@@ -1,5 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, no-console, @typescript-eslint/no-non-null-assertion */
 
+import fs from 'fs';
+import path from 'path';
+
 import { db } from '@/lib/db';
 
 import { AdminConfig } from './admin.types';
@@ -306,7 +309,20 @@ export async function getConfig(): Promise<AdminConfig> {
 
   // db 中无配置，执行一次初始化
   if (!adminConfig) {
-    adminConfig = await getInitConfig("");
+    // localstorage 模式下尝试从 config.example.json 加载默认源
+    let defaultConfigFile = '';
+    const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
+    if (storageType === 'localstorage') {
+      try {
+        const examplePath = path.join(process.cwd(), 'config.example.json');
+        if (fs.existsSync(examplePath)) {
+          defaultConfigFile = fs.readFileSync(examplePath, 'utf-8');
+        }
+      } catch (e) {
+        console.warn('读取 config.example.json 失败:', e);
+      }
+    }
+    adminConfig = await getInitConfig(defaultConfigFile);
   }
   adminConfig = configSelfCheck(adminConfig);
   cachedConfig = adminConfig;
