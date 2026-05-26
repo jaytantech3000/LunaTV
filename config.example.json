@@ -1,0 +1,152 @@
+{
+  "cache_time": 7200,
+  "api_site": {
+    "wolong": {
+      "api": "https://collect.wolongzyw.com/api.php/provide/vod",
+      "name": "卧龙资源",
+      "detail": "更新响应极速，主打国产电视剧、网剧以及最新院线高清版的首发抢先上线。"
+    },
+    "lzizy": {
+      "api": "https://cj.lziapi.com/api.php/provide/vod",
+      "name": "量子资源",
+      "detail": "一线大厂，量子高清切片秒播，国内多CDN节点加速，更新极快，直连效果极佳。"
+    },
+    "subaibaiy": {
+      "api": "https://api.subaibaiys.com/api.php/provide/vod",
+      "name": "速播云",
+      "detail": "主打高品质无广告切片，包含大量独家海外剧与热门华语影视。"
+    },
+    "feifan": {
+      "api": "https://cj.ffzyapi.com/api.php/provide/vod",
+      "name": "非凡资源",
+      "detail": "与量子齐名的行业巨头，资源库体量庞大，涵盖各类冷门和最新院线、综艺。"
+    },
+    "mozhua": {
+      "api": "https://mozhuazy.com/api.php/provide/vod",
+      "name": "魔爪资源",
+      "detail": "老牌影视采集站，资源品类丰富，播放线路较稳定。"
+    },
+    "ikun": {
+      "api": "https://ikunzy.vip/api.php/provide/vod",
+      "name": "iKun资源",
+      "detail": "人气极高的高清资源站，更新速度快，支持秒播，深受盒子用户喜爱。"
+    },
+    "heimuer": {
+      "api": "https://heimuer.tv/api.php/provide/vod",
+      "name": "黑木耳资源",
+      "detail": "知名高清切片站，画质优秀，无水印干扰，播放体验佳。"
+    },
+    "dbzy": {
+      "api": "https://dbzy.tv/api.php/provide/vod",
+      "name": "豆瓣资源",
+      "detail": "老牌稳定切片源，主要收集高评分及经典电影电视剧。"
+    },
+    "snzy": {
+      "api": "https://suoniapi.com/api.php/provide/vod",
+      "name": "索尼资源",
+      "detail": "口碑极佳的独立切片源，播放线路非常稳定，视频清晰度压制表现优秀。"
+    },
+    "bfzy": {
+      "api": "https://bfzyapi.com/api.php/provide/vod",
+      "name": "暴风资源",
+      "detail": "老牌高清资源站，支持多条解析和备用切片线路，适合作为高品质主线。"
+    },
+    "hnzy": {
+      "api": "https://www.hongniuapi.com/api.php/provide/vod",
+      "name": "红牛资源",
+      "detail": "业内出了名的常青树采集站，常年稳定在线，适合作为长期的基础片源保障。"
+    },
+    "kczy": {
+      "api": "https://caiji.kczyapi.com/api.php/provide/vod",
+      "name": "快车资源",
+      "detail": "快车切片，全网热播剧集同步更新极快，播放延迟低、解析成功率高。"
+    },
+    "jszy": {
+      "api": "https://jszyapi.com/api.php/provide/vod",
+      "name": "极速资源",
+      "detail": "主打极速加载与移动端适配缓冲，CDN节点抗抖动强，适合网络环境较差的用户。"
+    },
+    "hhzy": {
+      "api": "https://hhzyapi.com/api.php/provide/vod",
+      "name": "豪华资源",
+      "detail": "高清精品压制站，专注于无水印/低水印蓝光画质压制，适合对画质有要求的平台。"
+    },
+    "sdzy": {
+      "api": "https://sdzyapi.com/api.php/provide/vod",
+      "name": "闪电资源",
+      "detail": "闪电切片，线路拥有出色的抗红、防封锁机制，直连秒开，海外访问良好。"
+    },
+    "jyzy": {
+      "api": "https://jyzyapi.com/api.php/provide/vod",
+      "name": "金鹰资源",
+      "detail": "全能老牌站，经典备份源，分类完整，与大厂资源互补极佳。"
+    },
+    "xlzy": {
+      "api": "https://api.xinlangapi.com/api.php/provide/vod",
+      "name": "新浪资源",
+      "detail": "新浪切片，主打视频纯净度，台标和跑马灯广告较少，视频加载速度流畅。"
+    },
+    "188zy": {
+      "api": "https://www.188zy.xyz/api.php/provide/vod",
+      "name": "188资源",
+      "detail": "包含大量怀旧、冷门和无删减版老旧片源，补全冷门和特殊版本片库必备。"
+    },
+    "yhzy": {
+      "api": "https://api.yinghuazy.xyz/api.php/provide/vod",
+      "name": "樱花资源",
+      "detail": "动漫专线，同步更新国内外新番、剧场版、日韩剧，二次元爱好者首选。"
+    },
+    "djzy": {
+      "api": "https://cj.djzyapi.com/api.php/provide/vod",
+      "name": "短剧资源",
+      "detail": "垂直采集源，专门针对当前全网火爆的各类短剧（爽剧、都市、穿越等）做极速同步。"
+    },
+    "ftzy": {
+      "api": "https://cj.feituziapi.com/api.php/provide/vod",
+      "name": "飞兔资源",
+      "detail": "飞兔切片，更新频率高，主打欧美剧集、海外热播电影，小众译制片较多。"
+    }
+  },
+  "custom_category": [
+    {
+      "name": "热门电影",
+      "type": "movie",
+      "query": "热门"
+    },
+    {
+      "name": "豆瓣高分",
+      "type": "movie",
+      "query": "豆瓣高分"
+    },
+    {
+      "name": "华语电影",
+      "type": "movie",
+      "query": "华语"
+    },
+    {
+      "name": "欧美电影",
+      "type": "movie",
+      "query": "欧美"
+    },
+    {
+      "name": "日本动画",
+      "type": "tv",
+      "query": "日本动画"
+    },
+    {
+      "name": "国产剧",
+      "type": "tv",
+      "query": "国产剧"
+    },
+    {
+      "name": "韩剧",
+      "type": "tv",
+      "query": "韩剧"
+    },
+    {
+      "name": "美剧",
+      "type": "tv",
+      "query": "美剧"
+    }
+  ]
+}
