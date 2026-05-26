@@ -173,6 +173,15 @@ services:
       - UPSTASH_TOKEN=上面的 TOKEN
 ```
 
+如果你是通过 **Vercel / Upstash 官方集成** 注入环境变量，也可以直接使用官方变量名：
+
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
+- `KV_REST_API_URL`
+- `KV_REST_API_TOKEN`
+
+当前项目同时兼容以上两套变量名。
+
 ### ☁️ Zeabur 部署（推荐）
 
 Thanks to @SzeMeng76
@@ -334,6 +343,10 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | REDIS_URL                           | redis 连接 url                               | 连接 url                         | 空                                                                                                                         |
 | UPSTASH_URL                         | upstash redis 连接 url                       | 连接 url                         | 空                                                                                                                         |
 | UPSTASH_TOKEN                       | upstash redis 连接 token                     | 连接 token                       | 空                                                                                                                         |
+| UPSTASH_REDIS_REST_URL             | Upstash 官方 REST URL（Vercel 集成常用）     | 连接 url                         | 空                                                                                                                         |
+| UPSTASH_REDIS_REST_TOKEN           | Upstash 官方 REST Token（Vercel 集成常用）   | 连接 token                       | 空                                                                                                                         |
+| KV_REST_API_URL                    | Vercel KV / Upstash 集成 REST URL           | 连接 url                         | 空                                                                                                                         |
+| KV_REST_API_TOKEN                  | Vercel KV / Upstash 集成 REST Token         | 连接 token                       | 空                                                                                                                         |
 | NEXT_PUBLIC_SEARCH_MAX_PAGE         | 搜索接口可拉取的最大页数                     | 1-50                             | 5                                                                                                                          |
 | NEXT_PUBLIC_DOUBAN_PROXY_TYPE       | 豆瓣数据源请求方式                           | 见下方                           | direct                                                                                                                     |
 | NEXT_PUBLIC_DOUBAN_PROXY            | 自定义豆瓣数据代理 URL                       | url prefix                       | (空)                                                                                                                       |

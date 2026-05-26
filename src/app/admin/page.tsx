@@ -4631,8 +4631,24 @@ function AdminPageClient() {
   }
 
   if (error) {
-    // 错误已通过弹窗展示，此处直接返回空
-    return null;
+    return (
+      <PageLayout activePath='/admin'>
+        <div className='px-2 sm:px-10 py-4 sm:py-8'>
+          <div className='max-w-[95%] mx-auto'>
+            <h1 className='text-2xl font-bold text-gray-900 dark:text-gray-100 mb-8'>
+              管理员设置
+            </h1>
+            <div className='p-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg'>
+              <div className='flex items-center space-x-2 mb-2'>
+                <AlertCircle className='w-5 h-5 text-red-600 dark:text-red-400' />
+                <span className='font-medium text-red-800 dark:text-red-300'>加载失败</span>
+              </div>
+              <p className='text-sm text-red-700 dark:text-red-400'>{error}</p>
+            </div>
+          </div>
+        </div>
+      </PageLayout>
+    );
   }
 
   return (
