@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
-import { yellowWords } from '@/lib/yellow';
+import { filterAdultContentResults } from '@/lib/yellow';
 
 export const runtime = 'nodejs';
 
@@ -90,10 +90,7 @@ export async function GET(request: NextRequest) {
           // 过滤黄色内容
           let filteredResults = results;
           if (!config.SiteConfig.DisableYellowFilter) {
-            filteredResults = results.filter((result) => {
-              const typeName = result.type_name || '';
-              return !yellowWords.some((word: string) => typeName.includes(word));
-            });
+            filteredResults = filterAdultContentResults(results);
           }
 
           // 发送该源的搜索结果

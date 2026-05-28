@@ -43,6 +43,7 @@ import { createPortal } from 'react-dom';
 
 import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { isAdultSourceCandidate } from '@/lib/yellow';
 
 import DataMigration from '@/components/DataMigration';
 import PageLayout from '@/components/PageLayout';
@@ -300,6 +301,232 @@ interface CustomCategory {
   disabled?: boolean;
   from: 'config' | 'custom';
 }
+
+type SourceSelectionPreset =
+  | 'none'
+  | 'allEnabled'
+  | 'adultOnly'
+  | 'regularOnly'
+  | 'addAdult'
+  | 'removeAdult'
+  | 'invertEnabled';
+
+interface SourceSelectionEditorProps {
+  sources: DataSource[];
+  selectedApis: string[];
+  onSelectedApisChange: (selectedApis: string[]) => void;
+  checkboxColorClass: string;
+}
+
+const getSourceDomain = (url: string): string => {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.hostname;
+  } catch {
+    return url;
+  }
+};
+
+const uniqueSourceKeys = (keys: string[]) => Array.from(new Set(keys));
+
+const SourceSelectionEditor = ({
+  sources,
+  selectedApis,
+  onSelectedApisChange,
+  checkboxColorClass,
+}: SourceSelectionEditorProps) => {
+  const enabledSources = useMemo(
+    () => sources.filter((source) => !source.disabled),
+    [sources]
+  );
+  const adultEnabledSources = useMemo(
+    () => enabledSources.filter((source) => isAdultSourceCandidate(source)),
+    [enabledSources]
+  );
+  const regularEnabledSources = useMemo(
+    () => enabledSources.filter((source) => !isAdultSourceCandidate(source)),
+    [enabledSources]
+  );
+  const enabledSourceKeys = useMemo(
+    () => enabledSources.map((source) => source.key),
+    [enabledSources]
+  );
+  const adultEnabledSourceKeys = useMemo(
+    () => adultEnabledSources.map((source) => source.key),
+    [adultEnabledSources]
+  );
+  const adultEnabledSourceKeySet = useMemo(
+    () => new Set(adultEnabledSourceKeys),
+    [adultEnabledSourceKeys]
+  );
+  const regularEnabledSourceKeys = useMemo(
+    () => regularEnabledSources.map((source) => source.key),
+    [regularEnabledSources]
+  );
+
+  const applyPreset = (preset: SourceSelectionPreset) => {
+    switch (preset) {
+      case 'none':
+        onSelectedApisChange([]);
+        return;
+      case 'allEnabled':
+        onSelectedApisChange(enabledSourceKeys);
+        return;
+      case 'adultOnly':
+        onSelectedApisChange(adultEnabledSourceKeys);
+        return;
+      case 'regularOnly':
+        onSelectedApisChange(regularEnabledSourceKeys);
+        return;
+      case 'addAdult':
+        onSelectedApisChange(
+          uniqueSourceKeys([...selectedApis, ...adultEnabledSourceKeys])
+        );
+        return;
+      case 'removeAdult':
+        onSelectedApisChange(
+          selectedApis.filter((api) => !adultEnabledSourceKeySet.has(api))
+        );
+        return;
+      case 'invertEnabled':
+        onSelectedApisChange(
+          enabledSources
+            .filter((source) => !selectedApis.includes(source.key))
+            .map((source) => source.key)
+        );
+        return;
+    }
+  };
+
+  const quickActionButtonClass = (disabled = false) =>
+    `${buttonStyles.quickAction} ${
+      disabled ? 'opacity-50 cursor-not-allowed' : ''
+    }`;
+
+  return (
+    <div>
+      <div className='mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-gray-50 dark:bg-gray-900 p-4'>
+        <div className='space-y-1'>
+          <div className='text-sm font-medium text-gray-800 dark:text-gray-200'>
+            已启用源 {enabledSources.length} 个
+          </div>
+          <div className='text-xs text-gray-500 dark:text-gray-400'>
+            成人源 {adultEnabledSources.length} 个，普通源{' '}
+            {regularEnabledSources.length} 个。批量操作仅作用于已启用源。
+          </div>
+        </div>
+        <div className='text-sm text-gray-600 dark:text-gray-400'>
+          已选择：
+          <span className='ml-1 font-medium text-blue-600 dark:text-blue-400'>
+            {selectedApis.length > 0 ? `${selectedApis.length} 个源` : '无限制'}
+          </span>
+        </div>
+      </div>
+
+      <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3'>
+        {sources.map((source) => {
+          const isAdultSource = isAdultSourceCandidate(source);
+          return (
+            <label
+              key={source.key}
+              className='flex items-center space-x-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors'
+            >
+              <input
+                type='checkbox'
+                checked={selectedApis.includes(source.key)}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    onSelectedApisChange(
+                      uniqueSourceKeys([...selectedApis, source.key])
+                    );
+                  } else {
+                    onSelectedApisChange(
+                      selectedApis.filter((api) => api !== source.key)
+                    );
+                  }
+                }}
+                className={`rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 ${checkboxColorClass}`}
+              />
+              <div className='flex-1 min-w-0'>
+                <div className='flex items-center gap-2'>
+                  <div className='text-sm font-medium text-gray-900 dark:text-gray-100 truncate'>
+                    {source.name}
+                  </div>
+                  {isAdultSource && (
+                    <span className='inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300'>
+                      成人
+                    </span>
+                  )}
+                  {source.disabled && (
+                    <span className='inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300'>
+                      已禁用
+                    </span>
+                  )}
+                </div>
+                {source.api && (
+                  <div className='text-xs text-gray-500 dark:text-gray-400 truncate'>
+                    {getSourceDomain(source.api)}
+                  </div>
+                )}
+              </div>
+            </label>
+          );
+        })}
+      </div>
+
+      <div className='mt-4 flex flex-wrap gap-2'>
+        <button
+          onClick={() => applyPreset('none')}
+          className={quickActionButtonClass()}
+        >
+          全不选（无限制）
+        </button>
+        <button
+          onClick={() => applyPreset('allEnabled')}
+          className={quickActionButtonClass(enabledSources.length === 0)}
+          disabled={enabledSources.length === 0}
+        >
+          全选启用源
+        </button>
+        <button
+          onClick={() => applyPreset('adultOnly')}
+          className={quickActionButtonClass(adultEnabledSources.length === 0)}
+          disabled={adultEnabledSources.length === 0}
+        >
+          仅成人源
+        </button>
+        <button
+          onClick={() => applyPreset('regularOnly')}
+          className={quickActionButtonClass(regularEnabledSources.length === 0)}
+          disabled={regularEnabledSources.length === 0}
+        >
+          仅普通源
+        </button>
+        <button
+          onClick={() => applyPreset('addAdult')}
+          className={quickActionButtonClass(adultEnabledSources.length === 0)}
+          disabled={adultEnabledSources.length === 0}
+        >
+          追加成人源
+        </button>
+        <button
+          onClick={() => applyPreset('removeAdult')}
+          className={quickActionButtonClass(adultEnabledSources.length === 0)}
+          disabled={adultEnabledSources.length === 0}
+        >
+          排除成人源
+        </button>
+        <button
+          onClick={() => applyPreset('invertEnabled')}
+          className={quickActionButtonClass(enabledSources.length === 0)}
+          disabled={enabledSources.length === 0}
+        >
+          反选启用源
+        </button>
+      </div>
+    </div>
+  );
+};
 
 // 可折叠标签组件
 interface CollapsibleTabProps {
@@ -671,20 +898,6 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
       }
     });
   };
-
-
-
-  // 提取URL域名的辅助函数
-  const extractDomain = (url: string): string => {
-    try {
-      const urlObj = new URL(url);
-      return urlObj.hostname;
-    } catch {
-      // 如果URL格式不正确，返回原字符串
-      return url;
-    }
-  };
-
   const handleSaveUserApis = async () => {
     if (!selectedUser) return;
 
@@ -1329,65 +1542,17 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                 </div>
               </div>
 
-              {/* 采集源选择 - 多列布局 */}
+              {/* 采集源选择 */}
               <div className='mb-6'>
                 <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300 mb-4'>
                   选择可用的采集源：
                 </h4>
-                <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4'>
-                  {config?.SourceConfig?.map((source) => (
-                    <label key={source.key} className='flex items-center space-x-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors'>
-                      <input
-                        type='checkbox'
-                        checked={selectedApis.includes(source.key)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedApis([...selectedApis, source.key]);
-                          } else {
-                            setSelectedApis(selectedApis.filter(api => api !== source.key));
-                          }
-                        }}
-                        className='rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700'
-                      />
-                      <div className='flex-1 min-w-0'>
-                        <div className='text-sm font-medium text-gray-900 dark:text-gray-100 truncate'>
-                          {source.name}
-                        </div>
-                        {source.api && (
-                          <div className='text-xs text-gray-500 dark:text-gray-400 truncate'>
-                            {extractDomain(source.api)}
-                          </div>
-                        )}
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* 快速操作按钮 */}
-              <div className='flex flex-wrap items-center justify-between mb-6 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg'>
-                <div className='flex space-x-2'>
-                  <button
-                    onClick={() => setSelectedApis([])}
-                    className={buttonStyles.quickAction}
-                  >
-                    全不选（无限制）
-                  </button>
-                  <button
-                    onClick={() => {
-                      const allApis = config?.SourceConfig?.filter(source => !source.disabled).map(s => s.key) || [];
-                      setSelectedApis(allApis);
-                    }}
-                    className={buttonStyles.quickAction}
-                  >
-                    全选
-                  </button>
-                </div>
-                <div className='text-sm text-gray-600 dark:text-gray-400'>
-                  已选择：<span className='font-medium text-blue-600 dark:text-blue-400'>
-                    {selectedApis.length > 0 ? `${selectedApis.length} 个源` : '无限制'}
-                  </span>
-                </div>
+                <SourceSelectionEditor
+                  sources={config?.SourceConfig || []}
+                  selectedApis={selectedApis}
+                  onSelectedApisChange={setSelectedApis}
+                  checkboxColorClass='text-blue-600 focus:ring-blue-500'
+                />
               </div>
 
               {/* 操作按钮 */}
@@ -1463,59 +1628,14 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                   <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-4'>
                     可用视频源
                   </label>
-                  <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3'>
-                    {config?.SourceConfig?.map((source) => (
-                      <label key={source.key} className='flex items-center space-x-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors'>
-                        <input
-                          type='checkbox'
-                          checked={newUserGroup.enabledApis.includes(source.key)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setNewUserGroup(prev => ({
-                                ...prev,
-                                enabledApis: [...prev.enabledApis, source.key]
-                              }));
-                            } else {
-                              setNewUserGroup(prev => ({
-                                ...prev,
-                                enabledApis: prev.enabledApis.filter(api => api !== source.key)
-                              }));
-                            }
-                          }}
-                          className='rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700'
-                        />
-                        <div className='flex-1 min-w-0'>
-                          <div className='text-sm font-medium text-gray-900 dark:text-gray-100 truncate'>
-                            {source.name}
-                          </div>
-                          {source.api && (
-                            <div className='text-xs text-gray-500 dark:text-gray-400 truncate'>
-                              {extractDomain(source.api)}
-                            </div>
-                          )}
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-
-                  {/* 快速操作按钮 */}
-                  <div className='mt-4 flex space-x-2'>
-                    <button
-                      onClick={() => setNewUserGroup(prev => ({ ...prev, enabledApis: [] }))}
-                      className={buttonStyles.quickAction}
-                    >
-                      全不选（无限制）
-                    </button>
-                    <button
-                      onClick={() => {
-                        const allApis = config?.SourceConfig?.filter(source => !source.disabled).map(s => s.key) || [];
-                        setNewUserGroup(prev => ({ ...prev, enabledApis: allApis }));
-                      }}
-                      className={buttonStyles.quickAction}
-                    >
-                      全选
-                    </button>
-                  </div>
+                  <SourceSelectionEditor
+                    sources={config?.SourceConfig || []}
+                    selectedApis={newUserGroup.enabledApis}
+                    onSelectedApisChange={(enabledApis) =>
+                      setNewUserGroup((prev) => ({ ...prev, enabledApis }))
+                    }
+                    checkboxColorClass='text-blue-600 focus:ring-blue-500'
+                  />
                 </div>
 
                 {/* 操作按钮 */}
@@ -1575,59 +1695,16 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                   <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-4'>
                     可用视频源
                   </label>
-                  <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3'>
-                    {config?.SourceConfig?.map((source) => (
-                      <label key={source.key} className='flex items-center space-x-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors'>
-                        <input
-                          type='checkbox'
-                          checked={editingUserGroup.enabledApis.includes(source.key)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setEditingUserGroup(prev => prev ? {
-                                ...prev,
-                                enabledApis: [...prev.enabledApis, source.key]
-                              } : null);
-                            } else {
-                              setEditingUserGroup(prev => prev ? {
-                                ...prev,
-                                enabledApis: prev.enabledApis.filter(api => api !== source.key)
-                              } : null);
-                            }
-                          }}
-                          className='rounded border-gray-300 text-purple-600 focus:ring-purple-500 dark:border-gray-600 dark:bg-gray-700'
-                        />
-                        <div className='flex-1 min-w-0'>
-                          <div className='text-sm font-medium text-gray-900 dark:text-gray-100 truncate'>
-                            {source.name}
-                          </div>
-                          {source.api && (
-                            <div className='text-xs text-gray-500 dark:text-gray-400 truncate'>
-                              {extractDomain(source.api)}
-                            </div>
-                          )}
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-
-                  {/* 快速操作按钮 */}
-                  <div className='mt-4 flex space-x-2'>
-                    <button
-                      onClick={() => setEditingUserGroup(prev => prev ? { ...prev, enabledApis: [] } : null)}
-                      className={buttonStyles.quickAction}
-                    >
-                      全不选（无限制）
-                    </button>
-                    <button
-                      onClick={() => {
-                        const allApis = config?.SourceConfig?.filter(source => !source.disabled).map(s => s.key) || [];
-                        setEditingUserGroup(prev => prev ? { ...prev, enabledApis: allApis } : null);
-                      }}
-                      className={buttonStyles.quickAction}
-                    >
-                      全选
-                    </button>
-                  </div>
+                  <SourceSelectionEditor
+                    sources={config?.SourceConfig || []}
+                    selectedApis={editingUserGroup.enabledApis}
+                    onSelectedApisChange={(enabledApis) =>
+                      setEditingUserGroup((prev) =>
+                        prev ? { ...prev, enabledApis } : null
+                      )
+                    }
+                    checkboxColorClass='text-purple-600 focus:ring-purple-500'
+                  />
                 </div>
 
                 {/* 操作按钮 */}
@@ -3545,6 +3622,8 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
     );
   }
 
+  const adultContentFilterEnabled = !siteSettings.DisableYellowFilter;
+
   return (
     <div className='space-y-6'>
       {/* 站点名称 */}
@@ -3842,29 +3921,29 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
         />
       </div>
 
-      {/* 禁用黄色过滤器 */}
+      {/* 成人内容过滤 */}
       <div>
         <div className='flex items-center justify-between'>
           <label
             className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
           >
-            禁用黄色过滤器
+            成人内容过滤
           </label>
           <button
             type='button'
             onClick={() =>
               setSiteSettings((prev) => ({
                 ...prev,
-                DisableYellowFilter: !prev.DisableYellowFilter,
+                DisableYellowFilter: prev.DisableYellowFilter ? false : true,
               }))
             }
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${siteSettings.DisableYellowFilter
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${adultContentFilterEnabled
               ? buttonStyles.toggleOn
               : buttonStyles.toggleOff
               }`}
           >
             <span
-              className={`inline-block h-4 w-4 transform rounded-full ${buttonStyles.toggleThumb} transition-transform ${siteSettings.DisableYellowFilter
+              className={`inline-block h-4 w-4 transform rounded-full ${buttonStyles.toggleThumb} transition-transform ${adultContentFilterEnabled
                 ? buttonStyles.toggleThumbOn
                 : buttonStyles.toggleThumbOff
                 }`}
@@ -3872,7 +3951,7 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
           </button>
         </div>
         <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-          禁用黄色内容的过滤功能，允许显示所有内容。
+          打开时过滤搜索结果中的成人内容，关闭时不过滤成人内容。
         </p>
       </div>
 

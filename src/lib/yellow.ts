@@ -27,3 +27,68 @@ export const yellowWords = [
   '伦理',
   '日本伦理',
 ];
+
+const ADULT_SOURCE_MARKERS = ['🔞', '成人', '情色', '三级片', '三級', 'porn', 'av'];
+
+function containsAdultMarker(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return [...ADULT_SOURCE_MARKERS, ...yellowWords].some((marker) =>
+    normalized.includes(marker.toLowerCase())
+  );
+}
+
+export function isAdultSourceCandidate(
+  source: Partial<{
+    name: string;
+    key: string;
+    api: string;
+    detail: string;
+  }>
+): boolean {
+  const searchableText = [source.name, source.key, source.api, source.detail]
+    .filter(Boolean)
+    .join(' ');
+
+  return containsAdultMarker(searchableText);
+}
+
+export function isAdultContentResult(
+  result: Partial<{
+    title: string;
+    type_name: string;
+    class: string;
+    source_name: string;
+    desc: string;
+  }>
+): boolean {
+  const sourceName = result.source_name || '';
+  if (ADULT_SOURCE_MARKERS.some((marker) => sourceName.includes(marker))) {
+    return true;
+  }
+
+  const searchableText = [
+    result.title,
+    result.type_name,
+    result.class,
+    result.source_name,
+    result.desc,
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return containsAdultMarker(searchableText);
+}
+
+export function filterAdultContentResults<
+  T extends {
+    title?: string;
+    type_name?: string;
+    class?: string;
+    source_name?: string;
+    desc?: string;
+  },
+>(
+  results: T[]
+): T[] {
+  return results.filter((result) => !isAdultContentResult(result));
+}
