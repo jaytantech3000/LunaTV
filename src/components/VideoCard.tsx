@@ -342,7 +342,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(function VideoCard
         showHeart: true, // 移动端菜单中需要显示收藏选项
         showCheckCircle: false,
         showDoubanLink: true, // 移动端菜单中显示豆瓣链接
-        showRating: false,
+        showRating: !!rate,
         showYear: true,
       },
       douban: {
@@ -358,6 +358,9 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(function VideoCard
     };
     return configs[from] || configs.search;
   }, [from, isAggregate, douban_id, rate]);
+
+  const showRatingBadge = config.showRating && !!rate;
+  const showEpisodesBadge = !!actualEpisodes && actualEpisodes > 1;
 
   // 移动端操作菜单配置
   const mobileActions = useMemo(() => {
@@ -699,9 +702,9 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(function VideoCard
           )}
 
           {/* 徽章 */}
-          {config.showRating && rate && (
+          {showRatingBadge && (
             <div
-              className='absolute top-2 right-2 bg-pink-500 text-white text-xs font-bold w-7 h-7 rounded-full flex items-center justify-center shadow-md transition-all duration-300 ease-out group-hover:scale-110'
+              className='absolute top-2 right-2 bg-pink-500 text-white text-xs font-bold min-w-[1.75rem] h-7 px-1.5 rounded-full flex items-center justify-center shadow-md transition-all duration-300 ease-out group-hover:scale-110'
               style={{
                 WebkitUserSelect: 'none',
                 userSelect: 'none',
@@ -716,9 +719,9 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(function VideoCard
             </div>
           )}
 
-          {actualEpisodes && actualEpisodes > 1 && (
+          {showEpisodesBadge && (
             <div
-              className='absolute top-2 right-2 bg-green-500 text-white text-xs font-semibold px-2 py-1 rounded-md shadow-md transition-all duration-300 ease-out group-hover:scale-110'
+              className={`absolute right-2 ${showRatingBadge ? 'top-10' : 'top-2'} bg-green-500 text-white text-xs font-semibold px-2 py-1 rounded-md shadow-md transition-all duration-300 ease-out group-hover:scale-110`}
               style={{
                 WebkitUserSelect: 'none',
                 userSelect: 'none',

@@ -39,6 +39,10 @@ function SearchPageClient() {
   const [completedSources, setCompletedSources] = useState(0);
   const pendingResultsRef = useRef<SearchResult[]>([]);
   const flushTimerRef = useRef<number | null>(null);
+  const [doubanRatings, setDoubanRatings] = useState<Record<string, string>>({});
+  const pendingDoubanRatingIdsRef = useRef<Set<number>>(new Set());
+  const resolvedDoubanRatingIdsRef = useRef<Set<number>>(new Set());
+  const doubanRatingRequestTokenRef = useRef(0);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
   // 聚合卡片 refs 与聚合统计缓存
   const groupRefs = useRef<Map<string, React.RefObject<VideoCardHandle>>>(new Map());
@@ -85,6 +89,21 @@ function SearchPageClient() {
     })();
 
     return { episodes, source_names, douban_id };
+  };
+
+  const resetDoubanRatings = () => {
+    doubanRatingRequestTokenRef.current += 1;
+    pendingDoubanRatingIdsRef.current.clear();
+    resolvedDoubanRatingIdsRef.current.clear();
+    setDoubanRatings({});
+  };
+
+  const getDoubanRating = (doubanId?: number) => {
+    if (!doubanId || doubanId <= 0) {
+      return '';
+    }
+
+    return doubanRatings[doubanId.toString()] || '';
   };
   // 过滤器：非聚合与聚合
   const [filterAll, setFilterAll] = useState<{ source: string; title: string; year: string; yearOrder: 'none' | 'asc' | 'desc' }>({
@@ -207,6 +226,75 @@ function SearchPageClient() {
       }
     });
   }, [aggregatedResults]);
+
+  useEffect(() => {
+    const idsToFetch = Array.from(
+      new Set(
+        searchResults
+          .map((item) => item.douban_id)
+          .filter((id): id is number => typeof id === 'number' && id > 0)
+      )
+    ).filter((id) => {
+      const key = id.toString();
+      return (
+        !Object.prototype.hasOwnProperty.call(doubanRatings, key) &&
+        !pendingDoubanRatingIdsRef.current.has(id) &&
+        !resolvedDoubanRatingIdsRef.current.has(id)
+      );
+    });
+
+    if (idsToFetch.length === 0) {
+      return;
+    }
+
+    const requestToken = doubanRatingRequestTokenRef.current;
+    const batchSize = 12;
+
+    for (let index = 0; index < idsToFetch.length; index += batchSize) {
+      const batch = idsToFetch.slice(index, index + batchSize);
+      batch.forEach((id) => pendingDoubanRatingIdsRef.current.add(id));
+
+      void (async () => {
+        try {
+          const response = await fetch(
+            `/api/douban/ratings?ids=${batch.join(',')}`
+          );
+
+          if (!response.ok) {
+            throw new Error('获取豆瓣评分失败');
+          }
+
+          const data = await response.json();
+          const ratings =
+            data?.ratings && typeof data.ratings === 'object'
+              ? (data.ratings as Record<string, string>)
+              : {};
+
+          if (doubanRatingRequestTokenRef.current !== requestToken) {
+            return;
+          }
+
+          if (Object.keys(ratings).length > 0) {
+            startTransition(() => {
+              setDoubanRatings((prev) => ({
+                ...prev,
+                ...ratings,
+              }));
+            });
+          }
+        } catch {
+          // 评分加载失败时保留搜索结果，不阻塞页面使用
+        } finally {
+          if (doubanRatingRequestTokenRef.current === requestToken) {
+            batch.forEach((id) => {
+              pendingDoubanRatingIdsRef.current.delete(id);
+              resolvedDoubanRatingIdsRef.current.add(id);
+            });
+          }
+        }
+      })();
+    }
+  }, [doubanRatings, searchResults]);
 
   // 构建筛选选项
   const filterOptions = useMemo(() => {
@@ -414,6 +502,7 @@ function SearchPageClient() {
         eventSourceRef.current = null;
       }
       setSearchResults([]);
+      resetDoubanRatings();
       setTotalSources(0);
       setCompletedSources(0);
       // 清理缓冲
@@ -559,6 +648,7 @@ function SearchPageClient() {
     } else {
       setShowResults(false);
       setShowSuggestions(false);
+      resetDoubanRatings();
     }
   }, [searchParams]);
 
@@ -790,6 +880,7 @@ function SearchPageClient() {
                               episodes={episodes}
                               source_names={source_names}
                               douban_id={douban_id}
+                              rate={getDoubanRating(douban_id)}
                               query={
                                 searchQuery.trim() !== title
                                   ? searchQuery.trim()
@@ -820,6 +911,7 @@ function SearchPageClient() {
                             source={item.source}
                             source_name={item.source_name}
                             douban_id={item.douban_id}
+                            rate={getDoubanRating(item.douban_id)}
                             query={
                               searchQuery.trim() !== item.title
                                 ? searchQuery.trim()
