@@ -1,13 +1,20 @@
 /** @type {import('next').NextConfig} */
 /* eslint-disable @typescript-eslint/no-var-requires */
 
+const isVercel = Boolean(process.env.VERCEL);
+const distDir =
+  process.env.NEXT_DIST_DIR ||
+  // Vercel's Next.js runtime expects the default `.next` directory unless the
+  // project-level output directory is changed in Vercel settings.
+  (process.env.NODE_ENV === 'production' && !isVercel
+    ? '.next-build'
+    : '.next');
+
 const nextConfig = {
   output: 'standalone',
-  // Keep dev and production build artifacts isolated so a local `next build`
-  // never corrupts a running `next dev` instance.
-  distDir:
-    process.env.NEXT_DIST_DIR ||
-    (process.env.NODE_ENV === 'production' ? '.next-build' : '.next'),
+  // Keep dev and local production build artifacts isolated so a local
+  // `next build` never corrupts a running `next dev` instance.
+  distDir,
   eslint: {
     dirs: ['src'],
   },
