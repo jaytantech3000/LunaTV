@@ -104,10 +104,12 @@ function DoubanPageClient() {
     (state) => state.setDoubanPageEntry
   );
 
-  const normalizedSelectedWeekday =
-    type === 'anime' && primarySelection === '每日放送'
-      ? selectedWeekday || '-'
-      : '-';
+  const isDailyBangumiMode =
+    type === 'anime' && primarySelection === '每日放送';
+  const supportsInfiniteScroll = !isDailyBangumiMode;
+  const normalizedSelectedWeekday = isDailyBangumiMode
+    ? selectedWeekday || '-'
+    : '-';
   const normalizedCacheFilters = useMemo(() => {
     if (type === 'anime' && primarySelection !== '每日放送') {
       return {
@@ -309,9 +311,11 @@ function DoubanPageClient() {
       return;
     }
 
+    const restoredHasMore =
+      supportsInfiniteScroll && cachedDoubanPageEntry.hasMore;
     const shouldContinueLoadingFromCache = shouldAutoLoadMoreForRatingFilter(
       cachedDoubanPageEntry.items,
-      cachedDoubanPageEntry.hasMore
+      restoredHasMore
     );
 
     loadedPageIndexRef.current = cachedDoubanPageEntry.loadedPageIndex;
@@ -319,15 +323,18 @@ function DoubanPageClient() {
     setCurrentPage(
       shouldContinueLoadingFromCache
         ? cachedDoubanPageEntry.loadedPageIndex + 1
-        : cachedDoubanPageEntry.loadedPageIndex
+        : supportsInfiniteScroll
+        ? cachedDoubanPageEntry.loadedPageIndex
+        : 0
     );
-    setHasMore(cachedDoubanPageEntry.hasMore);
+    setHasMore(restoredHasMore);
     setIsLoadingMore(false);
     setLoading(shouldContinueLoadingFromCache);
   }, [
     cachedDoubanPageEntry,
     hasCachedDoubanPageSeed,
     hasDiscoveryCacheHydrated,
+    supportsInfiniteScroll,
     shouldAutoLoadMoreForRatingFilter,
   ]);
 
@@ -451,6 +458,7 @@ function DoubanPageClient() {
         setLoading(true);
         setCurrentPage(cachedDoubanPageEntry.loadedPageIndex + 1);
       } else {
+        setHasMore(supportsInfiniteScroll && cachedDoubanPageEntry.hasMore);
         setLoading(false);
       }
       return;
@@ -481,7 +489,7 @@ function DoubanPageClient() {
         } else {
           throw new Error('没有找到对应的分类');
         }
-      } else if (type === 'anime' && primarySelection === '每日放送') {
+      } else if (isDailyBangumiMode) {
         const calendarData = await GetBangumiCalendarData();
         const weekdayData = calendarData.find(
           (item) => item.weekday.en === selectedWeekday
@@ -562,7 +570,7 @@ function DoubanPageClient() {
         };
 
         if (isBaseSnapshotEqual(requestSnapshot, currentSnapshot)) {
-          const nextHasMore = data.list.length !== 0;
+          const nextHasMore = supportsInfiniteScroll && data.list.length !== 0;
           const shouldContinueLoading = shouldAutoLoadMoreForRatingFilter(
             data.list,
             nextHasMore
@@ -610,6 +618,7 @@ function DoubanPageClient() {
     setDoubanPageEntry,
     cachedDoubanPageEntry,
     hasCachedDoubanPageSeed,
+    supportsInfiniteScroll,
     shouldAutoLoadMoreForRatingFilter,
   ]);
 
@@ -649,6 +658,10 @@ function DoubanPageClient() {
 
   // 单独处理 currentPage 变化（加载更多）
   useEffect(() => {
+    if (!supportsInfiniteScroll || currentPage <= 0) {
+      return;
+    }
+
     if (currentPage > 0) {
       if (currentPage <= loadedPageIndexRef.current) {
         return;
@@ -687,13 +700,6 @@ function DoubanPageClient() {
             } else {
               throw new Error('没有找到对应的分类');
             }
-          } else if (type === 'anime' && primarySelection === '每日放送') {
-            // 每日放送模式下，不进行数据请求，返回空数据
-            data = {
-              code: 200,
-              message: 'success',
-              list: [],
-            };
           } else if (type === 'anime') {
             data = await getDoubanRecommends({
               kind: primarySelection === '番剧' ? 'tv' : 'movie',
@@ -809,11 +815,13 @@ function DoubanPageClient() {
     doubanCacheKey,
     isSnapshotEqual,
     setDoubanPageEntry,
+    supportsInfiniteScroll,
     shouldAutoLoadMoreForRatingFilter,
   ]);
 
   useEffect(() => {
     if (
+      !supportsInfiniteScroll ||
       !hasDiscoveryCacheHydrated ||
       !selectorsReady ||
       loading ||
@@ -835,13 +843,14 @@ function DoubanPageClient() {
     isLoadingMore,
     loading,
     selectorsReady,
+    supportsInfiniteScroll,
     shouldAutoLoadMoreForRatingFilter,
   ]);
 
   // 设置滚动监听
   useEffect(() => {
     // 如果没有更多数据或正在加载，则不设置监听
-    if (!hasMore || isLoadingMore || loading) {
+    if (!supportsInfiniteScroll || !hasMore || isLoadingMore || loading) {
       return;
     }
 
@@ -867,7 +876,7 @@ function DoubanPageClient() {
         observerRef.current.disconnect();
       }
     };
-  }, [hasMore, isLoadingMore, loading]);
+  }, [hasMore, isLoadingMore, loading, supportsInfiniteScroll]);
 
   // 处理选择器变化
   const handlePrimaryChange = useCallback(
@@ -1075,7 +1084,7 @@ function DoubanPageClient() {
           )}
 
           {/* 加载更多指示器 */}
-          {hasMore && !loading && (
+          {supportsInfiniteScroll && hasMore && !loading && (
             <div
               ref={(el) => {
                 if (el && el.offsetParent !== null) {
@@ -1094,9 +1103,13 @@ function DoubanPageClient() {
           )}
 
           {/* 没有更多数据提示 */}
-          {!hasMore && filteredDoubanData.length > 0 && (
-            <div className='text-center text-gray-500 py-8'>已加载全部内容</div>
-          )}
+          {supportsInfiniteScroll &&
+            !hasMore &&
+            filteredDoubanData.length > 0 && (
+              <div className='text-center text-gray-500 py-8'>
+                已加载全部内容
+              </div>
+            )}
 
           {/* 空状态 */}
           {!loading && filteredDoubanData.length === 0 && (
