@@ -19,6 +19,7 @@ import {
   getDoubanList,
   getDoubanRecommends,
 } from '@/lib/douban.client';
+import { filterItemsByMinimumRating } from '@/lib/rating-filter';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
 import DoubanCardSkeleton from '@/components/DoubanCardSkeleton';
@@ -33,6 +34,7 @@ import {
   isDiscoveryCacheEntryFresh,
   useDiscoveryCacheStore,
 } from '@/stores/useDiscoveryCacheStore';
+import { useGlobalRatingFilterStore } from '@/stores/useGlobalRatingFilterStore';
 
 const LOAD_DEBOUNCE_MS = 24;
 const DEFAULT_MULTI_LEVEL_VALUES = {
@@ -173,6 +175,41 @@ function DoubanPageClient() {
   const hasFreshDoubanPageCache = isDiscoveryCacheEntryFresh(
     cachedDoubanPageEntry
   );
+  const hasCachedDoubanPageSeed =
+    (cachedDoubanPageEntry?.items.length ?? 0) > 0;
+  const isGlobalRatingFilterEnabled = useGlobalRatingFilterStore(
+    (state) => state.enabled
+  );
+  const globalMinimumRating = useGlobalRatingFilterStore(
+    (state) => state.minimumRating
+  );
+  const filteredDoubanData = useMemo(
+    () =>
+      filterItemsByMinimumRating(
+        doubanData,
+        (item) => item.rate,
+        isGlobalRatingFilterEnabled,
+        globalMinimumRating
+      ),
+    [doubanData, globalMinimumRating, isGlobalRatingFilterEnabled]
+  );
+  const shouldAutoLoadMoreForRatingFilter = useCallback(
+    (items: DoubanItem[], nextHasMore: boolean) => {
+      if (!isGlobalRatingFilterEnabled || !nextHasMore || items.length === 0) {
+        return false;
+      }
+
+      return (
+        filterItemsByMinimumRating(
+          items,
+          (item) => item.rate,
+          isGlobalRatingFilterEnabled,
+          globalMinimumRating
+        ).length === 0
+      );
+    },
+    [globalMinimumRating, isGlobalRatingFilterEnabled]
+  );
 
   // 获取自定义分类数据
   useEffect(() => {
@@ -264,17 +301,35 @@ function DoubanPageClient() {
 
   // 先在布局阶段复用目标缓存，避免 tab 切换时内容区先闪成空白/骨架
   useLayoutEffect(() => {
-    if (!hasDiscoveryCacheHydrated || !cachedDoubanPageEntry) {
+    if (
+      !hasDiscoveryCacheHydrated ||
+      !cachedDoubanPageEntry ||
+      !hasCachedDoubanPageSeed
+    ) {
       return;
     }
 
+    const shouldContinueLoadingFromCache = shouldAutoLoadMoreForRatingFilter(
+      cachedDoubanPageEntry.items,
+      cachedDoubanPageEntry.hasMore
+    );
+
     loadedPageIndexRef.current = cachedDoubanPageEntry.loadedPageIndex;
     setDoubanData(cachedDoubanPageEntry.items);
-    setCurrentPage(cachedDoubanPageEntry.loadedPageIndex);
+    setCurrentPage(
+      shouldContinueLoadingFromCache
+        ? cachedDoubanPageEntry.loadedPageIndex + 1
+        : cachedDoubanPageEntry.loadedPageIndex
+    );
     setHasMore(cachedDoubanPageEntry.hasMore);
     setIsLoadingMore(false);
-    setLoading(false);
-  }, [cachedDoubanPageEntry, hasDiscoveryCacheHydrated]);
+    setLoading(shouldContinueLoadingFromCache);
+  }, [
+    cachedDoubanPageEntry,
+    hasCachedDoubanPageSeed,
+    hasDiscoveryCacheHydrated,
+    shouldAutoLoadMoreForRatingFilter,
+  ]);
 
   // 生成骨架屏数据
   const skeletonData = Array.from({ length: 25 }, (_, index) => index);
@@ -382,8 +437,22 @@ function DoubanPageClient() {
       selectedWeekday,
     };
 
-    if (hasFreshDoubanPageCache) {
-      setLoading(false);
+    if (
+      hasFreshDoubanPageCache &&
+      cachedDoubanPageEntry &&
+      hasCachedDoubanPageSeed
+    ) {
+      if (
+        shouldAutoLoadMoreForRatingFilter(
+          cachedDoubanPageEntry.items,
+          cachedDoubanPageEntry.hasMore
+        )
+      ) {
+        setLoading(true);
+        setCurrentPage(cachedDoubanPageEntry.loadedPageIndex + 1);
+      } else {
+        setLoading(false);
+      }
       return;
     }
 
@@ -493,20 +562,28 @@ function DoubanPageClient() {
         };
 
         if (isBaseSnapshotEqual(requestSnapshot, currentSnapshot)) {
-          setDoubanData(data.list);
-          setCurrentPage(0);
-          loadedPageIndexRef.current = 0;
-          setHasMore(data.list.length !== 0);
-          setDoubanPageEntry(
-            doubanCacheKey,
-            buildDoubanPageCacheEntry({
-              items: data.list,
-              loadedPageIndex: 0,
-              hasMore: data.list.length !== 0,
-              updatedAt: Date.now(),
-            })
+          const nextHasMore = data.list.length !== 0;
+          const shouldContinueLoading = shouldAutoLoadMoreForRatingFilter(
+            data.list,
+            nextHasMore
           );
-          setLoading(false);
+
+          setDoubanData(data.list);
+          setCurrentPage(shouldContinueLoading ? 1 : 0);
+          loadedPageIndexRef.current = 0;
+          setHasMore(nextHasMore);
+          if (data.list.length > 0) {
+            setDoubanPageEntry(
+              doubanCacheKey,
+              buildDoubanPageCacheEntry({
+                items: data.list,
+                loadedPageIndex: 0,
+                hasMore: nextHasMore,
+                updatedAt: Date.now(),
+              })
+            );
+          }
+          setLoading(!shouldContinueLoading ? false : true);
         } else {
           console.log('参数不一致，不执行任何操作，避免设置过期数据');
         }
@@ -531,6 +608,9 @@ function DoubanPageClient() {
     isBaseSnapshotEqual,
     doubanCacheKey,
     setDoubanPageEntry,
+    cachedDoubanPageEntry,
+    hasCachedDoubanPageSeed,
+    shouldAutoLoadMoreForRatingFilter,
   ]);
 
   // 只在选择器准备好后才加载数据
@@ -675,6 +755,7 @@ function DoubanPageClient() {
 
             if (isSnapshotEqual(requestSnapshot, currentSnapshot)) {
               let nextItems: DoubanItem[] = [];
+              const nextHasMore = data.list.length !== 0;
               setDoubanData((prev) => {
                 nextItems = [...prev, ...data.list];
                 return nextItems;
@@ -684,12 +765,24 @@ function DoubanPageClient() {
                 buildDoubanPageCacheEntry({
                   items: nextItems,
                   loadedPageIndex: currentPage,
-                  hasMore: data.list.length !== 0,
+                  hasMore: nextHasMore,
                   updatedAt: Date.now(),
                 })
               );
               loadedPageIndexRef.current = currentPage;
-              setHasMore(data.list.length !== 0);
+              setHasMore(nextHasMore);
+
+              const shouldContinueLoading = shouldAutoLoadMoreForRatingFilter(
+                nextItems,
+                nextHasMore
+              );
+
+              if (shouldContinueLoading) {
+                setLoading(true);
+                setCurrentPage(currentPage + 1);
+              } else {
+                setLoading(false);
+              }
             } else {
               console.log('参数不一致，不执行任何操作，避免设置过期数据');
             }
@@ -716,6 +809,33 @@ function DoubanPageClient() {
     doubanCacheKey,
     isSnapshotEqual,
     setDoubanPageEntry,
+    shouldAutoLoadMoreForRatingFilter,
+  ]);
+
+  useEffect(() => {
+    if (
+      !hasDiscoveryCacheHydrated ||
+      !selectorsReady ||
+      loading ||
+      isLoadingMore
+    ) {
+      return;
+    }
+
+    if (!shouldAutoLoadMoreForRatingFilter(doubanData, hasMore)) {
+      return;
+    }
+
+    setLoading(true);
+    setCurrentPage(loadedPageIndexRef.current + 1);
+  }, [
+    doubanData,
+    hasDiscoveryCacheHydrated,
+    hasMore,
+    isLoadingMore,
+    loading,
+    selectorsReady,
+    shouldAutoLoadMoreForRatingFilter,
   ]);
 
   // 设置滚动监听
@@ -921,7 +1041,7 @@ function DoubanPageClient() {
         {/* 内容展示区域 */}
         <div className='max-w-[95%] mx-auto mt-8 overflow-visible'>
           {/* 内容网格 */}
-          {!selectorsReady || (loading && doubanData.length === 0) ? (
+          {!selectorsReady || (loading && filteredDoubanData.length === 0) ? (
             // 显示骨架屏
             <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-12 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8 sm:gap-y-20'>
               {skeletonData.map((index) => (
@@ -931,7 +1051,7 @@ function DoubanPageClient() {
           ) : (
             // 显示实际数据
             <VirtualGrid
-              items={doubanData}
+              items={filteredDoubanData}
               className='grid-cols-3 gap-x-2 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8'
               rowGapClass='pb-12 sm:pb-20'
               estimateRowHeight={320}
@@ -974,13 +1094,17 @@ function DoubanPageClient() {
           )}
 
           {/* 没有更多数据提示 */}
-          {!hasMore && doubanData.length > 0 && (
+          {!hasMore && filteredDoubanData.length > 0 && (
             <div className='text-center text-gray-500 py-8'>已加载全部内容</div>
           )}
 
           {/* 空状态 */}
-          {!loading && doubanData.length === 0 && (
-            <div className='text-center text-gray-500 py-8'>暂无相关内容</div>
+          {!loading && filteredDoubanData.length === 0 && (
+            <div className='text-center text-gray-500 py-8'>
+              {doubanData.length > 0
+                ? '当前评分过滤条件下暂无相关内容'
+                : '暂无相关内容'}
+            </div>
           )}
         </div>
       </div>

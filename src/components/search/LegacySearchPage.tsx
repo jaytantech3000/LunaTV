@@ -17,6 +17,10 @@ import {
   getSearchHistory,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import {
+  filterItemsByMinimumRating,
+  passesGlobalRatingFilter,
+} from '@/lib/rating-filter';
 import { SearchResult } from '@/lib/types';
 
 import {
@@ -36,6 +40,7 @@ import SearchSuggestions from '@/components/SearchSuggestions';
 import VideoCard, { VideoCardHandle } from '@/components/VideoCard';
 import VirtualGrid from '@/components/VirtualGrid';
 
+import { useGlobalRatingFilterStore } from '@/stores/useGlobalRatingFilterStore';
 import {
   buildSearchCacheEntry,
   isSearchCacheEntryFresh,
@@ -102,6 +107,12 @@ function LegacySearchPageClient({
   const totalDoubanCollections = cachedDiscoveryEntry?.totalCollections || 0;
   const completedDoubanCollections =
     cachedDiscoveryEntry?.completedCollections || 0;
+  const isGlobalRatingFilterEnabled = useGlobalRatingFilterStore(
+    (state) => state.enabled
+  );
+  const globalMinimumRating = useGlobalRatingFilterStore(
+    (state) => state.minimumRating
+  );
   // 聚合卡片 refs 与聚合统计缓存
   const groupRefs = useRef<Map<string, React.RefObject<VideoCardHandle>>>(
     new Map()
@@ -488,6 +499,22 @@ function LegacySearchPageClient({
         : b.title.localeCompare(a.title);
     });
   }, [searchResults, filterAll, searchQuery]);
+  const visibleAllResults = useMemo(
+    () =>
+      filterItemsByMinimumRating(
+        filteredAllResults,
+        (item) =>
+          item.douban_id ? doubanRatings[item.douban_id.toString()] || '' : '',
+        isGlobalRatingFilterEnabled,
+        globalMinimumRating
+      ),
+    [
+      doubanRatings,
+      filteredAllResults,
+      globalMinimumRating,
+      isGlobalRatingFilterEnabled,
+    ]
+  );
 
   // 聚合：应用筛选与排序
   const filteredAggResults = useMemo(() => {
@@ -530,6 +557,35 @@ function LegacySearchPageClient({
         : bTitle.localeCompare(aTitle);
     });
   }, [aggregatedResults, filterAgg, searchQuery]);
+  const visibleAggResults = useMemo(
+    () =>
+      filteredAggResults.filter(([_, group]) => {
+        const doubanId = computeGroupStats(group).douban_id;
+        return passesGlobalRatingFilter(
+          doubanId ? doubanRatings[doubanId.toString()] || '' : '',
+          isGlobalRatingFilterEnabled,
+          globalMinimumRating
+        );
+      }),
+    [
+      doubanRatings,
+      filteredAggResults,
+      globalMinimumRating,
+      isGlobalRatingFilterEnabled,
+    ]
+  );
+  const visibleDoubanAggregateItems = useMemo(
+    () =>
+      filterItemsByMinimumRating(
+        doubanAggregateItems,
+        (item) => item.rate,
+        isGlobalRatingFilterEnabled,
+        globalMinimumRating
+      ),
+    [doubanAggregateItems, globalMinimumRating, isGlobalRatingFilterEnabled]
+  );
+  const visibleSearchResultsCount =
+    viewMode === 'agg' ? visibleAggResults.length : visibleAllResults.length;
 
   useEffect(() => {
     if (!active) {
@@ -1082,21 +1138,23 @@ function LegacySearchPageClient({
               </div>
             </label>
           </div>
-          {searchResults.length === 0 ? (
+          {visibleSearchResultsCount === 0 ? (
             isLoading ? (
               <div className='flex h-40 items-center justify-center'>
                 <div className='h-8 w-8 animate-spin rounded-full border-b-2 border-green-500'></div>
               </div>
             ) : (
               <div className='py-8 text-center text-gray-500 dark:text-gray-400'>
-                未找到相关结果
+                {searchResults.length > 0
+                  ? '当前评分过滤条件下暂无相关结果'
+                  : '未找到相关结果'}
               </div>
             )
           ) : (
             <div key={`search-results-${viewMode}`}>
               {viewMode === 'agg' ? (
                 <VirtualGrid
-                  items={filteredAggResults}
+                  items={visibleAggResults}
                   className='grid-cols-3 gap-x-2 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8'
                   rowGapClass='pb-14 sm:pb-20'
                   estimateRowHeight={320}
@@ -1142,7 +1200,7 @@ function LegacySearchPageClient({
                 />
               ) : (
                 <VirtualGrid
-                  items={filteredAllResults}
+                  items={visibleAllResults}
                   className='grid-cols-3 gap-x-2 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8'
                   rowGapClass='pb-14 sm:pb-20'
                   estimateRowHeight={320}
@@ -1180,7 +1238,7 @@ function LegacySearchPageClient({
         <section className='mb-12'>
           <SearchSectionHeading
             title='豆瓣聚合'
-            description={`当前聚合 ${doubanAggregateItems.length} 部内容`}
+            description={`当前聚合 ${visibleDoubanAggregateItems.length} 部内容`}
             meta={`豆瓣列表进度 ${completedDoubanCollections}/${totalDoubanCollections}`}
             actions={
               isDoubanAggregateLoading ? (
@@ -1191,19 +1249,21 @@ function LegacySearchPageClient({
               ) : null
             }
           />
-          {doubanAggregateItems.length === 0 ? (
+          {visibleDoubanAggregateItems.length === 0 ? (
             isDoubanAggregateLoading ? (
               <div className='flex h-40 items-center justify-center'>
                 <div className='h-8 w-8 animate-spin rounded-full border-b-2 border-green-500'></div>
               </div>
             ) : (
               <div className='rounded-2xl border border-dashed border-gray-200 bg-white/70 px-6 py-14 text-center text-sm text-gray-500 dark:border-gray-800 dark:bg-gray-900/50 dark:text-gray-400'>
-                当前暂无可展示的豆瓣聚合内容
+                {doubanAggregateItems.length > 0
+                  ? '当前评分过滤条件下暂无可展示的豆瓣聚合内容'
+                  : '当前暂无可展示的豆瓣聚合内容'}
               </div>
             )
           ) : (
             <VirtualGrid
-              items={doubanAggregateItems}
+              items={visibleDoubanAggregateItems}
               className={DOUBAN_AGGREGATE_GRID_CLASS_NAME}
               rowGapClass='pb-14 sm:pb-20'
               estimateRowHeight={320}

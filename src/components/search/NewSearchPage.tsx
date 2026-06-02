@@ -17,6 +17,7 @@ import {
   getDoubanRecommends,
   getDoubanTitleSearch,
 } from '@/lib/douban.client';
+import { filterItemsByMinimumRating } from '@/lib/rating-filter';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
 import {
@@ -33,6 +34,7 @@ import SearchQuickSelector, {
 import VideoCard from '@/components/VideoCard';
 import VirtualGrid from '@/components/VirtualGrid';
 
+import { useGlobalRatingFilterStore } from '@/stores/useGlobalRatingFilterStore';
 import {
   buildSearchCacheEntry,
   isSearchCacheEntryFresh,
@@ -1214,6 +1216,12 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
     cachedCollectionEntry?.totalCollections ??
     (isTitleSearchMode ? 1 : collectionRequests.length);
   const completedCollections = cachedCollectionEntry?.completedCollections || 0;
+  const isGlobalRatingFilterEnabled = useGlobalRatingFilterStore(
+    (state) => state.enabled
+  );
+  const globalMinimumRating = useGlobalRatingFilterStore(
+    (state) => state.minimumRating
+  );
 
   const visibleCustomTags = useMemo(() => {
     const filteredTags = filterCustomTagsByContentType(
@@ -1276,22 +1284,32 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
       })
       .map(({ item }) => item);
   }, [collectionItems, isTitleSearchMode, submittedQuery]);
+  const visibleItems = useMemo(
+    () =>
+      filterItemsByMinimumRating(
+        filteredItems,
+        (item) => item.rate,
+        isGlobalRatingFilterEnabled,
+        globalMinimumRating
+      ),
+    [filteredItems, globalMinimumRating, isGlobalRatingFilterEnabled]
+  );
 
   const resultsSummary = useMemo(() => {
     if (isTitleSearchMode) {
-      return `豆瓣标题搜索命中 ${filteredItems.length} 条内容`;
+      return `豆瓣标题搜索命中 ${visibleItems.length} 条内容`;
     }
 
     if (submittedQuery) {
-      return `在 ${collectionItems.length} 条聚合内容中匹配到 ${filteredItems.length} 部片名`;
+      return `在 ${collectionItems.length} 条聚合内容中匹配到 ${visibleItems.length} 部片名`;
     }
 
-    return `当前聚合 ${filteredItems.length} 部内容`;
+    return `当前聚合 ${visibleItems.length} 部内容`;
   }, [
     collectionItems.length,
-    filteredItems.length,
     isTitleSearchMode,
     submittedQuery,
+    visibleItems.length,
   ]);
 
   const buildSearchUrl = (
@@ -1718,14 +1736,16 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
           }
         />
 
-        {filteredItems.length === 0 ? (
+        {visibleItems.length === 0 ? (
           isLoading ? (
             <div className='flex h-40 items-center justify-center'>
               <div className='h-8 w-8 animate-spin rounded-full border-b-2 border-green-500' />
             </div>
           ) : (
             <div className='rounded-2xl border border-dashed border-gray-200 bg-white/70 px-6 py-14 text-center text-sm text-gray-500 dark:border-gray-800 dark:bg-gray-900/50 dark:text-gray-400'>
-              {submittedQuery
+              {filteredItems.length > 0
+                ? '当前评分过滤条件下暂无可展示内容'
+                : submittedQuery
                 ? isTitleSearchMode
                   ? '豆瓣标题搜索未找到相关片名'
                   : '当前豆瓣聚合列表中未找到匹配片名'
@@ -1734,7 +1754,7 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
           )
         ) : (
           <VirtualGrid
-            items={filteredItems}
+            items={visibleItems}
             className={DOUBAN_AGGREGATE_GRID_CLASS_NAME}
             rowGapClass='pb-14 sm:pb-20'
             estimateRowHeight={320}
