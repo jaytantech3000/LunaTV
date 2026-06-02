@@ -21,6 +21,8 @@ import PageLayout from '@/components/PageLayout';
 import VideoCard from '@/components/VideoCard';
 import VirtualGrid from '@/components/VirtualGrid';
 
+const LOAD_DEBOUNCE_MS = 24;
+
 function DoubanPageClient() {
   const searchParams = useSearchParams();
   const [doubanData, setDoubanData] = useState<DoubanItem[]>([]);
@@ -31,7 +33,7 @@ function DoubanPageClient() {
   const [selectorsReady, setSelectorsReady] = useState(false);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadingRef = useRef<HTMLDivElement>(null);
-  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimeoutRef = useRef<number | null>(null);
 
   // 用于存储最新参数值的 refs
   const currentParamsRef = useRef({
@@ -108,12 +110,11 @@ function DoubanPageClient() {
 
   // 初始化时标记选择器为准备好状态
   useEffect(() => {
-    // 短暂延迟确保初始状态设置完成
-    const timer = setTimeout(() => {
+    const frameId = window.requestAnimationFrame(() => {
       setSelectorsReady(true);
-    }, 50);
+    });
 
-    return () => clearTimeout(timer);
+    return () => window.cancelAnimationFrame(frameId);
   }, []); // 只在组件挂载时执行一次
 
   // type变化时立即重置selectorsReady（最高优先级）
@@ -177,12 +178,11 @@ function DoubanPageClient() {
       sort: 'T',
     });
 
-    // 使用短暂延迟确保状态更新完成后标记选择器准备好
-    const timer = setTimeout(() => {
+    const frameId = window.requestAnimationFrame(() => {
       setSelectorsReady(true);
-    }, 50);
+    });
 
-    return () => clearTimeout(timer);
+    return () => window.cancelAnimationFrame(frameId);
   }, [type, customCategories]);
 
   // 生成骨架屏数据
@@ -215,7 +215,7 @@ function DoubanPageClient() {
         snapshot1.selectedWeekday === snapshot2.selectedWeekday &&
         snapshot1.currentPage === snapshot2.currentPage &&
         JSON.stringify(snapshot1.multiLevelSelection) ===
-        JSON.stringify(snapshot2.multiLevelSelection)
+          JSON.stringify(snapshot2.multiLevelSelection)
       );
     },
     []
@@ -394,18 +394,18 @@ function DoubanPageClient() {
 
     // 清除之前的防抖定时器
     if (debounceTimeoutRef.current) {
-      clearTimeout(debounceTimeoutRef.current);
+      window.clearTimeout(debounceTimeoutRef.current);
     }
 
-    // 使用防抖机制加载数据，避免连续状态更新触发多次请求
-    debounceTimeoutRef.current = setTimeout(() => {
+    // 保留轻量防抖来合并同一帧内的连续状态变化，但避免切换 tab 时的明显空等。
+    debounceTimeoutRef.current = window.setTimeout(() => {
       loadInitialData();
-    }, 100); // 100ms 防抖延迟
+    }, LOAD_DEBOUNCE_MS);
 
     // 清理函数
     return () => {
       if (debounceTimeoutRef.current) {
-        clearTimeout(debounceTimeoutRef.current);
+        window.clearTimeout(debounceTimeoutRef.current);
       }
     };
   }, [
@@ -687,12 +687,12 @@ function DoubanPageClient() {
     return type === 'movie'
       ? '电影'
       : type === 'tv'
-        ? '电视剧'
-        : type === 'anime'
-          ? '动漫'
-          : type === 'show'
-            ? '综艺'
-            : '自定义';
+      ? '电视剧'
+      : type === 'anime'
+      ? '动漫'
+      : type === 'show'
+      ? '综艺'
+      : '自定义';
   };
 
   const getPageDescription = () => {
@@ -755,12 +755,15 @@ function DoubanPageClient() {
         {/* 内容展示区域 */}
         <div className='max-w-[95%] mx-auto mt-8 overflow-visible'>
           {/* 内容网格 */}
-          {loading || !selectorsReady
-            ? // 显示骨架屏
+          {loading || !selectorsReady ? (
+            // 显示骨架屏
             <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-12 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8 sm:gap-y-20'>
-              {skeletonData.map((index) => <DoubanCardSkeleton key={index} />)}
+              {skeletonData.map((index) => (
+                <DoubanCardSkeleton key={index} />
+              ))}
             </div>
-            : // 显示实际数据
+          ) : (
+            // 显示实际数据
             <VirtualGrid
               items={doubanData}
               className='grid-cols-3 gap-x-2 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8'
@@ -783,7 +786,7 @@ function DoubanPageClient() {
                 </div>
               )}
             />
-          }
+          )}
 
           {/* 加载更多指示器 */}
           {hasMore && !loading && (

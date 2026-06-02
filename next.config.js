@@ -3,6 +3,11 @@
 
 const nextConfig = {
   output: 'standalone',
+  // Keep dev and production build artifacts isolated so a local `next build`
+  // never corrupts a running `next dev` instance.
+  distDir:
+    process.env.NEXT_DIST_DIR ||
+    (process.env.NODE_ENV === 'production' ? '.next-build' : '.next'),
   eslint: {
     dirs: ['src'],
   },

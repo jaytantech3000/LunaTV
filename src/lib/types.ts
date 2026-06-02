@@ -116,6 +116,7 @@ export interface DoubanItem {
   poster: string;
   rate: string;
   year: string;
+  playType?: 'movie' | 'tv';
 }
 
 export interface DoubanResult {

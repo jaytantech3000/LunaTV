@@ -397,6 +397,40 @@ class HybridCacheManager {
 // 获取缓存管理器实例
 const cacheManager = HybridCacheManager.getInstance();
 
+interface AuthenticatedRequestInit extends RequestInit {
+  redirectOnUnauthorized?: boolean;
+}
+
+class DatabaseRequestError extends Error {
+  status: number | null;
+  redirectedToLogin: boolean;
+
+  constructor(
+    message: string,
+    options?: {
+      status?: number | null;
+      redirectedToLogin?: boolean;
+    }
+  ) {
+    super(message);
+    this.name = 'DatabaseRequestError';
+    this.status = options?.status ?? null;
+    this.redirectedToLogin = options?.redirectedToLogin ?? false;
+  }
+}
+
+function isDatabaseRequestError(error: unknown): error is DatabaseRequestError {
+  return error instanceof DatabaseRequestError;
+}
+
+function isUnauthorizedRequestError(error: unknown): boolean {
+  return isDatabaseRequestError(error) && error.status === 401;
+}
+
+function wasRedirectedToLogin(error: unknown): boolean {
+  return isDatabaseRequestError(error) && error.redirectedToLogin;
+}
+
 // ---- 错误处理辅助函数 ----
 /**
  * 数据库操作失败时的通用错误处理
@@ -406,6 +440,10 @@ async function handleDatabaseOperationFailure(
   dataType: 'playRecords' | 'favorites' | 'searchHistory',
   error: any
 ): Promise<void> {
+  if (wasRedirectedToLogin(error) || isUnauthorizedRequestError(error)) {
+    return;
+  }
+
   console.error(`数据库操作失败 (${dataType}):`, error);
   triggerGlobalError(`数据库操作失败`);
 
@@ -442,9 +480,48 @@ async function handleDatabaseOperationFailure(
       })
     );
   } catch (refreshErr) {
+    if (
+      wasRedirectedToLogin(refreshErr) ||
+      isUnauthorizedRequestError(refreshErr)
+    ) {
+      return;
+    }
+
     console.error(`刷新${dataType}缓存失败:`, refreshErr);
     triggerGlobalError(`刷新${dataType}缓存失败`);
   }
+}
+
+async function refreshSearchHistorySilently(): Promise<void> {
+  try {
+    const freshData = await fetchFromApi<string[]>(`/api/searchhistory`, {
+      redirectOnUnauthorized: false,
+    });
+    cacheManager.cacheSearchHistory(freshData);
+    window.dispatchEvent(
+      new CustomEvent('searchHistoryUpdated', {
+        detail: freshData,
+      })
+    );
+  } catch (error) {
+    if (wasRedirectedToLogin(error) || isUnauthorizedRequestError(error)) {
+      return;
+    }
+
+    console.warn('刷新搜索历史缓存失败:', error);
+  }
+}
+
+async function handleSearchHistoryOperationFailure(
+  operation: string,
+  error: unknown
+): Promise<void> {
+  if (wasRedirectedToLogin(error) || isUnauthorizedRequestError(error)) {
+    return;
+  }
+
+  console.warn(`搜索历史${operation}失败:`, error);
+  await refreshSearchHistorySilently();
 }
 
 // 页面加载时清理过期缓存
@@ -458,12 +535,27 @@ if (typeof window !== 'undefined') {
  */
 async function fetchWithAuth(
   url: string,
-  options?: RequestInit
+  options?: AuthenticatedRequestInit
 ): Promise<Response> {
-  const res = await fetch(url, options);
+  const {
+    redirectOnUnauthorized = true,
+    credentials,
+    ...requestOptions
+  } = options || {};
+  const res = await fetch(url, {
+    ...requestOptions,
+    credentials: credentials || 'same-origin',
+  });
+
   if (!res.ok) {
     // 如果是 401 未授权，跳转到登录页面
     if (res.status === 401) {
+      if (!redirectOnUnauthorized) {
+        throw new DatabaseRequestError(`请求 ${url} 失败: ${res.status}`, {
+          status: res.status,
+        });
+      }
+
       // 调用 logout 接口
       try {
         await fetch('/api/logout', {
@@ -477,15 +569,24 @@ async function fetchWithAuth(
       const loginUrl = new URL('/login', window.location.origin);
       loginUrl.searchParams.set('redirect', currentUrl);
       window.location.href = loginUrl.toString();
-      throw new Error('用户未授权，已跳转到登录页面');
+      throw new DatabaseRequestError('用户未授权，已跳转到登录页面', {
+        status: res.status,
+        redirectedToLogin: true,
+      });
     }
-    throw new Error(`请求 ${url} 失败: ${res.status}`);
+
+    throw new DatabaseRequestError(`请求 ${url} 失败: ${res.status}`, {
+      status: res.status,
+    });
   }
   return res;
 }
 
-async function fetchFromApi<T>(path: string): Promise<T> {
-  const res = await fetchWithAuth(path);
+async function fetchFromApi<T>(
+  path: string,
+  options?: AuthenticatedRequestInit
+): Promise<T> {
+  const res = await fetchWithAuth(path, options);
   return (await res.json()) as T;
 }
 
@@ -704,7 +805,9 @@ export async function getSearchHistory(): Promise<string[]> {
 
     if (cachedData) {
       // 返回缓存数据，同时后台异步更新
-      fetchFromApi<string[]>(`/api/searchhistory`)
+      fetchFromApi<string[]>(`/api/searchhistory`, {
+        redirectOnUnauthorized: false,
+      })
         .then((freshData) => {
           // 只有数据真正不同时才更新缓存
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
@@ -718,20 +821,24 @@ export async function getSearchHistory(): Promise<string[]> {
           }
         })
         .catch((err) => {
+          if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+            return;
+          }
+
           console.warn('后台同步搜索历史失败:', err);
-          triggerGlobalError('后台同步搜索历史失败');
         });
 
       return cachedData;
     } else {
       // 缓存为空，直接从 API 获取并缓存
       try {
-        const freshData = await fetchFromApi<string[]>(`/api/searchhistory`);
+        const freshData = await fetchFromApi<string[]>(`/api/searchhistory`, {
+          redirectOnUnauthorized: false,
+        });
         cacheManager.cacheSearchHistory(freshData);
         return freshData;
       } catch (err) {
         console.error('获取搜索历史失败:', err);
-        triggerGlobalError('获取搜索历史失败');
         return [];
       }
     }
@@ -785,9 +892,10 @@ export async function addSearchHistory(keyword: string): Promise<void> {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ keyword: trimmed }),
+        redirectOnUnauthorized: false,
       });
     } catch (err) {
-      await handleDatabaseOperationFailure('searchHistory', err);
+      await handleSearchHistoryOperationFailure('保存', err);
     }
     return;
   }
@@ -835,9 +943,10 @@ export async function clearSearchHistory(): Promise<void> {
     try {
       await fetchWithAuth(`/api/searchhistory`, {
         method: 'DELETE',
+        redirectOnUnauthorized: false,
       });
     } catch (err) {
-      await handleDatabaseOperationFailure('searchHistory', err);
+      await handleSearchHistoryOperationFailure('清空', err);
     }
     return;
   }
@@ -880,10 +989,11 @@ export async function deleteSearchHistory(keyword: string): Promise<void> {
         `/api/searchhistory?keyword=${encodeURIComponent(trimmed)}`,
         {
           method: 'DELETE',
+          redirectOnUnauthorized: false,
         }
       );
     } catch (err) {
-      await handleDatabaseOperationFailure('searchHistory', err);
+      await handleSearchHistoryOperationFailure('删除', err);
     }
     return;
   }
@@ -1358,7 +1468,7 @@ export function subscribeToDataUpdates<T>(
   callback: (data: T) => void
 ): () => void {
   if (typeof window === 'undefined') {
-    return () => { };
+    return () => {};
   }
 
   const handleUpdate = (event: CustomEvent) => {
