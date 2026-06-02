@@ -397,6 +397,31 @@ class HybridCacheManager {
 // 获取缓存管理器实例
 const cacheManager = HybridCacheManager.getInstance();
 
+export function getCachedPlayRecordsSnapshot(): Record<
+  string,
+  PlayRecord
+> | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  if (STORAGE_TYPE !== 'localstorage') {
+    return cacheManager.getCachedPlayRecords();
+  }
+
+  try {
+    const raw = localStorage.getItem(PLAY_RECORDS_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    return JSON.parse(raw) as Record<string, PlayRecord>;
+  } catch (err) {
+    console.error('读取播放记录快照失败:', err);
+    return null;
+  }
+}
+
 interface AuthenticatedRequestInit extends RequestInit {
   redirectOnUnauthorized?: boolean;
 }

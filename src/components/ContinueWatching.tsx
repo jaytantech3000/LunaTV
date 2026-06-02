@@ -1,12 +1,13 @@
 /* eslint-disable no-console */
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 
 import type { PlayRecord } from '@/lib/db.client';
 import {
   clearAllPlayRecords,
   getAllPlayRecords,
+  getCachedPlayRecordsSnapshot,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 
@@ -17,32 +18,45 @@ interface ContinueWatchingProps {
   className?: string;
 }
 
+function mapPlayRecords(
+  allRecords: Record<string, PlayRecord>
+): (PlayRecord & { key: string })[] {
+  return Object.entries(allRecords)
+    .map(([key, record]) => ({
+      ...record,
+      key,
+    }))
+    .sort((a, b) => b.save_time - a.save_time);
+}
+
 export default function ContinueWatching({ className }: ContinueWatchingProps) {
   const [playRecords, setPlayRecords] = useState<
     (PlayRecord & { key: string })[]
   >([]);
   const [loading, setLoading] = useState(true);
 
+  useLayoutEffect(() => {
+    const snapshot = getCachedPlayRecordsSnapshot();
+    if (snapshot === null) {
+      return;
+    }
+
+    setPlayRecords(mapPlayRecords(snapshot));
+    setLoading(false);
+  }, []);
+
   // 处理播放记录数据更新的函数
   const updatePlayRecords = (allRecords: Record<string, PlayRecord>) => {
-    // 将记录转换为数组并根据 save_time 由近到远排序
-    const recordsArray = Object.entries(allRecords).map(([key, record]) => ({
-      ...record,
-      key,
-    }));
-
-    // 按 save_time 降序排序（最新的在前面）
-    const sortedRecords = recordsArray.sort(
-      (a, b) => b.save_time - a.save_time
-    );
-
-    setPlayRecords(sortedRecords);
+    setPlayRecords(mapPlayRecords(allRecords));
   };
 
   useEffect(() => {
     const fetchPlayRecords = async () => {
       try {
-        setLoading(true);
+        const snapshot = getCachedPlayRecordsSnapshot();
+        if (snapshot === null) {
+          setLoading(true);
+        }
 
         // 从缓存或API获取所有播放记录
         const allRecords = await getAllPlayRecords();

@@ -107,7 +107,7 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
 
   const [active, setActive] = useState(activePath ?? currentFullPath);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (typeof activePath === 'string') {
       setActive(activePath);
     } else {

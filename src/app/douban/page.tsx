@@ -4,7 +4,14 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import { GetBangumiCalendarData } from '@/lib/bangumi.client';
 import {
@@ -21,7 +28,21 @@ import PageLayout from '@/components/PageLayout';
 import VideoCard from '@/components/VideoCard';
 import VirtualGrid from '@/components/VirtualGrid';
 
+import {
+  buildDoubanPageCacheEntry,
+  isDiscoveryCacheEntryFresh,
+  useDiscoveryCacheStore,
+} from '@/stores/useDiscoveryCacheStore';
+
 const LOAD_DEBOUNCE_MS = 24;
+const DEFAULT_MULTI_LEVEL_VALUES = {
+  type: 'all',
+  region: 'all',
+  year: 'all',
+  platform: 'all',
+  label: 'all',
+  sort: 'T',
+} as const;
 
 function DoubanPageClient() {
   const searchParams = useSearchParams();
@@ -32,8 +53,9 @@ function DoubanPageClient() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [selectorsReady, setSelectorsReady] = useState(false);
   const observerRef = useRef<IntersectionObserver | null>(null);
-  const loadingRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef<HTMLDivElement | null>(null);
   const debounceTimeoutRef = useRef<number | null>(null);
+  const loadedPageIndexRef = useRef(-1);
 
   // 用于存储最新参数值的 refs
   const currentParamsRef = useRef({
@@ -69,17 +91,88 @@ function DoubanPageClient() {
   // MultiLevelSelector 状态
   const [multiLevelValues, setMultiLevelValues] = useState<
     Record<string, string>
-  >({
-    type: 'all',
-    region: 'all',
-    year: 'all',
-    platform: 'all',
-    label: 'all',
-    sort: 'T',
-  });
+  >({ ...DEFAULT_MULTI_LEVEL_VALUES });
 
   // 星期选择器状态
   const [selectedWeekday, setSelectedWeekday] = useState<string>('');
+  const hasDiscoveryCacheHydrated = useDiscoveryCacheStore(
+    (state) => state.hasHydrated
+  );
+  const setDoubanPageEntry = useDiscoveryCacheStore(
+    (state) => state.setDoubanPageEntry
+  );
+
+  const normalizedSelectedWeekday =
+    type === 'anime' && primarySelection === '每日放送'
+      ? selectedWeekday || '-'
+      : '-';
+  const normalizedCacheFilters = useMemo(() => {
+    if (type === 'anime' && primarySelection !== '每日放送') {
+      return {
+        type: 'all',
+        region: multiLevelValues.region || 'all',
+        year: multiLevelValues.year || 'all',
+        platform: multiLevelValues.platform || 'all',
+        label: multiLevelValues.label || 'all',
+        sort: multiLevelValues.sort || 'T',
+      };
+    }
+
+    if (primarySelection === '全部') {
+      return {
+        type: multiLevelValues.type || 'all',
+        region: multiLevelValues.region || 'all',
+        year: multiLevelValues.year || 'all',
+        platform: multiLevelValues.platform || 'all',
+        label: multiLevelValues.label || 'all',
+        sort: multiLevelValues.sort || 'T',
+      };
+    }
+
+    return { ...DEFAULT_MULTI_LEVEL_VALUES };
+  }, [
+    multiLevelValues.label,
+    multiLevelValues.platform,
+    multiLevelValues.region,
+    multiLevelValues.sort,
+    multiLevelValues.type,
+    multiLevelValues.year,
+    primarySelection,
+    type,
+  ]);
+  const doubanCacheKey = useMemo(
+    () =>
+      [
+        type,
+        primarySelection,
+        secondarySelection,
+        normalizedSelectedWeekday,
+        normalizedCacheFilters.type,
+        normalizedCacheFilters.region,
+        normalizedCacheFilters.year,
+        normalizedCacheFilters.platform,
+        normalizedCacheFilters.label,
+        normalizedCacheFilters.sort,
+      ].join(':'),
+    [
+      normalizedCacheFilters.label,
+      normalizedCacheFilters.platform,
+      normalizedCacheFilters.region,
+      normalizedCacheFilters.sort,
+      normalizedCacheFilters.type,
+      normalizedCacheFilters.year,
+      normalizedSelectedWeekday,
+      primarySelection,
+      secondarySelection,
+      type,
+    ]
+  );
+  const cachedDoubanPageEntry = useDiscoveryCacheStore(
+    (state) => state.doubanPageEntries[doubanCacheKey]
+  );
+  const hasFreshDoubanPageCache = isDiscoveryCacheEntryFresh(
+    cachedDoubanPageEntry
+  );
 
   // 获取自定义分类数据
   useEffect(() => {
@@ -108,23 +201,15 @@ function DoubanPageClient() {
     currentPage,
   ]);
 
-  // 初始化时标记选择器为准备好状态
-  useEffect(() => {
-    const frameId = window.requestAnimationFrame(() => {
-      setSelectorsReady(true);
-    });
-
-    return () => window.cancelAnimationFrame(frameId);
-  }, []); // 只在组件挂载时执行一次
-
-  // type变化时立即重置selectorsReady（最高优先级）
-  useEffect(() => {
+  // 在布局阶段同步切换 type，避免先渲染一帧旧/空状态导致闪烁
+  useLayoutEffect(() => {
     setSelectorsReady(false);
-    setLoading(true); // 立即显示loading状态
-  }, [type]);
+    setLoading(true);
+    setCurrentPage(0);
+    setHasMore(true);
+    setIsLoadingMore(false);
+    loadedPageIndexRef.current = -1;
 
-  // 当type变化时重置选择器状态
-  useEffect(() => {
     if (type === 'custom' && customCategories.length > 0) {
       // 自定义分类模式：优先选择 movie，如果没有 movie 则选择 tv
       const types = Array.from(
@@ -169,21 +254,27 @@ function DoubanPageClient() {
     }
 
     // 清空 MultiLevelSelector 状态
-    setMultiLevelValues({
-      type: 'all',
-      region: 'all',
-      year: 'all',
-      platform: 'all',
-      label: 'all',
-      sort: 'T',
-    });
+    setMultiLevelValues({ ...DEFAULT_MULTI_LEVEL_VALUES });
+    setSelectedWeekday('');
 
-    const frameId = window.requestAnimationFrame(() => {
+    if (type !== 'custom' || customCategories.length > 0) {
       setSelectorsReady(true);
-    });
-
-    return () => window.cancelAnimationFrame(frameId);
+    }
   }, [type, customCategories]);
+
+  // 先在布局阶段复用目标缓存，避免 tab 切换时内容区先闪成空白/骨架
+  useLayoutEffect(() => {
+    if (!hasDiscoveryCacheHydrated || !cachedDoubanPageEntry) {
+      return;
+    }
+
+    loadedPageIndexRef.current = cachedDoubanPageEntry.loadedPageIndex;
+    setDoubanData(cachedDoubanPageEntry.items);
+    setCurrentPage(cachedDoubanPageEntry.loadedPageIndex);
+    setHasMore(cachedDoubanPageEntry.hasMore);
+    setIsLoadingMore(false);
+    setLoading(false);
+  }, [cachedDoubanPageEntry, hasDiscoveryCacheHydrated]);
 
   // 生成骨架屏数据
   const skeletonData = Array.from({ length: 25 }, (_, index) => index);
@@ -221,6 +312,35 @@ function DoubanPageClient() {
     []
   );
 
+  const isBaseSnapshotEqual = useCallback(
+    (
+      snapshot1: {
+        type: string;
+        primarySelection: string;
+        secondarySelection: string;
+        multiLevelSelection: Record<string, string>;
+        selectedWeekday: string;
+      },
+      snapshot2: {
+        type: string;
+        primarySelection: string;
+        secondarySelection: string;
+        multiLevelSelection: Record<string, string>;
+        selectedWeekday: string;
+      }
+    ) => {
+      return (
+        snapshot1.type === snapshot2.type &&
+        snapshot1.primarySelection === snapshot2.primarySelection &&
+        snapshot1.secondarySelection === snapshot2.secondarySelection &&
+        snapshot1.selectedWeekday === snapshot2.selectedWeekday &&
+        JSON.stringify(snapshot1.multiLevelSelection) ===
+          JSON.stringify(snapshot2.multiLevelSelection)
+      );
+    },
+    []
+  );
+
   // 生成API请求参数的辅助函数
   const getRequestParams = useCallback(
     (pageStart: number) => {
@@ -249,6 +369,10 @@ function DoubanPageClient() {
 
   // 防抖的数据加载函数
   const loadInitialData = useCallback(async () => {
+    if (!hasDiscoveryCacheHydrated) {
+      return;
+    }
+
     // 创建当前参数的快照
     const requestSnapshot = {
       type,
@@ -256,15 +380,17 @@ function DoubanPageClient() {
       secondarySelection,
       multiLevelSelection: multiLevelValues,
       selectedWeekday,
-      currentPage: 0,
     };
+
+    if (hasFreshDoubanPageCache) {
+      setLoading(false);
+      return;
+    }
 
     try {
       setLoading(true);
-      // 确保在加载初始数据时重置页面状态
-      setDoubanData([]);
       setCurrentPage(0);
-      setHasMore(true);
+      loadedPageIndexRef.current = -1;
       setIsLoadingMore(false);
 
       let data: DoubanResult;
@@ -358,11 +484,28 @@ function DoubanPageClient() {
       if (data.code === 200) {
         // 检查参数是否仍然一致，如果一致才设置数据
         // 使用 ref 获取最新的当前值
-        const currentSnapshot = { ...currentParamsRef.current };
+        const currentSnapshot = {
+          type: currentParamsRef.current.type,
+          primarySelection: currentParamsRef.current.primarySelection,
+          secondarySelection: currentParamsRef.current.secondarySelection,
+          multiLevelSelection: currentParamsRef.current.multiLevelSelection,
+          selectedWeekday: currentParamsRef.current.selectedWeekday,
+        };
 
-        if (isSnapshotEqual(requestSnapshot, currentSnapshot)) {
+        if (isBaseSnapshotEqual(requestSnapshot, currentSnapshot)) {
           setDoubanData(data.list);
+          setCurrentPage(0);
+          loadedPageIndexRef.current = 0;
           setHasMore(data.list.length !== 0);
+          setDoubanPageEntry(
+            doubanCacheKey,
+            buildDoubanPageCacheEntry({
+              items: data.list,
+              loadedPageIndex: 0,
+              hasMore: data.list.length !== 0,
+              updatedAt: Date.now(),
+            })
+          );
           setLoading(false);
         } else {
           console.log('参数不一致，不执行任何操作，避免设置过期数据');
@@ -376,19 +519,24 @@ function DoubanPageClient() {
       setLoading(false); // 发生错误时总是停止loading状态
     }
   }, [
+    hasDiscoveryCacheHydrated,
     type,
     primarySelection,
     secondarySelection,
     multiLevelValues,
     selectedWeekday,
+    hasFreshDoubanPageCache,
     getRequestParams,
     customCategories,
+    isBaseSnapshotEqual,
+    doubanCacheKey,
+    setDoubanPageEntry,
   ]);
 
   // 只在选择器准备好后才加载数据
   useEffect(() => {
     // 只有在选择器准备好时才开始加载
-    if (!selectorsReady) {
+    if (!hasDiscoveryCacheHydrated || !selectorsReady) {
       return;
     }
 
@@ -409,6 +557,7 @@ function DoubanPageClient() {
       }
     };
   }, [
+    hasDiscoveryCacheHydrated,
     selectorsReady,
     type,
     primarySelection,
@@ -421,6 +570,10 @@ function DoubanPageClient() {
   // 单独处理 currentPage 变化（加载更多）
   useEffect(() => {
     if (currentPage > 0) {
+      if (currentPage <= loadedPageIndexRef.current) {
+        return;
+      }
+
       const fetchMoreData = async () => {
         // 创建当前参数的快照
         const requestSnapshot = {
@@ -521,7 +674,21 @@ function DoubanPageClient() {
             const currentSnapshot = { ...currentParamsRef.current };
 
             if (isSnapshotEqual(requestSnapshot, currentSnapshot)) {
-              setDoubanData((prev) => [...prev, ...data.list]);
+              let nextItems: DoubanItem[] = [];
+              setDoubanData((prev) => {
+                nextItems = [...prev, ...data.list];
+                return nextItems;
+              });
+              setDoubanPageEntry(
+                doubanCacheKey,
+                buildDoubanPageCacheEntry({
+                  items: nextItems,
+                  loadedPageIndex: currentPage,
+                  hasMore: data.list.length !== 0,
+                  updatedAt: Date.now(),
+                })
+              );
+              loadedPageIndexRef.current = currentPage;
               setHasMore(data.list.length !== 0);
             } else {
               console.log('参数不一致，不执行任何操作，避免设置过期数据');
@@ -546,6 +713,9 @@ function DoubanPageClient() {
     customCategories,
     multiLevelValues,
     selectedWeekday,
+    doubanCacheKey,
+    isSnapshotEqual,
+    setDoubanPageEntry,
   ]);
 
   // 设置滚动监听
@@ -590,16 +760,10 @@ function DoubanPageClient() {
         setDoubanData([]);
         setHasMore(true);
         setIsLoadingMore(false);
+        loadedPageIndexRef.current = -1;
 
         // 清空 MultiLevelSelector 状态
-        setMultiLevelValues({
-          type: 'all',
-          region: 'all',
-          year: 'all',
-          platform: 'all',
-          label: 'all',
-          sort: 'T',
-        });
+        setMultiLevelValues({ ...DEFAULT_MULTI_LEVEL_VALUES });
 
         // 如果是自定义分类模式，同时更新一级和二级选择器
         if (type === 'custom' && customCategories.length > 0) {
@@ -641,6 +805,7 @@ function DoubanPageClient() {
         setDoubanData([]);
         setHasMore(true);
         setIsLoadingMore(false);
+        loadedPageIndexRef.current = -1;
         setSecondarySelection(value);
       }
     },
@@ -673,6 +838,7 @@ function DoubanPageClient() {
       setDoubanData([]);
       setHasMore(true);
       setIsLoadingMore(false);
+      loadedPageIndexRef.current = -1;
       setMultiLevelValues(values);
     },
     [multiLevelValues]
@@ -755,7 +921,7 @@ function DoubanPageClient() {
         {/* 内容展示区域 */}
         <div className='max-w-[95%] mx-auto mt-8 overflow-visible'>
           {/* 内容网格 */}
-          {loading || !selectorsReady ? (
+          {!selectorsReady || (loading && doubanData.length === 0) ? (
             // 显示骨架屏
             <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-12 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8 sm:gap-y-20'>
               {skeletonData.map((index) => (
@@ -793,9 +959,7 @@ function DoubanPageClient() {
             <div
               ref={(el) => {
                 if (el && el.offsetParent !== null) {
-                  (
-                    loadingRef as React.MutableRefObject<HTMLDivElement | null>
-                  ).current = el;
+                  loadingRef.current = el;
                 }
               }}
               className='flex justify-center mt-12 py-8'

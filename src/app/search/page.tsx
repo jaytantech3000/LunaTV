@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useLayoutEffect, useState } from 'react';
 
 import LegacySearchPage from '@/components/search/LegacySearchPage';
 import NewSearchPage from '@/components/search/NewSearchPage';
@@ -19,7 +19,7 @@ function SearchPageSwitcher() {
     })
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setMountedModes((previousModes) =>
       previousModes[mode]
         ? previousModes
