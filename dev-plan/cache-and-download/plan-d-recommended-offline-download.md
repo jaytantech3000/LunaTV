@@ -1,6 +1,8 @@
 # LunaTV 离线下载推荐实施方案
 
-> **推荐实施路径** · 修正版 A 为主 · 预估 3-5 周  
+配套执行清单见 `dev-plan/cache-and-download/plan-d-implementation-checklist.md`。
+
+> **推荐实施路径** · 修正版 A 为主 · 预估 4-6 周  
 > **二期增强** · Background Fetch（Chromium） · 追加 1-2 周
 
 ## 背景
@@ -20,7 +22,7 @@ LunaTV 当前已经具备 PWA、HLS.js、ArtPlayer、Zustand 和基础本地缓�
 - Cache Storage + Service Worker + 前台分片下载
 - 保留现有 ArtPlayer + HLS.js
 - 保留 next-pwa，但改为自定义 runtime caching 和 custom worker
-- 下载元数据存 Zustand + localStorage，媒体二进制存 Cache Storage
+- 轻量元数据存 Zustand + localStorage，大体量资源索引存 IndexedDB，媒体二进制存 Cache Storage
 
 ### v1 不采用
 
@@ -84,6 +86,8 @@ interface ApiSite {
 
 - `src/lib/config.ts`
 - `src/lib/admin.types.ts`
+- `getAvailableApiSites()` 返回结构
+- `src/lib/downstream.ts`
 - `src/app/api/admin/source/route.ts`
 - `src/app/admin/page.tsx`
 - 配置文件解析与保存逻辑
@@ -93,6 +97,7 @@ interface ApiSite {
 - `v1` 仅支持 `ua` 和 `referer`
 - 不支持任意自定义 headers
 - 不支持依赖 cookie / token 的站点
+- 若搜索接口或详情接口本身也依赖 `ua/referer`，则 `search/detail` 下游请求也同步透传
 
 管理策略固定为：
 
@@ -115,8 +120,26 @@ interface ApiSite {
 - `m3u8` 路由负责重写 manifest
 - 所有重写后的 `segment/key/嵌套 m3u8` URL 必须显式带 `source`
 - 上游请求统一带源配置中的 `ua/referer`
-- VOD 播放页统一走代理入口
+- `/play` 内所有 VOD 播放入口都只消费 helper 生成的 same-origin 代理 URL
 - 直播页维持现状，不参与这次离线下载改造
+
+### 3. `/play` 引入 VOD URL 归一化层
+
+当前 `/play` 不只是播放器在消费 `episodes[]`，优选测速、初始化选源、切换源、离线模式都会直接读这个字段。
+
+因此不能只在播放器初始化时改 URL，必须新增统一归一化层，例如：
+
+- `normalizeVodDetailForPlayback(detail: SearchResult): SearchResult`
+- `normalizeVodEpisodeUrl(source, upstreamUrl): string`
+
+固定要求：
+
+- `/api/detail` 返回后的 `detail`
+- 搜索结果进入优选逻辑前的候选源
+- 在线换源结果
+- `/play?offline=1` 本地拼装的 `detail`
+
+都必须先经过同一套 URL 归一化逻辑，再进入后续播放、测速和下载流程。
 
 ## v1 架构
 
@@ -156,7 +179,7 @@ export interface DownloadTask {
   title: string
   episodeTitle: string
   originalM3u8Url: string
-  proxiedM3u8Url: string
+  entryManifestUrl: string
   status: 'queued' | 'downloading' | 'paused' | 'done' | 'error'
   progress: number
   totalResources: number
@@ -170,8 +193,10 @@ export interface DownloadTask {
 export interface DownloadedEpisodeMeta {
   episodeIndex: number
   episodeTitle: string
-  proxiedM3u8Url: string
-  cachedRequestUrls: string[]
+  rootManifestUrl: string
+  playbackManifestUrl: string
+  cacheIndexId: string
+  resourceCount: number
   sizeBytes: number
   downloadedAt: number
 }
@@ -225,8 +250,9 @@ interface DownloadStore {
 持久化策略：
 
 - `persist + localStorage`
-- 只保存任务和元数据
+- 只保存轻量任务和元数据
 - 不保存二进制媒体
+- 不保存逐片 URL 数组
 - `contentId` 固定为 `${source}:${vodId}`
 - `task.id` 固定为 `${contentId}:${episodeIndex}`
 
@@ -246,6 +272,21 @@ interface DownloadStore {
 
 - `lunatv-vod-manifest-v1`
 - `lunatv-vod-media-v1`
+
+### `src/lib/download/resource-index.ts`
+
+专门封装 IndexedDB 中的大体量资源索引：
+
+- `saveEpisodeIndex(cacheIndexId, urls)`
+- `getEpisodeIndex(cacheIndexId)`
+- `deleteEpisodeIndex(cacheIndexId)`
+- `clearEpisodeIndexes()`
+
+规则：
+
+- 只存每集的 same-origin 代理 URL 列表
+- 不把 URL 列表放进 Zustand `persist`
+- `cacheIndexId` 固定为 `${contentId}:${episodeIndex}`
 
 ### `src/lib/download/proxy-url.ts`
 
@@ -271,7 +312,7 @@ interface DownloadStore {
 - query 参数顺序固定为 `source` 在前、`url` 在后
 - 不允许在可缓存 URL 上附加时间戳、调试标记、随机参数
 - manifest 重写、播放器入口、下载器、删除逻辑都必须调用同一组 helper
-- `cachedRequestUrls` 只保存 helper 生成后的 same-origin URL，不保存原始上游 URL
+- IndexedDB 中的资源索引只保存 helper 生成后的 same-origin URL，不保存原始上游 URL
 
 ### `src/lib/download/manifest.ts`
 
@@ -279,7 +320,7 @@ interface DownloadStore {
 
 - 拉取代理后的顶层 m3u8
 - 递归处理 master playlist
-- `v1` 固定选择第一个 media playlist
+- `v1` 固定选择一个 media playlist 作为离线播放目标
 - 收集：
   - 顶层 manifest URL
   - 目标 media playlist URL
@@ -293,7 +334,9 @@ interface DownloadStore {
 - 仅支持标准 HLS VOD
 - 忽略广告过滤开关，始终按原始资源图谱缓存
 - 顶层 manifest、选中的 media playlist、key、segment、`EXT-X-MAP` 都要写入待缓存资源集合
-- master playlist 只选择第一个 media playlist，不保留多清晰度分支
+- 若顶层是 master playlist，下载器必须产出明确的 `playbackManifestUrl`
+- 离线播放只进入选中的具体 media playlist，不再回到顶层 master playlist
+- `v1` 不保留多清晰度分支，不支持离线质量切换
 
 ### `src/lib/download/manager.ts`
 
@@ -314,7 +357,8 @@ interface DownloadStore {
 - `cancel` 删除未完成任务及已写入的本任务缓存
 - `delete` 删除已完成集对应缓存和元数据
 - 下载创建时同步保存当前影片的离线播放快照：`source/sourceName/title/poster/year/desc/typeName/doubanId/episodeTitles`
-- `manager` 写入 `cachedRequestUrls` 时必须使用 `proxy-url.ts` 生成的 URL
+- `manager` 写入资源索引时必须使用 `proxy-url.ts` 生成的 URL
+- `manager` 完成下载后，必须把该集的 `playbackManifestUrl`、`cacheIndexId` 和 `resourceCount` 一并写入元数据
 
 ### 离线播放启动闭环
 
@@ -332,8 +376,8 @@ interface DownloadStore {
 - `/play` 检测到 `offline=1` 后，不再请求 `/api/detail` 或 `/api/search`
 - `/play` 直接从 `downloadStore.library` 读取 `DownloadedContentMeta`
 - 页面本地合成 `SearchResult` 风格的 `detail`
-- `detail.episodes` 由 `DownloadedContentMeta.episodes[].proxiedM3u8Url` 生成
-- 初始 `videoUrl` 直接使用对应集的 `proxiedM3u8Url`
+- `detail.episodes` 由 `DownloadedContentMeta.episodes[].playbackManifestUrl` 生成
+- 初始 `videoUrl` 直接使用对应集的 `playbackManifestUrl`
 - 离线模式下 `availableSources` 固定为空，不显示在线换源结果
 - 若 `contentId` 不存在、该集不存在或缓存校验失败，跳回 `/downloads` 并提示重新下载
 
@@ -431,6 +475,7 @@ interface DownloadStore {
 
 - `lunatv-vod-manifest-v1`
 - `lunatv-vod-media-v1`
+- `resource-index` IndexedDB
 - `downloadStore`
 
 `v1` 不支持多用户共享离线媒体。
@@ -491,6 +536,7 @@ interface DownloadStore {
 - `config` 视频源只展示 `ua/referer`
 - 新增 `/api/proxy/vod/*`
 - 新增 `proxy-url.ts`，统一代理 URL 生成规则
+- 新增 `/play` URL 归一化层，保证测速、切源、播放、离线入口都只消费代理 URL
 - 播放页 VOD 统一切到代理入口
 
 ### Phase 2：下载引擎
@@ -498,9 +544,11 @@ interface DownloadStore {
 - 实现 `types.ts`
 - 实现 `downloadStore.ts`
 - 实现 `cache.ts`
+- 实现 `resource-index.ts`
 - 实现 `session.ts`
 - 实现 `manifest.ts`
 - 实现 `manager.ts`
+- 完成账号边界最小闭环：登出清理、401 清理、用户切换清理
 - 打通 `/play?offline=1` 离线启动模式
 - 完成单集下载与删除闭环
 
@@ -519,13 +567,7 @@ interface DownloadStore {
 - UserMenu 新设置项
 - 自动预取下一集
 
-### Phase 5：账号边界
-
-- 登出清理离线缓存
-- 401 自动注销清理离线缓存
-- 用户切换清理旧离线缓存
-
-### Phase 6：二期增强（可选）
+### Phase 5：二期增强（可选）
 
 - Chromium Background Fetch
 - 关闭标签页继续下载
@@ -537,12 +579,15 @@ interface DownloadStore {
 
 - manifest 解析：
   - 普通 media playlist
-  - master playlist -> 选首个 media playlist
+  - master playlist -> 选定单一 media playlist，并产出 `playbackManifestUrl`
   - AES-128 key
   - `EXT-X-MAP`
 - URL helper：
   - 同一 `source + upstreamUrl` 始终生成同一代理 URL
   - 所有缓存键均为 same-origin VOD 代理 URL
+- 资源索引：
+  - 大体量 URL 列表不进入 Zustand `persist`
+  - `cacheIndexId` 能正确保存、读取、删除
 - 下载器：
   - 创建任务
   - pause / resume
@@ -558,6 +603,7 @@ interface DownloadStore {
 - `/api/proxy/vod/m3u8` 重写后的所有 URL 都带 `source`
 - `ua/referer` 能传到上游请求
 - 下载完成后断网可播放
+- master playlist 下载完成后，离线播放不再请求未缓存的其他清晰度分支
 - `/play?offline=1` 在断网下不请求 `/api/detail`
 - 删除单集只删除该集缓存
 - 自动预取能正确加入下一集任务
@@ -596,13 +642,14 @@ interface DownloadStore {
 - Safari 仍可能在存储压力下清理 Cache Storage
 - 部分源站仅靠 `ua/referer` 仍可能不够
 - 通过代理下载会放大服务端流量压力
+- `/play` 当前对原始 `episodes[]` 的依赖点较多，代理 URL 归一化改造面会比表面看起来更大
 
 ## 工期评估
 
 ### v1
 
 - 中高难度
-- 预估 `3-5 周`
+- 预估 `4-6 周`
 
 ### v2 Background Fetch
 
