@@ -12,6 +12,8 @@ export interface ApiSite {
   api: string;
   name: string;
   detail?: string;
+  ua?: string;
+  referer?: string;
 }
 
 export interface LiveCfg {
@@ -100,10 +102,12 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
   apiSitesFromFile.forEach(([key, site]) => {
     const existingSource = currentApiSites.get(key);
     if (existingSource) {
-      // 如果已存在，只覆盖 name、api、detail 和 from
+      // 如果已存在，只覆盖来自配置文件的字段
       existingSource.name = site.name;
       existingSource.api = site.api;
       existingSource.detail = site.detail;
+      existingSource.ua = site.ua;
+      existingSource.referer = site.referer;
       existingSource.from = 'config';
     } else {
       // 如果不存在，创建新条目
@@ -112,6 +116,8 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
         name: site.name,
         api: site.api,
         detail: site.detail,
+        ua: site.ua,
+        referer: site.referer,
         from: 'config',
         disabled: false,
       });
@@ -279,6 +285,8 @@ async function getInitConfig(configFile: string, subConfig: {
       name: site.name,
       api: site.api,
       detail: site.detail,
+      ua: site.ua,
+      referer: site.referer,
       from: 'config',
       disabled: false,
     });
@@ -474,6 +482,8 @@ export async function getAvailableApiSites(user?: string): Promise<ApiSite[]> {
       name: s.name,
       api: s.api,
       detail: s.detail,
+      ua: s.ua,
+      referer: s.referer,
     }));
   }
 
@@ -495,6 +505,8 @@ export async function getAvailableApiSites(user?: string): Promise<ApiSite[]> {
         name: s.name,
         api: s.api,
         detail: s.detail,
+        ua: s.ua,
+        referer: s.referer,
       }));
     }
   }

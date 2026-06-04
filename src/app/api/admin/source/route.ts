@@ -9,10 +9,28 @@ import { db } from '@/lib/db';
 export const runtime = 'nodejs';
 
 // 支持的操作类型
-type Action = 'add' | 'disable' | 'enable' | 'delete' | 'sort' | 'batch_disable' | 'batch_enable' | 'batch_delete';
+type Action =
+  | 'add'
+  | 'edit'
+  | 'disable'
+  | 'enable'
+  | 'delete'
+  | 'sort'
+  | 'batch_disable'
+  | 'batch_enable'
+  | 'batch_delete';
 
 interface BaseBody {
   action?: Action;
+}
+
+function normalizeRequiredString(value?: string): string {
+  return value?.trim() || '';
+}
+
+function normalizeOptionalString(value?: string): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
 
 export async function POST(request: NextRequest) {
@@ -37,7 +55,7 @@ export async function POST(request: NextRequest) {
     const username = authInfo.username;
 
     // 基础校验
-    const ACTIONS: Action[] = ['add', 'disable', 'enable', 'delete', 'sort', 'batch_disable', 'batch_enable', 'batch_delete'];
+    const ACTIONS: Action[] = ['add', 'edit', 'disable', 'enable', 'delete', 'sort', 'batch_disable', 'batch_enable', 'batch_delete'];
     if (!username || !action || !ACTIONS.includes(action)) {
       return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
     }
@@ -57,12 +75,27 @@ export async function POST(request: NextRequest) {
 
     switch (action) {
       case 'add': {
-        const { key, name, api, detail } = body as {
+        const {
+          key: rawKey,
+          name: rawName,
+          api: rawApi,
+          detail: rawDetail,
+          ua: rawUa,
+          referer: rawReferer,
+        } = body as {
           key?: string;
           name?: string;
           api?: string;
           detail?: string;
+          ua?: string;
+          referer?: string;
         };
+        const key = normalizeRequiredString(rawKey);
+        const name = normalizeRequiredString(rawName);
+        const api = normalizeRequiredString(rawApi);
+        const detail = normalizeOptionalString(rawDetail);
+        const ua = normalizeOptionalString(rawUa);
+        const referer = normalizeOptionalString(rawReferer);
         if (!key || !name || !api) {
           return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
         }
@@ -74,9 +107,57 @@ export async function POST(request: NextRequest) {
           name,
           api,
           detail,
+          ua,
+          referer,
           from: 'custom',
           disabled: false,
         });
+        break;
+      }
+      case 'edit': {
+        const {
+          key: rawKey,
+          name: rawName,
+          api: rawApi,
+          detail: rawDetail,
+          ua: rawUa,
+          referer: rawReferer,
+        } = body as {
+          key?: string;
+          name?: string;
+          api?: string;
+          detail?: string;
+          ua?: string;
+          referer?: string;
+        };
+        const key = normalizeRequiredString(rawKey);
+        const name = normalizeRequiredString(rawName);
+        const api = normalizeRequiredString(rawApi);
+        const detail = normalizeOptionalString(rawDetail);
+        const ua = normalizeOptionalString(rawUa);
+        const referer = normalizeOptionalString(rawReferer);
+
+        if (!key || !name || !api) {
+          return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
+        }
+
+        const entry = adminConfig.SourceConfig.find((s) => s.key === key);
+        if (!entry) {
+          return NextResponse.json({ error: '源不存在' }, { status: 404 });
+        }
+
+        if (entry.from === 'config') {
+          return NextResponse.json(
+            { error: '配置文件来源的视频源不可编辑' },
+            { status: 400 }
+          );
+        }
+
+        entry.name = name;
+        entry.api = api;
+        entry.detail = detail;
+        entry.ua = ua;
+        entry.referer = referer;
         break;
       }
       case 'disable': {

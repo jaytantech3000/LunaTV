@@ -18,6 +18,29 @@ interface ApiSearchItem {
   type_name?: string;
 }
 
+function buildDownstreamHeaders(
+  apiSite: ApiSite,
+  baseHeaders: Record<string, string>
+): HeadersInit {
+  const headers = { ...baseHeaders };
+  const customUa = apiSite.ua?.trim();
+  const customReferer = apiSite.referer?.trim();
+
+  if (customUa) {
+    headers['User-Agent'] = customUa;
+  }
+
+  if (customReferer) {
+    headers.Referer = customReferer;
+  }
+
+  return headers;
+}
+
+function hasCustomDetailUrl(apiSite: ApiSite): boolean {
+  return Boolean(apiSite.detail?.trim().match(/^https?:\/\//i));
+}
+
 /**
  * 通用的带缓存搜索函数
  */
@@ -44,7 +67,7 @@ async function searchWithCache(
 
   try {
     const response = await fetch(url, {
-      headers: API_CONFIG.search.headers,
+      headers: buildDownstreamHeaders(apiSite, API_CONFIG.search.headers),
       signal: controller.signal,
     });
 
@@ -201,7 +224,7 @@ export async function getDetailFromApi(
   apiSite: ApiSite,
   id: string
 ): Promise<SearchResult> {
-  if (apiSite.detail) {
+  if (hasCustomDetailUrl(apiSite)) {
     return handleSpecialSourceDetail(id, apiSite);
   }
 
@@ -211,7 +234,7 @@ export async function getDetailFromApi(
   const timeoutId = setTimeout(() => controller.abort(), 10000);
 
   const response = await fetch(detailUrl, {
-    headers: API_CONFIG.detail.headers,
+    headers: buildDownstreamHeaders(apiSite, API_CONFIG.detail.headers),
     signal: controller.signal,
   });
 
@@ -296,7 +319,7 @@ async function handleSpecialSourceDetail(
   const timeoutId = setTimeout(() => controller.abort(), 10000);
 
   const response = await fetch(detailUrl, {
-    headers: API_CONFIG.detail.headers,
+    headers: buildDownstreamHeaders(apiSite, API_CONFIG.detail.headers),
     signal: controller.signal,
   });
 

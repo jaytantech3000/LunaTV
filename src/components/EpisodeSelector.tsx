@@ -42,6 +42,7 @@ interface EpisodeSelectorProps {
   sourceSearchError?: string | null;
   /** 预计算的测速结果，避免重复测速 */
   precomputedVideoInfo?: Map<string, VideoInfo>;
+  sourceSwitchEnabled?: boolean;
 }
 
 /**
@@ -61,6 +62,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   sourceSearchLoading = false,
   sourceSearchError = null,
   precomputedVideoInfo,
+  sourceSwitchEnabled = true,
 }) => {
   const router = useRouter();
   const pageCount = Math.ceil(totalEpisodes / episodesPerPage);
@@ -89,8 +91,14 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   // 主要的 tab 状态：'episodes' 或 'sources'
   // 当只有一集时默认展示 "换源"，并隐藏 "选集" 标签
   const [activeTab, setActiveTab] = useState<'episodes' | 'sources'>(
-    totalEpisodes > 1 ? 'episodes' : 'sources'
+    totalEpisodes > 1 || !sourceSwitchEnabled ? 'episodes' : 'sources'
   );
+
+  useEffect(() => {
+    if (!sourceSwitchEnabled && activeTab === 'sources') {
+      setActiveTab('episodes');
+    }
+  }, [activeTab, sourceSwitchEnabled]);
 
   // 当前分页索引（0 开始）
   const initialPage = Math.floor((value - 1) / episodesPerPage);
@@ -313,6 +321,9 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
 
   // 处理换源tab点击，只在点击时才搜索
   const handleSourceTabClick = () => {
+    if (!sourceSwitchEnabled) {
+      return;
+    }
     setActiveTab('sources');
   };
 
@@ -352,7 +363,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     <div className='md:ml-2 px-4 py-0 h-full rounded-xl bg-black/10 dark:bg-white/5 flex flex-col border border-white/0 dark:border-white/30 overflow-hidden'>
       {/* 主要的 Tab 切换 - 无缝融入设计 */}
       <div className='flex mb-1 -mx-6 flex-shrink-0'>
-        {totalEpisodes > 1 && (
+        {(totalEpisodes > 1 || !sourceSwitchEnabled) && (
           <div
             onClick={() => setActiveTab('episodes')}
             className={`flex-1 py-3 px-6 text-center cursor-pointer transition-all duration-200 font-medium
@@ -363,19 +374,21 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
             `.trim()}
           >
             选集
+            </div>
+          )}
+        {sourceSwitchEnabled && (
+          <div
+            onClick={handleSourceTabClick}
+            className={`flex-1 py-3 px-6 text-center cursor-pointer transition-all duration-200 font-medium
+              ${activeTab === 'sources'
+                ? 'text-green-600 dark:text-green-400'
+                : 'text-gray-700 hover:text-green-600 bg-black/5 dark:bg-white/5 dark:text-gray-300 dark:hover:text-green-400 hover:bg-black/3 dark:hover:bg-white/3'
+              }
+            `.trim()}
+          >
+            换源
           </div>
         )}
-        <div
-          onClick={handleSourceTabClick}
-          className={`flex-1 py-3 px-6 text-center cursor-pointer transition-all duration-200 font-medium
-            ${activeTab === 'sources'
-              ? 'text-green-600 dark:text-green-400'
-              : 'text-gray-700 hover:text-green-600 bg-black/5 dark:bg-white/5 dark:text-gray-300 dark:hover:text-green-400 hover:bg-black/3 dark:hover:bg-white/3'
-            }
-          `.trim()}
-        >
-          换源
-        </div>
       </div>
 
       {/* 选集 Tab 内容 */}

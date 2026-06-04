@@ -1,4 +1,5 @@
 import { BackButton } from './BackButton';
+import DownloadSessionSync from './DownloadSessionSync';
 import GlobalRatingFilterControl from './GlobalRatingFilterControl';
 import MobileBottomNav from './MobileBottomNav';
 import MobileHeader from './MobileHeader';
@@ -14,6 +15,8 @@ interface PageLayoutProps {
 const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
   return (
     <div className='w-full min-h-screen'>
+      <DownloadSessionSync />
+
       {/* 移动端头部 */}
       <MobileHeader showBackButton={['/play', '/live'].includes(activePath)} />
 

@@ -15,6 +15,7 @@
  */
 
 import { getAuthInfoFromBrowserCookie } from './auth';
+import { purgeOfflineDownloads } from './download/session';
 import { SkipConfig } from './types';
 
 // 全局错误触发函数
@@ -583,6 +584,7 @@ async function fetchWithAuth(
 
       // 调用 logout 接口
       try {
+        await purgeOfflineDownloads();
         await fetch('/api/logout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

@@ -36,6 +36,8 @@ export interface AdminConfig {
     name: string;
     api: string;
     detail?: string;
+    ua?: string;
+    referer?: string;
     from: 'config' | 'custom';
     disabled?: boolean;
   }[];

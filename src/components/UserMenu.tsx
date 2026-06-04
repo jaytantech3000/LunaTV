@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { purgeOfflineDownloads } from '@/lib/download/session';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
@@ -259,6 +260,12 @@ export const UserMenu: React.FC = () => {
   };
 
   const handleLogout = async () => {
+    try {
+      await purgeOfflineDownloads();
+    } catch (error) {
+      console.error('清理离线下载失败:', error);
+    }
+
     try {
       await fetch('/api/logout', {
         method: 'POST',

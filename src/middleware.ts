@@ -119,9 +119,13 @@ function handleAuthFailure(
 function shouldSkipAuth(pathname: string): boolean {
   const skipPaths = [
     '/_next',
+    '/_offline',
     '/favicon.ico',
     '/robots.txt',
     '/manifest.json',
+    '/sw.js',
+    '/workbox-',
+    '/worker-',
     '/icons/',
     '/logo.png',
     '/screenshot.png',

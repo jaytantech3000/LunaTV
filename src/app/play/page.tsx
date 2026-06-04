@@ -21,11 +21,33 @@ import {
   saveSkipConfig,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import {
+  matchDownloadResponse,
+  putDownloadResponse,
+} from '@/lib/download/cache';
+import { normalizeVodDetailForPlayback } from '@/lib/download/normalize';
+import {
+  buildOfflinePlaybackDetail,
+  validateDownloadedEpisode,
+} from '@/lib/download/offline';
+import { looksLikeManifestUrl } from '@/lib/download/proxy-url';
+import { hasExplicitExclusiveByteRange } from '@/lib/download/range';
+import { sanitizeVodManifestContent } from '@/lib/download/sanitize-manifest';
+import { ensureOfflineServiceWorkerReady } from '@/lib/download/service-worker';
+import { buildDownloadContentId } from '@/lib/download/types';
+import {
+  filterPlaybackSearchResults,
+  getPrefetchedPlaybackSource,
+  preferBestPlaybackSource,
+} from '@/lib/playback-source-prefetch';
 import { SearchResult } from '@/lib/types';
-import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
+import { processImageUrl } from '@/lib/utils';
 
+import CurrentEpisodeDownloadControl from '@/components/CurrentEpisodeDownloadControl';
 import EpisodeSelector from '@/components/EpisodeSelector';
 import PageLayout from '@/components/PageLayout';
+
+import { useDownloadStore } from '@/stores/downloadStore';
 
 // 扩展 HTMLVideoElement 类型以支持 hls 属性
 declare global {
@@ -42,9 +64,211 @@ interface WakeLockSentinel {
   removeEventListener(type: 'release', listener: () => void): void;
 }
 
+const EPISODE_PROGRESS_STORAGE_KEY = 'moontv-episode-progress-v1';
+
+function buildEpisodeProgressStorageKey(
+  source: string,
+  id: string,
+  episodeNumber: number
+): string {
+  return `${generateStorageKey(source, id)}:${episodeNumber}`;
+}
+
+function readEpisodeProgressSnapshot(): Record<string, number> {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const raw = localStorage.getItem(EPISODE_PROGRESS_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    return JSON.parse(raw) as Record<string, number>;
+  } catch (error) {
+    console.warn('读取分集播放进度失败:', error);
+    return {};
+  }
+}
+
+function writeEpisodeProgressSnapshot(snapshot: Record<string, number>): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    localStorage.setItem(
+      EPISODE_PROGRESS_STORAGE_KEY,
+      JSON.stringify(snapshot)
+    );
+  } catch (error) {
+    console.warn('写入分集播放进度失败:', error);
+  }
+}
+
+function readStoredEpisodeProgress(
+  source: string,
+  id: string,
+  episodeNumber: number
+): number | null {
+  const snapshot = readEpisodeProgressSnapshot();
+  const value =
+    snapshot[buildEpisodeProgressStorageKey(source, id, episodeNumber)];
+
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+function persistStoredEpisodeProgress(
+  source: string,
+  id: string,
+  episodeNumber: number,
+  progressSeconds: number
+): void {
+  if (!Number.isFinite(progressSeconds) || progressSeconds <= 0) {
+    return;
+  }
+
+  const snapshot = readEpisodeProgressSnapshot();
+  snapshot[buildEpisodeProgressStorageKey(source, id, episodeNumber)] =
+    Math.floor(progressSeconds);
+  writeEpisodeProgressSnapshot(snapshot);
+}
+
+function buildCachedLoaderStats() {
+  const start = performance.now();
+
+  return {
+    aborted: false,
+    loaded: 0,
+    retry: 0,
+    total: 0,
+    chunkCount: 0,
+    bwEstimate: 0,
+    loading: {
+      start,
+      first: start,
+      end: 0,
+    },
+    parsing: {
+      start: 0,
+      end: 0,
+    },
+    buffering: {
+      start: 0,
+      first: 0,
+      end: 0,
+    },
+  };
+}
+
+async function buildCachedRangeResponse(
+  cachedResponse: Response,
+  rangeStart?: number,
+  rangeEnd?: number
+): Promise<Response> {
+  if (!hasExplicitExclusiveByteRange(rangeStart, rangeEnd)) {
+    return cachedResponse;
+  }
+
+  const fullBuffer = await cachedResponse.arrayBuffer();
+  const totalLength = fullBuffer.byteLength;
+  const start = Math.max(0, rangeStart || 0);
+  const endExclusive =
+    rangeEnd === undefined || rangeEnd === null
+      ? totalLength
+      : Math.min(totalLength, rangeEnd);
+
+  if (start >= totalLength || start >= endExclusive) {
+    const headers = new Headers(cachedResponse.headers);
+    headers.set('Accept-Ranges', 'bytes');
+    headers.set('Content-Range', `bytes */${totalLength}`);
+    headers.set('Content-Length', '0');
+    return new Response(null, {
+      status: 416,
+      headers,
+    });
+  }
+
+  const slicedBuffer = fullBuffer.slice(start, endExclusive);
+  const headers = new Headers(cachedResponse.headers);
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set(
+    'Content-Range',
+    `bytes ${start}-${endExclusive - 1}/${totalLength}`
+  );
+  headers.set('Content-Length', String(slicedBuffer.byteLength));
+
+  return new Response(slicedBuffer, {
+    status: 206,
+    headers,
+  });
+}
+
+async function readOfflineCachedVodResponse(
+  url: string,
+  options: {
+    rangeStart?: number;
+    rangeEnd?: number;
+  } = {}
+): Promise<Response | undefined> {
+  let cachedResponse = await matchDownloadResponse(url);
+
+  if (!cachedResponse && typeof navigator !== 'undefined' && navigator.onLine) {
+    try {
+      const networkResponse = await fetch(url, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+      });
+
+      if (networkResponse.ok) {
+        await putDownloadResponse(url, networkResponse.clone());
+        cachedResponse = networkResponse;
+      }
+    } catch (_) {
+      // 离线兜底读取失败时交给调用方统一处理
+    }
+  }
+
+  if (!cachedResponse) {
+    return undefined;
+  }
+
+  return buildCachedRangeResponse(
+    cachedResponse,
+    options.rangeStart,
+    options.rangeEnd
+  );
+}
+
 function PlayPageClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const isOfflineMode = searchParams.get('offline') === '1';
+  const initialEpisodeQueryIndex = (() => {
+    const rawEpisode = Number(searchParams.get('episode') || '1');
+    if (!Number.isFinite(rawEpisode) || rawEpisode <= 0) {
+      return 0;
+    }
+    return rawEpisode - 1;
+  })();
+  const offlineContentId =
+    searchParams.get('contentId') ||
+    (() => {
+      const source = searchParams.get('source') || '';
+      const id = searchParams.get('id') || '';
+      if (!source || !id) {
+        return '';
+      }
+
+      return buildDownloadContentId(source, id);
+    })();
+  const downloadStoreHydrated = useDownloadStore((state) => state.hasHydrated);
+  const offlineContent = useDownloadStore((state) =>
+    offlineContentId ? state.library[offlineContentId] : undefined
+  );
 
   // -----------------------------------------------------------------------------
   // 状态变量（State）
@@ -120,7 +344,10 @@ function PlayPageClient() {
     needPreferRef.current = needPrefer;
   }, [needPrefer]);
   // 集数相关
-  const [currentEpisodeIndex, setCurrentEpisodeIndex] = useState(0);
+  const [currentEpisodeIndex, setCurrentEpisodeIndex] = useState(
+    initialEpisodeQueryIndex
+  );
+  const [offlineEpisodeOrder, setOfflineEpisodeOrder] = useState<number[]>([]);
 
   const currentSourceRef = useRef(currentSource);
   const currentIdRef = useRef(currentId);
@@ -128,6 +355,9 @@ function PlayPageClient() {
   const videoYearRef = useRef(videoYear);
   const detailRef = useRef<SearchResult | null>(detail);
   const currentEpisodeIndexRef = useRef(currentEpisodeIndex);
+  const offlineEpisodeOrderRef = useRef<number[]>([]);
+  const episodeProgressMapRef = useRef<Record<number, number>>({});
+  const playbackHistoryRestoreKeyRef = useRef('');
 
   // 同步最新值到 refs
   useEffect(() => {
@@ -145,6 +375,9 @@ function PlayPageClient() {
     videoTitle,
     videoYear,
   ]);
+  useEffect(() => {
+    offlineEpisodeOrderRef.current = offlineEpisodeOrder;
+  }, [offlineEpisodeOrder]);
 
   // 视频播放地址
   const [videoUrl, setVideoUrl] = useState('');
@@ -201,7 +434,12 @@ function PlayPageClient() {
   const lastSaveTimeRef = useRef<number>(0);
 
   const artPlayerRef = useRef<any>(null);
+  const playerSessionRef = useRef<{
+    isOfflineMode: boolean;
+    playbackType: string;
+  } | null>(null);
   const artRef = useRef<HTMLDivElement | null>(null);
+  const initStartedRef = useRef(false);
 
   // Wake Lock 相关
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
@@ -214,197 +452,11 @@ function PlayPageClient() {
   const preferBestSource = async (
     sources: SearchResult[]
   ): Promise<SearchResult> => {
-    if (sources.length === 1) return sources[0];
-
-    // 将播放源均分为两批，并发测速各批，避免一次性过多请求
-    const batchSize = Math.ceil(sources.length / 2);
-    const allResults: Array<{
-      source: SearchResult;
-      testResult: { quality: string; loadSpeed: string; pingTime: number };
-    } | null> = [];
-
-    for (let start = 0; start < sources.length; start += batchSize) {
-      const batchSources = sources.slice(start, start + batchSize);
-      const batchResults = await Promise.all(
-        batchSources.map(async (source) => {
-          try {
-            // 检查是否有第一集的播放地址
-            if (!source.episodes || source.episodes.length === 0) {
-              console.warn(`播放源 ${source.source_name} 没有可用的播放地址`);
-              return null;
-            }
-
-            const episodeUrl =
-              source.episodes.length > 1
-                ? source.episodes[1]
-                : source.episodes[0];
-            const testResult = await getVideoResolutionFromM3u8(episodeUrl);
-
-            return {
-              source,
-              testResult,
-            };
-          } catch (error) {
-            return null;
-          }
-        })
-      );
-      allResults.push(...batchResults);
-    }
-
-    // 等待所有测速完成，包含成功和失败的结果
-    // 保存所有测速结果到 precomputedVideoInfo，供 EpisodeSelector 使用（包含错误结果）
-    const newVideoInfoMap = new Map<
-      string,
-      {
-        quality: string;
-        loadSpeed: string;
-        pingTime: number;
-        hasError?: boolean;
-      }
-    >();
-    allResults.forEach((result, index) => {
-      const source = sources[index];
-      const sourceKey = `${source.source}-${source.id}`;
-
-      if (result) {
-        // 成功的结果
-        newVideoInfoMap.set(sourceKey, result.testResult);
-      }
-    });
-
-    // 过滤出成功的结果用于优选计算
-    const successfulResults = allResults.filter(Boolean) as Array<{
-      source: SearchResult;
-      testResult: { quality: string; loadSpeed: string; pingTime: number };
-    }>;
-
-    setPrecomputedVideoInfo(newVideoInfoMap);
-
-    if (successfulResults.length === 0) {
-      console.warn('所有播放源测速都失败，使用第一个播放源');
-      return sources[0];
-    }
-
-    // 找出所有有效速度的最大值，用于线性映射
-    const validSpeeds = successfulResults
-      .map((result) => {
-        const speedStr = result.testResult.loadSpeed;
-        if (speedStr === '未知' || speedStr === '测量中...') return 0;
-
-        const match = speedStr.match(/^([\d.]+)\s*(KB\/s|MB\/s)$/);
-        if (!match) return 0;
-
-        const value = parseFloat(match[1]);
-        const unit = match[2];
-        return unit === 'MB/s' ? value * 1024 : value; // 统一转换为 KB/s
-      })
-      .filter((speed) => speed > 0);
-
-    const maxSpeed = validSpeeds.length > 0 ? Math.max(...validSpeeds) : 1024; // 默认1MB/s作为基准
-
-    // 找出所有有效延迟的最小值和最大值，用于线性映射
-    const validPings = successfulResults
-      .map((result) => result.testResult.pingTime)
-      .filter((ping) => ping > 0);
-
-    const minPing = validPings.length > 0 ? Math.min(...validPings) : 50;
-    const maxPing = validPings.length > 0 ? Math.max(...validPings) : 1000;
-
-    // 计算每个结果的评分
-    const resultsWithScore = successfulResults.map((result) => ({
-      ...result,
-      score: calculateSourceScore(
-        result.testResult,
-        maxSpeed,
-        minPing,
-        maxPing
-      ),
-    }));
-
-    // 按综合评分排序，选择最佳播放源
-    resultsWithScore.sort((a, b) => b.score - a.score);
-
-    console.log('播放源评分排序结果:');
-    resultsWithScore.forEach((result, index) => {
-      console.log(
-        `${index + 1}. ${result.source.source_name
-        } - 评分: ${result.score.toFixed(2)} (${result.testResult.quality}, ${result.testResult.loadSpeed
-        }, ${result.testResult.pingTime}ms)`
-      );
-    });
-
-    return resultsWithScore[0].source;
-  };
-
-  // 计算播放源综合评分
-  const calculateSourceScore = (
-    testResult: {
-      quality: string;
-      loadSpeed: string;
-      pingTime: number;
-    },
-    maxSpeed: number,
-    minPing: number,
-    maxPing: number
-  ): number => {
-    let score = 0;
-
-    // 分辨率评分 (40% 权重)
-    const qualityScore = (() => {
-      switch (testResult.quality) {
-        case '4K':
-          return 100;
-        case '2K':
-          return 85;
-        case '1080p':
-          return 75;
-        case '720p':
-          return 60;
-        case '480p':
-          return 40;
-        case 'SD':
-          return 20;
-        default:
-          return 0;
-      }
-    })();
-    score += qualityScore * 0.4;
-
-    // 下载速度评分 (40% 权重) - 基于最大速度线性映射
-    const speedScore = (() => {
-      const speedStr = testResult.loadSpeed;
-      if (speedStr === '未知' || speedStr === '测量中...') return 30;
-
-      // 解析速度值
-      const match = speedStr.match(/^([\d.]+)\s*(KB\/s|MB\/s)$/);
-      if (!match) return 30;
-
-      const value = parseFloat(match[1]);
-      const unit = match[2];
-      const speedKBps = unit === 'MB/s' ? value * 1024 : value;
-
-      // 基于最大速度线性映射，最高100分
-      const speedRatio = speedKBps / maxSpeed;
-      return Math.min(100, Math.max(0, speedRatio * 100));
-    })();
-    score += speedScore * 0.4;
-
-    // 网络延迟评分 (20% 权重) - 基于延迟范围线性映射
-    const pingScore = (() => {
-      const ping = testResult.pingTime;
-      if (ping <= 0) return 0; // 无效延迟给默认分
-
-      // 如果所有延迟都相同，给满分
-      if (maxPing === minPing) return 100;
-
-      // 线性映射：最低延迟=100分，最高延迟=0分
-      const pingRatio = (maxPing - ping) / (maxPing - minPing);
-      return Math.min(100, Math.max(0, pingRatio * 100));
-    })();
-    score += pingScore * 0.2;
-
-    return Math.round(score * 100) / 100; // 保留两位小数
+    const { bestSource, videoInfoMap } = await preferBestPlaybackSource(
+      sources
+    );
+    setPrecomputedVideoInfo(videoInfoMap);
+    return bestSource;
   };
 
   // 更新视频地址
@@ -424,6 +476,10 @@ function PlayPageClient() {
     if (newUrl !== videoUrl) {
       setVideoUrl(newUrl);
     }
+  };
+
+  const getPlaybackType = (url: string): string => {
+    return looksLikeManifestUrl(url) ? 'm3u8' : '';
   };
 
   const ensureVideoSource = (video: HTMLVideoElement | null, url: string) => {
@@ -484,11 +540,13 @@ function PlayPageClient() {
         // 销毁 ArtPlayer 实例
         artPlayerRef.current.destroy();
         artPlayerRef.current = null;
+        playerSessionRef.current = null;
 
         console.log('播放器资源已清理');
       } catch (err) {
         console.warn('清理播放器资源时出错:', err);
         artPlayerRef.current = null;
+        playerSessionRef.current = null;
       }
     }
   };
@@ -496,21 +554,30 @@ function PlayPageClient() {
   // 去广告相关函数
   function filterAdsFromM3U8(m3u8Content: string): string {
     if (!m3u8Content) return '';
+    return sanitizeVodManifestContent(m3u8Content);
+  }
 
-    // 按行分割M3U8内容
-    const lines = m3u8Content.split('\n');
-    const filteredLines = [];
+  function buildOfflineHlsErrorMessage(data: any): string | null {
+    const detail = typeof data?.details === 'string' ? data.details : '';
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // 只过滤#EXT-X-DISCONTINUITY标识
-      if (!line.includes('#EXT-X-DISCONTINUITY')) {
-        filteredLines.push(line);
-      }
+    switch (detail) {
+      case 'manifestLoadError':
+      case 'levelLoadError':
+        return '离线播放清单读取失败，请返回下载页重新下载';
+      case 'fragLoadError':
+        return '离线视频分片缺失或缓存异常，请返回下载页重新下载';
+      case 'keyLoadError':
+        return '离线解密密钥缺失或缓存异常，请返回下载页重新下载';
+      case 'manifestIncompatibleCodecsError':
+      case 'bufferAddCodecError':
+        return '离线视频编码当前浏览器不支持，请重新下载其他清晰度后重试';
+      case 'fragParsingError':
+      case 'bufferAppendingError':
+      case 'bufferAppendError':
+        return '离线视频数据损坏或不完整，请返回下载页重新下载';
+      default:
+        return null;
     }
-
-    return filteredLines.join('\n');
   }
 
   // 跳过片头片尾配置相关函数
@@ -616,32 +683,164 @@ function PlayPageClient() {
   };
 
   class CustomHlsJsLoader extends Hls.DefaultConfig.loader {
+    private cacheAbortController: AbortController | null = null;
+
     constructor(config: any) {
       super(config);
-      const load = this.load.bind(this);
-      this.load = function (context: any, config: any, callbacks: any) {
-        // 拦截manifest和level请求
-        if (
-          (context as any).type === 'manifest' ||
-          (context as any).type === 'level'
-        ) {
-          const onSuccess = callbacks.onSuccess;
-          callbacks.onSuccess = function (
-            response: any,
-            stats: any,
-            context: any
+    }
+
+    abort() {
+      this.cacheAbortController?.abort();
+      this.cacheAbortController = null;
+
+      if (typeof super.abort === 'function') {
+        super.abort();
+      }
+    }
+
+    destroy() {
+      this.cacheAbortController?.abort();
+      this.cacheAbortController = null;
+
+      if (typeof super.destroy === 'function') {
+        super.destroy();
+      }
+    }
+
+    load(context: any, config: any, callbacks: any) {
+      const wrappedCallbacks = {
+        ...callbacks,
+        onSuccess: (
+          response: any,
+          stats: any,
+          successContext: any,
+          networkDetails: any
+        ) => {
+          if (
+            blockAdEnabledRef.current &&
+            response.data &&
+            typeof response.data === 'string'
           ) {
-            // 如果是m3u8文件，处理内容以移除广告分段
-            if (response.data && typeof response.data === 'string') {
-              // 过滤掉广告段 - 实现更精确的广告过滤逻辑
-              response.data = filterAdsFromM3U8(response.data);
-            }
-            return onSuccess(response, stats, context, null);
-          };
-        }
-        // 执行原始load方法
-        load(context, config, callbacks);
+            response.data = filterAdsFromM3U8(response.data);
+          }
+
+          return callbacks.onSuccess(
+            response,
+            stats,
+            successContext,
+            networkDetails ?? null
+          );
+        },
       };
+
+      if (!isOfflineMode) {
+        super.load(context, config, wrappedCallbacks);
+        return;
+      }
+
+      const controller = new AbortController();
+      const stats = buildCachedLoaderStats();
+      this.context = context;
+      (this as any).config = config;
+      (this as any).callbacks = wrappedCallbacks;
+      this.stats = stats;
+      this.cacheAbortController = controller;
+
+      void (async () => {
+        try {
+          const cachedResponse = await readOfflineCachedVodResponse(
+            context.url,
+            {
+              rangeStart: context.rangeStart,
+              rangeEnd: context.rangeEnd,
+            }
+          );
+
+          if (controller.signal.aborted) {
+            stats.aborted = true;
+            callbacks.onAbort?.(stats, context, null);
+            return;
+          }
+
+          if (!cachedResponse) {
+            setIsVideoLoading(false);
+            setError('离线缓存缺失，无法继续播放');
+            callbacks.onError(
+              {
+                code: 404,
+                text: '离线缓存缺失，无法继续播放',
+              },
+              context,
+              null,
+              stats
+            );
+            return;
+          }
+
+          (this as any).response = cachedResponse;
+
+          const responseData =
+            context.responseType === 'arraybuffer'
+              ? await cachedResponse.arrayBuffer()
+              : await cachedResponse.text();
+
+          if (controller.signal.aborted) {
+            stats.aborted = true;
+            callbacks.onAbort?.(stats, context, null);
+            return;
+          }
+
+          const end = performance.now();
+          const responseSize =
+            responseData instanceof ArrayBuffer
+              ? responseData.byteLength
+              : responseData.length;
+          stats.loading.first = end;
+          stats.loading.end = end;
+          stats.chunkCount = 1;
+          stats.total = responseSize;
+          stats.loaded = stats.total;
+
+          wrappedCallbacks.onProgress?.(
+            stats,
+            context,
+            responseData,
+            cachedResponse
+          );
+          wrappedCallbacks.onSuccess(
+            {
+              url: cachedResponse.url || context.url,
+              data: responseData,
+              code: cachedResponse.status,
+            },
+            stats,
+            context,
+            cachedResponse
+          );
+        } catch (error) {
+          if (controller.signal.aborted) {
+            stats.aborted = true;
+            callbacks.onAbort?.(stats, context, null);
+            return;
+          }
+
+          callbacks.onError(
+            {
+              code: 0,
+              text: error instanceof Error ? error.message : '读取离线缓存失败',
+            },
+            context,
+            null,
+            stats
+          );
+          setIsVideoLoading(false);
+          setError(error instanceof Error ? error.message : '读取离线缓存失败');
+        } finally {
+          if (this.cacheAbortController === controller) {
+            this.cacheAbortController = null;
+          }
+        }
+      })();
     }
   }
 
@@ -652,6 +851,14 @@ function PlayPageClient() {
 
   // 进入页面时直接获取全部源信息
   useEffect(() => {
+    if (initStartedRef.current) {
+      return;
+    }
+
+    if (isOfflineMode && !downloadStoreHydrated) {
+      return;
+    }
+
     const fetchSourceDetail = async (
       source: string,
       id: string
@@ -663,7 +870,9 @@ function PlayPageClient() {
         if (!detailResponse.ok) {
           throw new Error('获取视频详情失败');
         }
-        const detailData = (await detailResponse.json()) as SearchResult;
+        const detailData = normalizeVodDetailForPlayback(
+          (await detailResponse.json()) as SearchResult
+        );
         setAvailableSources([detailData]);
         return [detailData];
       } catch (err) {
@@ -684,19 +893,13 @@ function PlayPageClient() {
         }
         const data = await response.json();
 
-        // 处理搜索结果，根据规则过滤
-        const results = data.results.filter(
-          (result: SearchResult) =>
-            result.title.replaceAll(' ', '').toLowerCase() ===
-            videoTitleRef.current.replaceAll(' ', '').toLowerCase() &&
-            (videoYearRef.current
-              ? result.year.toLowerCase() === videoYearRef.current.toLowerCase()
-              : true) &&
-            (searchType
-              ? (searchType === 'tv' && result.episodes.length > 1) ||
-              (searchType === 'movie' && result.episodes.length === 1)
-              : true)
-        );
+        const results = filterPlaybackSearchResults(data.results || [], {
+          title: videoTitleRef.current,
+          year: videoYearRef.current,
+          searchType,
+          query,
+          preferBest: optimizationEnabled,
+        });
         setAvailableSources(results);
         return results;
       } catch (err) {
@@ -708,7 +911,85 @@ function PlayPageClient() {
       }
     };
 
+    const initOfflinePlayback = async () => {
+      if (!offlineContent) {
+        setError('未找到离线内容');
+        setLoading(false);
+        return;
+      }
+
+      const { detail: offlineDetail, episodeOrder } =
+        buildOfflinePlaybackDetail(offlineContent);
+
+      if (!offlineDetail.episodes.length) {
+        setError('当前离线内容没有可播放剧集');
+        setLoading(false);
+        return;
+      }
+
+      let targetIndex = 0;
+      const mappedTargetIndex = episodeOrder.findIndex(
+        (episodeIndex) => episodeIndex === initialEpisodeQueryIndex
+      );
+      if (mappedTargetIndex >= 0) {
+        targetIndex = mappedTargetIndex;
+      }
+
+      const targetEpisodeMeta = offlineContent.episodes.find(
+        (episode) => episode.episodeIndex === episodeOrder[targetIndex]
+      );
+
+      if (
+        !targetEpisodeMeta ||
+        !(await validateDownloadedEpisode(targetEpisodeMeta))
+      ) {
+        router.replace('/downloads?error=missing');
+        return;
+      }
+
+      const playableDetail = normalizeVodDetailForPlayback(offlineDetail);
+
+      setNeedPrefer(false);
+      setOfflineEpisodeOrder(episodeOrder);
+      setCurrentSource(playableDetail.source);
+      setCurrentId(playableDetail.id);
+      setVideoYear(playableDetail.year);
+      setVideoTitle(playableDetail.title || videoTitleRef.current);
+      setVideoCover(playableDetail.poster);
+      setVideoDoubanId(playableDetail.douban_id || 0);
+      setAvailableSources([]);
+      setDetail(playableDetail);
+      setCurrentEpisodeIndex(targetIndex);
+
+      const newUrl = new URL(window.location.href);
+      newUrl.searchParams.set('offline', '1');
+      newUrl.searchParams.set('contentId', offlineContent.contentId);
+      newUrl.searchParams.set('source', playableDetail.source);
+      newUrl.searchParams.set('id', playableDetail.id);
+      newUrl.searchParams.set('year', playableDetail.year);
+      newUrl.searchParams.set('title', playableDetail.title);
+      newUrl.searchParams.set('episode', String(episodeOrder[targetIndex] + 1));
+      window.history.replaceState({}, '', newUrl.toString());
+
+      setLoadingStage('ready');
+      setLoadingMessage('✨ 离线内容已就绪，即将开始播放...');
+
+      setTimeout(() => {
+        setLoading(false);
+      }, 300);
+    };
+
     const initAll = async () => {
+      initStartedRef.current = true;
+
+      if (isOfflineMode) {
+        setLoading(true);
+        setLoadingStage('fetching');
+        setLoadingMessage('📦 正在读取离线内容...');
+        await initOfflinePlayback();
+        return;
+      }
+
       if (!currentSource && !currentId && !videoTitle && !searchTitle) {
         setError('缺少必要参数');
         setLoading(false);
@@ -722,7 +1003,26 @@ function PlayPageClient() {
           : '🔍 正在搜索播放源...'
       );
 
-      let sourcesInfo = await fetchSourcesData(searchTitle || videoTitle);
+      const prefetchedSourceResult = getPrefetchedPlaybackSource({
+        title: videoTitleRef.current || videoTitle,
+        year: videoYearRef.current,
+        searchType,
+        query: searchTitle,
+        preferBest: optimizationEnabled,
+      });
+
+      if (prefetchedSourceResult?.videoInfoMap) {
+        setPrecomputedVideoInfo(prefetchedSourceResult.videoInfoMap);
+      } else {
+        setPrecomputedVideoInfo(new Map());
+      }
+
+      let sourcesInfo =
+        prefetchedSourceResult?.sources ||
+        (await fetchSourcesData(searchTitle || videoTitle));
+      if (prefetchedSourceResult?.sources) {
+        setAvailableSources(prefetchedSourceResult.sources);
+      }
       if (
         currentSource &&
         currentId &&
@@ -761,30 +1061,37 @@ function PlayPageClient() {
         setLoadingStage('preferring');
         setLoadingMessage('⚡ 正在优选最佳播放源...');
 
-        detailData = await preferBestSource(sourcesInfo);
+        detailData =
+          prefetchedSourceResult?.bestSource ||
+          (await preferBestSource(sourcesInfo));
       }
 
       console.log(detailData.source, detailData.id);
 
+      const playableDetail = normalizeVodDetailForPlayback(detailData);
+
       setNeedPrefer(false);
-      setCurrentSource(detailData.source);
-      setCurrentId(detailData.id);
-      setVideoYear(detailData.year);
-      setVideoTitle(detailData.title || videoTitleRef.current);
-      setVideoCover(detailData.poster);
-      setVideoDoubanId(detailData.douban_id || 0);
-      setDetail(detailData);
-      if (currentEpisodeIndex >= detailData.episodes.length) {
+      setOfflineEpisodeOrder([]);
+      setCurrentSource(playableDetail.source);
+      setCurrentId(playableDetail.id);
+      setVideoYear(playableDetail.year);
+      setVideoTitle(playableDetail.title || videoTitleRef.current);
+      setVideoCover(playableDetail.poster);
+      setVideoDoubanId(playableDetail.douban_id || 0);
+      setDetail(playableDetail);
+      if (currentEpisodeIndex >= playableDetail.episodes.length) {
         setCurrentEpisodeIndex(0);
       }
 
       // 规范URL参数
       const newUrl = new URL(window.location.href);
-      newUrl.searchParams.set('source', detailData.source);
-      newUrl.searchParams.set('id', detailData.id);
-      newUrl.searchParams.set('year', detailData.year);
-      newUrl.searchParams.set('title', detailData.title);
+      newUrl.searchParams.set('source', playableDetail.source);
+      newUrl.searchParams.set('id', playableDetail.id);
+      newUrl.searchParams.set('year', playableDetail.year);
+      newUrl.searchParams.set('title', playableDetail.title);
       newUrl.searchParams.delete('prefer');
+      newUrl.searchParams.delete('offline');
+      newUrl.searchParams.delete('contentId');
       window.history.replaceState({}, '', newUrl.toString());
 
       setLoadingStage('ready');
@@ -796,14 +1103,45 @@ function PlayPageClient() {
       }, 1000);
     };
 
-    initAll();
-  }, []);
+    void initAll();
+  }, [
+    currentId,
+    currentSource,
+    downloadStoreHydrated,
+    initialEpisodeQueryIndex,
+    isOfflineMode,
+    offlineContent,
+    router,
+    searchTitle,
+    searchType,
+    videoTitle,
+  ]);
+
+  useEffect(() => {
+    episodeProgressMapRef.current = {};
+    playbackHistoryRestoreKeyRef.current = '';
+  }, [currentSource, currentId]);
 
   // 播放记录处理
   useEffect(() => {
-    // 仅在初次挂载时检查播放记录
     const initFromHistory = async () => {
-      if (!currentSource || !currentId) return;
+      if (!currentSource || !currentId || !detail) {
+        return;
+      }
+
+      if (isOfflineMode && offlineEpisodeOrder.length === 0) {
+        return;
+      }
+
+      const restoreKey = `${currentSource}:${currentId}:${
+        isOfflineMode ? offlineEpisodeOrder.join(',') : 'online'
+      }`;
+
+      if (playbackHistoryRestoreKeyRef.current === restoreKey) {
+        return;
+      }
+
+      playbackHistoryRestoreKeyRef.current = restoreKey;
 
       try {
         const allRecords = await getAllPlayRecords();
@@ -811,16 +1149,33 @@ function PlayPageClient() {
         const record = allRecords[key];
 
         if (record) {
-          const targetIndex = record.index - 1;
-          const targetTime = record.play_time;
+          const targetIndex = getPlaybackRecordEpisodeIndex(record.index);
+          const targetTime =
+            readStoredEpisodeProgress(currentSource, currentId, record.index) ||
+            record.play_time;
 
-          // 更新当前选集索引
-          if (targetIndex !== currentEpisodeIndex) {
-            setCurrentEpisodeIndex(targetIndex);
+          if (targetTime > 0) {
+            episodeProgressMapRef.current[record.index] = targetTime;
           }
 
-          // 保存待恢复的播放进度，待播放器就绪后跳转
-          resumeTimeRef.current = targetTime;
+          if (
+            targetIndex >= 0 &&
+            targetIndex < (detail.episodes?.length || 0)
+          ) {
+            if (targetIndex !== currentEpisodeIndexRef.current) {
+              setCurrentEpisodeIndex(targetIndex);
+              updateEpisodeQueryParam(targetIndex);
+            }
+            resumeTimeRef.current = targetTime > 0 ? targetTime : null;
+            return;
+          }
+        }
+
+        const currentEpisodeResumeTime = getEpisodeResumeTime(
+          currentEpisodeIndexRef.current
+        );
+        if (currentEpisodeResumeTime > 0) {
+          resumeTimeRef.current = currentEpisodeResumeTime;
         }
       } catch (err) {
         console.error('读取播放记录失败:', err);
@@ -828,7 +1183,7 @@ function PlayPageClient() {
     };
 
     initFromHistory();
-  }, []);
+  }, [currentId, currentSource, detail, isOfflineMode, offlineEpisodeOrder]);
 
   // 跳过片头片尾配置处理
   useEffect(() => {
@@ -948,25 +1303,192 @@ function PlayPageClient() {
   // ---------------------------------------------------------------------------
   // 集数切换
   // ---------------------------------------------------------------------------
-  // 处理集数切换
-  const handleEpisodeChange = (episodeNumber: number) => {
-    if (episodeNumber >= 0 && episodeNumber < totalEpisodes) {
-      // 在更换集数前保存当前播放进度
-      if (artPlayerRef.current && artPlayerRef.current.paused) {
-        saveCurrentPlayProgress();
-      }
-      setCurrentEpisodeIndex(episodeNumber);
+  const getPlaybackRecordEpisodeNumber = (episodeIndex: number): number => {
+    if (
+      isOfflineMode &&
+      offlineEpisodeOrderRef.current[episodeIndex] !== undefined
+    ) {
+      return offlineEpisodeOrderRef.current[episodeIndex] + 1;
+    }
+
+    return episodeIndex + 1;
+  };
+
+  const getPlaybackRecordEpisodeIndex = (episodeNumber: number): number => {
+    if (isOfflineMode) {
+      return offlineEpisodeOrderRef.current.findIndex(
+        (episodeIndex) => episodeIndex + 1 === episodeNumber
+      );
+    }
+
+    return episodeNumber - 1;
+  };
+
+  const rememberEpisodeProgress = (
+    episodeIndex: number,
+    progressSeconds: number
+  ): void => {
+    if (
+      !currentSourceRef.current ||
+      !currentIdRef.current ||
+      !Number.isFinite(progressSeconds) ||
+      progressSeconds <= 0
+    ) {
+      return;
+    }
+
+    const episodeNumber = getPlaybackRecordEpisodeNumber(episodeIndex);
+    const normalizedProgress = Math.floor(progressSeconds);
+
+    episodeProgressMapRef.current[episodeNumber] = normalizedProgress;
+    persistStoredEpisodeProgress(
+      currentSourceRef.current,
+      currentIdRef.current,
+      episodeNumber,
+      normalizedProgress
+    );
+  };
+
+  const getEpisodeResumeTime = (episodeIndex: number): number => {
+    const episodeNumber = getPlaybackRecordEpisodeNumber(episodeIndex);
+    const cachedProgress = episodeProgressMapRef.current[episodeNumber];
+
+    if (
+      typeof cachedProgress === 'number' &&
+      Number.isFinite(cachedProgress) &&
+      cachedProgress > 0
+    ) {
+      return cachedProgress;
+    }
+
+    if (!currentSourceRef.current || !currentIdRef.current) {
+      return 0;
+    }
+
+    const storedProgress = readStoredEpisodeProgress(
+      currentSourceRef.current,
+      currentIdRef.current,
+      episodeNumber
+    );
+
+    if (storedProgress && storedProgress > 0) {
+      episodeProgressMapRef.current[episodeNumber] = storedProgress;
+      return storedProgress;
+    }
+
+    return 0;
+  };
+
+  const updateEpisodeQueryParam = (episodeIndex: number): void => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const nextEpisodeNumber = getPlaybackRecordEpisodeNumber(episodeIndex);
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set('episode', String(nextEpisodeNumber));
+    window.history.replaceState({}, '', newUrl.toString());
+  };
+
+  // 保存播放进度
+  const saveCurrentPlayProgress = async () => {
+    if (
+      !artPlayerRef.current ||
+      !currentSourceRef.current ||
+      !currentIdRef.current ||
+      !videoTitleRef.current ||
+      !detailRef.current?.source_name
+    ) {
+      return;
+    }
+
+    const player = artPlayerRef.current;
+    const currentTime = player.currentTime || 0;
+    const duration = player.duration || 0;
+
+    // 如果播放时间太短（少于5秒）或者视频时长无效，不保存
+    if (currentTime < 1 || !duration) {
+      return;
+    }
+
+    rememberEpisodeProgress(currentEpisodeIndexRef.current, currentTime);
+
+    try {
+      await savePlayRecord(currentSourceRef.current, currentIdRef.current, {
+        title: videoTitleRef.current,
+        source_name: detailRef.current?.source_name || '',
+        year: detailRef.current?.year,
+        cover: detailRef.current?.poster || '',
+        index: getPlaybackRecordEpisodeNumber(currentEpisodeIndexRef.current),
+        total_episodes: detailRef.current?.episodes.length || 1,
+        play_time: Math.floor(currentTime),
+        total_time: Math.floor(duration),
+        save_time: Date.now(),
+        search_title: searchTitle,
+      });
+
+      lastSaveTimeRef.current = Date.now();
+      console.log('播放进度已保存:', {
+        title: videoTitleRef.current,
+        episode: getPlaybackRecordEpisodeNumber(currentEpisodeIndexRef.current),
+        year: detailRef.current?.year,
+        progress: `${Math.floor(currentTime)}/${Math.floor(duration)}`,
+      });
+    } catch (err) {
+      console.error('保存播放进度失败:', err);
     }
   };
 
-  const handlePreviousEpisode = () => {
-    const d = detailRef.current;
-    const idx = currentEpisodeIndexRef.current;
-    if (d && d.episodes && idx > 0) {
-      if (artPlayerRef.current && !artPlayerRef.current.paused) {
-        saveCurrentPlayProgress();
+  const switchEpisode = (episodeIndex: number) => {
+    const currentDetail = detailRef.current;
+    if (
+      !currentDetail?.episodes ||
+      episodeIndex < 0 ||
+      episodeIndex >= currentDetail.episodes.length ||
+      episodeIndex === currentEpisodeIndexRef.current
+    ) {
+      return;
+    }
+
+    void (async () => {
+      if (isOfflineMode) {
+        const targetOriginalEpisodeIndex =
+          offlineEpisodeOrderRef.current[episodeIndex] ?? episodeIndex;
+        const targetEpisodeMeta = offlineContent?.episodes.find(
+          (episode) => episode.episodeIndex === targetOriginalEpisodeIndex
+        );
+
+        if (!targetEpisodeMeta) {
+          setError('当前离线剧集不存在，请返回下载页重新下载');
+          return;
+        }
+
+        setIsVideoLoading(true);
+        const isEpisodeReady = await validateDownloadedEpisode(targetEpisodeMeta);
+        if (!isEpisodeReady) {
+          setIsVideoLoading(false);
+          setError('离线资源缺失或首片段不可用，请返回下载页重新下载');
+          return;
+        }
       }
-      setCurrentEpisodeIndex(idx - 1);
+
+      void saveCurrentPlayProgress();
+      resumeTimeRef.current = getEpisodeResumeTime(episodeIndex) || 0;
+      setCurrentEpisodeIndex(episodeIndex);
+      updateEpisodeQueryParam(episodeIndex);
+      setError(null);
+    })();
+  };
+
+  // 处理集数切换
+  const handleEpisodeChange = (episodeNumber: number) => {
+    switchEpisode(episodeNumber);
+  };
+
+  const handlePreviousEpisode = () => {
+    const idx = currentEpisodeIndexRef.current;
+    if (idx > 0) {
+      switchEpisode(idx - 1);
     }
   };
 
@@ -974,10 +1496,7 @@ function PlayPageClient() {
     const d = detailRef.current;
     const idx = currentEpisodeIndexRef.current;
     if (d && d.episodes && idx < d.episodes.length - 1) {
-      if (artPlayerRef.current && !artPlayerRef.current.paused) {
-        saveCurrentPlayProgress();
-      }
-      setCurrentEpisodeIndex(idx + 1);
+      switchEpisode(idx + 1);
     }
   };
 
@@ -1074,52 +1593,6 @@ function PlayPageClient() {
   // ---------------------------------------------------------------------------
   // 播放记录相关
   // ---------------------------------------------------------------------------
-  // 保存播放进度
-  const saveCurrentPlayProgress = async () => {
-    if (
-      !artPlayerRef.current ||
-      !currentSourceRef.current ||
-      !currentIdRef.current ||
-      !videoTitleRef.current ||
-      !detailRef.current?.source_name
-    ) {
-      return;
-    }
-
-    const player = artPlayerRef.current;
-    const currentTime = player.currentTime || 0;
-    const duration = player.duration || 0;
-
-    // 如果播放时间太短（少于5秒）或者视频时长无效，不保存
-    if (currentTime < 1 || !duration) {
-      return;
-    }
-
-    try {
-      await savePlayRecord(currentSourceRef.current, currentIdRef.current, {
-        title: videoTitleRef.current,
-        source_name: detailRef.current?.source_name || '',
-        year: detailRef.current?.year,
-        cover: detailRef.current?.poster || '',
-        index: currentEpisodeIndexRef.current + 1, // 转换为1基索引
-        total_episodes: detailRef.current?.episodes.length || 1,
-        play_time: Math.floor(currentTime),
-        total_time: Math.floor(duration),
-        save_time: Date.now(),
-        search_title: searchTitle,
-      });
-
-      lastSaveTimeRef.current = Date.now();
-      console.log('播放进度已保存:', {
-        title: videoTitleRef.current,
-        episode: currentEpisodeIndexRef.current + 1,
-        year: detailRef.current?.year,
-        progress: `${Math.floor(currentTime)}/${Math.floor(duration)}`,
-      });
-    } catch (err) {
-      console.error('保存播放进度失败:', err);
-    }
-  };
 
   useEffect(() => {
     // 页面即将卸载时保存播放进度和清理资源
@@ -1228,6 +1701,68 @@ function PlayPageClient() {
   };
 
   useEffect(() => {
+    let loadingWatchdogTimer: number | null = null;
+    let removeVideoEventListeners: (() => void) | null = null;
+
+    const markVideoReady = () => {
+      if (loadingWatchdogTimer) {
+        window.clearTimeout(loadingWatchdogTimer);
+        loadingWatchdogTimer = null;
+      }
+      setError(null);
+      setIsVideoLoading(false);
+    };
+
+    const attachNativeVideoListeners = (video: HTMLVideoElement | null) => {
+      if (!video) {
+        return () => undefined;
+      }
+
+      const minimumReadyState = isOfflineMode
+        ? HTMLMediaElement.HAVE_FUTURE_DATA
+        : HTMLMediaElement.HAVE_METADATA;
+
+      const handleReady = () => {
+        markVideoReady();
+      };
+
+      const handleMetadata = () => {
+        if (!isOfflineMode) {
+          markVideoReady();
+        }
+      };
+
+      const handleError = () => {
+        if (video.error?.message) {
+          setError(video.error.message);
+        }
+      };
+
+      video.addEventListener('loadedmetadata', handleMetadata);
+      video.addEventListener('loadeddata', handleReady);
+      video.addEventListener('canplay', handleReady);
+      video.addEventListener('playing', handleReady);
+      video.addEventListener('error', handleError);
+
+      if (video.readyState >= minimumReadyState) {
+        handleReady();
+      } else {
+        requestAnimationFrame(() => {
+          if (video.readyState >= minimumReadyState) {
+            handleReady();
+          }
+        });
+      }
+
+      return () => {
+        video.removeEventListener('loadedmetadata', handleMetadata);
+        video.removeEventListener('loadeddata', handleReady);
+        video.removeEventListener('canplay', handleReady);
+        video.removeEventListener('playing', handleReady);
+        video.removeEventListener('error', handleError);
+      };
+    };
+
     if (
       !Artplayer ||
       !Hls ||
@@ -1256,18 +1791,33 @@ function PlayPageClient() {
     }
     console.log(videoUrl);
 
+    const playbackType = getPlaybackType(videoUrl);
+    setIsVideoLoading(true);
+
     // 检测是否为WebKit浏览器
     const isWebkit =
       typeof window !== 'undefined' &&
       typeof (window as any).webkitConvertPointFromNodeToPage === 'function';
 
-    // 非WebKit浏览器且播放器已存在，使用switch方法切换
-    if (!isWebkit && artPlayerRef.current) {
+    // 非 WebKit 且播放模式未切换时，复用现有播放器减少重建成本
+    const canReuseExistingPlayer =
+      !isWebkit &&
+      artPlayerRef.current &&
+      playerSessionRef.current?.isOfflineMode === isOfflineMode &&
+      playerSessionRef.current?.playbackType === playbackType;
+
+    if (canReuseExistingPlayer) {
+      artPlayerRef.current.option.type = playbackType;
       artPlayerRef.current.switch = videoUrl;
-      artPlayerRef.current.title = `${videoTitle} - 第${currentEpisodeIndex + 1
-        }集`;
+      artPlayerRef.current.title = `${videoTitle} - 第${
+        currentEpisodeIndex + 1
+      }集`;
       artPlayerRef.current.poster = videoCover;
-      if (artPlayerRef.current?.video) {
+      playerSessionRef.current = {
+        isOfflineMode,
+        playbackType,
+      };
+      if (artPlayerRef.current?.video && playbackType !== 'm3u8') {
         ensureVideoSource(
           artPlayerRef.current.video as HTMLVideoElement,
           videoUrl
@@ -1321,44 +1871,113 @@ function PlayPageClient() {
         moreVideoAttr: {
           crossOrigin: 'anonymous',
         },
+        type: playbackType,
         // HLS 支持配置
         customType: {
           m3u8: function (video: HTMLVideoElement, url: string) {
             if (!Hls) {
               console.error('HLS.js 未加载');
+              setIsVideoLoading(false);
+              setError('HLS.js 未加载');
+              return;
+            }
+
+            if (typeof Hls.isSupported === 'function' && !Hls.isSupported()) {
+              if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                void (async () => {
+                  if (isOfflineMode) {
+                    const serviceWorkerReady =
+                      await ensureOfflineServiceWorkerReady();
+                    if (!serviceWorkerReady) {
+                      setIsVideoLoading(false);
+                      setError(
+                        process.env.NODE_ENV === 'development'
+                          ? '当前开发模式不提供完整离线缓存，请改用 pnpm preview:offline 后重试'
+                          : '离线代理尚未就绪，请刷新页面后重试'
+                      );
+                      return;
+                    }
+                  }
+
+                  ensureVideoSource(video, url);
+                  video.src = url;
+                  video.load();
+                  void video.play().catch(() => undefined);
+                  if (!isOfflineMode) {
+                    markVideoReady();
+                  }
+                })();
+                return;
+              }
+
+              setIsVideoLoading(false);
+              setError('当前浏览器不支持 HLS 播放');
               return;
             }
 
             if (video.hls) {
               video.hls.destroy();
             }
-            const hls = new Hls({
+            const hlsConfig: Record<string, any> = {
               debug: false, // 关闭日志
-              enableWorker: true, // WebWorker 解码，降低主线程压力
-              lowLatencyMode: true, // 开启低延迟 LL-HLS
+              enableWorker: !isOfflineMode, // 离线场景优先稳定性，减少 Worker 变量
+              lowLatencyMode: !isOfflineMode, // 离线场景不需要 LL-HLS，避免请求 part/preload 资源
 
               /* 缓冲/内存相关 */
               maxBufferLength: 30, // 前向缓冲最大 30s，过大容易导致高延迟
               backBufferLength: 30, // 仅保留 30s 已播放内容，避免内存占用
               maxBufferSize: 60 * 1000 * 1000, // 约 60MB，超出后触发清理
+              loader: CustomHlsJsLoader,
+            };
 
-              /* 自定义loader */
-              loader: blockAdEnabledRef.current
-                ? CustomHlsJsLoader
-                : Hls.DefaultConfig.loader,
+            const hls = new Hls(hlsConfig);
+
+            hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+              if (
+                !isOfflineMode &&
+                video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+              ) {
+                markVideoReady();
+              }
             });
 
-            hls.loadSource(url);
-            hls.attachMedia(video);
-            video.hls = hls;
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+              void video.play().catch(() => undefined);
+              if (!isOfflineMode) {
+                markVideoReady();
+              }
+            });
 
-            ensureVideoSource(video, url);
+            hls.on(Hls.Events.FRAG_BUFFERED, () => {
+              markVideoReady();
+            });
 
-            hls.on(Hls.Events.ERROR, function (event: any, data: any) {
+	            hls.loadSource(url);
+	            hls.attachMedia(video);
+	            video.hls = hls;
+
+	            hls.on(Hls.Events.ERROR, function (event: any, data: any) {
               console.error('HLS Error:', event, data);
+              const offlineErrorMessage = isOfflineMode
+                ? buildOfflineHlsErrorMessage(data)
+                : null;
+
+              if (isOfflineMode && offlineErrorMessage) {
+                setIsVideoLoading(false);
+                setError(offlineErrorMessage);
+                hls.destroy();
+                return;
+              }
+
               if (data.fatal) {
                 switch (data.type) {
                   case Hls.ErrorTypes.NETWORK_ERROR:
+                    if (isOfflineMode) {
+                      setIsVideoLoading(false);
+                      setError('离线资源缺失或缓存异常，请返回下载页重新下载');
+                      hls.destroy();
+                      break;
+                    }
                     console.log('网络错误，尝试恢复...');
                     hls.startLoad();
                     break;
@@ -1390,15 +2009,16 @@ function PlayPageClient() {
                 localStorage.setItem('enable_blockad', String(newVal));
                 if (artPlayerRef.current) {
                   resumeTimeRef.current = artPlayerRef.current.currentTime;
-                  if (
-                    artPlayerRef.current.video &&
-                    artPlayerRef.current.video.hls
-                  ) {
-                    artPlayerRef.current.video.hls.destroy();
-                  }
-                  artPlayerRef.current.destroy();
-                  artPlayerRef.current = null;
-                }
+	                  if (
+	                    artPlayerRef.current.video &&
+	                    artPlayerRef.current.video.hls
+	                  ) {
+	                    artPlayerRef.current.video.hls.destroy();
+	                  }
+	                  artPlayerRef.current.destroy();
+	                  artPlayerRef.current = null;
+	                  playerSessionRef.current = null;
+	                }
                 setBlockAdEnabled(newVal);
               } catch (_) {
                 // ignore
@@ -1486,12 +2106,29 @@ function PlayPageClient() {
               handleNextEpisode();
             },
           },
-        ],
-      });
+	        ],
+	      });
+	      playerSessionRef.current = {
+	        isOfflineMode,
+	        playbackType,
+	      };
+
+	      removeVideoEventListeners = attachNativeVideoListeners(
+	        artPlayerRef.current?.video as HTMLVideoElement | null
+	      );
 
       // 监听播放器事件
       artPlayerRef.current.on('ready', () => {
-        setError(null);
+        const video = artPlayerRef.current?.video as
+          | HTMLVideoElement
+          | undefined;
+        if (
+          !isOfflineMode &&
+          video?.readyState &&
+          video.readyState >= HTMLMediaElement.HAVE_METADATA
+        ) {
+          markVideoReady();
+        }
 
         // 播放器就绪后，如果正在播放则请求 Wake Lock
         if (artPlayerRef.current && !artPlayerRef.current.paused) {
@@ -1523,6 +2160,12 @@ function PlayPageClient() {
       });
       artPlayerRef.current.on('video:ratechange', () => {
         lastPlaybackRateRef.current = artPlayerRef.current.playbackRate;
+      });
+
+      artPlayerRef.current.on('video:loadedmetadata', () => {
+        if (!isOfflineMode) {
+          markVideoReady();
+        }
       });
 
       // 监听视频可播放事件，这时恢复播放进度更可靠
@@ -1561,7 +2204,7 @@ function PlayPageClient() {
         }, 0);
 
         // 隐藏换源加载状态
-        setIsVideoLoading(false);
+        markVideoReady();
       });
 
       // 监听视频时间更新事件，实现跳过片头片尾
@@ -1592,7 +2235,7 @@ function PlayPageClient() {
           skipConfigRef.current.outro_time < 0 &&
           duration > 0 &&
           currentTime >
-          artPlayerRef.current.duration + skipConfigRef.current.outro_time
+            artPlayerRef.current.duration + skipConfigRef.current.outro_time
         ) {
           if (
             currentEpisodeIndexRef.current <
@@ -1621,7 +2264,7 @@ function PlayPageClient() {
         const idx = currentEpisodeIndexRef.current;
         if (d && d.episodes && idx < d.episodes.length - 1) {
           setTimeout(() => {
-            setCurrentEpisodeIndex(idx + 1);
+            switchEpisode(idx + 1);
           }, 1000);
         }
       });
@@ -1642,17 +2285,46 @@ function PlayPageClient() {
         saveCurrentPlayProgress();
       });
 
-      if (artPlayerRef.current?.video) {
-        ensureVideoSource(
-          artPlayerRef.current.video as HTMLVideoElement,
-          videoUrl
-        );
+	      if (artPlayerRef.current?.video && playbackType !== 'm3u8') {
+	        ensureVideoSource(
+	          artPlayerRef.current.video as HTMLVideoElement,
+	          videoUrl
+	        );
+	      }
+
+      if (isOfflineMode) {
+        loadingWatchdogTimer = window.setTimeout(() => {
+          const video = artPlayerRef.current?.video as
+            | HTMLVideoElement
+            | undefined;
+
+          if (
+            video &&
+            (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA ||
+              video.buffered.length > 0)
+          ) {
+            markVideoReady();
+            return;
+          }
+
+          setIsVideoLoading(false);
+          setError('离线视频首片段加载超时，请返回下载页重新下载');
+        }, 20000);
       }
     } catch (err) {
       console.error('创建播放器失败:', err);
+      setIsVideoLoading(false);
       setError('播放器初始化失败');
     }
-  }, [Artplayer, Hls, videoUrl, loading, blockAdEnabled]);
+
+    return () => {
+      if (loadingWatchdogTimer) {
+        window.clearTimeout(loadingWatchdogTimer);
+      }
+
+      removeVideoEventListeners?.();
+    };
+  }, [Artplayer, Hls, videoUrl, loading, blockAdEnabled, isOfflineMode]);
 
   // 当组件卸载时清理定时器、Wake Lock 和播放器资源
   useEffect(() => {
@@ -1706,27 +2378,30 @@ function PlayPageClient() {
             <div className='mb-6 w-80 mx-auto'>
               <div className='flex justify-center space-x-2 mb-4'>
                 <div
-                  className={`w-3 h-3 rounded-full transition-all duration-500 ${loadingStage === 'searching' || loadingStage === 'fetching'
-                    ? 'bg-green-500 scale-125'
-                    : loadingStage === 'preferring' ||
-                      loadingStage === 'ready'
+                  className={`w-3 h-3 rounded-full transition-all duration-500 ${
+                    loadingStage === 'searching' || loadingStage === 'fetching'
+                      ? 'bg-green-500 scale-125'
+                      : loadingStage === 'preferring' ||
+                        loadingStage === 'ready'
                       ? 'bg-green-500'
                       : 'bg-gray-300'
-                    }`}
+                  }`}
                 ></div>
                 <div
-                  className={`w-3 h-3 rounded-full transition-all duration-500 ${loadingStage === 'preferring'
-                    ? 'bg-green-500 scale-125'
-                    : loadingStage === 'ready'
+                  className={`w-3 h-3 rounded-full transition-all duration-500 ${
+                    loadingStage === 'preferring'
+                      ? 'bg-green-500 scale-125'
+                      : loadingStage === 'ready'
                       ? 'bg-green-500'
                       : 'bg-gray-300'
-                    }`}
+                  }`}
                 ></div>
                 <div
-                  className={`w-3 h-3 rounded-full transition-all duration-500 ${loadingStage === 'ready'
-                    ? 'bg-green-500 scale-125'
-                    : 'bg-gray-300'
-                    }`}
+                  className={`w-3 h-3 rounded-full transition-all duration-500 ${
+                    loadingStage === 'ready'
+                      ? 'bg-green-500 scale-125'
+                      : 'bg-gray-300'
+                  }`}
                 ></div>
               </div>
 
@@ -1737,11 +2412,11 @@ function PlayPageClient() {
                   style={{
                     width:
                       loadingStage === 'searching' ||
-                        loadingStage === 'fetching'
+                      loadingStage === 'fetching'
                         ? '33%'
                         : loadingStage === 'preferring'
-                          ? '66%'
-                          : '100%',
+                        ? '66%'
+                        : '100%',
                   }}
                 ></div>
               </div>
@@ -1836,11 +2511,31 @@ function PlayPageClient() {
             {videoTitle || '影片标题'}
             {totalEpisodes > 1 && (
               <span className='text-gray-500 dark:text-gray-400'>
-                {` > ${detail?.episodes_titles?.[currentEpisodeIndex] || `第 ${currentEpisodeIndex + 1} 集`}`}
+                {` > ${
+                  detail?.episodes_titles?.[currentEpisodeIndex] ||
+                  `第 ${currentEpisodeIndex + 1} 集`
+                }`}
               </span>
             )}
           </h1>
         </div>
+
+        {detail &&
+          detail.episodes.length > 0 &&
+          currentEpisodeIndex >= 0 &&
+          currentEpisodeIndex < detail.episodes.length && (
+            <CurrentEpisodeDownloadControl
+              detail={detail}
+              episodeIndex={
+                isOfflineMode
+                  ? offlineEpisodeOrder[currentEpisodeIndex] ??
+                    currentEpisodeIndex
+                  : currentEpisodeIndex
+              }
+              isOfflineMode={isOfflineMode}
+            />
+          )}
+
         {/* 第二行：播放器和选集 */}
         <div className='space-y-2'>
           {/* 折叠控制 - 仅在 lg 及以上屏幕显示 */}
@@ -1855,8 +2550,9 @@ function PlayPageClient() {
               }
             >
               <svg
-                className={`w-3.5 h-3.5 text-gray-500 dark:text-gray-400 transition-transform duration-200 ${isEpisodeSelectorCollapsed ? 'rotate-180' : 'rotate-0'
-                  }`}
+                className={`w-3.5 h-3.5 text-gray-500 dark:text-gray-400 transition-transform duration-200 ${
+                  isEpisodeSelectorCollapsed ? 'rotate-180' : 'rotate-0'
+                }`}
                 fill='none'
                 stroke='currentColor'
                 viewBox='0 0 24 24'
@@ -1874,24 +2570,27 @@ function PlayPageClient() {
 
               {/* 精致的状态指示点 */}
               <div
-                className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full transition-all duration-200 ${isEpisodeSelectorCollapsed
-                  ? 'bg-orange-400 animate-pulse'
-                  : 'bg-green-400'
-                  }`}
+                className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full transition-all duration-200 ${
+                  isEpisodeSelectorCollapsed
+                    ? 'bg-orange-400 animate-pulse'
+                    : 'bg-green-400'
+                }`}
               ></div>
             </button>
           </div>
 
           <div
-            className={`grid gap-4 lg:h-[500px] xl:h-[650px] 2xl:h-[750px] transition-all duration-300 ease-in-out ${isEpisodeSelectorCollapsed
-              ? 'grid-cols-1'
-              : 'grid-cols-1 md:grid-cols-4'
-              }`}
+            className={`grid gap-4 lg:h-[500px] xl:h-[650px] 2xl:h-[750px] transition-all duration-300 ease-in-out ${
+              isEpisodeSelectorCollapsed
+                ? 'grid-cols-1'
+                : 'grid-cols-1 md:grid-cols-4'
+            }`}
           >
             {/* 播放器 */}
             <div
-              className={`h-full transition-all duration-300 ease-in-out rounded-xl border border-white/0 dark:border-white/30 ${isEpisodeSelectorCollapsed ? 'col-span-1' : 'md:col-span-3'
-                }`}
+              className={`h-full transition-all duration-300 ease-in-out rounded-xl border border-white/0 dark:border-white/30 ${
+                isEpisodeSelectorCollapsed ? 'col-span-1' : 'md:col-span-3'
+              }`}
             >
               <div className='relative w-full h-[300px] lg:h-full'>
                 <div
@@ -1941,24 +2640,26 @@ function PlayPageClient() {
 
             {/* 选集和换源 - 在移动端始终显示，在 lg 及以上可折叠 */}
             <div
-              className={`h-[300px] lg:h-full md:overflow-hidden transition-all duration-300 ease-in-out ${isEpisodeSelectorCollapsed
-                ? 'md:col-span-1 lg:hidden lg:opacity-0 lg:scale-95'
-                : 'md:col-span-1 lg:opacity-100 lg:scale-100'
-                }`}
+              className={`h-[300px] lg:h-full md:overflow-hidden transition-all duration-300 ease-in-out ${
+                isEpisodeSelectorCollapsed
+                  ? 'md:col-span-1 lg:hidden lg:opacity-0 lg:scale-95'
+                  : 'md:col-span-1 lg:opacity-100 lg:scale-100'
+              }`}
             >
               <EpisodeSelector
                 totalEpisodes={totalEpisodes}
                 episodes_titles={detail?.episodes_titles || []}
                 value={currentEpisodeIndex + 1}
                 onChange={handleEpisodeChange}
-                onSourceChange={handleSourceChange}
+                onSourceChange={isOfflineMode ? undefined : handleSourceChange}
                 currentSource={currentSource}
                 currentId={currentId}
                 videoTitle={searchTitle || videoTitle}
-                availableSources={availableSources}
+                availableSources={isOfflineMode ? [] : availableSources}
                 sourceSearchLoading={sourceSearchLoading}
                 sourceSearchError={sourceSearchError}
                 precomputedVideoInfo={precomputedVideoInfo}
+                sourceSwitchEnabled={!isOfflineMode}
               />
             </div>
           </div>

@@ -1,0 +1,910 @@
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { SearchResult } from '@/lib/types';
+
+import { useDownloadStore } from '@/stores/downloadStore';
+
+import {
+  deleteCachedDownloads,
+  hasCachedDownload,
+  isOfflineDownloadSupported,
+  putDownloadResponse,
+} from './cache';
+import { parseManifestForDownload } from './manifest';
+import { normalizeVodEpisodeUrl } from './normalize';
+import {
+  deleteResourceIndex,
+  getResourceIndex,
+  putResourceIndex,
+} from './resource-index';
+import {
+  buildDownloadCacheIndexId,
+  buildDownloadContentId,
+  buildDownloadTaskId,
+  DownloadedContentMeta,
+  DownloadTask,
+  DownloadTaskStatus,
+  normalizeConcurrentDownloadTasks,
+} from './types';
+
+interface StartEpisodeDownloadParams {
+  detail: SearchResult;
+  episodeIndex: number;
+}
+
+interface StartBatchEpisodeDownloadParams {
+  detail: SearchResult;
+  episodeIndexes: number[];
+}
+
+interface TaskRunnerState {
+  mode: 'running' | 'paused' | 'cancelled' | 'failed';
+  controllers: Set<AbortController>;
+  task: DownloadTask;
+  failureError?: Error;
+}
+
+interface QueueEpisodeDownloadResult {
+  task: DownloadTask;
+  queued: boolean;
+}
+
+interface BatchDownloadResult {
+  queuedCount: number;
+  skippedCount: number;
+  tasks: DownloadTask[];
+}
+
+const RESOURCE_DOWNLOAD_WORKER_COUNT = 3;
+
+function getCurrentOwnerUsername(): string {
+  const username = getAuthInfoFromBrowserCookie()?.username?.trim();
+  if (!username) {
+    throw new Error('当前未登录，无法使用离线下载');
+  }
+  return username;
+}
+
+function now(): number {
+  return Date.now();
+}
+
+function getEpisodeTitle(detail: SearchResult, episodeIndex: number): string {
+  return detail.episodes_titles[episodeIndex] || `第 ${episodeIndex + 1} 集`;
+}
+
+function calculateProgress(
+  downloadedResources: number,
+  totalResources: number
+): number {
+  if (totalResources <= 0) {
+    return 0;
+  }
+
+  return Math.min(
+    100,
+    Math.round((downloadedResources / totalResources) * 100)
+  );
+}
+
+function upsertTask(task: DownloadTask): void {
+  useDownloadStore.getState().upsertTask(task);
+}
+
+function patchTask(
+  taskId: string,
+  updater: (task: DownloadTask) => DownloadTask
+): void {
+  useDownloadStore
+    .getState()
+    .patchTask(taskId, (task) => (task ? updater(task) : undefined));
+}
+
+function buildInitialTask(
+  detail: SearchResult,
+  episodeIndex: number
+): DownloadTask {
+  const contentId = buildDownloadContentId(detail.source, detail.id);
+  const taskId = buildDownloadTaskId(contentId, episodeIndex);
+  const entryManifestUrl = normalizeVodEpisodeUrl(
+    detail.source,
+    detail.episodes[episodeIndex] || ''
+  );
+  const createdAt = now();
+
+  return {
+    id: taskId,
+    contentId,
+    source: detail.source,
+    sourceName: detail.source_name,
+    vodId: detail.id,
+    episodeIndex,
+    title: detail.title,
+    poster: detail.poster,
+    year: detail.year,
+    desc: detail.desc,
+    typeName: detail.type_name,
+    doubanId: detail.douban_id,
+    episodeTitle: getEpisodeTitle(detail, episodeIndex),
+    originalM3u8Url: detail.episodes[episodeIndex] || '',
+    entryManifestUrl,
+    cacheIndexId: buildDownloadCacheIndexId(taskId),
+    status: 'queued',
+    progress: 0,
+    totalResources: 0,
+    downloadedResources: 0,
+    sizeBytes: 0,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+async function downloadAndCacheUrl(
+  url: string,
+  controller: AbortController
+): Promise<number> {
+  const response = await fetch(url, {
+    cache: 'no-store',
+    credentials: 'same-origin',
+    signal: controller.signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`下载资源失败: ${response.status}`);
+  }
+
+  const sizeBytes = Number(response.headers.get('content-length') || 0);
+  await putDownloadResponse(url, response.clone());
+  return Number.isFinite(sizeBytes) ? sizeBytes : 0;
+}
+
+function mergeLibraryItem(
+  previousItem: DownloadedContentMeta | undefined,
+  task: DownloadTask,
+  ownerUsername: string,
+  playbackManifestUrl: string,
+  rootManifestUrl: string,
+  resourceCount: number,
+  episodeSizeBytes: number
+): DownloadedContentMeta {
+  const episodeTitles = previousItem?.episodeTitles?.length
+    ? [...previousItem.episodeTitles]
+    : [];
+  episodeTitles[task.episodeIndex] = task.episodeTitle;
+
+  const nextEpisodes = [
+    ...(previousItem?.episodes || []).filter(
+      (episode) => episode.episodeIndex !== task.episodeIndex
+    ),
+    {
+      episodeIndex: task.episodeIndex,
+      episodeTitle: task.episodeTitle,
+      rootManifestUrl,
+      playbackManifestUrl,
+      cacheIndexId: task.cacheIndexId,
+      resourceCount,
+      sizeBytes: episodeSizeBytes,
+      downloadedAt: now(),
+    },
+  ].sort((left, right) => left.episodeIndex - right.episodeIndex);
+
+  const totalSizeBytes = nextEpisodes.reduce(
+    (sum, episode) => sum + episode.sizeBytes,
+    0
+  );
+
+  return {
+    contentId: task.contentId,
+    source: task.source,
+    vodId: task.vodId,
+    sourceName: task.sourceName,
+    title: task.title,
+    poster: task.poster,
+    year: task.year,
+    desc: task.desc || previousItem?.desc,
+    typeName: task.typeName || previousItem?.typeName,
+    doubanId: task.doubanId || previousItem?.doubanId,
+    episodeTitles,
+    ownerUsername,
+    episodes: nextEpisodes,
+    totalSizeBytes,
+    updatedAt: now(),
+  };
+}
+
+class DownloadManager {
+  private runners = new Map<string, TaskRunnerState>();
+
+  private resourceCleanupJobs = new Map<string, Promise<void>>();
+
+  private getMaxActiveTaskCount(): number {
+    return normalizeConcurrentDownloadTasks(
+      useDownloadStore.getState().maxConcurrentTasks
+    );
+  }
+
+  private getResourceCleanupJob(cacheIndexId: string): Promise<void> | null {
+    return this.resourceCleanupJobs.get(cacheIndexId) || null;
+  }
+
+  private async waitForTaskCleanup(taskId: string): Promise<void> {
+    const cleanupJob = this.getResourceCleanupJob(
+      buildDownloadCacheIndexId(taskId)
+    );
+    if (cleanupJob) {
+      await cleanupJob;
+    }
+  }
+
+  private schedulePendingTasks(): void {
+    const runningRunnerCount = Array.from(this.runners.values()).filter(
+      (runner) => runner.mode === 'running'
+    ).length;
+    const availableSlots = this.getMaxActiveTaskCount() - runningRunnerCount;
+    if (availableSlots <= 0) {
+      return;
+    }
+
+    const pendingTasks = Object.values(useDownloadStore.getState().tasks)
+      .filter((task) => task.status === 'queued' && !this.runners.has(task.id))
+      .sort((left, right) => {
+        if (left.createdAt !== right.createdAt) {
+          return left.createdAt - right.createdAt;
+        }
+
+        if (left.title !== right.title) {
+          return left.title.localeCompare(right.title, 'zh-CN');
+        }
+
+        return left.episodeIndex - right.episodeIndex;
+      })
+      .slice(0, availableSlots);
+
+    pendingTasks.forEach((task) => {
+      void this.runTask(task.id);
+    });
+  }
+
+  private ensureSupport(): void {
+    if (!isOfflineDownloadSupported()) {
+      throw new Error('当前浏览器不支持离线下载');
+    }
+  }
+
+  private ensureOwner(): string {
+    const ownerUsername = getCurrentOwnerUsername();
+    const { ownerUsername: storeOwner, setOwnerUsername } =
+      useDownloadStore.getState();
+
+    if (!storeOwner) {
+      setOwnerUsername(ownerUsername);
+      return ownerUsername;
+    }
+
+    if (storeOwner !== ownerUsername) {
+      throw new Error('检测到登录用户已变化，请刷新页面后重试');
+    }
+
+    return ownerUsername;
+  }
+
+  private getTask(taskId: string): DownloadTask | undefined {
+    return useDownloadStore.getState().tasks[taskId];
+  }
+
+  private setTaskStatus(
+    taskId: string,
+    status: DownloadTaskStatus,
+    extra: Partial<DownloadTask> = {}
+  ): void {
+    patchTask(taskId, (task) => ({
+      ...task,
+      ...extra,
+      status,
+      updatedAt: now(),
+    }));
+  }
+
+  private async ensureStoragePersistence(): Promise<void> {
+    if (typeof navigator === 'undefined' || !navigator.storage) {
+      return;
+    }
+
+    try {
+      await navigator.storage.persist?.();
+      await navigator.storage.estimate?.();
+    } catch (error) {
+      // 忽略浏览器不支持或拒绝持久化的情况
+    }
+  }
+
+  private async updateResourceIndex(
+    task: DownloadTask,
+    urls: string[]
+  ): Promise<void> {
+    const ownerUsername = this.ensureOwner();
+    const timestamp = now();
+
+    await putResourceIndex({
+      id: task.cacheIndexId,
+      ownerUsername,
+      taskId: task.id,
+      contentId: task.contentId,
+      source: task.source,
+      vodId: task.vodId,
+      episodeIndex: task.episodeIndex,
+      urls,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+
+  private stopRunner(taskId: string): void {
+    const runner = this.runners.get(taskId);
+    if (!runner) {
+      return;
+    }
+
+    runner.controllers.forEach((controller) => controller.abort());
+    runner.controllers.clear();
+    this.runners.delete(taskId);
+  }
+
+  private async cleanupCacheIndex(cacheIndexId: string): Promise<void> {
+    const resourceIndex = await getResourceIndex(cacheIndexId);
+    if (!resourceIndex) {
+      return;
+    }
+
+    if (resourceIndex.urls.length) {
+      await deleteCachedDownloads(resourceIndex.urls);
+    }
+
+    const latestResourceIndex = await getResourceIndex(cacheIndexId);
+    if (
+      latestResourceIndex &&
+      (latestResourceIndex.createdAt !== resourceIndex.createdAt ||
+        latestResourceIndex.updatedAt !== resourceIndex.updatedAt)
+    ) {
+      return;
+    }
+
+    await deleteResourceIndex(cacheIndexId);
+  }
+
+  private ensureCleanupJob(cacheIndexId: string): Promise<void> {
+    const existingJob = this.getResourceCleanupJob(cacheIndexId);
+    if (existingJob) {
+      return existingJob;
+    }
+
+    const cleanupJob = this.cleanupCacheIndex(cacheIndexId).finally(() => {
+      if (this.resourceCleanupJobs.get(cacheIndexId) === cleanupJob) {
+        this.resourceCleanupJobs.delete(cacheIndexId);
+      }
+    });
+
+    this.resourceCleanupJobs.set(cacheIndexId, cleanupJob);
+    return cleanupJob;
+  }
+
+  private queueCacheCleanup(cacheIndexId: string): void {
+    void this.ensureCleanupJob(cacheIndexId).catch(() => undefined);
+  }
+
+  private async removeTaskResources(
+    task: Pick<DownloadTask, 'cacheIndexId'>
+  ): Promise<void> {
+    await this.ensureCleanupJob(task.cacheIndexId);
+  }
+
+  private removeTaskResourcesInBackground(
+    task: Pick<DownloadTask, 'cacheIndexId'>
+  ): void {
+    this.queueCacheCleanup(task.cacheIndexId);
+  }
+
+  private async finalizeTask(taskId: string): Promise<void> {
+    this.runners.delete(taskId);
+  }
+
+  private abortOtherControllers(
+    runner: TaskRunnerState,
+    currentController?: AbortController
+  ): void {
+    runner.controllers.forEach((controller) => {
+      if (controller === currentController) {
+        return;
+      }
+
+      controller.abort();
+    });
+  }
+
+  private queueEpisodeDownload(
+    params: StartEpisodeDownloadParams
+  ): QueueEpisodeDownloadResult {
+    this.ensureSupport();
+    const ownerUsername = this.ensureOwner();
+    const task = buildInitialTask(params.detail, params.episodeIndex);
+
+    if (!task.entryManifestUrl) {
+      throw new Error('当前剧集缺少可下载的播放地址');
+    }
+
+    const existingTask = this.getTask(task.id);
+    const existingLibraryItem =
+      useDownloadStore.getState().library[task.contentId];
+
+    if (
+      existingTask?.status === 'done' ||
+      existingLibraryItem?.episodes.some(
+        (episode) => episode.episodeIndex === params.episodeIndex
+      )
+    ) {
+      return {
+        task: existingTask || task,
+        queued: false,
+      };
+    }
+
+    if (
+      existingTask &&
+      ['downloading', 'queued'].includes(existingTask.status)
+    ) {
+      return {
+        task: existingTask,
+        queued: false,
+      };
+    }
+
+    useDownloadStore.getState().setOwnerUsername(ownerUsername);
+
+    if (existingTask && ['paused', 'error'].includes(existingTask.status)) {
+      this.setTaskStatus(existingTask.id, 'queued', {
+        errorMessage: undefined,
+      });
+      return {
+        task: this.getTask(existingTask.id) || {
+          ...existingTask,
+          status: 'queued',
+          errorMessage: undefined,
+        },
+        queued: true,
+      };
+    }
+
+    upsertTask(task);
+    return {
+      task,
+      queued: true,
+    };
+  }
+
+  private async runTask(taskId: string): Promise<void> {
+    const existingRunner = this.runners.get(taskId);
+    if (existingRunner?.mode === 'running') {
+      return;
+    }
+
+    const task = this.getTask(taskId);
+    if (!task) {
+      return;
+    }
+
+    const runner: TaskRunnerState = {
+      mode: 'running',
+      controllers: new Set(),
+      task,
+    };
+    this.runners.set(taskId, runner);
+    this.setTaskStatus(taskId, 'downloading', {
+      errorMessage: undefined,
+    });
+
+    try {
+      this.ensureSupport();
+      const ownerUsername = this.ensureOwner();
+      await this.ensureStoragePersistence();
+
+      const createTrackedController = (): AbortController => {
+        const controller = new AbortController();
+        runner.controllers.add(controller);
+        return controller;
+      };
+      const ensureRunnerActive = (): void => {
+        if (runner.mode === 'running') {
+          return;
+        }
+
+        if (runner.mode === 'failed' && runner.failureError) {
+          throw runner.failureError;
+        }
+
+        throw new Error(
+          runner.mode === 'paused'
+            ? '下载已暂停'
+            : runner.mode === 'cancelled'
+            ? '下载已取消'
+            : '下载已停止'
+        );
+      };
+
+      const manifestController = createTrackedController();
+      const manifestResult = await parseManifestForDownload(
+        task.entryManifestUrl,
+        {
+          signal: manifestController.signal,
+        }
+      );
+      runner.controllers.delete(manifestController);
+      ensureRunnerActive();
+      await this.updateResourceIndex(task, manifestResult.resourceUrls);
+      ensureRunnerActive();
+
+      const totalResources = manifestResult.resources.length;
+      const initialDownloadedResources = Math.min(
+        Math.max(task.downloadedResources, 0),
+        totalResources
+      );
+      let resolvedResources = 0;
+      let sizeBytes = Math.max(task.sizeBytes, 0);
+      let lastFlushedDownloadedResources = -1;
+      let lastFlushedSizeBytes = -1;
+      const flushProgress = (force = false): void => {
+        const downloadedResources = Math.min(
+          totalResources,
+          Math.max(initialDownloadedResources, resolvedResources)
+        );
+
+        if (
+          !force &&
+          downloadedResources === lastFlushedDownloadedResources &&
+          sizeBytes === lastFlushedSizeBytes
+        ) {
+          return;
+        }
+
+        lastFlushedDownloadedResources = downloadedResources;
+        lastFlushedSizeBytes = sizeBytes;
+
+        patchTask(taskId, (currentTask) => ({
+          ...currentTask,
+          playbackManifestUrl: manifestResult.playbackManifestUrl,
+          totalResources,
+          downloadedResources,
+          sizeBytes,
+          progress: calculateProgress(downloadedResources, totalResources),
+          updatedAt: now(),
+        }));
+      };
+
+      flushProgress(true);
+
+      let cursor = 0;
+
+      const work = async () => {
+        while (cursor < manifestResult.resources.length) {
+          ensureRunnerActive();
+
+          const resource = manifestResult.resources[cursor];
+          cursor += 1;
+
+          const isCached = await hasCachedDownload(resource.url);
+          ensureRunnerActive();
+
+          if (isCached) {
+            resolvedResources += 1;
+            if (
+              resolvedResources === totalResources ||
+              resolvedResources % 25 === 0
+            ) {
+              flushProgress();
+            }
+            continue;
+          }
+
+          const controller = createTrackedController();
+
+          try {
+            const resourceSize = await downloadAndCacheUrl(
+              resource.url,
+              controller
+            );
+
+            ensureRunnerActive();
+
+            resolvedResources += 1;
+            sizeBytes += resourceSize;
+            flushProgress(true);
+          } catch (error) {
+            if (controller.signal.aborted && runner.mode !== 'running') {
+              ensureRunnerActive();
+            }
+
+            if (runner.mode === 'running') {
+              runner.mode = 'failed';
+              runner.failureError =
+                error instanceof Error
+                  ? error
+                  : new Error('下载失败，请稍后重试');
+              this.abortOtherControllers(runner, controller);
+            }
+
+            throw runner.failureError || error;
+          } finally {
+            runner.controllers.delete(controller);
+          }
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: RESOURCE_DOWNLOAD_WORKER_COUNT }, () => work())
+      );
+
+      if (runner.mode !== 'running') {
+        return;
+      }
+
+      flushProgress(true);
+
+      const latestTask = this.getTask(taskId);
+      if (!latestTask) {
+        return;
+      }
+
+      const { library, upsertLibraryItem } = useDownloadStore.getState();
+      const nextLibraryItem = mergeLibraryItem(
+        library[latestTask.contentId],
+        latestTask,
+        ownerUsername,
+        manifestResult.playbackManifestUrl,
+        manifestResult.rootManifestUrl,
+        manifestResult.resources.length,
+        sizeBytes
+      );
+
+      upsertLibraryItem(nextLibraryItem);
+
+      this.setTaskStatus(taskId, 'done', {
+        playbackManifestUrl: manifestResult.playbackManifestUrl,
+        totalResources: manifestResult.resources.length,
+        downloadedResources: manifestResult.resources.length,
+        progress: 100,
+        sizeBytes,
+        errorMessage: undefined,
+      });
+    } catch (error) {
+      const runnerState = this.runners.get(taskId);
+      const currentTask = this.getTask(taskId);
+      const taskForCleanup = currentTask || runnerState?.task || task;
+      const taskError = runnerState?.failureError || error;
+
+      if (!currentTask && runnerState?.mode !== 'cancelled') {
+        await this.finalizeTask(taskId);
+        return;
+      }
+
+      if (runnerState?.mode === 'paused') {
+        if (currentTask?.status === 'paused') {
+          this.setTaskStatus(taskId, 'paused', {
+            errorMessage: undefined,
+          });
+        }
+      } else if (runnerState?.mode === 'cancelled') {
+        await this.removeTaskResources(taskForCleanup);
+        if (
+          !currentTask ||
+          currentTask.createdAt === taskForCleanup.createdAt
+        ) {
+          useDownloadStore.getState().removeTask(taskId);
+        }
+      } else {
+        if (currentTask) {
+          this.setTaskStatus(taskId, 'error', {
+            errorMessage:
+              taskError instanceof Error
+                ? taskError.message
+                : '下载失败，请稍后重试',
+          });
+        }
+      }
+    } finally {
+      await this.finalizeTask(taskId);
+      this.schedulePendingTasks();
+    }
+  }
+
+  async startEpisodeDownload(
+    params: StartEpisodeDownloadParams
+  ): Promise<DownloadTask> {
+    const contentId = buildDownloadContentId(
+      params.detail.source,
+      params.detail.id
+    );
+    await this.waitForTaskCleanup(
+      buildDownloadTaskId(contentId, params.episodeIndex)
+    );
+    const result = this.queueEpisodeDownload(params);
+    this.schedulePendingTasks();
+    return result.task;
+  }
+
+  async startBatchEpisodeDownloads(
+    params: StartBatchEpisodeDownloadParams
+  ): Promise<BatchDownloadResult> {
+    const uniqueEpisodeIndexes = Array.from(
+      new Set(
+        params.episodeIndexes.filter(
+          (episodeIndex) =>
+            Number.isInteger(episodeIndex) &&
+            episodeIndex >= 0 &&
+            episodeIndex < params.detail.episodes.length
+        )
+      )
+    ).sort((left, right) => left - right);
+
+    const tasks: DownloadTask[] = [];
+    let queuedCount = 0;
+    let skippedCount = 0;
+    const contentId = buildDownloadContentId(
+      params.detail.source,
+      params.detail.id
+    );
+
+    await Promise.all(
+      uniqueEpisodeIndexes.map((episodeIndex) =>
+        this.waitForTaskCleanup(buildDownloadTaskId(contentId, episodeIndex))
+      )
+    );
+
+    uniqueEpisodeIndexes.forEach((episodeIndex) => {
+      if (!params.detail.episodes[episodeIndex]) {
+        skippedCount += 1;
+        return;
+      }
+
+      try {
+        const result = this.queueEpisodeDownload({
+          detail: params.detail,
+          episodeIndex,
+        });
+        tasks.push(result.task);
+        if (result.queued) {
+          queuedCount += 1;
+        } else {
+          skippedCount += 1;
+        }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === '当前剧集缺少可下载的播放地址'
+        ) {
+          skippedCount += 1;
+          return;
+        }
+
+        throw error;
+      }
+    });
+
+    this.schedulePendingTasks();
+
+    return {
+      queuedCount,
+      skippedCount,
+      tasks,
+    };
+  }
+
+  async pauseTask(taskId: string): Promise<void> {
+    const task = this.getTask(taskId);
+    if (!task) {
+      return;
+    }
+
+    const runner = this.runners.get(taskId);
+    if (runner) {
+      runner.mode = 'paused';
+      runner.controllers.forEach((controller) => controller.abort());
+    }
+
+    this.setTaskStatus(taskId, 'paused', {
+      errorMessage: undefined,
+    });
+    this.schedulePendingTasks();
+  }
+
+  async resumeTask(taskId: string): Promise<void> {
+    const task = this.getTask(taskId);
+    if (!task) {
+      return;
+    }
+
+    if (task.status === 'done') {
+      return;
+    }
+
+    this.setTaskStatus(taskId, 'queued', {
+      errorMessage: undefined,
+    });
+    this.schedulePendingTasks();
+  }
+
+  refreshScheduling(): void {
+    this.schedulePendingTasks();
+  }
+
+  async cancelTask(taskId: string): Promise<void> {
+    const task = this.getTask(taskId);
+    if (!task) {
+      return;
+    }
+
+    const runner = this.runners.get(taskId);
+    if (runner) {
+      runner.mode = 'cancelled';
+      runner.controllers.forEach((controller) => controller.abort());
+      useDownloadStore.getState().removeTask(taskId);
+      this.schedulePendingTasks();
+      return;
+    }
+
+    useDownloadStore.getState().removeTask(taskId);
+    this.removeTaskResourcesInBackground(task);
+    this.schedulePendingTasks();
+  }
+
+  async deleteEpisode(contentId: string, episodeIndex: number): Promise<void> {
+    const taskId = buildDownloadTaskId(contentId, episodeIndex);
+    const task = this.getTask(taskId);
+
+    if (task && task.status !== 'done') {
+      await this.cancelTask(taskId);
+      return;
+    }
+
+    const { library, removeLibraryItem, removeTask, upsertLibraryItem } =
+      useDownloadStore.getState();
+    const content = library[contentId];
+    if (!content) {
+      removeTask(taskId);
+      return;
+    }
+
+    const targetEpisode = content.episodes.find(
+      (episode) => episode.episodeIndex === episodeIndex
+    );
+    const nextEpisodes = content.episodes.filter(
+      (episode) => episode.episodeIndex !== episodeIndex
+    );
+
+    removeTask(taskId);
+
+    if (targetEpisode) {
+      this.removeTaskResourcesInBackground(targetEpisode);
+    }
+
+    if (nextEpisodes.length === 0) {
+      removeLibraryItem(contentId);
+      return;
+    }
+
+    upsertLibraryItem({
+      ...content,
+      episodes: nextEpisodes,
+      totalSizeBytes: nextEpisodes.reduce(
+        (sum, episode) => sum + episode.sizeBytes,
+        0
+      ),
+      updatedAt: now(),
+    });
+  }
+
+  abortAll(): void {
+    Array.from(this.runners.keys()).forEach((taskId) => {
+      this.stopRunner(taskId);
+    });
+  }
+}
+
+export const downloadManager = new DownloadManager();

@@ -1,7 +1,10 @@
 /** @type {import('next').NextConfig} */
 /* eslint-disable @typescript-eslint/no-var-requires */
 
+const defaultRuntimeCaching = require('next-pwa/cache');
+
 const isVercel = Boolean(process.env.VERCEL);
+const enablePwaInDev = process.env.ENABLE_PWA_DEV === 'true';
 const distDir =
   process.env.NEXT_DIST_DIR ||
   // Vercel's Next.js runtime expects the default `.next` directory unless the
@@ -81,11 +84,39 @@ const nextConfig = {
   },
 };
 
+const runtimeCaching = defaultRuntimeCaching.map((entry) => {
+  if (entry?.options?.cacheName !== 'apis') {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    urlPattern: ({ url }) => {
+      const isSameOrigin = self.origin === url.origin;
+      if (!isSameOrigin) return false;
+
+      const pathname = url.pathname;
+      if (pathname.startsWith('/api/auth/')) return false;
+      if (pathname.startsWith('/api/proxy/vod/')) return false;
+      return pathname.startsWith('/api/');
+    },
+  };
+});
+
 const withPWA = require('next-pwa')({
   dest: 'public',
-  disable: process.env.NODE_ENV === 'development',
+  disable: process.env.NODE_ENV === 'development' && !enablePwaInDev,
+  ...(enablePwaInDev
+    ? {
+        mode: 'production',
+      }
+    : {}),
   register: true,
   skipWaiting: true,
+  runtimeCaching,
+  fallbacks: {
+    document: '/_offline',
+  },
 });
 
 module.exports = withPWA(nextConfig);
