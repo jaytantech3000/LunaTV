@@ -25,6 +25,9 @@ const concurrentTaskOptions = Array.from(
   (_, index) => MIN_CONCURRENT_DOWNLOAD_TASKS + index
 );
 
+const compactActionButtonClassName =
+  'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors';
+
 interface DownloadTaskActionHandlers {
   onPause: (taskId: string) => Promise<void>;
   onResume: (taskId: string) => Promise<void>;
@@ -67,76 +70,102 @@ function ActiveTasksSection({
           当前没有进行中的下载任务。
         </div>
       ) : (
-        <div className='grid gap-4'>
+        <div className='grid gap-3 xl:grid-cols-2'>
           {activeTasks.map((task) => (
             <div
               key={task.id}
-              className='rounded-2xl border border-gray-200 bg-white/80 p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900/50'
+              className='rounded-2xl border border-gray-200 bg-white/80 p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/50'
             >
-              <div className='flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between'>
-                <div className='space-y-1'>
-                  <div className='text-base font-medium text-gray-900 dark:text-gray-100'>
-                    {task.title}
+              <div className='flex flex-col gap-3'>
+                <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+                  <div className='min-w-0 space-y-2'>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <div
+                        className='truncate text-base font-semibold text-gray-900 dark:text-gray-100'
+                        title={task.title}
+                      >
+                        {task.title}
+                      </div>
+                      <span className='inline-flex rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'>
+                        {task.episodeTitle}
+                      </span>
+                      <span className='inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300'>
+                        {getDownloadStatusLabel(task.status)}
+                      </span>
+                    </div>
+                    <div
+                      className='truncate text-sm text-gray-600 dark:text-gray-400'
+                      title={task.sourceName}
+                    >
+                      {task.sourceName}
+                    </div>
+                    <div className='flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400'>
+                      {task.totalResources > 0 ? (
+                        <span>
+                          {task.downloadedResources}/{task.totalResources} 个资源
+                        </span>
+                      ) : (
+                        <span>等待资源清单</span>
+                      )}
+                      {task.sizeBytes > 0 && (
+                        <span>{formatBytes(task.sizeBytes)}</span>
+                      )}
+                      <span>{task.progress}%</span>
+                    </div>
                   </div>
-                  <div className='text-sm text-gray-600 dark:text-gray-400'>
-                    {task.episodeTitle} · {task.sourceName}
-                  </div>
-                  <div className='text-xs text-gray-500 dark:text-gray-500'>
-                    {getDownloadStatusLabel(task.status)}
-                    {task.totalResources > 0 &&
-                      ` · ${task.downloadedResources}/${task.totalResources}`}
-                    {task.sizeBytes > 0 && ` · ${formatBytes(task.sizeBytes)}`}
+
+                  <div className='flex shrink-0 flex-wrap gap-2 sm:justify-end'>
+                    {task.status === 'downloading' && (
+                      <button
+                        type='button'
+                        onClick={() => void onPause(task.id)}
+                        className={`${compactActionButtonClassName} border border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/20`}
+                      >
+                        暂停
+                      </button>
+                    )}
+
+                    {task.status === 'queued' && (
+                      <span className='rounded-lg border border-gray-300 bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-400'>
+                        排队中
+                      </span>
+                    )}
+
+                    {['paused', 'error'].includes(task.status) && (
+                      <button
+                        type='button'
+                        onClick={() => void onResume(task.id)}
+                        className={`${compactActionButtonClassName} bg-emerald-600 text-white hover:bg-emerald-700`}
+                      >
+                        {task.status === 'error' ? '重试' : '继续'}
+                      </button>
+                    )}
+
+                    <button
+                      type='button'
+                      onClick={() => void onCancel(task.id)}
+                      className={`${compactActionButtonClassName} border border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/10`}
+                    >
+                      取消
+                    </button>
                   </div>
                 </div>
 
-                <div className='flex flex-wrap gap-2'>
-                  {task.status === 'downloading' && (
-                    <button
-                      type='button'
-                      onClick={() => void onPause(task.id)}
-                      className='rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/20'
-                    >
-                      暂停
-                    </button>
-                  )}
-
-                  {task.status === 'queued' && (
-                    <span className='rounded-lg border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-400'>
-                      排队中
-                    </span>
-                  )}
-
-                  {['paused', 'error'].includes(task.status) && (
-                    <button
-                      type='button'
-                      onClick={() => void onResume(task.id)}
-                      className='rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700'
-                    >
-                      {task.status === 'error' ? '重试' : '继续'}
-                    </button>
-                  )}
-
-                  <button
-                    type='button'
-                    onClick={() => void onCancel(task.id)}
-                    className='rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/10'
-                  >
-                    取消
-                  </button>
+                <div className='flex items-center gap-3'>
+                  <div className='h-2 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800'>
+                    <div
+                      className='h-full rounded-full bg-emerald-500 transition-all'
+                      style={{ width: `${task.progress}%` }}
+                    />
+                  </div>
+                  <div className='w-12 text-right text-xs font-medium text-gray-500 dark:text-gray-400'>
+                    {task.progress}%
+                  </div>
                 </div>
               </div>
 
-              {task.totalResources > 0 && (
-                <div className='mt-4 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800'>
-                  <div
-                    className='h-full rounded-full bg-emerald-500 transition-all'
-                    style={{ width: `${task.progress}%` }}
-                  />
-                </div>
-              )}
-
               {task.errorMessage && task.status === 'error' && (
-                <div className='mt-3 text-xs text-red-600 dark:text-red-400'>
+                <div className='mt-3 rounded-xl border border-red-200/70 bg-red-50/80 px-3 py-2 text-xs text-red-600 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-400'>
                   {task.errorMessage}
                 </div>
               )}
@@ -176,27 +205,35 @@ function DownloadedContentsSection({
           还没有可离线播放的内容。
         </div>
       ) : (
-        <div className='grid gap-4'>
+        <div className='grid gap-4 xl:grid-cols-2'>
           {downloadedContents.map((content) => (
             <div
               key={content.contentId}
-              className='rounded-2xl border border-gray-200 bg-white/80 p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900/50'
+              className='flex h-full flex-col rounded-2xl border border-gray-200 bg-white/80 p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/50'
             >
-              <div className='flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between'>
-                <div className='space-y-1'>
-                  <div className='text-base font-medium text-gray-900 dark:text-gray-100'>
+              <div className='flex items-start justify-between gap-3'>
+                <div className='min-w-0 space-y-2'>
+                  <div
+                    className='line-clamp-2 text-lg font-semibold text-gray-900 dark:text-gray-100'
+                    title={content.title}
+                  >
                     {content.title}
                   </div>
-                  <div className='text-sm text-gray-600 dark:text-gray-400'>
-                    {content.sourceName} · {content.episodes.length} 集已下载
+                  <div className='flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-600 dark:text-gray-400'>
+                    <span>{content.sourceName}</span>
+                    <span>{content.episodes.length} 集已下载</span>
                   </div>
                 </div>
-                <div className='text-sm text-gray-500 dark:text-gray-400'>
-                  共 {formatBytes(content.totalSizeBytes)}
+                <div className='shrink-0 rounded-full border border-gray-200 bg-gray-100 px-3 py-1 text-sm font-medium text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'>
+                  {formatBytes(content.totalSizeBytes)}
                 </div>
               </div>
 
-              <div className='mt-4 grid gap-3'>
+              <div
+                className={`mt-4 grid gap-2 ${
+                  content.episodes.length > 4 ? 'max-h-80 overflow-y-auto pr-1' : ''
+                }`}
+              >
                 {content.episodes.map((episode) => {
                   const offlineHref = buildOfflinePlayHref({
                     content,
@@ -206,11 +243,19 @@ function DownloadedContentsSection({
                   return (
                     <div
                       key={`${content.contentId}-${episode.episodeIndex}`}
-                      className='flex flex-col gap-3 rounded-xl border border-gray-200/80 bg-gray-50/80 px-4 py-3 dark:border-gray-800 dark:bg-gray-950/40 lg:flex-row lg:items-center lg:justify-between'
+                      className='flex flex-col gap-3 rounded-xl border border-gray-200/80 bg-gray-50/80 px-3 py-3 dark:border-gray-800 dark:bg-gray-950/40 sm:flex-row sm:items-center sm:justify-between'
                     >
-                      <div className='space-y-1'>
-                        <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
-                          {episode.episodeTitle}
+                      <div className='min-w-0 space-y-1'>
+                        <div className='flex flex-wrap items-center gap-2'>
+                          <span className='inline-flex rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600 dark:border-gray-700 dark:bg-gray-900/70 dark:text-gray-300'>
+                            EP{String(episode.episodeIndex + 1).padStart(2, '0')}
+                          </span>
+                          <div
+                            className='truncate text-sm font-medium text-gray-900 dark:text-gray-100'
+                            title={episode.episodeTitle}
+                          >
+                            {episode.episodeTitle}
+                          </div>
                         </div>
                         <div className='text-xs text-gray-500 dark:text-gray-400'>
                           {formatBytes(episode.sizeBytes)} ·{' '}
@@ -218,11 +263,11 @@ function DownloadedContentsSection({
                         </div>
                       </div>
 
-                      <div className='flex flex-wrap gap-2'>
+                      <div className='flex shrink-0 flex-wrap gap-2 sm:justify-end'>
                         <Link
                           href={offlineHref}
                           prefetch={false}
-                          className='rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700'
+                          className={`${compactActionButtonClassName} bg-emerald-600 text-white hover:bg-emerald-700`}
                         >
                           离线播放
                         </Link>
@@ -234,7 +279,7 @@ function DownloadedContentsSection({
                               episode.episodeIndex
                             )
                           }
-                          className='rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-900/40 dark:text-red-400 dark:hover:bg-red-950/20'
+                          className={`${compactActionButtonClassName} border border-red-300 text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:text-red-400 dark:hover:bg-red-950/20`}
                         >
                           删除
                         </button>
