@@ -3,21 +3,31 @@
 import { Settings2 } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { type ChangeEvent, useEffect, useMemo, useState } from 'react';
+import {
+  type ChangeEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { createPortal } from 'react-dom';
 
 import { formatBytes, getDownloadStatusLabel } from '@/lib/download/format';
 import { downloadManager } from '@/lib/download/manager';
+import { normalizeVodDetailForPlayback } from '@/lib/download/normalize';
 import { buildOfflinePlayHref } from '@/lib/download/offline';
 import { sortActiveDownloadTasks } from '@/lib/download/sort';
 import {
+  buildDownloadTaskId,
   DOWNLOAD_CACHE_NAME,
   DOWNLOAD_RESOURCE_DB_NAME,
   DOWNLOAD_RESOURCE_STORE_NAME,
   DownloadedContentMeta,
+  DownloadTask,
   MAX_CONCURRENT_DOWNLOAD_TASKS,
   MIN_CONCURRENT_DOWNLOAD_TASKS,
 } from '@/lib/download/types';
+import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 
 import { useDownloadStore } from '@/stores/downloadStore';
@@ -47,6 +57,75 @@ function formatDateTime(timestamp: number): string {
 
 function formatEpisodeCode(episodeIndex: number): string {
   return `EP${String(episodeIndex + 1).padStart(2, '0')}`;
+}
+
+interface MoreDownloadEpisodeOption {
+  episodeIndex: number;
+  episodeTitle: string;
+  hasSource: boolean;
+  task?: DownloadTask;
+  isActionable: boolean;
+}
+
+function getMoreDownloadEpisodeStatus(option: MoreDownloadEpisodeOption): string {
+  if (!option.hasSource) {
+    return '当前源缺少可下载地址';
+  }
+
+  switch (option.task?.status) {
+    case 'downloading':
+      return `下载中 · ${option.task.progress}%`;
+    case 'queued':
+      return '已加入下载队列';
+    case 'paused':
+      return '已暂停，可继续';
+    case 'error':
+      return option.task.errorMessage || '下载失败，可重试';
+    default:
+      return '尚未下载';
+  }
+}
+
+function getMoreDownloadEpisodeActionLabel(
+  option: MoreDownloadEpisodeOption
+): string {
+  if (!option.hasSource) {
+    return '不可下载';
+  }
+
+  switch (option.task?.status) {
+    case 'downloading':
+      return '下载中';
+    case 'queued':
+      return '排队中';
+    case 'paused':
+      return '继续下载';
+    case 'error':
+      return '重试下载';
+    default:
+      return '下载';
+  }
+}
+
+function getMoreDownloadEpisodeActionBadgeClassName(
+  option: MoreDownloadEpisodeOption
+): string {
+  if (!option.hasSource) {
+    return 'border-white/10 bg-white/5 text-gray-500';
+  }
+
+  switch (option.task?.status) {
+    case 'downloading':
+      return 'border-sky-500/20 bg-sky-500/10 text-sky-200';
+    case 'queued':
+      return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
+    case 'paused':
+      return 'border-orange-500/20 bg-orange-500/10 text-orange-200';
+    case 'error':
+      return 'border-red-500/20 bg-red-500/10 text-red-200';
+    default:
+      return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+  }
 }
 
 interface DownloadTaskActionHandlers {
@@ -318,13 +397,30 @@ function DownloadedContentDialog({
   onDeleteEpisode,
 }: DownloadedContentDialogProps) {
   const router = useRouter();
+  const tasks = useDownloadStore((state) => state.tasks);
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [selectedEpisodeIndexes, setSelectedEpisodeIndexes] = useState<
     number[]
   >([]);
   const [isDeletingSelected, setIsDeletingSelected] = useState(false);
+  const [isMoreDownloadsOpen, setIsMoreDownloadsOpen] = useState(false);
+  const [downloadableDetail, setDownloadableDetail] =
+    useState<SearchResult | null>(null);
+  const [isLoadingDownloadableDetail, setIsLoadingDownloadableDetail] =
+    useState(false);
+  const [moreDownloadsError, setMoreDownloadsError] = useState<string | null>(
+    null
+  );
+  const [moreDownloadsFeedback, setMoreDownloadsFeedback] = useState<
+    string | null
+  >(null);
+  const detailRequestKeyRef = useRef(`${content.source}:${content.vodId}`);
   const shouldCollapseDescription = (content.desc?.length || 0) > 140;
+  const downloadedEpisodeIndexSet = useMemo(
+    () => new Set(content.episodes.map((episode) => episode.episodeIndex)),
+    [content.episodes]
+  );
   const allEpisodeIndexes = useMemo(
     () => content.episodes.map((episode) => episode.episodeIndex),
     [content.episodes]
@@ -338,13 +434,51 @@ function DownloadedContentDialog({
     allEpisodeIndexes.every((episodeIndex) =>
       selectedEpisodeIndexSet.has(episodeIndex)
     );
+  const moreDownloadEpisodeOptions = useMemo<MoreDownloadEpisodeOption[]>(() => {
+    if (!downloadableDetail) {
+      return [];
+    }
+
+    return downloadableDetail.episodes.flatMap((episodeUrl, episodeIndex) => {
+      const task = tasks[buildDownloadTaskId(content.contentId, episodeIndex)];
+      const isDownloaded =
+        downloadedEpisodeIndexSet.has(episodeIndex) || task?.status === 'done';
+
+      if (isDownloaded) {
+        return [];
+      }
+
+      return {
+        episodeIndex,
+        episodeTitle:
+          downloadableDetail.episodes_titles[episodeIndex] ||
+          `第 ${episodeIndex + 1} 集`,
+        hasSource: Boolean(episodeUrl),
+        task,
+        isActionable:
+          Boolean(episodeUrl) &&
+          (!task || ['paused', 'error'].includes(task.status)),
+      };
+    });
+  }, [
+    content.contentId,
+    downloadableDetail,
+    downloadedEpisodeIndexSet,
+    tasks,
+  ]);
 
   useEffect(() => {
+    detailRequestKeyRef.current = `${content.source}:${content.vodId}`;
     setIsDescriptionExpanded(false);
     setIsEditing(false);
     setSelectedEpisodeIndexes([]);
     setIsDeletingSelected(false);
-  }, [content.contentId]);
+    setIsMoreDownloadsOpen(false);
+    setDownloadableDetail(null);
+    setIsLoadingDownloadableDetail(false);
+    setMoreDownloadsError(null);
+    setMoreDownloadsFeedback(null);
+  }, [content.contentId, content.source, content.vodId]);
 
   useEffect(() => {
     setSelectedEpisodeIndexes((currentState) => {
@@ -400,6 +534,98 @@ function DownloadedContentDialog({
     }
   };
 
+  const loadDownloadableDetail = async (): Promise<SearchResult | null> => {
+    if (downloadableDetail) {
+      return downloadableDetail;
+    }
+
+    if (isLoadingDownloadableDetail) {
+      return null;
+    }
+
+    const requestKey = `${content.source}:${content.vodId}`;
+
+    try {
+      setIsLoadingDownloadableDetail(true);
+      setMoreDownloadsError(null);
+
+      const searchParams = new URLSearchParams({
+        source: content.source,
+        id: content.vodId,
+      });
+      const response = await fetch(`/api/detail?${searchParams.toString()}`, {
+        cache: 'no-store',
+      });
+      const payload = (await response.json()) as SearchResult & {
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || '获取可下载剧集失败');
+      }
+
+      const normalizedDetail = normalizeVodDetailForPlayback(payload);
+
+      if (detailRequestKeyRef.current !== requestKey) {
+        return null;
+      }
+
+      setDownloadableDetail(normalizedDetail);
+      return normalizedDetail;
+    } catch (error) {
+      if (detailRequestKeyRef.current === requestKey) {
+        setMoreDownloadsError(
+          error instanceof Error ? error.message : '获取可下载剧集失败'
+        );
+      }
+      return null;
+    } finally {
+      if (detailRequestKeyRef.current === requestKey) {
+        setIsLoadingDownloadableDetail(false);
+      }
+    }
+  };
+
+  const handleToggleMoreDownloads = () => {
+    const nextOpenState = !isMoreDownloadsOpen;
+    setIsMoreDownloadsOpen(nextOpenState);
+    setMoreDownloadsFeedback(null);
+
+    if (nextOpenState && !downloadableDetail && !isLoadingDownloadableDetail) {
+      void loadDownloadableDetail();
+    }
+  };
+
+  const handleStartMoreDownload = async (episodeIndex: number) => {
+    const detail = downloadableDetail || (await loadDownloadableDetail());
+    if (!detail) {
+      return;
+    }
+
+    if (!detail.episodes[episodeIndex]) {
+      setMoreDownloadsError('当前剧集缺少可下载地址');
+      return;
+    }
+
+    try {
+      setMoreDownloadsError(null);
+      setMoreDownloadsFeedback(null);
+      await downloadManager.startEpisodeDownload({
+        detail,
+        episodeIndex,
+      });
+      setMoreDownloadsFeedback(
+        `已将 ${
+          detail.episodes_titles[episodeIndex] || `第 ${episodeIndex + 1} 集`
+        } 加入下载队列。`
+      );
+    } catch (error) {
+      setMoreDownloadsError(
+        error instanceof Error ? error.message : '加入下载队列失败'
+      );
+    }
+  };
+
   if (typeof document === 'undefined') {
     return null;
   }
@@ -427,6 +653,17 @@ function DownloadedContentDialog({
                 <span>{content.sourceName}</span>
                 <span>{content.episodes.length} 集</span>
                 <span>{formatBytes(content.totalSizeBytes)}</span>
+                <button
+                  type='button'
+                  onClick={handleToggleMoreDownloads}
+                  className='inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20'
+                >
+                  {isLoadingDownloadableDetail
+                    ? '加载中...'
+                    : isMoreDownloadsOpen
+                    ? '收起更多'
+                    : '下载更多'}
+                </button>
               </div>
             </div>
 
@@ -577,6 +814,100 @@ function DownloadedContentDialog({
 
           <div className='min-h-0 overflow-y-auto p-4 lg:p-6'>
             <div className='space-y-4'>
+              {isMoreDownloadsOpen ? (
+                <div className='rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4'>
+                  <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+                    <div className='space-y-1'>
+                      <div className='text-sm font-semibold text-white'>
+                        未下载资源集
+                      </div>
+                      <div className='text-xs text-gray-400'>
+                        点击剧集卡片可继续加入离线下载；已在队列中的剧集会显示当前状态。
+                      </div>
+                    </div>
+                    {downloadableDetail ? (
+                      <span className='inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-200'>
+                        {moreDownloadEpisodeOptions.length} 集待处理
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {isLoadingDownloadableDetail ? (
+                    <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
+                      正在加载可下载剧集...
+                    </div>
+                  ) : null}
+
+                  {!isLoadingDownloadableDetail && moreDownloadsError ? (
+                    <div className='mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200'>
+                      {moreDownloadsError}
+                    </div>
+                  ) : null}
+
+                  {!isLoadingDownloadableDetail &&
+                  !moreDownloadsError &&
+                  downloadableDetail &&
+                  moreDownloadEpisodeOptions.length === 0 ? (
+                    <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
+                      当前内容的可下载剧集已全部缓存。
+                    </div>
+                  ) : null}
+
+                  {!isLoadingDownloadableDetail &&
+                  !moreDownloadsError &&
+                  moreDownloadEpisodeOptions.length > 0 ? (
+                    <div className='mt-4 max-h-[320px] overflow-y-auto pr-1'>
+                      <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+                        {moreDownloadEpisodeOptions.map((episode) => (
+                          <button
+                            type='button'
+                            key={`${content.contentId}-more-${episode.episodeIndex}`}
+                            disabled={!episode.isActionable}
+                            onClick={() =>
+                              void handleStartMoreDownload(episode.episodeIndex)
+                            }
+                            className={`rounded-xl border p-3 text-left transition-colors ${
+                              episode.isActionable
+                                ? 'border-emerald-500/20 bg-black/20 hover:border-emerald-400/40 hover:bg-white/5'
+                                : 'border-white/10 bg-black/20 text-gray-400'
+                            }`}
+                          >
+                            <div className='flex items-start justify-between gap-3'>
+                              <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
+                                {formatEpisodeCode(episode.episodeIndex)}
+                              </span>
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${getMoreDownloadEpisodeActionBadgeClassName(
+                                  episode
+                                )}`}
+                              >
+                                {getMoreDownloadEpisodeActionLabel(episode)}
+                              </span>
+                            </div>
+
+                            <div
+                              className='mt-4 truncate text-sm font-semibold text-white'
+                              title={episode.episodeTitle}
+                            >
+                              {episode.episodeTitle}
+                            </div>
+                            <div className='mt-2 text-xs text-gray-400'>
+                              {getMoreDownloadEpisodeStatus(episode)}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {moreDownloadsFeedback ? (
+                    <div className='mt-3 text-xs text-emerald-200'>
+                      {moreDownloadsFeedback}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               <div className='grid gap-3 md:grid-cols-2 lg:grid-cols-3'>
                 {content.episodes.map((episode) => {
                   const offlineHref = buildOfflinePlayHref({
