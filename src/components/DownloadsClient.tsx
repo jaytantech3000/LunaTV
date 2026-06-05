@@ -298,23 +298,10 @@ function DownloadedContentsSection({
                 </div>
               </div>
 
-              <div className='space-y-3 px-3 pb-3 pt-2'>
+              <div className='px-3 pb-3 pt-2'>
                 <div className='flex items-center justify-between text-xs text-gray-500 dark:text-gray-400'>
                   <span>最近更新</span>
                   <span>{formatDateTime(content.updatedAt)}</span>
-                </div>
-                <div className='flex items-center justify-between rounded-2xl border border-gray-200/80 bg-gray-50/80 px-3 py-2.5 dark:border-gray-800 dark:bg-gray-950/40'>
-                  <div className='min-w-0'>
-                    <div className='text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400'>
-                      离线资源
-                    </div>
-                    <div className='mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100'>
-                      点击查看详情
-                    </div>
-                  </div>
-                  <div className='shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300'>
-                    {content.episodes.length} 集
-                  </div>
                 </div>
               </div>
             </button>
