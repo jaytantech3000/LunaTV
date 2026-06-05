@@ -2544,7 +2544,8 @@ function PlayPageClient() {
           </h1>
         </div>
 
-        {detail &&
+        {!isOfflineMode &&
+          detail &&
           detail.episodes.length > 0 &&
           currentEpisodeIndex >= 0 &&
           currentEpisodeIndex < detail.episodes.length && (
