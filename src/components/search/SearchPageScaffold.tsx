@@ -57,7 +57,7 @@ export default function SearchPageScaffold({
   return (
     <PageLayout activePath='/search'>
       <div className='px-4 py-4 sm:px-10 sm:py-8'>
-        <div className='mx-auto max-w-4xl'>
+        <div className={`mx-auto ${contentWidthClassName}`}>
           <form onSubmit={onSearchSubmit} className='relative'>
             <Search className='pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 dark:text-gray-500' />
             <input
@@ -93,7 +93,7 @@ export default function SearchPageScaffold({
             {searchSuggestions}
           </form>
 
-          <SearchModeToggle mode={mode} className='mt-4' />
+          <SearchModeToggle mode={mode} className='mt-5 lg:mt-6' />
         </div>
 
         {searchHistory?.visible ? (

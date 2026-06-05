@@ -28,24 +28,26 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
         </div>
 
         {/* 主内容区域 */}
-        <div className='relative min-w-0 flex-1 transition-all duration-300'>
-          {/* 桌面端左上角返回按钮 */}
-          {['/play', '/live'].includes(activePath) && (
-            <div className='absolute top-3 left-1 z-20 hidden md:flex'>
-              <BackButton />
+        <div className='min-w-0 flex-1 transition-all duration-300'>
+          <div className='hidden md:flex items-center justify-between px-4 pt-2 sm:px-6 lg:px-8'>
+            <div className='flex min-h-10 items-center'>
+              {['/play', '/live'].includes(activePath) ? (
+                <BackButton />
+              ) : (
+                <div aria-hidden='true' className='h-10 w-10' />
+              )}
             </div>
-          )}
 
-          {/* 桌面端顶部按钮 */}
-          <div className='absolute top-2 right-4 z-20 hidden md:flex items-center gap-2'>
-            <ThemeToggle />
-            <GlobalRatingFilterControl />
-            <UserMenu />
+            <div className='flex items-center gap-2'>
+              <ThemeToggle />
+              <GlobalRatingFilterControl />
+              <UserMenu />
+            </div>
           </div>
 
           {/* 主内容 */}
           <main
-            className='flex-1 md:min-h-0 mb-14 md:mb-0 md:mt-0 mt-12'
+            className='flex-1 md:min-h-0 mb-14 mt-12 md:mb-0 md:mt-0'
             style={{
               paddingBottom: 'calc(3.5rem + env(safe-area-inset-bottom))',
             }}
