@@ -149,6 +149,49 @@ export function buildDownloadManifestCandidateUrls(
   );
 }
 
+function pickPreferredTextValue(
+  primaryValue: string | undefined,
+  fallbackValue: string | undefined
+): string {
+  const normalizedPrimaryValue = primaryValue?.trim();
+  if (normalizedPrimaryValue) {
+    return normalizedPrimaryValue;
+  }
+
+  return fallbackValue?.trim() || '';
+}
+
+function pickPreferredOptionalTextValue(
+  primaryValue: string | undefined,
+  fallbackValue: string | undefined
+): string | undefined {
+  const nextValue = pickPreferredTextValue(primaryValue, fallbackValue);
+  return nextValue || undefined;
+}
+
+function pickPreferredDoubanId(
+  primaryValue: number | undefined,
+  fallbackValue: number | undefined
+): number | undefined {
+  if (
+    typeof primaryValue === 'number' &&
+    Number.isFinite(primaryValue) &&
+    primaryValue > 0
+  ) {
+    return primaryValue;
+  }
+
+  if (
+    typeof fallbackValue === 'number' &&
+    Number.isFinite(fallbackValue) &&
+    fallbackValue > 0
+  ) {
+    return fallbackValue;
+  }
+
+  return undefined;
+}
+
 function buildInitialTask(
   detail: SearchResult,
   episodeIndex: number,
@@ -191,6 +234,29 @@ function buildInitialTask(
     sizeBytes: 0,
     createdAt,
     updatedAt: createdAt,
+  };
+}
+
+export function applyLibraryMetadataFallback(
+  task: DownloadTask,
+  previousItem: DownloadedContentMeta | undefined
+): DownloadTask {
+  if (!previousItem) {
+    return task;
+  }
+
+  return {
+    ...task,
+    sourceName: pickPreferredTextValue(task.sourceName, previousItem.sourceName),
+    title: pickPreferredTextValue(task.title, previousItem.title),
+    poster: pickPreferredTextValue(task.poster, previousItem.poster),
+    year: pickPreferredTextValue(task.year, previousItem.year),
+    desc: pickPreferredOptionalTextValue(task.desc, previousItem.desc),
+    typeName: pickPreferredOptionalTextValue(
+      task.typeName,
+      previousItem.typeName
+    ),
+    doubanId: pickPreferredDoubanId(task.doubanId, previousItem.doubanId),
   };
 }
 
@@ -242,7 +308,7 @@ function waitForRetry(attempt: number): Promise<void> {
   });
 }
 
-function mergeLibraryItem(
+export function mergeLibraryItem(
   previousItem: DownloadedContentMeta | undefined,
   task: DownloadTask,
   ownerUsername: string,
@@ -281,13 +347,16 @@ function mergeLibraryItem(
     contentId: task.contentId,
     source: task.source,
     vodId: task.vodId,
-    sourceName: task.sourceName,
-    title: task.title,
-    poster: task.poster,
-    year: task.year,
-    desc: task.desc || previousItem?.desc,
-    typeName: task.typeName || previousItem?.typeName,
-    doubanId: task.doubanId || previousItem?.doubanId,
+    sourceName: pickPreferredTextValue(task.sourceName, previousItem?.sourceName),
+    title: pickPreferredTextValue(task.title, previousItem?.title),
+    poster: pickPreferredTextValue(task.poster, previousItem?.poster),
+    year: pickPreferredTextValue(task.year, previousItem?.year),
+    desc: pickPreferredOptionalTextValue(task.desc, previousItem?.desc),
+    typeName: pickPreferredOptionalTextValue(
+      task.typeName,
+      previousItem?.typeName
+    ),
+    doubanId: pickPreferredDoubanId(task.doubanId, previousItem?.doubanId),
     episodeTitles,
     ownerUsername,
     episodes: nextEpisodes,
@@ -546,14 +615,15 @@ class DownloadManager {
       params.episodeIndex,
       params.availableSources
     );
+    const existingLibraryItem =
+      useDownloadStore.getState().library[task.contentId];
+    const nextTask = applyLibraryMetadataFallback(task, existingLibraryItem);
 
-    if (!task.entryManifestUrl) {
+    if (!nextTask.entryManifestUrl) {
       throw new Error('当前剧集缺少可下载的播放地址');
     }
 
-    const existingTask = this.getTask(task.id);
-    const existingLibraryItem =
-      useDownloadStore.getState().library[task.contentId];
+    const existingTask = this.getTask(nextTask.id);
 
     if (
       existingTask?.status === 'done' ||
@@ -562,7 +632,7 @@ class DownloadManager {
       )
     ) {
       return {
-        task: existingTask || task,
+        task: existingTask || nextTask,
         queued: false,
       };
     }
@@ -613,9 +683,9 @@ class DownloadManager {
       };
     }
 
-    upsertTask(task);
+    upsertTask(nextTask);
     return {
-      task,
+      task: nextTask,
       queued: true,
     };
   }
