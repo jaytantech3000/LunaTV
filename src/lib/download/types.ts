@@ -93,7 +93,7 @@ export interface ManifestParseResult {
 
 export const MIN_CONCURRENT_DOWNLOAD_TASKS = 1;
 export const MAX_CONCURRENT_DOWNLOAD_TASKS = 5;
-export const DEFAULT_CONCURRENT_DOWNLOAD_TASKS = MIN_CONCURRENT_DOWNLOAD_TASKS;
+export const DEFAULT_CONCURRENT_DOWNLOAD_TASKS = 3;
 
 export function normalizeConcurrentDownloadTasks(value: unknown): number {
   const numericValue =

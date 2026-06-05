@@ -2,13 +2,16 @@
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { type ChangeEvent, useMemo, useState } from 'react';
+import { type ChangeEvent, useEffect, useMemo, useState } from 'react';
 
 import { formatBytes, getDownloadStatusLabel } from '@/lib/download/format';
 import { downloadManager } from '@/lib/download/manager';
 import { buildOfflinePlayHref } from '@/lib/download/offline';
 import { sortActiveDownloadTasks } from '@/lib/download/sort';
 import {
+  DOWNLOAD_CACHE_NAME,
+  DOWNLOAD_RESOURCE_DB_NAME,
+  DOWNLOAD_RESOURCE_STORE_NAME,
   MAX_CONCURRENT_DOWNLOAD_TASKS,
   MIN_CONCURRENT_DOWNLOAD_TASKS,
 } from '@/lib/download/types';
@@ -251,6 +254,7 @@ function DownloadedContentsSection({
 export default function DownloadsClient() {
   const searchParams = useSearchParams();
   const [actionError, setActionError] = useState<string | null>(null);
+  const [storageOrigin, setStorageOrigin] = useState('');
   const isDevelopment = process.env.NODE_ENV === 'development';
   const hasHydrated = useDownloadStore((state) => state.hasHydrated);
   const maxConcurrentTasks = useDownloadStore(
@@ -259,6 +263,14 @@ export default function DownloadsClient() {
   const setMaxConcurrentTasks = useDownloadStore(
     (state) => state.setMaxConcurrentTasks
   );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    setStorageOrigin(window.location.origin);
+  }, []);
 
   const handlePause = async (taskId: string) => {
     try {
@@ -385,14 +397,51 @@ export default function DownloadsClient() {
               <div className='mt-3 inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300'>
                 当前浏览器离线缓存
               </div>
+              <div className='mt-3 rounded-xl border border-emerald-200/70 bg-emerald-50/60 p-3 dark:border-emerald-900/40 dark:bg-emerald-950/20'>
+                <div className='text-xs font-medium uppercase tracking-wide text-emerald-700 dark:text-emerald-300'>
+                  逻辑存储位置
+                </div>
+                <div className='mt-3 grid gap-2 text-xs text-gray-600 dark:text-gray-300'>
+                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)]'>
+                    <span className='font-medium text-gray-700 dark:text-gray-200'>
+                      站点
+                    </span>
+                    <code className='break-all rounded bg-white/80 px-2 py-1 text-[11px] text-gray-700 dark:bg-gray-900/70 dark:text-gray-200'>
+                      {storageOrigin || '当前站点'}
+                    </code>
+                  </div>
+                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)]'>
+                    <span className='font-medium text-gray-700 dark:text-gray-200'>
+                      Cache
+                    </span>
+                    <code className='break-all rounded bg-white/80 px-2 py-1 text-[11px] text-gray-700 dark:bg-gray-900/70 dark:text-gray-200'>
+                      {DOWNLOAD_CACHE_NAME}
+                    </code>
+                  </div>
+                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)]'>
+                    <span className='font-medium text-gray-700 dark:text-gray-200'>
+                      IndexedDB
+                    </span>
+                    <code className='break-all rounded bg-white/80 px-2 py-1 text-[11px] text-gray-700 dark:bg-gray-900/70 dark:text-gray-200'>
+                      {DOWNLOAD_RESOURCE_DB_NAME}
+                    </code>
+                  </div>
+                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)]'>
+                    <span className='font-medium text-gray-700 dark:text-gray-200'>
+                      对象仓库
+                    </span>
+                    <code className='break-all rounded bg-white/80 px-2 py-1 text-[11px] text-gray-700 dark:bg-gray-900/70 dark:text-gray-200'>
+                      {DOWNLOAD_RESOURCE_STORE_NAME}
+                    </code>
+                  </div>
+                </div>
+              </div>
               <p className='mt-3 text-xs leading-5 text-gray-500 dark:text-gray-400'>
-                Web
-                版受浏览器沙箱限制，暂不支持直接打开系统文件夹或自定义磁盘目录。
+                实际磁盘位置由浏览器站点沙箱托管，Web 版暂不支持直接显示系统路径、打开系统文件夹或自定义磁盘目录。
               </p>
               {isDevelopment && (
                 <p className='mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300'>
-                  本地验证离线播放时，请使用 `pnpm
-                  preview:offline`；开发模式不会提供完整的离线缓存链路。
+                  本地验证离线播放时，请使用独立预览模式；开发模式不会提供完整的离线缓存链路。
                 </p>
               )}
             </div>
