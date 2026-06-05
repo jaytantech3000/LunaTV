@@ -36,9 +36,9 @@ import { sanitizeVodManifestContent } from '@/lib/download/sanitize-manifest';
 import { ensureOfflineServiceWorkerReady } from '@/lib/download/service-worker';
 import { buildDownloadContentId } from '@/lib/download/types';
 import {
-  filterPlaybackSearchResults,
   getPrefetchedPlaybackSource,
   preferBestPlaybackSource,
+  searchPlaybackSources,
 } from '@/lib/playback-source-prefetch';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
@@ -898,15 +898,7 @@ function PlayPageClient() {
     const fetchSourcesData = async (query: string): Promise<SearchResult[]> => {
       // 根据搜索词获取全部源信息
       try {
-        const response = await fetch(
-          `/api/search?q=${encodeURIComponent(query.trim())}`
-        );
-        if (!response.ok) {
-          throw new Error('搜索失败');
-        }
-        const data = await response.json();
-
-        const results = filterPlaybackSearchResults(data.results || [], {
+        const results = await searchPlaybackSources({
           title: videoTitleRef.current,
           year: videoYearRef.current,
           searchType,

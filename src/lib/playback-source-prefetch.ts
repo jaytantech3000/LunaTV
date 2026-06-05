@@ -25,6 +25,8 @@ export interface PlaybackSourcePrefetchResult {
 }
 
 const PREFETCH_CONCURRENCY = 2;
+const PREVIEW_LIKE_TITLE_PATTERN =
+  /(预告(?:片)?|片花|花絮|先导(?:片)?|抢先版|彩蛋|番外|幕后|解说|速看|cut|剪辑)/i;
 
 const settledPrefetchCache = new Map<
   string,
@@ -160,6 +162,10 @@ function normalizeSeasonMarkers(value: string): string {
         ? ` season${normalizedNumber} `
         : ` ${rawNumber} `;
     });
+}
+
+function isPreviewLikeTitle(value: string): boolean {
+  return PREVIEW_LIKE_TITLE_PATTERN.test(value);
 }
 
 function buildTitleMatchCandidates(
@@ -356,8 +362,114 @@ function buildSourceInfoKey(source: SearchResult): string {
   return `${source.source}-${source.id}`;
 }
 
-function buildSearchQuery(params: PlaybackSourcePrefetchParams): string {
-  return (params.query || params.title).trim();
+function buildSearchResultKey(result: SearchResult): string {
+  return `${result.source}-${result.id}`;
+}
+
+function mergePlaybackSearchResults(
+  existing: SearchResult[],
+  incoming: SearchResult[]
+): SearchResult[] {
+  if (incoming.length === 0) {
+    return existing;
+  }
+
+  const mergedResults = [...existing];
+  const seenKeys = new Set(existing.map(buildSearchResultKey));
+
+  incoming.forEach((result) => {
+    const key = buildSearchResultKey(result);
+    if (seenKeys.has(key)) {
+      return;
+    }
+
+    seenKeys.add(key);
+    mergedResults.push(result);
+  });
+
+  return mergedResults;
+}
+
+function hasExactDoubanMatch(
+  sources: SearchResult[],
+  expectedDoubanId: number | undefined
+): boolean {
+  if (expectedDoubanId === undefined) {
+    return false;
+  }
+
+  return sources.some(
+    (source) => normalizePositiveNumber(source.douban_id) === expectedDoubanId
+  );
+}
+
+function hasHighConfidenceDoubanMatch(
+  sources: SearchResult[],
+  params: PlaybackSourcePrefetchParams
+): boolean {
+  const expectedDoubanId = normalizePositiveNumber(params.doubanId);
+  if (expectedDoubanId === undefined) {
+    return sources.length > 0;
+  }
+
+  const exactMatches = sources.filter(
+    (source) => normalizePositiveNumber(source.douban_id) === expectedDoubanId
+  );
+
+  if (exactMatches.length === 0) {
+    return false;
+  }
+
+  if (params.searchType === 'movie') {
+    return exactMatches.some(
+      (source) => !isPreviewLikeTitle(source.title || '')
+    );
+  }
+
+  return exactMatches.some(
+    (source) =>
+      source.episodes.length > 1 && !isPreviewLikeTitle(source.title || '')
+  );
+}
+
+async function fetchPlaybackSearchQuery(query: string): Promise<SearchResult[]> {
+  const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`, {
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error('搜索失败');
+  }
+
+  const data = (await response.json()) as { results?: SearchResult[] };
+  return Array.isArray(data.results) ? data.results : [];
+}
+
+export function buildPlaybackSearchQueries(
+  params: PlaybackSourcePrefetchParams
+): string[] {
+  const year = params.year?.trim() || '';
+  const queries = new Set<string>();
+
+  [params.query, params.title].forEach((value) => {
+    const base = value?.trim();
+    if (!base) {
+      return;
+    }
+
+    queries.add(base);
+
+    if (!year || base.includes(year)) {
+      return;
+    }
+
+    queries.add(`${base} ${year}`);
+    queries.add(`${base}${year}`);
+    queries.add(`${base} (${year})`);
+    queries.add(`${base}(${year})`);
+  });
+
+  return Array.from(queries);
 }
 
 export function getPlaybackSourcePrefetchKey(
@@ -426,18 +538,37 @@ export function filterPlaybackSearchResults(
     });
 
   const expectedDoubanId = normalizePositiveNumber(params.doubanId);
-  const strictMatches = scoredResults
-    .filter(({ result, score }) => {
-      const resultDoubanId = normalizePositiveNumber(result.douban_id);
-      if (
-        expectedDoubanId !== undefined &&
-        resultDoubanId === expectedDoubanId
-      ) {
-        return true;
-      }
+  const exactDoubanMatches =
+    expectedDoubanId === undefined
+      ? []
+      : scoredResults.filter(({ result }) => {
+          const resultDoubanId = normalizePositiveNumber(result.douban_id);
+          return resultDoubanId === expectedDoubanId;
+        });
 
-      return score >= 220;
-    })
+  if (exactDoubanMatches.length > 0) {
+    const multiEpisodeExactMatches = exactDoubanMatches.filter(
+      ({ result }) => result.episodes.length > 1
+    );
+    const exactMatchPool =
+      multiEpisodeExactMatches.length > 0
+        ? multiEpisodeExactMatches
+        : exactDoubanMatches;
+    const nonPreviewExactMatches = exactMatchPool.filter(
+      ({ result }) => !isPreviewLikeTitle(result.title || '')
+    );
+    const exactResults =
+      nonPreviewExactMatches.length > 0
+        ? nonPreviewExactMatches
+        : exactMatchPool;
+
+    return normalizeVodSearchResultsForPlayback(
+      exactResults.map(({ result }) => result)
+    );
+  }
+
+  const strictMatches = scoredResults
+    .filter(({ score }) => score >= 220)
     .map(({ result }) => result);
 
   if (strictMatches.length > 0) {
@@ -450,6 +581,66 @@ export function filterPlaybackSearchResults(
       .slice(0, 3)
       .map(({ result }) => result)
   );
+}
+
+export async function searchPlaybackSources(
+  params: PlaybackSourcePrefetchParams
+): Promise<SearchResult[]> {
+  const queries = buildPlaybackSearchQueries(params);
+  const expectedDoubanId = normalizePositiveNumber(params.doubanId);
+
+  if (queries.length === 0) {
+    return [];
+  }
+
+  let aggregatedResults: SearchResult[] = [];
+  let fallbackSources: SearchResult[] = [];
+  let successfulQueryCount = 0;
+  let lastError: Error | null = null;
+
+  for (const query of queries) {
+    try {
+      const rawResults = await fetchPlaybackSearchQuery(query);
+      successfulQueryCount += 1;
+      aggregatedResults = mergePlaybackSearchResults(
+        aggregatedResults,
+        rawResults
+      );
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('搜索失败');
+      continue;
+    }
+
+    if (aggregatedResults.length === 0) {
+      continue;
+    }
+
+    const sources = filterPlaybackSearchResults(aggregatedResults, params);
+
+    if (sources.length === 0) {
+      continue;
+    }
+
+    fallbackSources = sources;
+
+    if (
+      expectedDoubanId === undefined ||
+      (hasExactDoubanMatch(sources, expectedDoubanId) &&
+        hasHighConfidenceDoubanMatch(sources, params))
+    ) {
+      return sources;
+    }
+  }
+
+  if (fallbackSources.length > 0) {
+    return fallbackSources;
+  }
+
+  if (successfulQueryCount === 0 && lastError) {
+    throw lastError;
+  }
+
+  return [];
 }
 
 export async function preferBestPlaybackSource(
@@ -565,27 +756,13 @@ export async function prefetchBestPlaybackSource(
   }
 
   const task = withPrefetchSlot(async () => {
-    const searchQuery = buildSearchQuery(params);
-    if (!searchQuery) {
+    if (buildPlaybackSearchQueries(params).length === 0) {
       settledPrefetchCache.set(key, null);
       return null;
     }
 
     try {
-      const response = await fetch(
-        `/api/search?q=${encodeURIComponent(searchQuery)}`,
-        {
-          credentials: 'same-origin',
-        }
-      );
-
-      if (!response.ok) {
-        settledPrefetchCache.set(key, null);
-        return null;
-      }
-
-      const data = (await response.json()) as { results?: SearchResult[] };
-      const sources = filterPlaybackSearchResults(data.results || [], params);
+      const sources = await searchPlaybackSources(params);
 
       if (sources.length === 0) {
         settledPrefetchCache.set(key, null);
