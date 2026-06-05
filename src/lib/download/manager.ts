@@ -1,4 +1,5 @@
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { searchPlaybackSources } from '@/lib/playback-source-prefetch';
 import { SearchResult } from '@/lib/types';
 
 import { useDownloadStore } from '@/stores/downloadStore';
@@ -9,7 +10,7 @@ import {
   isOfflineDownloadSupported,
   putDownloadResponse,
 } from './cache';
-import { parseManifestForDownload } from './manifest';
+import { parseManifestForDownloadWithFallback } from './manifest';
 import { normalizeVodEpisodeUrl } from './normalize';
 import {
   deleteResourceIndex,
@@ -29,11 +30,13 @@ import {
 interface StartEpisodeDownloadParams {
   detail: SearchResult;
   episodeIndex: number;
+  availableSources?: SearchResult[];
 }
 
 interface StartBatchEpisodeDownloadParams {
   detail: SearchResult;
   episodeIndexes: number[];
+  availableSources?: SearchResult[];
 }
 
 interface TaskRunnerState {
@@ -102,16 +105,65 @@ function patchTask(
     .patchTask(taskId, (task) => (task ? updater(task) : undefined));
 }
 
+function mergeManifestCandidateUrls(...candidateLists: string[][]): string[] {
+  const seen = new Set<string>();
+  const mergedCandidates: string[] = [];
+
+  candidateLists.forEach((candidates) => {
+    candidates.forEach((candidate) => {
+      const normalizedCandidate = candidate.trim();
+      if (!normalizedCandidate || seen.has(normalizedCandidate)) {
+        return;
+      }
+
+      seen.add(normalizedCandidate);
+      mergedCandidates.push(normalizedCandidate);
+    });
+  });
+
+  return mergedCandidates;
+}
+
+function collectDownloadManifestCandidateUrls(
+  sources: SearchResult[],
+  episodeIndex: number
+): string[] {
+  return mergeManifestCandidateUrls(
+    sources.map((candidate) =>
+      normalizeVodEpisodeUrl(
+        candidate.source,
+        candidate.episodes[episodeIndex] || ''
+      )
+    )
+  );
+}
+
+export function buildDownloadManifestCandidateUrls(
+  detail: SearchResult,
+  episodeIndex: number,
+  availableSources: SearchResult[] = []
+): string[] {
+  return collectDownloadManifestCandidateUrls(
+    [detail, ...availableSources],
+    episodeIndex
+  );
+}
+
 function buildInitialTask(
   detail: SearchResult,
-  episodeIndex: number
+  episodeIndex: number,
+  availableSources: SearchResult[] = []
 ): DownloadTask {
   const contentId = buildDownloadContentId(detail.source, detail.id);
   const taskId = buildDownloadTaskId(contentId, episodeIndex);
-  const entryManifestUrl = normalizeVodEpisodeUrl(
-    detail.source,
-    detail.episodes[episodeIndex] || ''
+  const manifestCandidateUrls = buildDownloadManifestCandidateUrls(
+    detail,
+    episodeIndex,
+    availableSources
   );
+  const entryManifestUrl =
+    manifestCandidateUrls[0] ||
+    normalizeVodEpisodeUrl(detail.source, detail.episodes[episodeIndex] || '');
   const createdAt = now();
 
   return {
@@ -130,6 +182,7 @@ function buildInitialTask(
     episodeTitle: getEpisodeTitle(detail, episodeIndex),
     originalM3u8Url: detail.episodes[episodeIndex] || '',
     entryManifestUrl,
+    manifestCandidateUrls,
     cacheIndexId: buildDownloadCacheIndexId(taskId),
     status: 'queued',
     progress: 0,
@@ -370,6 +423,37 @@ class DownloadManager {
     });
   }
 
+  private async resolveManifestCandidateUrls(
+    task: DownloadTask
+  ): Promise<string[]> {
+    const currentCandidates = mergeManifestCandidateUrls(
+      task.manifestCandidateUrls || [],
+      task.entryManifestUrl ? [task.entryManifestUrl] : []
+    );
+
+    if (currentCandidates.length > 1 || !task.title.trim()) {
+      return currentCandidates;
+    }
+
+    try {
+      const fallbackSources = await searchPlaybackSources({
+        title: task.title,
+        year: task.year,
+        doubanId: task.doubanId,
+      });
+
+      return mergeManifestCandidateUrls(
+        currentCandidates,
+        collectDownloadManifestCandidateUrls(
+          fallbackSources,
+          task.episodeIndex
+        )
+      );
+    } catch (error) {
+      return currentCandidates;
+    }
+  }
+
   private stopRunner(taskId: string): void {
     const runner = this.runners.get(taskId);
     if (!runner) {
@@ -457,7 +541,11 @@ class DownloadManager {
   ): QueueEpisodeDownloadResult {
     this.ensureSupport();
     const ownerUsername = this.ensureOwner();
-    const task = buildInitialTask(params.detail, params.episodeIndex);
+    const task = buildInitialTask(
+      params.detail,
+      params.episodeIndex,
+      params.availableSources
+    );
 
     if (!task.entryManifestUrl) {
       throw new Error('当前剧集缺少可下载的播放地址');
@@ -483,6 +571,22 @@ class DownloadManager {
       existingTask &&
       ['downloading', 'queued'].includes(existingTask.status)
     ) {
+      const mergedManifestCandidateUrls = mergeManifestCandidateUrls(
+        existingTask.manifestCandidateUrls || [existingTask.entryManifestUrl],
+        task.manifestCandidateUrls || [task.entryManifestUrl]
+      );
+
+      if (
+        mergedManifestCandidateUrls.length !==
+        (existingTask.manifestCandidateUrls?.length || 0)
+      ) {
+        patchTask(existingTask.id, (currentTask) => ({
+          ...currentTask,
+          manifestCandidateUrls: mergedManifestCandidateUrls,
+          updatedAt: now(),
+        }));
+      }
+
       return {
         task: existingTask,
         queued: false,
@@ -494,6 +598,10 @@ class DownloadManager {
     if (existingTask && ['paused', 'error'].includes(existingTask.status)) {
       this.setTaskStatus(existingTask.id, 'queued', {
         errorMessage: undefined,
+        manifestCandidateUrls: mergeManifestCandidateUrls(
+          existingTask.manifestCandidateUrls || [existingTask.entryManifestUrl],
+          task.manifestCandidateUrls || [task.entryManifestUrl]
+        ),
       });
       return {
         task: this.getTask(existingTask.id) || {
@@ -561,15 +669,49 @@ class DownloadManager {
         );
       };
 
+      const manifestCandidateUrls = await this.resolveManifestCandidateUrls(
+        task
+      );
+      ensureRunnerActive();
+
+      if (
+        manifestCandidateUrls.length !==
+          (task.manifestCandidateUrls?.length || 0) ||
+        (manifestCandidateUrls[0] && manifestCandidateUrls[0] !== task.entryManifestUrl)
+      ) {
+        patchTask(taskId, (currentTask) => ({
+          ...currentTask,
+          entryManifestUrl:
+            manifestCandidateUrls[0] || currentTask.entryManifestUrl,
+          manifestCandidateUrls,
+          updatedAt: now(),
+        }));
+      }
+
       const manifestController = createTrackedController();
-      const manifestResult = await parseManifestForDownload(
-        task.entryManifestUrl,
+      const manifestResult = await parseManifestForDownloadWithFallback(
+        manifestCandidateUrls.length
+          ? manifestCandidateUrls
+          : [task.entryManifestUrl],
         {
           signal: manifestController.signal,
         }
       );
       runner.controllers.delete(manifestController);
       ensureRunnerActive();
+
+      if (manifestResult.rootManifestUrl !== task.entryManifestUrl) {
+        patchTask(taskId, (currentTask) => ({
+          ...currentTask,
+          entryManifestUrl: manifestResult.rootManifestUrl,
+          manifestCandidateUrls: mergeManifestCandidateUrls(
+            [manifestResult.rootManifestUrl],
+            currentTask.manifestCandidateUrls || [currentTask.entryManifestUrl]
+          ),
+          updatedAt: now(),
+        }));
+      }
+
       await this.updateResourceIndex(task, manifestResult.resourceUrls);
       ensureRunnerActive();
 
@@ -818,6 +960,7 @@ class DownloadManager {
         const result = this.queueEpisodeDownload({
           detail: params.detail,
           episodeIndex,
+          availableSources: params.availableSources,
         });
         tasks.push(result.task);
         if (result.queued) {

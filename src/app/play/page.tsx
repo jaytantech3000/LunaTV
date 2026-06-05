@@ -2550,6 +2550,7 @@ function PlayPageClient() {
           currentEpisodeIndex < detail.episodes.length && (
             <CurrentEpisodeDownloadControl
               detail={detail}
+              availableSources={isOfflineMode ? [] : availableSources}
               episodeIndex={
                 isOfflineMode
                   ? offlineEpisodeOrder[currentEpisodeIndex] ??

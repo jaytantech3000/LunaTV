@@ -1,8 +1,24 @@
+jest.mock('./cache', () => ({
+  putDownloadResponse: jest.fn().mockResolvedValue(undefined),
+}));
+
 import {
   collectMediaPlaylistResources,
   isMasterPlaylist,
+  parseManifestForDownloadWithFallback,
   selectPlaybackManifestUrl,
 } from './manifest';
+
+function createManifestResponse(body: string): Response {
+  return {
+    ok: true,
+    status: 200,
+    clone() {
+      return createManifestResponse(body);
+    },
+    text: async () => body,
+  } as unknown as Response;
+}
 
 describe('manifest parsing helpers', () => {
   it('detects master playlists and selects the highest bandwidth variant', () => {
@@ -81,5 +97,38 @@ describe('manifest parsing helpers', () => {
 #EXT-X-KEY:METHOD=SAMPLE-AES,URI="https://example.com/key"`
       )
     ).toThrow('暂不支持 DRM/HLS 加密方式: SAMPLE-AES');
+  });
+
+  it('falls back to the next entry manifest when the first candidate fails', async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+      })
+      .mockResolvedValueOnce(
+        createManifestResponse(
+          `#EXTM3U
+#EXTINF:4.0,
+/api/proxy/vod/segment?source=demo&url=https%3A%2F%2Fexample.com%2F0001.ts`
+        )
+      );
+
+    global.fetch = fetchMock as typeof fetch;
+
+    try {
+      const result = await parseManifestForDownloadWithFallback([
+        '/api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fexample.com%2Fblocked.m3u8',
+        '/api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fexample.com%2Fplayable.m3u8',
+      ]);
+
+      expect(result.rootManifestUrl).toContain('playable.m3u8');
+      expect(result.playbackManifestUrl).toContain('playable.m3u8');
+      expect(result.resources).toHaveLength(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 });

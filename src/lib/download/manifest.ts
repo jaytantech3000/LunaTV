@@ -259,3 +259,39 @@ export async function parseManifestForDownload(
     isMasterPlaylist: true,
   };
 }
+
+export async function parseManifestForDownloadWithFallback(
+  entryManifestUrls: string[],
+  options: {
+    signal?: AbortSignal;
+  } = {}
+): Promise<ManifestParseResult> {
+  const candidates = Array.from(
+    new Set(entryManifestUrls.map((url) => url.trim()).filter(Boolean))
+  );
+
+  if (candidates.length === 0) {
+    throw new Error('当前剧集缺少可下载的播放地址');
+  }
+
+  let lastError: Error | null = null;
+
+  for (const candidateUrl of candidates) {
+    if (options.signal?.aborted) {
+      throw lastError || new Error('下载已取消');
+    }
+
+    try {
+      return await parseManifestForDownload(candidateUrl, options);
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw error;
+      }
+
+      lastError =
+        error instanceof Error ? error : new Error('获取 manifest 失败');
+    }
+  }
+
+  throw lastError || new Error('当前内容没有可用的离线下载源');
+}

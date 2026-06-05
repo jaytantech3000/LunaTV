@@ -28,6 +28,7 @@ export interface DownloadTask {
   episodeTitle: string;
   originalM3u8Url: string;
   entryManifestUrl: string;
+  manifestCandidateUrls?: string[];
   playbackManifestUrl?: string;
   cacheIndexId: string;
   status: DownloadTaskStatus;

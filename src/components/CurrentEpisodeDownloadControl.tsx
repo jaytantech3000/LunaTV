@@ -22,6 +22,7 @@ import { useDownloadStore } from '@/stores/downloadStore';
 
 interface CurrentEpisodeDownloadControlProps {
   detail: SearchResult;
+  availableSources?: SearchResult[];
   episodeIndex: number;
   isOfflineMode?: boolean;
 }
@@ -140,6 +141,7 @@ function getEpisodeButtonClassName(params: {
 
 export default function CurrentEpisodeDownloadControl({
   detail,
+  availableSources = [],
   episodeIndex,
   isOfflineMode = false,
 }: CurrentEpisodeDownloadControlProps) {
@@ -329,6 +331,7 @@ export default function CurrentEpisodeDownloadControl({
       await downloadManager.startEpisodeDownload({
         detail,
         episodeIndex,
+        availableSources,
       });
     } catch (error) {
       setActionError(
@@ -440,6 +443,7 @@ export default function CurrentEpisodeDownloadControl({
       const result = await downloadManager.startBatchEpisodeDownloads({
         detail,
         episodeIndexes: selectedEpisodeIndexes,
+        availableSources,
       });
 
       setBatchFeedback(
