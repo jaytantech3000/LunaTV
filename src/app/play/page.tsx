@@ -137,6 +137,14 @@ function persistStoredEpisodeProgress(
   writeEpisodeProgressSnapshot(snapshot);
 }
 
+function readPositiveNumberSearchParam(value: string | null): number {
+  const parsedValue = Number(value);
+
+  return Number.isFinite(parsedValue) && parsedValue > 0
+    ? Math.trunc(parsedValue)
+    : 0;
+}
+
 function buildCachedLoaderStats() {
   const start = performance.now();
 
@@ -324,7 +332,9 @@ function PlayPageClient() {
   const [videoTitle, setVideoTitle] = useState(searchParams.get('title') || '');
   const [videoYear, setVideoYear] = useState(searchParams.get('year') || '');
   const [videoCover, setVideoCover] = useState('');
-  const [videoDoubanId, setVideoDoubanId] = useState(0);
+  const [videoDoubanId, setVideoDoubanId] = useState(() =>
+    readPositiveNumberSearchParam(searchParams.get('doubanId'))
+  );
   // 当前源和ID
   const [currentSource, setCurrentSource] = useState(
     searchParams.get('source') || ''
@@ -353,6 +363,7 @@ function PlayPageClient() {
   const currentIdRef = useRef(currentId);
   const videoTitleRef = useRef(videoTitle);
   const videoYearRef = useRef(videoYear);
+  const videoDoubanIdRef = useRef(videoDoubanId);
   const detailRef = useRef<SearchResult | null>(detail);
   const currentEpisodeIndexRef = useRef(currentEpisodeIndex);
   const offlineEpisodeOrderRef = useRef<number[]>([]);
@@ -367,6 +378,7 @@ function PlayPageClient() {
     currentEpisodeIndexRef.current = currentEpisodeIndex;
     videoTitleRef.current = videoTitle;
     videoYearRef.current = videoYear;
+    videoDoubanIdRef.current = videoDoubanId;
   }, [
     currentSource,
     currentId,
@@ -374,6 +386,7 @@ function PlayPageClient() {
     currentEpisodeIndex,
     videoTitle,
     videoYear,
+    videoDoubanId,
   ]);
   useEffect(() => {
     offlineEpisodeOrderRef.current = offlineEpisodeOrder;
@@ -898,6 +911,7 @@ function PlayPageClient() {
           year: videoYearRef.current,
           searchType,
           query,
+          doubanId: videoDoubanIdRef.current || undefined,
           preferBest: optimizationEnabled,
         });
         setAvailableSources(results);
@@ -968,6 +982,11 @@ function PlayPageClient() {
       newUrl.searchParams.set('id', playableDetail.id);
       newUrl.searchParams.set('year', playableDetail.year);
       newUrl.searchParams.set('title', playableDetail.title);
+      if (playableDetail.douban_id) {
+        newUrl.searchParams.set('doubanId', String(playableDetail.douban_id));
+      } else {
+        newUrl.searchParams.delete('doubanId');
+      }
       newUrl.searchParams.set('episode', String(episodeOrder[targetIndex] + 1));
       window.history.replaceState({}, '', newUrl.toString());
 
@@ -1008,6 +1027,7 @@ function PlayPageClient() {
         year: videoYearRef.current,
         searchType,
         query: searchTitle,
+        doubanId: videoDoubanIdRef.current || undefined,
         preferBest: optimizationEnabled,
       });
 
@@ -1089,6 +1109,11 @@ function PlayPageClient() {
       newUrl.searchParams.set('id', playableDetail.id);
       newUrl.searchParams.set('year', playableDetail.year);
       newUrl.searchParams.set('title', playableDetail.title);
+      if (playableDetail.douban_id) {
+        newUrl.searchParams.set('doubanId', String(playableDetail.douban_id));
+      } else {
+        newUrl.searchParams.delete('doubanId');
+      }
       newUrl.searchParams.delete('prefer');
       newUrl.searchParams.delete('offline');
       newUrl.searchParams.delete('contentId');
@@ -1276,6 +1301,11 @@ function PlayPageClient() {
       newUrl.searchParams.set('source', newSource);
       newUrl.searchParams.set('id', newId);
       newUrl.searchParams.set('year', newDetail.year);
+      if (newDetail.douban_id) {
+        newUrl.searchParams.set('doubanId', String(newDetail.douban_id));
+      } else {
+        newUrl.searchParams.delete('doubanId');
+      }
       window.history.replaceState({}, '', newUrl.toString());
 
       setVideoTitle(newDetail.title || newTitle);
@@ -1464,7 +1494,9 @@ function PlayPageClient() {
         }
 
         setIsVideoLoading(true);
-        const isEpisodeReady = await validateDownloadedEpisode(targetEpisodeMeta);
+        const isEpisodeReady = await validateDownloadedEpisode(
+          targetEpisodeMeta
+        );
         if (!isEpisodeReady) {
           setIsVideoLoading(false);
           setError('离线资源缺失或首片段不可用，请返回下载页重新下载');
@@ -1952,11 +1984,11 @@ function PlayPageClient() {
               markVideoReady();
             });
 
-	            hls.loadSource(url);
-	            hls.attachMedia(video);
-	            video.hls = hls;
+            hls.loadSource(url);
+            hls.attachMedia(video);
+            video.hls = hls;
 
-	            hls.on(Hls.Events.ERROR, function (event: any, data: any) {
+            hls.on(Hls.Events.ERROR, function (event: any, data: any) {
               console.error('HLS Error:', event, data);
               const offlineErrorMessage = isOfflineMode
                 ? buildOfflineHlsErrorMessage(data)
@@ -2009,16 +2041,16 @@ function PlayPageClient() {
                 localStorage.setItem('enable_blockad', String(newVal));
                 if (artPlayerRef.current) {
                   resumeTimeRef.current = artPlayerRef.current.currentTime;
-	                  if (
-	                    artPlayerRef.current.video &&
-	                    artPlayerRef.current.video.hls
-	                  ) {
-	                    artPlayerRef.current.video.hls.destroy();
-	                  }
-	                  artPlayerRef.current.destroy();
-	                  artPlayerRef.current = null;
-	                  playerSessionRef.current = null;
-	                }
+                  if (
+                    artPlayerRef.current.video &&
+                    artPlayerRef.current.video.hls
+                  ) {
+                    artPlayerRef.current.video.hls.destroy();
+                  }
+                  artPlayerRef.current.destroy();
+                  artPlayerRef.current = null;
+                  playerSessionRef.current = null;
+                }
                 setBlockAdEnabled(newVal);
               } catch (_) {
                 // ignore
@@ -2106,16 +2138,16 @@ function PlayPageClient() {
               handleNextEpisode();
             },
           },
-	        ],
-	      });
-	      playerSessionRef.current = {
-	        isOfflineMode,
-	        playbackType,
-	      };
+        ],
+      });
+      playerSessionRef.current = {
+        isOfflineMode,
+        playbackType,
+      };
 
-	      removeVideoEventListeners = attachNativeVideoListeners(
-	        artPlayerRef.current?.video as HTMLVideoElement | null
-	      );
+      removeVideoEventListeners = attachNativeVideoListeners(
+        artPlayerRef.current?.video as HTMLVideoElement | null
+      );
 
       // 监听播放器事件
       artPlayerRef.current.on('ready', () => {
@@ -2285,12 +2317,12 @@ function PlayPageClient() {
         saveCurrentPlayProgress();
       });
 
-	      if (artPlayerRef.current?.video && playbackType !== 'm3u8') {
-	        ensureVideoSource(
-	          artPlayerRef.current.video as HTMLVideoElement,
-	          videoUrl
-	        );
-	      }
+      if (artPlayerRef.current?.video && playbackType !== 'm3u8') {
+        ensureVideoSource(
+          artPlayerRef.current.video as HTMLVideoElement,
+          videoUrl
+        );
+      }
 
       if (isOfflineMode) {
         loadingWatchdogTimer = window.setTimeout(() => {

@@ -2,6 +2,9 @@ import { putDownloadResponse } from './cache';
 import { looksLikeManifestUrl } from './proxy-url';
 import { DownloadResource, ManifestParseResult } from './types';
 
+const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
+const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
+
 function splitManifestLines(content: string): string[] {
   return content.split(/\r?\n/).map((line) => line.trim());
 }
@@ -84,7 +87,10 @@ export function collectMediaPlaylistResources(
       return;
     }
 
-    if (line.startsWith('#EXT-X-KEY:') || line.startsWith('#EXT-X-SESSION-KEY:')) {
+    if (
+      line.startsWith('#EXT-X-KEY:') ||
+      line.startsWith('#EXT-X-SESSION-KEY:')
+    ) {
       const method = getKeyMethod(line);
       if (method && !['AES-128', 'NONE'].includes(method.toUpperCase())) {
         throw new Error(`暂不支持 DRM/HLS 加密方式: ${method}`);
@@ -180,6 +186,9 @@ async function fetchManifestText(
   const response = await fetch(url, {
     cache: 'no-store',
     credentials: 'same-origin',
+    headers: {
+      [DOWNLOAD_REQUEST_INTENT_HEADER]: BACKGROUND_DOWNLOAD_REQUEST_INTENT,
+    },
     signal,
   });
 

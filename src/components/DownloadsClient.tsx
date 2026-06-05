@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { type ChangeEvent, useMemo, useState } from 'react';
 
@@ -215,12 +216,13 @@ function DownloadedContentsSection({
                       </div>
 
                       <div className='flex flex-wrap gap-2'>
-                        <a
+                        <Link
                           href={offlineHref}
+                          prefetch={false}
                           className='rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700'
                         >
                           离线播放
-                        </a>
+                        </Link>
                         <button
                           type='button'
                           onClick={() =>
@@ -384,11 +386,13 @@ export default function DownloadsClient() {
                 当前浏览器离线缓存
               </div>
               <p className='mt-3 text-xs leading-5 text-gray-500 dark:text-gray-400'>
-                Web 版受浏览器沙箱限制，暂不支持直接打开系统文件夹或自定义磁盘目录。
+                Web
+                版受浏览器沙箱限制，暂不支持直接打开系统文件夹或自定义磁盘目录。
               </p>
               {isDevelopment && (
                 <p className='mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300'>
-                  本地验证离线播放时，请使用 `pnpm preview:offline`；开发模式不会提供完整的离线缓存链路。
+                  本地验证离线播放时，请使用 `pnpm
+                  preview:offline`；开发模式不会提供完整的离线缓存链路。
                 </p>
               )}
             </div>

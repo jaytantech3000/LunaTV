@@ -17,6 +17,8 @@ self.__WB_DISABLE_DEV_LOGS = true;
 const DOWNLOAD_CACHE_NAME = 'moontv-vod-download-v1';
 const VOD_PROXY_PATH_PREFIX = '/api/proxy/vod/';
 const RANGE_HEADER_PATTERN = /^bytes=(\d+)-(\d*)$/i;
+const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
+const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
 
 async function matchCachedDownloadResponse(
   cache: Cache,
@@ -150,6 +152,13 @@ self.addEventListener('fetch', (event) => {
   if (
     requestUrl.origin !== self.location.origin ||
     !requestUrl.pathname.startsWith(VOD_PROXY_PATH_PREFIX)
+  ) {
+    return;
+  }
+
+  if (
+    request.headers.get(DOWNLOAD_REQUEST_INTENT_HEADER) ===
+    BACKGROUND_DOWNLOAD_REQUEST_INTENT
   ) {
     return;
   }

@@ -13,6 +13,7 @@ export interface PlaybackSourcePrefetchParams {
   year?: string;
   searchType?: string;
   query?: string;
+  doubanId?: number;
   preferBest?: boolean;
 }
 
@@ -38,7 +39,207 @@ const pendingPrefetchResolvers: Array<() => void> = [];
 let activePrefetchCount = 0;
 
 function normalizeMatchText(value: string): string {
-  return value.replaceAll(' ', '').trim().toLowerCase();
+  return normalizeSeasonMarkers(value)
+    .trim()
+    .toLowerCase()
+    .normalize('NFKC')
+    .replace(/[\s\-_.·•・:：,，!！?？'"“”‘’`~()（）[\]【】{}<>《》/\\|]/g, '');
+}
+
+function normalizePositiveNumber(
+  value: number | undefined
+): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+function parseLooseSeasonNumber(value: string): number | null {
+  const normalizedValue = value.trim().toUpperCase();
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  if (/^\d+$/.test(normalizedValue)) {
+    const numericValue = Number(normalizedValue);
+    return Number.isFinite(numericValue) && numericValue > 0
+      ? numericValue
+      : null;
+  }
+
+  const romanMap: Record<string, number> = {
+    I: 1,
+    V: 5,
+    X: 10,
+    L: 50,
+    C: 100,
+  };
+
+  if (/^[IVXLCDM]+$/.test(normalizedValue)) {
+    let total = 0;
+    let previous = 0;
+
+    for (let index = normalizedValue.length - 1; index >= 0; index -= 1) {
+      const current = romanMap[normalizedValue[index]];
+      if (!current) {
+        return null;
+      }
+
+      if (current < previous) {
+        total -= current;
+      } else {
+        total += current;
+        previous = current;
+      }
+    }
+
+    return total > 0 ? total : null;
+  }
+
+  const chineseDigits: Record<string, number> = {
+    零: 0,
+    〇: 0,
+    一: 1,
+    二: 2,
+    两: 2,
+    三: 3,
+    四: 4,
+    五: 5,
+    六: 6,
+    七: 7,
+    八: 8,
+    九: 9,
+  };
+
+  if (normalizedValue === '十') {
+    return 10;
+  }
+
+  const tenIndex = normalizedValue.indexOf('十');
+  if (tenIndex >= 0) {
+    const tensRaw = normalizedValue.slice(0, tenIndex);
+    const unitsRaw = normalizedValue.slice(tenIndex + 1);
+    const tens = tensRaw ? chineseDigits[tensRaw] : 1;
+    const units = unitsRaw ? chineseDigits[unitsRaw] : 0;
+
+    if (typeof tens === 'number' && typeof units === 'number' && tens > 0) {
+      return tens * 10 + units;
+    }
+  }
+
+  const normalizedCharacters = normalizedValue.split('');
+
+  if (normalizedCharacters.every((char) => char in chineseDigits)) {
+    const digits = normalizedCharacters.map((char) => chineseDigits[char]);
+
+    if (digits.some((digit) => digit === undefined)) {
+      return null;
+    }
+
+    return Number(digits.join(''));
+  }
+
+  return null;
+}
+
+function normalizeSeasonMarkers(value: string): string {
+  return value
+    .replace(
+      /第([零〇一二两三四五六七八九十IVXLCDM\d]+)(季|部|期)/gi,
+      (_, rawNumber: string) => {
+        const normalizedNumber = parseLooseSeasonNumber(rawNumber);
+        return normalizedNumber
+          ? ` season${normalizedNumber} `
+          : ` ${rawNumber} `;
+      }
+    )
+    .replace(/season\s*([IVXLCDM\d]+)/gi, (_, rawNumber: string) => {
+      const normalizedNumber = parseLooseSeasonNumber(rawNumber);
+      return normalizedNumber
+        ? ` season${normalizedNumber} `
+        : ` ${rawNumber} `;
+    });
+}
+
+function buildTitleMatchCandidates(
+  params: PlaybackSourcePrefetchParams
+): string[] {
+  return Array.from(
+    new Set(
+      [params.title, params.query]
+        .map((value) => normalizeMatchText(value || ''))
+        .filter(Boolean)
+    )
+  );
+}
+
+function scoreNormalizedTitleMatch(
+  candidate: string,
+  expected: string
+): number {
+  if (!candidate || !expected) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  if (candidate === expected) {
+    return 420;
+  }
+
+  if (candidate.startsWith(expected) || expected.startsWith(candidate)) {
+    return 280;
+  }
+
+  if (candidate.includes(expected) || expected.includes(candidate)) {
+    return 220;
+  }
+
+  return Number.NEGATIVE_INFINITY;
+}
+
+function scorePlaybackSearchResult(
+  result: SearchResult,
+  params: PlaybackSourcePrefetchParams
+): number {
+  const expectedDoubanId = normalizePositiveNumber(params.doubanId);
+  const resultDoubanId = normalizePositiveNumber(result.douban_id);
+  const matchesDoubanId =
+    expectedDoubanId !== undefined && resultDoubanId === expectedDoubanId;
+  const normalizedTitle = normalizeMatchText(result.title || '');
+  const titleScores = buildTitleMatchCandidates(params)
+    .map((candidate) => scoreNormalizedTitleMatch(normalizedTitle, candidate))
+    .filter(Number.isFinite);
+
+  if (!matchesDoubanId && titleScores.length === 0) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  let score = matchesDoubanId ? 1000 : 0;
+
+  if (titleScores.length > 0) {
+    score += Math.max(...titleScores);
+  }
+
+  const expectedYear = params.year?.trim().toLowerCase() || '';
+  const resultYear = result.year?.trim().toLowerCase() || '';
+  if (expectedYear) {
+    if (resultYear === expectedYear) {
+      score += 80;
+    } else if (resultYear) {
+      score -= 120;
+    }
+  }
+
+  if (params.searchType) {
+    if (matchesSearchType(result, params.searchType)) {
+      score += 40;
+    } else {
+      score -= 120;
+    }
+  }
+
+  score += result.episodes.length > 1 ? 10 : 5;
+  return score;
 }
 
 function parseSpeedInKilobytes(loadSpeed: string): number {
@@ -108,9 +309,11 @@ function calculateSourceScore(
     );
   })();
 
-  return Math.round(
-    (qualityScore * 0.4 + speedScore * 0.4 + pingScore * 0.2) * 100
-  ) / 100;
+  return (
+    Math.round(
+      (qualityScore * 0.4 + speedScore * 0.4 + pingScore * 0.2) * 100
+    ) / 100
+  );
 }
 
 async function withPrefetchSlot<T>(task: () => Promise<T>): Promise<T> {
@@ -165,6 +368,7 @@ export function getPlaybackSourcePrefetchKey(
     year: params.year?.trim() || '',
     searchType: params.searchType?.trim() || '',
     query: params.query?.trim() || '',
+    doubanId: normalizePositiveNumber(params.doubanId) || 0,
     preferBest: params.preferBest !== false,
   });
 }
@@ -191,6 +395,11 @@ export function buildPlaybackSourcePlayUrl(
     searchParams.set('stitle', params.query.trim());
   }
 
+  const doubanId = normalizePositiveNumber(params.doubanId);
+  if (doubanId) {
+    searchParams.set('doubanId', String(doubanId));
+  }
+
   return `/play?${searchParams.toString()}`;
 }
 
@@ -198,21 +407,48 @@ export function filterPlaybackSearchResults(
   results: SearchResult[],
   params: PlaybackSourcePrefetchParams
 ): SearchResult[] {
-  const expectedTitle = normalizeMatchText(params.title);
-  const expectedYear = params.year?.trim().toLowerCase() || '';
+  const scoredResults = results
+    .map((result) => ({
+      result,
+      score: scorePlaybackSearchResult(result, params),
+    }))
+    .filter((item) => Number.isFinite(item.score))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      if (right.result.episodes.length !== left.result.episodes.length) {
+        return right.result.episodes.length - left.result.episodes.length;
+      }
+
+      return left.result.title.localeCompare(right.result.title, 'zh-CN');
+    });
+
+  const expectedDoubanId = normalizePositiveNumber(params.doubanId);
+  const strictMatches = scoredResults
+    .filter(({ result, score }) => {
+      const resultDoubanId = normalizePositiveNumber(result.douban_id);
+      if (
+        expectedDoubanId !== undefined &&
+        resultDoubanId === expectedDoubanId
+      ) {
+        return true;
+      }
+
+      return score >= 220;
+    })
+    .map(({ result }) => result);
+
+  if (strictMatches.length > 0) {
+    return normalizeVodSearchResultsForPlayback(strictMatches);
+  }
 
   return normalizeVodSearchResultsForPlayback(
-    results.filter((result) => {
-      if (normalizeMatchText(result.title) !== expectedTitle) {
-        return false;
-      }
-
-      if (expectedYear && result.year.trim().toLowerCase() !== expectedYear) {
-        return false;
-      }
-
-      return matchesSearchType(result, params.searchType);
-    })
+    scoredResults
+      .filter(({ score }) => score >= 180)
+      .slice(0, 3)
+      .map(({ result }) => result)
   );
 }
 
@@ -245,7 +481,9 @@ export async function preferBestPlaybackSource(
           }
 
           const episodeUrl =
-            source.episodes.length > 1 ? source.episodes[1] : source.episodes[0];
+            source.episodes.length > 1
+              ? source.episodes[1]
+              : source.episodes[0];
           const metrics = await getVideoResolutionFromM3u8(episodeUrl);
 
           return {
@@ -296,12 +534,7 @@ export async function preferBestPlaybackSource(
   const scoredResults = successfulResults
     .map((result) => ({
       ...result,
-      score: calculateSourceScore(
-        result.metrics,
-        maxSpeed,
-        minPing,
-        maxPing
-      ),
+      score: calculateSourceScore(result.metrics, maxSpeed, minPing, maxPing),
     }))
     .sort((left, right) => right.score - left.score);
 

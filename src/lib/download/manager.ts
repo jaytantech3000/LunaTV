@@ -55,6 +55,9 @@ interface BatchDownloadResult {
 }
 
 const RESOURCE_DOWNLOAD_WORKER_COUNT = 3;
+const MAX_RESOURCE_DOWNLOAD_RETRIES = 2;
+const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
+const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
 
 function getCurrentOwnerUsername(): string {
   const username = getAuthInfoFromBrowserCookie()?.username?.trim();
@@ -145,6 +148,9 @@ async function downloadAndCacheUrl(
   const response = await fetch(url, {
     cache: 'no-store',
     credentials: 'same-origin',
+    headers: {
+      [DOWNLOAD_REQUEST_INTENT_HEADER]: BACKGROUND_DOWNLOAD_REQUEST_INTENT,
+    },
     signal: controller.signal,
   });
 
@@ -155,6 +161,32 @@ async function downloadAndCacheUrl(
   const sizeBytes = Number(response.headers.get('content-length') || 0);
   await putDownloadResponse(url, response.clone());
   return Number.isFinite(sizeBytes) ? sizeBytes : 0;
+}
+
+function isRetryableDownloadError(error: unknown): boolean {
+  if (error instanceof TypeError) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  if (error.name === 'AbortError') {
+    return true;
+  }
+
+  const normalizedMessage = error.message.trim().toLowerCase();
+  return (
+    normalizedMessage.includes('networkerror') ||
+    normalizedMessage.includes('failed to fetch')
+  );
+}
+
+function waitForRetry(attempt: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 200 * attempt);
+  });
 }
 
 function mergeLibraryItem(
@@ -603,37 +635,56 @@ class DownloadManager {
             continue;
           }
 
-          const controller = createTrackedController();
+          let resourceSize = 0;
 
-          try {
-            const resourceSize = await downloadAndCacheUrl(
-              resource.url,
-              controller
-            );
+          for (
+            let attempt = 1;
+            attempt <= MAX_RESOURCE_DOWNLOAD_RETRIES + 1;
+            attempt += 1
+          ) {
+            const controller = createTrackedController();
 
-            ensureRunnerActive();
+            try {
+              resourceSize = await downloadAndCacheUrl(
+                resource.url,
+                controller
+              );
+              break;
+            } catch (error) {
+              if (controller.signal.aborted && runner.mode !== 'running') {
+                ensureRunnerActive();
+              }
 
-            resolvedResources += 1;
-            sizeBytes += resourceSize;
-            flushProgress(true);
-          } catch (error) {
-            if (controller.signal.aborted && runner.mode !== 'running') {
-              ensureRunnerActive();
+              const shouldRetry =
+                runner.mode === 'running' &&
+                attempt <= MAX_RESOURCE_DOWNLOAD_RETRIES &&
+                isRetryableDownloadError(error);
+
+              if (shouldRetry) {
+                await waitForRetry(attempt);
+                continue;
+              }
+
+              if (runner.mode === 'running') {
+                runner.mode = 'failed';
+                runner.failureError =
+                  error instanceof Error
+                    ? error
+                    : new Error('下载失败，请稍后重试');
+                this.abortOtherControllers(runner, controller);
+              }
+
+              throw runner.failureError || error;
+            } finally {
+              runner.controllers.delete(controller);
             }
-
-            if (runner.mode === 'running') {
-              runner.mode = 'failed';
-              runner.failureError =
-                error instanceof Error
-                  ? error
-                  : new Error('下载失败，请稍后重试');
-              this.abortOtherControllers(runner, controller);
-            }
-
-            throw runner.failureError || error;
-          } finally {
-            runner.controllers.delete(controller);
           }
+
+          ensureRunnerActive();
+
+          resolvedResources += 1;
+          sizeBytes += resourceSize;
+          flushProgress(true);
         }
       };
 
