@@ -1,6 +1,7 @@
 import { normalizeVodSearchResultsForPlayback } from '@/lib/download/normalize';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8 } from '@/lib/utils';
+import { filterAdultContentResults } from '@/lib/yellow';
 
 export interface PlaybackSourceMetrics {
   quality: string;
@@ -25,6 +26,7 @@ export interface PlaybackSourcePrefetchResult {
 }
 
 const PREFETCH_CONCURRENCY = 2;
+const MIN_LOOSE_TITLE_MATCH_LENGTH = 3;
 const PREVIEW_LIKE_TITLE_PATTERN =
   /(预告(?:片)?|片花|花絮|先导(?:片)?|抢先版|彩蛋|番外|幕后|解说|速看|cut|剪辑)/i;
 
@@ -197,6 +199,13 @@ function scoreNormalizedTitleMatch(
   }
 
   if (candidate.includes(expected) || expected.includes(candidate)) {
+    if (
+      Math.min(candidate.length, expected.length) <
+      MIN_LOOSE_TITLE_MATCH_LENGTH
+    ) {
+      return Number.NEGATIVE_INFINITY;
+    }
+
     return 220;
   }
 
@@ -519,7 +528,9 @@ export function filterPlaybackSearchResults(
   results: SearchResult[],
   params: PlaybackSourcePrefetchParams
 ): SearchResult[] {
-  const scoredResults = results
+  const safeResults = filterAdultContentResults(results);
+
+  const scoredResults = safeResults
     .map((result) => ({
       result,
       score: scorePlaybackSearchResult(result, params),
