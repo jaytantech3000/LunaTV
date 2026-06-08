@@ -4,8 +4,18 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
 
+const ALLOWED_HOST = 'hkcu.qzz.io';
+
 export async function middleware(request: NextRequest) {
+  const host = normalizeHost(request.headers.get('host'));
   const { pathname } = request.nextUrl;
+
+  if (process.env.NODE_ENV !== 'development' && !isAllowedHost(host)) {
+    return new NextResponse('Access Denied: Please use the official domain.', {
+      status: 403,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
+  }
 
   // 跳过不需要认证的路径
   if (shouldSkipAuth(pathname)) {
@@ -115,20 +125,42 @@ function handleAuthFailure(
   return NextResponse.redirect(loginUrl);
 }
 
+function normalizeHost(host: string | null): string {
+  return host?.split(':')[0].trim().toLowerCase() || '';
+}
+
+function isAllowedHost(host: string): boolean {
+  return Boolean(host) && !host.includes('vercel.app') && host === ALLOWED_HOST;
+}
+
 // 判断是否需要跳过认证的路径
 function shouldSkipAuth(pathname: string): boolean {
-  const skipPaths = [
-    '/_next',
-    '/_offline',
+  const skipExactPaths = new Set([
+    '/login',
+    '/warning',
     '/favicon.ico',
     '/robots.txt',
     '/manifest.json',
     '/sw.js',
+  ]);
+
+  if (skipExactPaths.has(pathname)) {
+    return true;
+  }
+
+  const skipPaths = [
+    '/_next',
+    '/_offline',
     '/workbox-',
     '/worker-',
     '/icons/',
     '/logo.png',
     '/screenshot.png',
+    '/api/login',
+    '/api/register',
+    '/api/logout',
+    '/api/cron',
+    '/api/server-config',
   ];
 
   return skipPaths.some((path) => pathname.startsWith(path));
@@ -136,7 +168,5 @@ function shouldSkipAuth(pathname: string): boolean {
 
 // 配置middleware匹配规则
 export const config = {
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|login|warning|api/login|api/register|api/logout|api/cron|api/server-config).*)',
-  ],
+  matcher: '/:path*',
 };

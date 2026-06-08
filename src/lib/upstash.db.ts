@@ -18,6 +18,13 @@ function ensureStringArray(value: any[]): string[] {
   return value.map((item) => String(item));
 }
 
+type GlobalWithUpstashRedis = typeof globalThis & {
+  __MOONTV_UPSTASH_REDIS_CLIENT__?: Redis;
+};
+
+const upstashGlobal = globalThis as GlobalWithUpstashRedis;
+let upstashRedisClient = upstashGlobal.__MOONTV_UPSTASH_REDIS_CLIENT__;
+
 // 添加Upstash Redis操作重试包装器
 async function withRetry<T>(
   operation: () => Promise<T>,
@@ -504,40 +511,42 @@ export class UpstashRedisStorage implements IStorage {
 
 // 单例 Upstash Redis 客户端
 function getUpstashRedisClient(): Redis {
-  const globalKey = Symbol.for('__MOONTV_UPSTASH_REDIS_CLIENT__');
-  let client: Redis | undefined = (global as any)[globalKey];
+  if (!upstashRedisClient) {
+    upstashRedisClient = createUpstashRedisClient();
+    upstashGlobal.__MOONTV_UPSTASH_REDIS_CLIENT__ = upstashRedisClient;
+  }
 
-  if (!client) {
-    const upstashUrl =
-      process.env.UPSTASH_URL ||
-      process.env.UPSTASH_REDIS_REST_URL ||
-      process.env.KV_REST_API_URL;
-    const upstashToken =
-      process.env.UPSTASH_TOKEN ||
-      process.env.UPSTASH_REDIS_REST_TOKEN ||
-      process.env.KV_REST_API_TOKEN;
+  return upstashRedisClient;
+}
 
-    if (!upstashUrl || !upstashToken) {
-      throw new Error(
-        'UPSTASH_URL/UPSTASH_TOKEN, UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN, or KV_REST_API_URL/KV_REST_API_TOKEN env variables must be set'
-      );
-    }
+function createUpstashRedisClient(): Redis {
+  const upstashUrl =
+    process.env.UPSTASH_REDIS_REST_URL ||
+    process.env.UPSTASH_URL ||
+    process.env.KV_REST_API_URL;
+  const upstashToken =
+    process.env.UPSTASH_REDIS_REST_TOKEN ||
+    process.env.UPSTASH_TOKEN ||
+    process.env.KV_REST_API_TOKEN;
 
-    // 创建 Upstash Redis 客户端
-    client = new Redis({
-      url: upstashUrl,
-      token: upstashToken,
-      // 可选配置
-      retry: {
-        retries: 3,
-        backoff: (retryCount: number) =>
-          Math.min(1000 * Math.pow(2, retryCount), 30000),
-      },
-    });
+  if (!upstashUrl || !upstashToken) {
+    throw new Error(
+      'UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN, UPSTASH_URL/UPSTASH_TOKEN, or KV_REST_API_URL/KV_REST_API_TOKEN env variables must be set'
+    );
+  }
 
+  const client = new Redis({
+    url: upstashUrl,
+    token: upstashToken,
+    retry: {
+      retries: 3,
+      backoff: (retryCount: number) =>
+        Math.min(1000 * Math.pow(2, retryCount), 30000),
+    },
+  });
+
+  if (process.env.NODE_ENV !== 'production') {
     console.log('Upstash Redis client created successfully');
-
-    (global as any)[globalKey] = client;
   }
 
   return client;
