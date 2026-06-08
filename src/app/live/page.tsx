@@ -16,8 +16,17 @@ import {
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { parseCustomTimeFormat } from '@/lib/time';
-import { apiFetch } from '@/lib/transport/api-client';
-import { buildApiUrl } from '@/lib/transport/endpoint';
+import {
+  buildLiveLogoUrl as buildLiveLogoProxyUrl,
+  buildLiveStreamProxyUrl,
+  fetchLiveChannels as fetchLiveChannelsData,
+  fetchLiveEpg as fetchLiveEpgData,
+  fetchLiveSources as fetchLiveSourcesData,
+  LiveChannel,
+  LiveEpgData,
+  LiveSource,
+  precheckLiveStream as precheckLiveStreamType,
+} from '@/lib/transport/live-client';
 
 import EpgScrollableRow from '@/components/EpgScrollableRow';
 import PageLayout from '@/components/PageLayout';
@@ -27,28 +36,6 @@ declare global {
   interface HTMLVideoElement {
     hls?: any;
   }
-}
-
-// 直播频道接口
-interface LiveChannel {
-  id: string;
-  tvgId: string;
-  name: string;
-  logo: string;
-  group: string;
-  url: string;
-}
-
-// 直播源接口
-interface LiveSource {
-  key: string;
-  name: string;
-  url: string;  // m3u 地址
-  ua?: string;
-  epg?: string; // 节目单
-  from: 'config' | 'custom';
-  channelNumber?: number;
-  disabled?: boolean;
 }
 
 function LivePageClient() {
@@ -105,16 +92,7 @@ function LivePageClient() {
   const [filteredChannels, setFilteredChannels] = useState<LiveChannel[]>([]);
 
   // 节目单信息
-  const [epgData, setEpgData] = useState<{
-    tvgId: string;
-    source: string;
-    epgUrl: string;
-    programs: Array<{
-      start: string;
-      end: string;
-      title: string;
-    }>;
-  } | null>(null);
+  const [epgData, setEpgData] = useState<LiveEpgData | null>(null);
 
   // EPG 数据加载状态
   const [isEpgLoading, setIsEpgLoading] = useState(false);
@@ -229,21 +207,7 @@ function LivePageClient() {
   // -----------------------------------------------------------------------------
 
   const buildLiveLogoUrl = (logoUrl: string, sourceKey?: string | null) => {
-    const normalizedLogoUrl = logoUrl?.trim();
-    const normalizedSourceKey = sourceKey?.trim() || '';
-
-    if (!normalizedLogoUrl) {
-      return '';
-    }
-
-    if (!normalizedSourceKey) {
-      return normalizedLogoUrl;
-    }
-
-    return buildApiUrl('/proxy/logo', {
-      source: normalizedSourceKey,
-      url: normalizedLogoUrl,
-    });
+    return buildLiveLogoProxyUrl(logoUrl, sourceKey);
   };
 
   // 获取直播源列表
@@ -252,18 +216,7 @@ function LivePageClient() {
       setLoadingStage('fetching');
       setLoadingMessage('正在获取直播源...');
 
-      // 获取 AdminConfig 中的直播源信息
-      const response = await apiFetch('/live/sources');
-      if (!response.ok) {
-        throw new Error('获取直播源失败');
-      }
-
-      const result = await response.json();
-      if (!result.success) {
-        throw new Error(result.error || '获取直播源失败');
-      }
-
-      const sources = result.data;
+      const sources = await fetchLiveSourcesData();
       setLiveSources(sources);
 
       if (sources.length > 0) {
@@ -315,19 +268,7 @@ function LivePageClient() {
       setIsVideoLoading(true);
 
       // 从 cachedLiveChannels 获取频道信息
-      const response = await apiFetch('/live/channels', {
-        searchParams: { source: source.key },
-      });
-      if (!response.ok) {
-        throw new Error('获取频道列表失败');
-      }
-
-      const result = await response.json();
-      if (!result.success) {
-        throw new Error(result.error || '获取频道列表失败');
-      }
-
-      const channelsData = result.data;
+      const channelsData = await fetchLiveChannelsData(source.key);
       if (!channelsData || channelsData.length === 0) {
         // 不抛出错误，而是设置空频道列表
         setCurrentChannels([]);
@@ -346,10 +287,10 @@ function LivePageClient() {
       }
 
       // 转换频道数据格式
-      const channels: LiveChannel[] = channelsData.map((channel: any) => ({
-        id: channel.id,
-        tvgId: channel.tvgId || channel.name,
-        name: channel.name,
+        const channels: LiveChannel[] = channelsData.map((channel: LiveChannel) => ({
+          id: channel.id,
+          tvgId: channel.tvgId || channel.name,
+          name: channel.name,
         logo: channel.logo,
         group: channel.group || '其他',
         url: channel.url
@@ -495,23 +436,15 @@ function LivePageClient() {
     if (channel.tvgId && currentSource) {
       try {
         setIsEpgLoading(true); // 开始加载 EPG 数据
-        const response = await apiFetch('/live/epg', {
-          searchParams: {
-            source: currentSource.key,
-            tvgId: channel.tvgId,
-          },
-        });
-        if (response.ok) {
-          const result = await response.json();
-          if (result.success) {
-            // 清洗EPG数据，去除重叠的节目
-            const cleanedData = {
-              ...result.data,
-              programs: cleanEpgData(result.data.programs)
-            };
-            setEpgData(cleanedData);
-          }
-        }
+        const nextEpgData = await fetchLiveEpgData(
+          currentSource.key,
+          channel.tvgId
+        );
+        const cleanedData = {
+          ...nextEpgData,
+          programs: cleanEpgData(nextEpgData.programs),
+        };
+        setEpgData(cleanedData);
       } catch (error) {
         console.error('获取节目单信息失败:', error);
       } finally {
@@ -896,21 +829,10 @@ function LivePageClient() {
       }
 
       // precheck type
-      let type = 'm3u8';
-      const precheckResponse = await apiFetch('/live/precheck', {
-        searchParams: {
-          url: videoUrl,
-          'moontv-source': currentSourceRef.current?.key || '',
-        },
-      });
-      if (!precheckResponse.ok) {
-        console.error('预检查失败:', precheckResponse.statusText);
-        return;
-      }
-      const precheckResult = await precheckResponse.json();
-      if (precheckResult.success) {
-        type = precheckResult.type;
-      }
+      const type = await precheckLiveStreamType(
+        videoUrl,
+        currentSourceRef.current?.key || ''
+      );
 
       // 如果不是 m3u8 类型，设置不支持的类型并返回
       if (type !== 'm3u8') {
@@ -923,10 +845,10 @@ function LivePageClient() {
       setUnsupportedType(null);
 
       const customType = { m3u8: m3u8Loader };
-      const targetUrl = buildApiUrl('/proxy/m3u8', {
-        url: videoUrl,
-        'moontv-source': currentSourceRef.current?.key || '',
-      });
+      const targetUrl = buildLiveStreamProxyUrl(
+        videoUrl,
+        currentSourceRef.current?.key || ''
+      );
       try {
         // 创建新的播放器实例
         Artplayer.USE_RAF = false;
