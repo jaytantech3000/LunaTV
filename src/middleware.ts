@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
 
-const ALLOWED_HOST = 'hkcu.qzz.io';
+const ROOT_DOMAIN = 'hkcu.qzz.io';
 
 export async function middleware(request: NextRequest) {
   const host = normalizeHost(request.headers.get('host'));
@@ -130,7 +130,11 @@ function normalizeHost(host: string | null): string {
 }
 
 function isAllowedHost(host: string): boolean {
-  return Boolean(host) && !host.includes('vercel.app') && host === ALLOWED_HOST;
+  return (
+    Boolean(host) &&
+    !host.includes('vercel.app') &&
+    (host === ROOT_DOMAIN || host.endsWith(`.${ROOT_DOMAIN}`))
+  );
 }
 
 // 判断是否需要跳过认证的路径
