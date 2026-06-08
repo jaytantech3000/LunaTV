@@ -1,4 +1,5 @@
 import { normalizeVodSearchResultsForPlayback } from '@/lib/download/normalize';
+import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8 } from '@/lib/utils';
 import { filterAdultContentResults } from '@/lib/yellow';
@@ -405,8 +406,9 @@ function hasHighConfidenceDoubanMatch(
 }
 
 async function fetchPlaybackSearchQuery(query: string): Promise<SearchResult[]> {
-  const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`, {
+  const response = await apiFetch('/search', {
     credentials: 'same-origin',
+    searchParams: { q: query },
   });
 
   if (!response.ok) {

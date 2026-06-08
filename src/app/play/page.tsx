@@ -39,6 +39,7 @@ import {
   preferBestPlaybackSource,
   searchPlaybackSources,
 } from '@/lib/playback-source-prefetch';
+import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 
@@ -876,9 +877,9 @@ function PlayPageClient() {
       id: string
     ): Promise<SearchResult[]> => {
       try {
-        const detailResponse = await fetch(
-          `/api/detail?source=${source}&id=${id}`
-        );
+        const detailResponse = await apiFetch('/detail', {
+          searchParams: { source, id },
+        });
         if (!detailResponse.ok) {
           throw new Error('获取视频详情失败');
         }

@@ -2,6 +2,8 @@
 import he from 'he';
 import Hls from 'hls.js';
 
+import { buildApiUrl } from '@/lib/transport/endpoint';
+
 function getDoubanImageProxyConfig(): {
   proxyType:
   | 'server'
@@ -42,7 +44,7 @@ export function processImageUrl(originalUrl: string): string {
   const { proxyType, proxyUrl } = getDoubanImageProxyConfig();
   switch (proxyType) {
     case 'server':
-      return `/api/image-proxy?url=${encodeURIComponent(originalUrl)}`;
+      return buildApiUrl('/image-proxy', { url: originalUrl });
     case 'cmliussss-cdn-tencent':
       return originalUrl.replace(
         /img\d+\.doubanio\.com/g,
@@ -56,7 +58,7 @@ export function processImageUrl(originalUrl: string): string {
     case 'custom':
       return `${proxyUrl}${encodeURIComponent(originalUrl)}`;
     default:
-      return `/api/image-proxy?url=${encodeURIComponent(originalUrl)}`;
+      return buildApiUrl('/image-proxy', { url: originalUrl });
   }
 }
 

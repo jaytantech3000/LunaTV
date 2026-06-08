@@ -19,6 +19,7 @@ import { createPortal } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { purgeOfflineDownloads } from '@/lib/download/session';
+import { apiFetch } from '@/lib/transport/api-client';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
@@ -267,7 +268,7 @@ export const UserMenu: React.FC = () => {
     }
 
     try {
-      await fetch('/api/logout', {
+      await apiFetch('/logout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -313,7 +314,7 @@ export const UserMenu: React.FC = () => {
     setPasswordLoading(true);
 
     try {
-      const response = await fetch('/api/change-password', {
+      const response = await apiFetch('/change-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -1,3 +1,5 @@
+import { getApiBaseUrl } from '@/lib/transport/endpoint';
+
 const VOD_PROXY_BASE_PATH = '/api/proxy/vod';
 const VOD_PROXY_M3U8_PATH = `${VOD_PROXY_BASE_PATH}/m3u8`;
 
@@ -12,7 +14,7 @@ function buildVodProxyUrl(
     source,
     url,
   });
-  return `${VOD_PROXY_BASE_PATH}/${kind}?${searchParams.toString()}`;
+  return `${getApiBaseUrl()}${VOD_PROXY_BASE_PATH}/${kind}?${searchParams.toString()}`;
 }
 
 export function buildVodProxyM3u8Url(params: {

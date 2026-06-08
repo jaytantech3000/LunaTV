@@ -16,6 +16,8 @@ import {
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { parseCustomTimeFormat } from '@/lib/time';
+import { apiFetch } from '@/lib/transport/api-client';
+import { buildApiUrl } from '@/lib/transport/endpoint';
 
 import EpgScrollableRow from '@/components/EpgScrollableRow';
 import PageLayout from '@/components/PageLayout';
@@ -226,6 +228,24 @@ function LivePageClient() {
   // 工具函数（Utils）
   // -----------------------------------------------------------------------------
 
+  const buildLiveLogoUrl = (logoUrl: string, sourceKey?: string | null) => {
+    const normalizedLogoUrl = logoUrl?.trim();
+    const normalizedSourceKey = sourceKey?.trim() || '';
+
+    if (!normalizedLogoUrl) {
+      return '';
+    }
+
+    if (!normalizedSourceKey) {
+      return normalizedLogoUrl;
+    }
+
+    return buildApiUrl('/proxy/logo', {
+      source: normalizedSourceKey,
+      url: normalizedLogoUrl,
+    });
+  };
+
   // 获取直播源列表
   const fetchLiveSources = async () => {
     try {
@@ -233,7 +253,7 @@ function LivePageClient() {
       setLoadingMessage('正在获取直播源...');
 
       // 获取 AdminConfig 中的直播源信息
-      const response = await fetch('/api/live/sources');
+      const response = await apiFetch('/live/sources');
       if (!response.ok) {
         throw new Error('获取直播源失败');
       }
@@ -295,7 +315,9 @@ function LivePageClient() {
       setIsVideoLoading(true);
 
       // 从 cachedLiveChannels 获取频道信息
-      const response = await fetch(`/api/live/channels?source=${source.key}`);
+      const response = await apiFetch('/live/channels', {
+        searchParams: { source: source.key },
+      });
       if (!response.ok) {
         throw new Error('获取频道列表失败');
       }
@@ -473,7 +495,12 @@ function LivePageClient() {
     if (channel.tvgId && currentSource) {
       try {
         setIsEpgLoading(true); // 开始加载 EPG 数据
-        const response = await fetch(`/api/live/epg?source=${currentSource.key}&tvgId=${channel.tvgId}`);
+        const response = await apiFetch('/live/epg', {
+          searchParams: {
+            source: currentSource.key,
+            tvgId: channel.tvgId,
+          },
+        });
         if (response.ok) {
           const result = await response.json();
           if (result.success) {
@@ -668,7 +695,10 @@ function LivePageClient() {
             title: currentChannelRef.current.name,
             source_name: currentSourceRef.current.name,
             year: '',
-            cover: `/api/proxy/logo?url=${encodeURIComponent(currentChannelRef.current.logo)}&source=${currentSourceRef.current.key}`,
+            cover: buildLiveLogoUrl(
+              currentChannelRef.current.logo,
+              currentSourceRef.current.key
+            ),
             total_episodes: 1,
             save_time: Date.now(),
             search_title: '',
@@ -867,8 +897,12 @@ function LivePageClient() {
 
       // precheck type
       let type = 'm3u8';
-      const precheckUrl = `/api/live/precheck?url=${encodeURIComponent(videoUrl)}&moontv-source=${currentSourceRef.current?.key || ''}`;
-      const precheckResponse = await fetch(precheckUrl);
+      const precheckResponse = await apiFetch('/live/precheck', {
+        searchParams: {
+          url: videoUrl,
+          'moontv-source': currentSourceRef.current?.key || '',
+        },
+      });
       if (!precheckResponse.ok) {
         console.error('预检查失败:', precheckResponse.statusText);
         return;
@@ -889,7 +923,10 @@ function LivePageClient() {
       setUnsupportedType(null);
 
       const customType = { m3u8: m3u8Loader };
-      const targetUrl = `/api/proxy/m3u8?url=${encodeURIComponent(videoUrl)}&moontv-source=${currentSourceRef.current?.key || ''}`;
+      const targetUrl = buildApiUrl('/proxy/m3u8', {
+        url: videoUrl,
+        'moontv-source': currentSourceRef.current?.key || '',
+      });
       try {
         // 创建新的播放器实例
         Artplayer.USE_RAF = false;
@@ -1424,7 +1461,10 @@ function LivePageClient() {
                                 <div className='w-10 h-10 bg-gray-300 dark:bg-gray-700 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden'>
                                   {channel.logo ? (
                                     <img
-                                      src={`/api/proxy/logo?url=${encodeURIComponent(channel.logo)}&source=${currentSource?.key || ''}`}
+                                      src={buildLiveLogoUrl(
+                                        channel.logo,
+                                        currentSource?.key || ''
+                                      )}
                                       alt={channel.name}
                                       className='w-full h-full rounded object-contain'
                                       loading="lazy"
@@ -1532,7 +1572,10 @@ function LivePageClient() {
                   <div className='w-20 h-20 bg-gray-300 dark:bg-gray-700 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden'>
                     {currentChannel.logo ? (
                       <img
-                        src={`/api/proxy/logo?url=${encodeURIComponent(currentChannel.logo)}&source=${currentSource?.key || ''}`}
+                        src={buildLiveLogoUrl(
+                          currentChannel.logo,
+                          currentSource?.key || ''
+                        )}
                         alt={currentChannel.name}
                         className='w-full h-full rounded object-contain'
                         loading="lazy"

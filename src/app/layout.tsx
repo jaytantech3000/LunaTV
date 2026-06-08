@@ -92,6 +92,7 @@ export default async function RootLayout({
     CUSTOM_CATEGORIES: customCategories,
     FLUID_SEARCH: fluidSearch,
     ENABLE_WEB_LIVE: enableWebLive,
+    API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || '',
   };
 
   return (

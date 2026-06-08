@@ -6,6 +6,7 @@ import { AlertCircle, CheckCircle } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 
+import { apiFetch } from '@/lib/transport/api-client';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
@@ -94,7 +95,7 @@ function LoginPageClient() {
 
     try {
       setLoading(true);
-      const res = await fetch('/api/login', {
+      const res = await apiFetch('/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
