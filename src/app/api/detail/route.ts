@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getAvailableApiSites, getCacheTime } from '@/lib/config';
-import { getDetailFromApi } from '@/lib/downstream';
+import {
+  ContentServiceError,
+  getContentDetail,
+} from '@/lib/core/content/service';
+import { buildQueryCacheHeaders } from '@/lib/server/http-cache';
 
 export const runtime = 'nodejs';
 
@@ -16,34 +19,32 @@ export async function GET(request: NextRequest) {
   const id = searchParams.get('id');
   const sourceCode = searchParams.get('source');
 
-  if (!id || !sourceCode) {
-    return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
-  }
-
-  if (!/^[\w-]+$/.test(id)) {
-    return NextResponse.json({ error: '无效的视频ID格式' }, { status: 400 });
-  }
-
   try {
-    const apiSites = await getAvailableApiSites(authInfo.username);
-    const apiSite = apiSites.find((site) => site.key === sourceCode);
-
-    if (!apiSite) {
-      return NextResponse.json({ error: '无效的API来源' }, { status: 400 });
+    if (!id || !sourceCode) {
+      return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
     }
 
-    const result = await getDetailFromApi(apiSite, id);
-    const cacheTime = await getCacheTime();
+    if (!/^[\w-]+$/.test(id)) {
+      return NextResponse.json({ error: '无效的视频ID格式' }, { status: 400 });
+    }
+
+    const { result, cacheTime } = await getContentDetail({
+      username: authInfo.username,
+      id,
+      sourceCode,
+    });
 
     return NextResponse.json(result, {
-      headers: {
-        'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,
-        'CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-        'Vercel-CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-        'Netlify-Vary': 'query',
-      },
+      headers: buildQueryCacheHeaders(cacheTime),
     });
   } catch (error) {
+    if (error instanceof ContentServiceError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      );
+    }
+
     return NextResponse.json(
       { error: (error as Error).message },
       { status: 500 }

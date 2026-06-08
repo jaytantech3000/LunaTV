@@ -1,4 +1,4 @@
-import { getAvailableApiSites } from '@/lib/config';
+import { getAvailableApiSites, getConfig } from '@/lib/config';
 import { SearchResult } from '@/lib/types';
 
 import { getDetailFromApi, searchFromApi } from './downstream';
@@ -27,7 +27,10 @@ export async function fetchVideoDetail({
   }
   if (fallbackTitle) {
     try {
-      const searchData = await searchFromApi(apiSite, fallbackTitle.trim());
+      const config = await getConfig();
+      const searchData = await searchFromApi(apiSite, fallbackTitle.trim(), {
+        maxPages: config.SiteConfig.SearchDownstreamMaxPage,
+      });
       const exactMatch = searchData.find(
         (item: SearchResult) =>
           item.source.toString() === source.toString() &&

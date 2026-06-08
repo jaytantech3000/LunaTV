@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getAvailableApiSites } from '@/lib/config';
+import { getContentResources } from '@/lib/core/content/service';
 
 export const runtime = 'nodejs';
 
@@ -14,7 +14,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   try {
-    const apiSites = await getAvailableApiSites(authInfo.username);
+    const apiSites = await getContentResources({
+      username: authInfo.username,
+    });
 
     return NextResponse.json(apiSites);
   } catch (error) {

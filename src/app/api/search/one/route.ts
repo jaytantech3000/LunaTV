@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
-import { searchFromApi } from '@/lib/downstream';
-import { filterAdultContentResults } from '@/lib/yellow';
+import {
+  ContentServiceError,
+  searchContentInResource,
+} from '@/lib/core/content/service';
+import { getCacheTime } from '@/lib/config';
+import { buildQueryCacheHeaders } from '@/lib/server/http-cache';
 
 export const runtime = 'nodejs';
 
@@ -18,66 +21,40 @@ export async function GET(request: NextRequest) {
   const query = searchParams.get('q');
   const resourceId = searchParams.get('resourceId');
 
-  if (!query || !resourceId) {
+  if (!query?.trim() || !resourceId?.trim()) {
     const cacheTime = await getCacheTime();
     return NextResponse.json(
       { result: null, error: '缺少必要参数: q 或 resourceId' },
       {
-        headers: {
-          'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,
-          'CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-          'Vercel-CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-          'Netlify-Vary': 'query',
-        },
+        headers: buildQueryCacheHeaders(cacheTime),
       }
     );
   }
 
-  const config = await getConfig();
-  const apiSites = await getAvailableApiSites(authInfo.username);
-
   try {
-    // 根据 resourceId 查找对应的 API 站点
-    const targetSite = apiSites.find((site) => site.key === resourceId);
-    if (!targetSite) {
-      return NextResponse.json(
-        {
-          error: `未找到指定的视频源: ${resourceId}`,
-          result: null,
-        },
-        { status: 404 }
-      );
-    }
+    const { results, cacheTime } = await searchContentInResource({
+      username: authInfo.username,
+      query,
+      resourceId,
+    });
 
-    const results = await searchFromApi(targetSite, query);
-    let result = results.filter((r) => r.title === query);
-    if (!config.SiteConfig.DisableYellowFilter) {
-      result = filterAdultContentResults(result);
-    }
-    const cacheTime = await getCacheTime();
-
-    if (result.length === 0) {
-      return NextResponse.json(
-        {
-          error: '未找到结果',
-          result: null,
-        },
-        { status: 404 }
-      );
-    } else {
-      return NextResponse.json(
-        { results: result },
-        {
-          headers: {
-            'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,
-            'CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-            'Vercel-CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-            'Netlify-Vary': 'query',
-          },
-        }
-      );
-    }
+    return NextResponse.json(
+      { results },
+      {
+        headers: buildQueryCacheHeaders(cacheTime),
+      }
+    );
   } catch (error) {
+    if (error instanceof ContentServiceError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          result: null,
+        },
+        { status: error.status }
+      );
+    }
+
     return NextResponse.json(
       {
         error: '搜索失败',

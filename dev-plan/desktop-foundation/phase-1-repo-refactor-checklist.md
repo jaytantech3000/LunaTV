@@ -71,9 +71,9 @@
 
 ### 3. 抽离平台无关的内容服务
 
-- [ ] 将搜索和详情下游逻辑整理成平台无关 service
-- [ ] 明确输入参数，不直接依赖 `NextRequest`
-- [ ] 将 route handler 缩成薄适配层
+- [x] 将搜索和详情下游逻辑整理成平台无关 service
+- [x] 明确输入参数，不直接依赖 `NextRequest`
+- [x] 将 route handler 缩成薄适配层
 
 关键文件：
 

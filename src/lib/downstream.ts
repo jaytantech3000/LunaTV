@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { API_CONFIG, ApiSite, getConfig } from '@/lib/config';
+import { API_CONFIG, ApiSite } from '@/lib/config';
 import { getCachedSearchPage, setCachedSearchPage } from '@/lib/search-cache';
 import { SearchResult } from '@/lib/types';
 import { cleanHtmlTags } from '@/lib/utils';
@@ -141,7 +141,9 @@ async function searchWithCache(
     });
 
     // 过滤掉集数为 0 的结果
-    const results = allResults.filter((result: SearchResult) => result.episodes.length > 0);
+    const results = allResults.filter(
+      (result: SearchResult) => result.episodes.length > 0
+    );
 
     const pageCount = page === 1 ? data.pagecount || 1 : undefined;
     // 写入缓存（成功）
@@ -150,7 +152,10 @@ async function searchWithCache(
   } catch (error: any) {
     clearTimeout(timeoutId);
     // 识别被 AbortController 中止（超时）
-    const aborted = error?.name === 'AbortError' || error?.code === 20 || error?.message?.includes('aborted');
+    const aborted =
+      error?.name === 'AbortError' ||
+      error?.code === 20 ||
+      error?.message?.includes('aborted');
     if (aborted) {
       setCachedSearchPage(apiSite.key, query, page, 'timeout', []);
     }
@@ -158,9 +163,14 @@ async function searchWithCache(
   }
 }
 
+export interface SearchFromApiOptions {
+  maxPages?: number;
+}
+
 export async function searchFromApi(
   apiSite: ApiSite,
-  query: string
+  query: string,
+  options: SearchFromApiOptions = {}
 ): Promise<SearchResult[]> {
   try {
     const apiBaseUrl = apiSite.api;
@@ -168,17 +178,22 @@ export async function searchFromApi(
       apiBaseUrl + API_CONFIG.search.path + encodeURIComponent(query);
 
     // 使用新的缓存搜索函数处理第一页
-    const firstPageResult = await searchWithCache(apiSite, query, 1, apiUrl, 8000);
+    const firstPageResult = await searchWithCache(
+      apiSite,
+      query,
+      1,
+      apiUrl,
+      8000
+    );
     const results = firstPageResult.results;
     const pageCountFromFirst = firstPageResult.pageCount;
 
-    const config = await getConfig();
-    const MAX_SEARCH_PAGES: number = config.SiteConfig.SearchDownstreamMaxPage;
+    const maxSearchPages = Math.max(1, options.maxPages || 5);
 
     // 获取总页数
     const pageCount = pageCountFromFirst || 1;
     // 确定需要获取的额外页数
-    const pagesToFetch = Math.min(pageCount - 1, MAX_SEARCH_PAGES - 1);
+    const pagesToFetch = Math.min(pageCount - 1, maxSearchPages - 1);
 
     // 如果有额外页数，获取更多页的结果
     if (pagesToFetch > 0) {
@@ -193,7 +208,13 @@ export async function searchFromApi(
 
         const pagePromise = (async () => {
           // 使用新的缓存搜索函数处理分页
-          const pageResult = await searchWithCache(apiSite, query, page, pageUrl, 8000);
+          const pageResult = await searchWithCache(
+            apiSite,
+            query,
+            page,
+            pageUrl,
+            8000
+          );
           return pageResult.results;
         })();
 
