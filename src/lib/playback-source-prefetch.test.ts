@@ -2,7 +2,6 @@ import { SearchResult } from '@/lib/types';
 
 import {
   buildPlaybackSearchQueries,
-  buildPlaybackSourcePlayUrl,
   filterPlaybackSearchResults,
   searchPlaybackSources,
 } from './playback-source-prefetch';
@@ -181,25 +180,6 @@ describe('playback source prefetch helpers', () => {
     });
 
     expect(results.map((result) => result.id)).toEqual(['prefixed-match']);
-  });
-
-  it('preserves douban id in generated play urls', () => {
-    const playUrl = buildPlaybackSourcePlayUrl(
-      {
-        title: '租借女友 第五季',
-        year: '2026',
-        searchType: 'tv',
-        doubanId: 129836,
-      },
-      buildSearchResult({
-        id: 'target-id',
-        source: 'target-source',
-      })
-    );
-
-    expect(playUrl).toContain('source=target-source');
-    expect(playUrl).toContain('id=target-id');
-    expect(playUrl).toContain('doubanId=129836');
   });
 
   it('builds year-aware playback search query fallbacks', () => {

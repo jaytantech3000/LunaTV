@@ -17,7 +17,6 @@ import React, {
   useEffect,
   useImperativeHandle,
   useMemo,
-  useRef,
   useState,
 } from 'react';
 
@@ -29,12 +28,6 @@ import {
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
-import {
-  buildPlaybackSourcePlayUrl,
-  getPlaybackSourcePrefetchKey,
-  getPrefetchedPlaybackSource,
-  prefetchBestPlaybackSource,
-} from '@/lib/playback-source-prefetch';
 import { processImageUrl } from '@/lib/utils';
 import { useLongPress } from '@/hooks/useLongPress';
 
@@ -95,28 +88,12 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
     ref
   ) {
     const router = useRouter();
-    const cardRef = useRef<HTMLDivElement | null>(null);
-    const playbackPrefetchRequestedRef = useRef(false);
     const [favorited, setFavorited] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [showMobileActions, setShowMobileActions] = useState(false);
     const [searchFavorited, setSearchFavorited] = useState<boolean | null>(
       null
     ); // 搜索结果的收藏状态
-    const [optimizationEnabled] = useState<boolean>(() => {
-      if (typeof window !== 'undefined') {
-        const saved = localStorage.getItem('enableOptimization');
-        if (saved !== null) {
-          try {
-            return JSON.parse(saved);
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-
-      return true;
-    });
 
     // 可外部修改的可控字段
     const [dynamicEpisodes, setDynamicEpisodes] = useState<number | undefined>(
@@ -160,84 +137,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         ? 'movie'
         : 'tv'
       : type;
-    const shouldPrefetchPlaybackSource =
-      origin === 'vod' &&
-      (from === 'douban' || (isAggregate && !actualSource && !actualId)) &&
-      !!actualTitle.trim();
-    const playbackSourcePrefetchParams = useMemo(
-      () =>
-        shouldPrefetchPlaybackSource
-          ? {
-              title: actualTitle,
-              year: actualYear,
-              searchType: actualSearchType,
-              query: actualQuery,
-              doubanId: actualDoubanId,
-              preferBest: optimizationEnabled,
-            }
-          : null,
-      [
-        shouldPrefetchPlaybackSource,
-        actualTitle,
-        actualYear,
-        actualSearchType,
-        actualQuery,
-        actualDoubanId,
-        optimizationEnabled,
-      ]
-    );
-    const playbackSourcePrefetchKey = useMemo(
-      () =>
-        playbackSourcePrefetchParams
-          ? getPlaybackSourcePrefetchKey(playbackSourcePrefetchParams)
-          : '',
-      [playbackSourcePrefetchParams]
-    );
-
-    useEffect(() => {
-      playbackPrefetchRequestedRef.current = false;
-    }, [playbackSourcePrefetchKey]);
-
-    useEffect(() => {
-      if (!playbackSourcePrefetchParams || !cardRef.current) {
-        return;
-      }
-
-      const requestPrefetch = () => {
-        if (playbackPrefetchRequestedRef.current) {
-          return;
-        }
-
-        playbackPrefetchRequestedRef.current = true;
-        void prefetchBestPlaybackSource(playbackSourcePrefetchParams);
-      };
-
-      if (typeof IntersectionObserver === 'undefined') {
-        requestPrefetch();
-        return;
-      }
-
-      const observer = new IntersectionObserver(
-        (entries) => {
-          if (!entries.some((entry) => entry.isIntersecting)) {
-            return;
-          }
-
-          requestPrefetch();
-          observer.disconnect();
-        },
-        {
-          rootMargin: '240px 0px',
-          threshold: 0.01,
-        }
-      );
-
-      observer.observe(cardRef.current);
-
-      return () => {
-        observer.disconnect();
-      };
-    }, [playbackSourcePrefetchKey, playbackSourcePrefetchParams]);
 
     // 获取收藏状态（搜索结果页面不检查）
     useEffect(() => {
@@ -338,9 +237,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
     );
 
     const handleClick = useCallback(() => {
-      const prefetchedSource = playbackSourcePrefetchParams
-        ? getPrefetchedPlaybackSource(playbackSourcePrefetchParams)?.bestSource
-        : null;
       const doubanIdParam =
         actualDoubanId && actualDoubanId > 0
           ? `&doubanId=${actualDoubanId}`
@@ -353,18 +249,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           ''
         )}&id=${actualId.replace('live_', '')}`;
         router.push(url);
-      } else if (
-        prefetchedSource &&
-        playbackSourcePrefetchParams &&
-        !actualSource &&
-        !actualId
-      ) {
-        router.push(
-          buildPlaybackSourcePlayUrl(
-            playbackSourcePrefetchParams,
-            prefetchedSource
-          )
-        );
       } else if (
         from === 'douban' ||
         (isAggregate && !actualSource && !actualId)
@@ -401,14 +285,10 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       actualQuery,
       actualSearchType,
       actualDoubanId,
-      playbackSourcePrefetchParams,
     ]);
 
     // 新标签页播放处理函数
     const handlePlayInNewTab = useCallback(() => {
-      const prefetchedSource = playbackSourcePrefetchParams
-        ? getPrefetchedPlaybackSource(playbackSourcePrefetchParams)?.bestSource
-        : null;
       const doubanIdParam =
         actualDoubanId && actualDoubanId > 0
           ? `&doubanId=${actualDoubanId}`
@@ -421,19 +301,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           ''
         )}&id=${actualId.replace('live_', '')}`;
         window.open(url, '_blank');
-      } else if (
-        prefetchedSource &&
-        playbackSourcePrefetchParams &&
-        !actualSource &&
-        !actualId
-      ) {
-        window.open(
-          buildPlaybackSourcePlayUrl(
-            playbackSourcePrefetchParams,
-            prefetchedSource
-          ),
-          '_blank'
-        );
       } else if (
         from === 'douban' ||
         (isAggregate && !actualSource && !actualId)
@@ -469,7 +336,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       actualQuery,
       actualSearchType,
       actualDoubanId,
-      playbackSourcePrefetchParams,
     ]);
 
     // 检查搜索结果的收藏状态
@@ -720,7 +586,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
     return (
       <>
         <div
-          ref={cardRef}
           className='group relative w-full rounded-lg bg-transparent cursor-pointer transition-all duration-300 ease-in-out hover:scale-[1.05] hover:z-[500]'
           onClick={handleClick}
           {...longPressProps}

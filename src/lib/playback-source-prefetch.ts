@@ -18,29 +18,9 @@ export interface PlaybackSourcePrefetchParams {
   preferBest?: boolean;
 }
 
-export interface PlaybackSourcePrefetchResult {
-  key: string;
-  sources: SearchResult[];
-  bestSource: SearchResult;
-  videoInfoMap: Map<string, PlaybackSourceMetrics>;
-}
-
-const PREFETCH_CONCURRENCY = 2;
 const MIN_LOOSE_TITLE_MATCH_LENGTH = 3;
 const PREVIEW_LIKE_TITLE_PATTERN =
   /(预告(?:片)?|片花|花絮|先导(?:片)?|抢先版|彩蛋|番外|幕后|解说|速看|cut|剪辑)/i;
-
-const settledPrefetchCache = new Map<
-  string,
-  PlaybackSourcePrefetchResult | null
->();
-const inflightPrefetches = new Map<
-  string,
-  Promise<PlaybackSourcePrefetchResult | null>
->();
-const pendingPrefetchResolvers: Array<() => void> = [];
-
-let activePrefetchCount = 0;
 
 function normalizeMatchText(value: string): string {
   return normalizeSeasonMarkers(value)
@@ -331,23 +311,6 @@ function calculateSourceScore(
   );
 }
 
-async function withPrefetchSlot<T>(task: () => Promise<T>): Promise<T> {
-  if (activePrefetchCount >= PREFETCH_CONCURRENCY) {
-    await new Promise<void>((resolve) => {
-      pendingPrefetchResolvers.push(resolve);
-    });
-  }
-
-  activePrefetchCount += 1;
-
-  try {
-    return await task();
-  } finally {
-    activePrefetchCount = Math.max(0, activePrefetchCount - 1);
-    pendingPrefetchResolvers.shift()?.();
-  }
-}
-
 function matchesSearchType(
   result: SearchResult,
   searchType: string | undefined
@@ -479,49 +442,6 @@ export function buildPlaybackSearchQueries(
   });
 
   return Array.from(queries);
-}
-
-export function getPlaybackSourcePrefetchKey(
-  params: PlaybackSourcePrefetchParams
-): string {
-  return JSON.stringify({
-    title: params.title.trim(),
-    year: params.year?.trim() || '',
-    searchType: params.searchType?.trim() || '',
-    query: params.query?.trim() || '',
-    doubanId: normalizePositiveNumber(params.doubanId) || 0,
-    preferBest: params.preferBest !== false,
-  });
-}
-
-export function buildPlaybackSourcePlayUrl(
-  params: PlaybackSourcePrefetchParams,
-  source: SearchResult
-): string {
-  const searchParams = new URLSearchParams({
-    source: source.source,
-    id: source.id,
-    title: params.title.trim(),
-  });
-
-  if (params.year?.trim()) {
-    searchParams.set('year', params.year.trim());
-  }
-
-  if (params.searchType?.trim()) {
-    searchParams.set('stype', params.searchType.trim());
-  }
-
-  if (params.query?.trim()) {
-    searchParams.set('stitle', params.query.trim());
-  }
-
-  const doubanId = normalizePositiveNumber(params.doubanId);
-  if (doubanId) {
-    searchParams.set('doubanId', String(doubanId));
-  }
-
-  return `/play?${searchParams.toString()}`;
 }
 
 export function filterPlaybackSearchResults(
@@ -744,70 +664,4 @@ export async function preferBestPlaybackSource(
     bestSource: scoredResults[0].source,
     videoInfoMap,
   };
-}
-
-export function getPrefetchedPlaybackSource(
-  params: PlaybackSourcePrefetchParams
-): PlaybackSourcePrefetchResult | null | undefined {
-  return settledPrefetchCache.get(getPlaybackSourcePrefetchKey(params));
-}
-
-export async function prefetchBestPlaybackSource(
-  params: PlaybackSourcePrefetchParams
-): Promise<PlaybackSourcePrefetchResult | null> {
-  const key = getPlaybackSourcePrefetchKey(params);
-  const settledResult = settledPrefetchCache.get(key);
-  if (settledResult !== undefined) {
-    return settledResult;
-  }
-
-  const inflightResult = inflightPrefetches.get(key);
-  if (inflightResult) {
-    return inflightResult;
-  }
-
-  const task = withPrefetchSlot(async () => {
-    if (buildPlaybackSearchQueries(params).length === 0) {
-      settledPrefetchCache.set(key, null);
-      return null;
-    }
-
-    try {
-      const sources = await searchPlaybackSources(params);
-
-      if (sources.length === 0) {
-        settledPrefetchCache.set(key, null);
-        return null;
-      }
-
-      const { bestSource, videoInfoMap } =
-        params.preferBest === false
-          ? {
-              bestSource: sources[0],
-              videoInfoMap: new Map<string, PlaybackSourceMetrics>(),
-            }
-          : await preferBestPlaybackSource(sources);
-
-      const result: PlaybackSourcePrefetchResult = {
-        key,
-        sources,
-        bestSource,
-        videoInfoMap,
-      };
-
-      settledPrefetchCache.set(key, result);
-      return result;
-    } catch (error) {
-      settledPrefetchCache.set(key, null);
-      return null;
-    }
-  });
-
-  inflightPrefetches.set(key, task);
-
-  try {
-    return await task;
-  } finally {
-    inflightPrefetches.delete(key);
-  }
 }

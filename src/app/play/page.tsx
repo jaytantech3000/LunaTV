@@ -36,7 +36,6 @@ import { sanitizeVodManifestContent } from '@/lib/download/sanitize-manifest';
 import { ensureOfflineServiceWorkerReady } from '@/lib/download/service-worker';
 import { buildDownloadContentId } from '@/lib/download/types';
 import {
-  getPrefetchedPlaybackSource,
   preferBestPlaybackSource,
   searchPlaybackSources,
 } from '@/lib/playback-source-prefetch';
@@ -1014,27 +1013,9 @@ function PlayPageClient() {
           : '🔍 正在搜索播放源...'
       );
 
-      const prefetchedSourceResult = getPrefetchedPlaybackSource({
-        title: videoTitleRef.current || videoTitle,
-        year: videoYearRef.current,
-        searchType,
-        query: searchTitle,
-        doubanId: videoDoubanIdRef.current || undefined,
-        preferBest: optimizationEnabled,
-      });
+      setPrecomputedVideoInfo(new Map());
 
-      if (prefetchedSourceResult?.videoInfoMap) {
-        setPrecomputedVideoInfo(prefetchedSourceResult.videoInfoMap);
-      } else {
-        setPrecomputedVideoInfo(new Map());
-      }
-
-      let sourcesInfo =
-        prefetchedSourceResult?.sources ||
-        (await fetchSourcesData(searchTitle || videoTitle));
-      if (prefetchedSourceResult?.sources) {
-        setAvailableSources(prefetchedSourceResult.sources);
-      }
+      let sourcesInfo = await fetchSourcesData(searchTitle || videoTitle);
       if (
         currentSource &&
         currentId &&
@@ -1073,9 +1054,7 @@ function PlayPageClient() {
         setLoadingStage('preferring');
         setLoadingMessage('⚡ 正在优选最佳播放源...');
 
-        detailData =
-          prefetchedSourceResult?.bestSource ||
-          (await preferBestSource(sourcesInfo));
+        detailData = await preferBestSource(sourcesInfo);
       }
 
       console.log(detailData.source, detailData.id);
