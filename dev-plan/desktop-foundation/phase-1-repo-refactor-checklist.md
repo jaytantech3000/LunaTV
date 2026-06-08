@@ -39,10 +39,10 @@
 
 ### 1. 建立 transport 基础层
 
-- [ ] 新增统一的 API endpoint/helper，避免组件和页面继续拼接 `/api/*`
-- [ ] 新增统一 `apiFetch` 封装
-- [ ] 支持“same-origin Web”和“desktop local service base URL”两种运行模式
-- [ ] 先替换前端里最核心的 `/api/*` 调用入口
+- [x] 新增统一的 API endpoint/helper，避免组件和页面继续拼接 `/api/*`
+- [x] 新增统一 `apiFetch` 封装
+- [x] 支持“same-origin Web”和“desktop local service base URL”两种运行模式
+- [x] 先替换前端里最核心的 `/api/*` 调用入口
 
 建议优先覆盖：
 

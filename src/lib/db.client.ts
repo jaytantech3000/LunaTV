@@ -16,6 +16,7 @@
 
 import { getAuthInfoFromBrowserCookie } from './auth';
 import { purgeOfflineDownloads } from './download/session';
+import { buildApiUrl } from './transport/endpoint';
 import { SkipConfig } from './types';
 
 // 全局错误触发函数
@@ -78,6 +79,13 @@ const SEARCH_HISTORY_KEY = 'moontv_search_history';
 const CACHE_PREFIX = 'moontv_cache_';
 const CACHE_VERSION = '1.0.0';
 const CACHE_EXPIRE_TIME = 60 * 60 * 1000; // 一小时缓存过期
+const USER_DATA_API_PATHS = {
+  logout: '/logout',
+  playRecords: '/playrecords',
+  searchHistory: '/searchhistory',
+  favorites: '/favorites',
+  skipConfigs: '/skipconfigs',
+} as const;
 
 // ---- 环境变量 ----
 const STORAGE_TYPE = (() => {
@@ -480,20 +488,22 @@ async function handleDatabaseOperationFailure(
     switch (dataType) {
       case 'playRecords':
         freshData = await fetchFromApi<Record<string, PlayRecord>>(
-          `/api/playrecords`
+          USER_DATA_API_PATHS.playRecords
         );
         cacheManager.cachePlayRecords(freshData);
         eventName = 'playRecordsUpdated';
         break;
       case 'favorites':
         freshData = await fetchFromApi<Record<string, Favorite>>(
-          `/api/favorites`
+          USER_DATA_API_PATHS.favorites
         );
         cacheManager.cacheFavorites(freshData);
         eventName = 'favoritesUpdated';
         break;
       case 'searchHistory':
-        freshData = await fetchFromApi<string[]>(`/api/searchhistory`);
+        freshData = await fetchFromApi<string[]>(
+          USER_DATA_API_PATHS.searchHistory
+        );
         cacheManager.cacheSearchHistory(freshData);
         eventName = 'searchHistoryUpdated';
         break;
@@ -520,9 +530,12 @@ async function handleDatabaseOperationFailure(
 
 async function refreshSearchHistorySilently(): Promise<void> {
   try {
-    const freshData = await fetchFromApi<string[]>(`/api/searchhistory`, {
-      redirectOnUnauthorized: false,
-    });
+    const freshData = await fetchFromApi<string[]>(
+      USER_DATA_API_PATHS.searchHistory,
+      {
+        redirectOnUnauthorized: false,
+      }
+    );
     cacheManager.cacheSearchHistory(freshData);
     window.dispatchEvent(
       new CustomEvent('searchHistoryUpdated', {
@@ -559,6 +572,10 @@ if (typeof window !== 'undefined') {
 /**
  * 通用的 fetch 函数，处理 401 状态码自动跳转登录
  */
+function resolveApiRequestUrl(url: string): string {
+  return /^https?:\/\//i.test(url) ? url : buildApiUrl(url);
+}
+
 async function fetchWithAuth(
   url: string,
   options?: AuthenticatedRequestInit
@@ -568,7 +585,8 @@ async function fetchWithAuth(
     credentials,
     ...requestOptions
   } = options || {};
-  const res = await fetch(url, {
+  const requestUrl = resolveApiRequestUrl(url);
+  const res = await fetch(requestUrl, {
     ...requestOptions,
     credentials: credentials || 'same-origin',
   });
@@ -577,15 +595,18 @@ async function fetchWithAuth(
     // 如果是 401 未授权，跳转到登录页面
     if (res.status === 401) {
       if (!redirectOnUnauthorized) {
-        throw new DatabaseRequestError(`请求 ${url} 失败: ${res.status}`, {
-          status: res.status,
-        });
+        throw new DatabaseRequestError(
+          `请求 ${requestUrl} 失败: ${res.status}`,
+          {
+            status: res.status,
+          }
+        );
       }
 
       // 调用 logout 接口
       try {
         await purgeOfflineDownloads();
-        await fetch('/api/logout', {
+        await fetch(buildApiUrl(USER_DATA_API_PATHS.logout), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
         });
@@ -602,7 +623,7 @@ async function fetchWithAuth(
       });
     }
 
-    throw new DatabaseRequestError(`请求 ${url} 失败: ${res.status}`, {
+    throw new DatabaseRequestError(`请求 ${requestUrl} 失败: ${res.status}`, {
       status: res.status,
     });
   }
@@ -643,7 +664,7 @@ export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
 
     if (cachedData) {
       // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, PlayRecord>>(`/api/playrecords`)
+      fetchFromApi<Record<string, PlayRecord>>(USER_DATA_API_PATHS.playRecords)
         .then((freshData) => {
           // 只有数据真正不同时才更新缓存
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
@@ -666,7 +687,7 @@ export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
       // 缓存为空，直接从 API 获取并缓存
       try {
         const freshData = await fetchFromApi<Record<string, PlayRecord>>(
-          `/api/playrecords`
+          USER_DATA_API_PATHS.playRecords
         );
         cacheManager.cachePlayRecords(freshData);
         return freshData;
@@ -717,7 +738,7 @@ export async function savePlayRecord(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth('/api/playrecords', {
+      await fetchWithAuth(USER_DATA_API_PATHS.playRecords, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -780,9 +801,12 @@ export async function deletePlayRecord(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(`/api/playrecords?key=${encodeURIComponent(key)}`, {
-        method: 'DELETE',
-      });
+      await fetchWithAuth(
+        `${USER_DATA_API_PATHS.playRecords}?key=${encodeURIComponent(key)}`,
+        {
+          method: 'DELETE',
+        }
+      );
     } catch (err) {
       await handleDatabaseOperationFailure('playRecords', err);
       triggerGlobalError('删除播放记录失败');
@@ -832,7 +856,7 @@ export async function getSearchHistory(): Promise<string[]> {
 
     if (cachedData) {
       // 返回缓存数据，同时后台异步更新
-      fetchFromApi<string[]>(`/api/searchhistory`, {
+      fetchFromApi<string[]>(USER_DATA_API_PATHS.searchHistory, {
         redirectOnUnauthorized: false,
       })
         .then((freshData) => {
@@ -859,9 +883,12 @@ export async function getSearchHistory(): Promise<string[]> {
     } else {
       // 缓存为空，直接从 API 获取并缓存
       try {
-        const freshData = await fetchFromApi<string[]>(`/api/searchhistory`, {
-          redirectOnUnauthorized: false,
-        });
+        const freshData = await fetchFromApi<string[]>(
+          USER_DATA_API_PATHS.searchHistory,
+          {
+            redirectOnUnauthorized: false,
+          }
+        );
         cacheManager.cacheSearchHistory(freshData);
         return freshData;
       } catch (err) {
@@ -913,7 +940,7 @@ export async function addSearchHistory(keyword: string): Promise<void> {
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth('/api/searchhistory', {
+      await fetchWithAuth(USER_DATA_API_PATHS.searchHistory, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -968,7 +995,7 @@ export async function clearSearchHistory(): Promise<void> {
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(`/api/searchhistory`, {
+      await fetchWithAuth(USER_DATA_API_PATHS.searchHistory, {
         method: 'DELETE',
         redirectOnUnauthorized: false,
       });
@@ -1013,7 +1040,9 @@ export async function deleteSearchHistory(keyword: string): Promise<void> {
     // 异步同步到数据库
     try {
       await fetchWithAuth(
-        `/api/searchhistory?keyword=${encodeURIComponent(trimmed)}`,
+        `${USER_DATA_API_PATHS.searchHistory}?keyword=${encodeURIComponent(
+          trimmed
+        )}`,
         {
           method: 'DELETE',
           redirectOnUnauthorized: false,
@@ -1062,7 +1091,7 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
 
     if (cachedData) {
       // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, Favorite>>(`/api/favorites`)
+      fetchFromApi<Record<string, Favorite>>(USER_DATA_API_PATHS.favorites)
         .then((freshData) => {
           // 只有数据真正不同时才更新缓存
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
@@ -1085,7 +1114,7 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
       // 缓存为空，直接从 API 获取并缓存
       try {
         const freshData = await fetchFromApi<Record<string, Favorite>>(
-          `/api/favorites`
+          USER_DATA_API_PATHS.favorites
         );
         cacheManager.cacheFavorites(freshData);
         return freshData;
@@ -1136,7 +1165,7 @@ export async function saveFavorite(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth('/api/favorites', {
+      await fetchWithAuth(USER_DATA_API_PATHS.favorites, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1199,9 +1228,12 @@ export async function deleteFavorite(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(`/api/favorites?key=${encodeURIComponent(key)}`, {
-        method: 'DELETE',
-      });
+      await fetchWithAuth(
+        `${USER_DATA_API_PATHS.favorites}?key=${encodeURIComponent(key)}`,
+        {
+          method: 'DELETE',
+        }
+      );
     } catch (err) {
       await handleDatabaseOperationFailure('favorites', err);
       triggerGlobalError('删除收藏失败');
@@ -1248,7 +1280,7 @@ export async function isFavorited(
 
     if (cachedFavorites) {
       // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, Favorite>>(`/api/favorites`)
+      fetchFromApi<Record<string, Favorite>>(USER_DATA_API_PATHS.favorites)
         .then((freshData) => {
           // 只有数据真正不同时才更新缓存
           if (JSON.stringify(cachedFavorites) !== JSON.stringify(freshData)) {
@@ -1271,7 +1303,7 @@ export async function isFavorited(
       // 缓存为空，直接从 API 获取并缓存
       try {
         const freshData = await fetchFromApi<Record<string, Favorite>>(
-          `/api/favorites`
+          USER_DATA_API_PATHS.favorites
         );
         cacheManager.cacheFavorites(freshData);
         return !!freshData[key];
@@ -1307,7 +1339,7 @@ export async function clearAllPlayRecords(): Promise<void> {
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(`/api/playrecords`, {
+      await fetchWithAuth(USER_DATA_API_PATHS.playRecords, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -1348,7 +1380,7 @@ export async function clearAllFavorites(): Promise<void> {
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(`/api/favorites`, {
+      await fetchWithAuth(USER_DATA_API_PATHS.favorites, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -1393,10 +1425,14 @@ export async function refreshAllCache(): Promise<void> {
     // 并行刷新所有数据
     const [playRecords, favorites, searchHistory, skipConfigs] =
       await Promise.allSettled([
-        fetchFromApi<Record<string, PlayRecord>>(`/api/playrecords`),
-        fetchFromApi<Record<string, Favorite>>(`/api/favorites`),
-        fetchFromApi<string[]>(`/api/searchhistory`),
-        fetchFromApi<Record<string, SkipConfig>>(`/api/skipconfigs`),
+        fetchFromApi<Record<string, PlayRecord>>(
+          USER_DATA_API_PATHS.playRecords
+        ),
+        fetchFromApi<Record<string, Favorite>>(USER_DATA_API_PATHS.favorites),
+        fetchFromApi<string[]>(USER_DATA_API_PATHS.searchHistory),
+        fetchFromApi<Record<string, SkipConfig>>(
+          USER_DATA_API_PATHS.skipConfigs
+        ),
       ]);
 
     if (playRecords.status === 'fulfilled') {
@@ -1558,7 +1594,7 @@ export async function getSkipConfig(
 
     if (cachedData) {
       // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, SkipConfig>>(`/api/skipconfigs`)
+      fetchFromApi<Record<string, SkipConfig>>(USER_DATA_API_PATHS.skipConfigs)
         .then((freshData) => {
           // 只有数据真正不同时才更新缓存
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
@@ -1580,7 +1616,7 @@ export async function getSkipConfig(
       // 缓存为空，直接从 API 获取并缓存
       try {
         const freshData = await fetchFromApi<Record<string, SkipConfig>>(
-          `/api/skipconfigs`
+          USER_DATA_API_PATHS.skipConfigs
         );
         cacheManager.cacheSkipConfigs(freshData);
         return freshData[key] || null;
@@ -1632,7 +1668,7 @@ export async function saveSkipConfig(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth('/api/skipconfigs', {
+      await fetchWithAuth(USER_DATA_API_PATHS.skipConfigs, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1686,7 +1722,7 @@ export async function getAllSkipConfigs(): Promise<Record<string, SkipConfig>> {
 
     if (cachedData) {
       // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, SkipConfig>>(`/api/skipconfigs`)
+      fetchFromApi<Record<string, SkipConfig>>(USER_DATA_API_PATHS.skipConfigs)
         .then((freshData) => {
           // 只有数据真正不同时才更新缓存
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
@@ -1709,7 +1745,7 @@ export async function getAllSkipConfigs(): Promise<Record<string, SkipConfig>> {
       // 缓存为空，直接从 API 获取并缓存
       try {
         const freshData = await fetchFromApi<Record<string, SkipConfig>>(
-          `/api/skipconfigs`
+          USER_DATA_API_PATHS.skipConfigs
         );
         cacheManager.cacheSkipConfigs(freshData);
         return freshData;
@@ -1759,9 +1795,12 @@ export async function deleteSkipConfig(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(`/api/skipconfigs?key=${encodeURIComponent(key)}`, {
-        method: 'DELETE',
-      });
+      await fetchWithAuth(
+        `${USER_DATA_API_PATHS.skipConfigs}?key=${encodeURIComponent(key)}`,
+        {
+          method: 'DELETE',
+        }
+      );
     } catch (err) {
       console.error('删除跳过片头片尾配置失败:', err);
       triggerGlobalError('删除跳过片头片尾配置失败');

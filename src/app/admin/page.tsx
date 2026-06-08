@@ -43,6 +43,7 @@ import { createPortal } from 'react-dom';
 
 import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { apiFetch } from '@/lib/transport/api-client';
 import { isAdultSourceCandidate } from '@/lib/yellow';
 
 import DataMigration from '@/components/DataMigration';
@@ -650,7 +651,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
   ) => {
     return withLoading(`userGroup_${action}_${groupName}`, async () => {
       try {
-        const res = await fetch('/api/admin/user', {
+        const res = await apiFetch('/admin/user', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -729,7 +730,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
   const handleAssignUserGroup = async (username: string, userGroups: string[]) => {
     return withLoading(`assignUserGroup_${username}`, async () => {
       try {
-        const res = await fetch('/api/admin/user', {
+        const res = await apiFetch('/admin/user', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -871,7 +872,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
 
     await withLoading('batchSetUserGroup', async () => {
       try {
-        const res = await fetch('/api/admin/user', {
+        const res = await apiFetch('/admin/user', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -905,7 +906,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
 
     await withLoading(`saveUserApis_${selectedUser.username}`, async () => {
       try {
-        const res = await fetch('/api/admin/user', {
+        const res = await apiFetch('/admin/user', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -947,7 +948,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     userGroup?: string
   ) => {
     try {
-      const res = await fetch('/api/admin/user', {
+      const res = await apiFetch('/admin/user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2188,7 +2189,7 @@ const VideoSourceConfig = ({
   // 通用 API 请求
   const callSourceApi = async (body: Record<string, any>) => {
     try {
-      const resp = await fetch('/api/admin/source', {
+      const resp = await apiFetch('/admin/source', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...body }),
@@ -3123,7 +3124,7 @@ const CategoryConfig = ({
   // 通用 API 请求
   const callCategoryApi = async (body: Record<string, any>) => {
     try {
-      const resp = await fetch('/api/admin/category', {
+      const resp = await apiFetch('/admin/category', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...body }),
@@ -3459,7 +3460,7 @@ const ConfigFileComponent = ({ config, refreshConfig }: { config: AdminConfig | 
 
     await withLoading('fetchConfig', async () => {
       try {
-        const resp = await fetch('/api/admin/config_subscription/fetch', {
+        const resp = await apiFetch('/admin/config_subscription/fetch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: subscriptionUrl }),
@@ -3491,7 +3492,7 @@ const ConfigFileComponent = ({ config, refreshConfig }: { config: AdminConfig | 
   const handleSave = async () => {
     await withLoading('saveConfig', async () => {
       try {
-        const resp = await fetch('/api/admin/config_file', {
+        const resp = await apiFetch('/admin/config_file', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -3796,7 +3797,7 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
   const handleSave = async () => {
     await withLoading('saveSiteConfig', async () => {
       try {
-        const resp = await fetch('/api/admin/site', {
+        const resp = await apiFetch('/admin/site', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...siteSettings }),
@@ -4306,7 +4307,7 @@ const LiveSourceConfig = ({
   // 通用 API 请求
   const callLiveSourceApi = async (body: Record<string, any>) => {
     try {
-      const resp = await fetch('/api/admin/live', {
+      const resp = await apiFetch('/admin/live', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...body }),
@@ -4347,7 +4348,7 @@ const LiveSourceConfig = ({
     await withLoading('refreshLiveSources', async () => {
       setIsRefreshing(true);
       try {
-        const response = await fetch('/api/admin/live/refresh', {
+        const response = await apiFetch('/admin/live/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
         });

@@ -5,6 +5,8 @@ import { AlertCircle, AlertTriangle, CheckCircle, Download, FileCheck, Lock, Upl
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { apiFetch } from '@/lib/transport/api-client';
+
 interface DataMigrationProps {
   onRefreshConfig?: () => Promise<void>;
 }
@@ -183,7 +185,7 @@ const DataMigration = ({ onRefreshConfig }: DataMigrationProps) => {
     try {
       setIsExporting(true);
 
-      const response = await fetch('/api/admin/data_migration/export', {
+      const response = await apiFetch('/admin/data_migration/export', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -272,7 +274,7 @@ const DataMigration = ({ onRefreshConfig }: DataMigrationProps) => {
       formData.append('file', selectedFile);
       formData.append('password', importPassword);
 
-      const response = await fetch('/api/admin/data_migration/import', {
+      const response = await apiFetch('/admin/data_migration/import', {
         method: 'POST',
         body: formData,
       });
