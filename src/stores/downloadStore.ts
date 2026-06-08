@@ -54,6 +54,29 @@ function normalizeTask(
     resetDownloadingStatus && task.status === 'downloading'
       ? 'paused'
       : task.status;
+  const sizeBytes =
+    typeof task.sizeBytes === 'number' && Number.isFinite(task.sizeBytes)
+      ? Math.max(0, task.sizeBytes)
+      : 0;
+  const currentSizeBytesRaw =
+    typeof task.currentSizeBytes === 'number' &&
+    Number.isFinite(task.currentSizeBytes)
+      ? Math.max(sizeBytes, task.currentSizeBytes)
+      : sizeBytes;
+  const currentSizeBytes =
+    status === 'downloading' ? currentSizeBytesRaw : sizeBytes;
+  const estimatedTotalSizeBytes =
+    typeof task.estimatedTotalSizeBytes === 'number' &&
+    Number.isFinite(task.estimatedTotalSizeBytes)
+      ? Math.max(currentSizeBytes, task.estimatedTotalSizeBytes)
+      : currentSizeBytes;
+  const downloadSpeedBytesPerSecond =
+    status === 'downloading' &&
+    typeof task.downloadSpeedBytesPerSecond === 'number' &&
+    Number.isFinite(task.downloadSpeedBytesPerSecond) &&
+    task.downloadSpeedBytesPerSecond > 0
+      ? task.downloadSpeedBytesPerSecond
+      : 0;
 
   return {
     ...task,
@@ -68,7 +91,10 @@ function normalizeTask(
       typeof task.downloadedResources === 'number'
         ? task.downloadedResources
         : 0,
-    sizeBytes: typeof task.sizeBytes === 'number' ? task.sizeBytes : 0,
+    sizeBytes,
+    currentSizeBytes,
+    estimatedTotalSizeBytes,
+    downloadSpeedBytesPerSecond,
     createdAt: typeof task.createdAt === 'number' ? task.createdAt : Date.now(),
     updatedAt: typeof task.updatedAt === 'number' ? task.updatedAt : Date.now(),
   };

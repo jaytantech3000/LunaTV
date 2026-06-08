@@ -21,6 +21,11 @@ function buildTask(partial: Partial<DownloadTask>): DownloadTask {
     totalResources: partial.totalResources || 0,
     downloadedResources: partial.downloadedResources || 0,
     sizeBytes: partial.sizeBytes || 0,
+    currentSizeBytes: partial.currentSizeBytes || partial.sizeBytes || 0,
+    estimatedTotalSizeBytes:
+      partial.estimatedTotalSizeBytes || partial.sizeBytes || 0,
+    downloadSpeedBytesPerSecond:
+      partial.downloadSpeedBytesPerSecond || 0,
     createdAt: partial.createdAt || 1,
     updatedAt: partial.updatedAt || 1,
     desc: partial.desc,

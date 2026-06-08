@@ -12,7 +12,14 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import { formatBytes, getDownloadStatusLabel } from '@/lib/download/format';
+import {
+  formatBytes,
+  formatTaskSizeProgress,
+  formatTransferRate,
+  getDownloadStatusLabel,
+  getTaskCurrentSizeBytes,
+  getTaskEstimatedTotalSizeBytes,
+} from '@/lib/download/format';
 import { downloadManager } from '@/lib/download/manager';
 import { normalizeVodDetailForPlayback } from '@/lib/download/normalize';
 import { buildOfflinePlayHref } from '@/lib/download/offline';
@@ -27,6 +34,7 @@ import {
   MAX_CONCURRENT_DOWNLOAD_TASKS,
   MIN_CONCURRENT_DOWNLOAD_TASKS,
 } from '@/lib/download/types';
+import { searchPlaybackSources } from '@/lib/playback-source-prefetch';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 
@@ -59,12 +67,74 @@ function formatEpisodeCode(episodeIndex: number): string {
   return `EP${String(episodeIndex + 1).padStart(2, '0')}`;
 }
 
+function buildSearchResultKey(
+  result: Pick<SearchResult, 'source' | 'id'>
+): string {
+  return `${result.source}:${result.id}`;
+}
+
+function mergeDownloadableSources(
+  detail: SearchResult,
+  sources: SearchResult[]
+): SearchResult[] {
+  const seen = new Set<string>();
+  const mergedSources: SearchResult[] = [];
+
+  [detail, ...sources].forEach((source) => {
+    const sourceKey = buildSearchResultKey(source);
+
+    if (seen.has(sourceKey)) {
+      return;
+    }
+
+    seen.add(sourceKey);
+    mergedSources.push(source);
+  });
+
+  return mergedSources;
+}
+
+function getEpisodeTitleFromSources(
+  sources: SearchResult[],
+  episodeIndex: number
+): string {
+  for (const source of sources) {
+    const episodeTitle = source.episodes_titles[episodeIndex]?.trim();
+
+    if (episodeTitle) {
+      return episodeTitle;
+    }
+  }
+
+  return `第 ${episodeIndex + 1} 集`;
+}
+
 interface MoreDownloadEpisodeOption {
   episodeIndex: number;
   episodeTitle: string;
   hasSource: boolean;
   task?: DownloadTask;
   isActionable: boolean;
+}
+
+interface ActiveTaskGroup {
+  contentId: string;
+  title: string;
+  poster: string;
+  sourceName: string;
+  year: string;
+  tasks: DownloadTask[];
+  totalResources: number;
+  downloadedResources: number;
+  currentSizeBytes: number;
+  estimatedTotalSizeBytes: number;
+  downloadSpeedBytesPerSecond: number;
+  progress: number;
+  updatedAt: number;
+  downloadingCount: number;
+  queuedCount: number;
+  pausedCount: number;
+  errorCount: number;
 }
 
 function getMoreDownloadEpisodeStatus(option: MoreDownloadEpisodeOption): string {
@@ -128,10 +198,15 @@ function getMoreDownloadEpisodeActionBadgeClassName(
   }
 }
 
-interface DownloadTaskActionHandlers {
-  onPause: (taskId: string) => Promise<void>;
-  onResume: (taskId: string) => Promise<void>;
-  onCancel: (taskId: string) => Promise<void>;
+interface ActiveTasksSectionProps {
+  activeTaskGroups: ActiveTaskGroup[];
+  activeContentId?: string | null;
+  onOpenContent: (contentId: string) => void;
+}
+
+interface ActiveTaskDialogProps {
+  group: ActiveTaskGroup;
+  onClose: () => void;
 }
 
 interface DownloadedContentsSectionProps {
@@ -153,142 +228,634 @@ interface DownloadSettingsDialogProps {
   onClose: () => void;
 }
 
+function buildActiveTaskGroups(
+  tasks: Record<string, DownloadTask>
+): ActiveTaskGroup[] {
+  const activeTasks = sortActiveDownloadTasks(
+    Object.values(tasks).filter((task) => task.status !== 'done')
+  );
+  const taskGroups = new Map<string, DownloadTask[]>();
+
+  activeTasks.forEach((task) => {
+    const currentTasks = taskGroups.get(task.contentId) || [];
+    currentTasks.push(task);
+    taskGroups.set(task.contentId, currentTasks);
+  });
+
+  return Array.from(taskGroups.values())
+    .map((groupTasks) => {
+      const sortedTasks = sortActiveDownloadTasks(groupTasks);
+      const leadTask = sortedTasks[0];
+      const totalResources = sortedTasks.reduce(
+        (sum, task) => sum + Math.max(0, task.totalResources),
+        0
+      );
+      const downloadedResources = sortedTasks.reduce(
+        (sum, task) =>
+          sum +
+          Math.max(
+            0,
+            Math.min(
+              task.downloadedResources,
+              task.totalResources > 0
+                ? task.totalResources
+                : task.downloadedResources
+            )
+          ),
+        0
+      );
+      const currentSizeBytes = sortedTasks.reduce(
+        (sum, task) => sum + getTaskCurrentSizeBytes(task),
+        0
+      );
+      const estimatedTotalSizeBytes = sortedTasks.reduce(
+        (sum, task) => sum + getTaskEstimatedTotalSizeBytes(task),
+        0
+      );
+      const downloadSpeedBytesPerSecond = sortedTasks.reduce(
+        (sum, task) =>
+          sum + Math.max(0, task.downloadSpeedBytesPerSecond || 0),
+        0
+      );
+      const progress =
+        totalResources > 0
+          ? Math.min(
+              100,
+              Math.round((downloadedResources / totalResources) * 100)
+            )
+          : Math.round(
+              sortedTasks.reduce(
+                (sum, task) => sum + Math.max(0, Math.min(100, task.progress)),
+                0
+              ) / sortedTasks.length
+            );
+
+      return {
+        contentId: leadTask.contentId,
+        title: leadTask.title,
+        poster: leadTask.poster,
+        sourceName: leadTask.sourceName,
+        year: leadTask.year,
+        tasks: sortedTasks,
+        totalResources,
+        downloadedResources,
+        currentSizeBytes,
+        estimatedTotalSizeBytes,
+        downloadSpeedBytesPerSecond,
+        progress,
+        updatedAt: sortedTasks.reduce(
+          (latestUpdatedAt, task) => Math.max(latestUpdatedAt, task.updatedAt),
+          0
+        ),
+        downloadingCount: sortedTasks.filter(
+          (task) => task.status === 'downloading'
+        ).length,
+        queuedCount: sortedTasks.filter((task) => task.status === 'queued')
+          .length,
+        pausedCount: sortedTasks.filter((task) => task.status === 'paused')
+          .length,
+        errorCount: sortedTasks.filter((task) => task.status === 'error')
+          .length,
+      };
+    })
+    .sort((left, right) => {
+      if (left.updatedAt !== right.updatedAt) {
+        return right.updatedAt - left.updatedAt;
+      }
+
+      return left.title.localeCompare(right.title, 'zh-CN');
+    });
+}
+
+function getActiveTaskGroupStatusBadgeLabel(group: ActiveTaskGroup): string {
+  const statusKinds = [
+    group.downloadingCount,
+    group.queuedCount,
+    group.pausedCount,
+    group.errorCount,
+  ].filter((count) => count > 0).length;
+
+  if (group.downloadingCount > 0) {
+    return statusKinds > 1
+      ? `${group.tasks.length} 集进行中`
+      : `${group.downloadingCount} 集下载中`;
+  }
+
+  if (group.queuedCount > 0) {
+    return statusKinds > 1
+      ? `${group.tasks.length} 集待处理`
+      : `${group.queuedCount} 集排队中`;
+  }
+
+  if (group.pausedCount > 0) {
+    return statusKinds > 1
+      ? `${group.tasks.length} 集已暂停`
+      : `${group.pausedCount} 集已暂停`;
+  }
+
+  if (group.errorCount > 0) {
+    return statusKinds > 1
+      ? `${group.tasks.length} 集异常`
+      : `${group.errorCount} 集失败`;
+  }
+
+  return `${group.tasks.length} 集任务`;
+}
+
+function getActiveTaskGroupStatusBadgeClassName(group: ActiveTaskGroup): string {
+  if (group.downloadingCount > 0) {
+    return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+  }
+
+  if (group.queuedCount > 0) {
+    return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
+  }
+
+  if (group.pausedCount > 0) {
+    return 'border-orange-500/20 bg-orange-500/10 text-orange-200';
+  }
+
+  if (group.errorCount > 0) {
+    return 'border-red-500/20 bg-red-500/10 text-red-200';
+  }
+
+  return 'border-white/10 bg-white/10 text-white/80';
+}
+
+function getActiveTaskGroupResourceSummary(group: ActiveTaskGroup): string {
+  if (group.totalResources > 0) {
+    return `${group.downloadedResources}/${group.totalResources} 个资源`;
+  }
+
+  return group.tasks.length > 1 ? `${group.tasks.length} 个任务` : '等待资源清单';
+}
+
+function getActiveTaskStatusClassName(task: DownloadTask): string {
+  switch (task.status) {
+    case 'downloading':
+      return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+    case 'queued':
+      return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
+    case 'paused':
+      return 'border-orange-500/20 bg-orange-500/10 text-orange-200';
+    case 'error':
+      return 'border-red-500/20 bg-red-500/10 text-red-200';
+    default:
+      return 'border-white/10 bg-white/5 text-gray-300';
+  }
+}
+
 function ActiveTasksSection({
-  onPause,
-  onResume,
-  onCancel,
-}: DownloadTaskActionHandlers) {
-  const tasks = useDownloadStore((state) => state.tasks);
-  const activeTasks = useMemo(
+  activeTaskGroups,
+  activeContentId,
+  onOpenContent,
+}: ActiveTasksSectionProps) {
+  const totalTaskCount = useMemo(
     () =>
-      sortActiveDownloadTasks(
-        Object.values(tasks).filter((task) => task.status !== 'done')
+      activeTaskGroups.reduce((sum, group) => sum + group.tasks.length, 0),
+    [activeTaskGroups]
+  );
+  const totalDownloadSpeedBytesPerSecond = useMemo(
+    () =>
+      activeTaskGroups.reduce(
+        (sum, group) => sum + group.downloadSpeedBytesPerSecond,
+        0
       ),
-    [tasks]
+    [activeTaskGroups]
   );
 
   return (
     <section className='space-y-4'>
       <div className='flex items-center justify-between gap-3'>
-        <div className='flex items-center justify-between gap-3'>
-          <h2 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
-            进行中的任务
-          </h2>
-          <span className='text-sm text-gray-500 dark:text-gray-400'>
-            {activeTasks.length} 个任务
-          </span>
-        </div>
+        <h2 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+          进行中的任务
+        </h2>
+        <span className='text-sm text-gray-500 dark:text-gray-400'>
+          {activeTaskGroups.length} 部内容 · {totalTaskCount} 个任务
+          {totalDownloadSpeedBytesPerSecond > 0 &&
+            ` · 总速 ${formatTransferRate(totalDownloadSpeedBytesPerSecond)}`}
+        </span>
       </div>
 
-      {activeTasks.length === 0 ? (
+      {activeTaskGroups.length === 0 ? (
         <div className='rounded-2xl border border-dashed border-gray-300 px-6 py-10 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400'>
           当前没有进行中的下载任务。
         </div>
       ) : (
-        <div className='grid gap-3 xl:grid-cols-2'>
-          {activeTasks.map((task) => (
-            <div
-              key={task.id}
-              className='rounded-2xl border border-gray-200 bg-white/80 p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/50'
+        <div className='flex flex-wrap gap-4'>
+          {activeTaskGroups.map((group) => (
+            <button
+              type='button'
+              key={group.contentId}
+              onClick={() => onOpenContent(group.contentId)}
+              className={`group w-full overflow-hidden rounded-[22px] border text-left transition-all duration-300 hover:-translate-y-1 hover:shadow-xl sm:w-[220px] xl:w-[238px] ${
+                activeContentId === group.contentId
+                  ? 'border-emerald-400/70 bg-emerald-50/40 shadow-lg shadow-emerald-500/10 dark:border-emerald-500/60 dark:bg-emerald-950/20'
+                  : 'border-gray-200 bg-white/80 shadow-sm hover:border-emerald-300/60 dark:border-gray-800 dark:bg-gray-900/50'
+              }`}
+              aria-haspopup='dialog'
+              aria-label={`查看 ${group.title} 的进行中任务详情`}
             >
-              <div className='flex flex-col gap-3'>
-                <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
-                  <div className='min-w-0 space-y-2'>
-                    <div className='flex flex-wrap items-center gap-2'>
-                      <div
-                        className='truncate text-base font-semibold text-gray-900 dark:text-gray-100'
-                        title={task.title}
-                      >
-                        {task.title}
-                      </div>
-                      <span className='inline-flex rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'>
-                        {task.episodeTitle}
-                      </span>
-                      <span className='inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300'>
-                        {getDownloadStatusLabel(task.status)}
-                      </span>
-                    </div>
-                    <div
-                      className='truncate text-sm text-gray-600 dark:text-gray-400'
-                      title={task.sourceName}
-                    >
-                      {task.sourceName}
-                    </div>
-                    <div className='flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400'>
-                      {task.totalResources > 0 ? (
-                        <span>
-                          {task.downloadedResources}/{task.totalResources} 个资源
-                        </span>
-                      ) : (
-                        <span>等待资源清单</span>
-                      )}
-                      {task.sizeBytes > 0 && (
-                        <span>{formatBytes(task.sizeBytes)}</span>
-                      )}
-                      <span>{task.progress}%</span>
-                    </div>
+              <div className='relative aspect-[4/5] overflow-hidden bg-gray-900'>
+                {group.poster ? (
+                  <Image
+                    src={processImageUrl(group.poster)}
+                    alt={group.title}
+                    fill
+                    className='object-cover transition-transform duration-500 group-hover:scale-105'
+                    referrerPolicy='no-referrer'
+                    sizes='(max-width: 640px) 100vw, 238px'
+                  />
+                ) : (
+                  <div className='absolute inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-700/60 via-gray-900 to-black text-4xl font-semibold text-white/80'>
+                    {group.title.slice(0, 1)}
                   </div>
+                )}
 
-                  <div className='flex shrink-0 flex-wrap gap-2 sm:justify-end'>
-                    {task.status === 'downloading' && (
-                      <button
-                        type='button'
-                        onClick={() => void onPause(task.id)}
-                        className={`${compactActionButtonClassName} border border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/20`}
-                      >
-                        暂停
-                      </button>
-                    )}
+                <div className='absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent' />
 
-                    {task.status === 'queued' && (
-                      <span className='rounded-lg border border-gray-300 bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-400'>
-                        排队中
-                      </span>
-                    )}
-
-                    {['paused', 'error'].includes(task.status) && (
-                      <button
-                        type='button'
-                        onClick={() => void onResume(task.id)}
-                        className={`${compactActionButtonClassName} bg-emerald-600 text-white hover:bg-emerald-700`}
-                      >
-                        {task.status === 'error' ? '重试' : '继续'}
-                      </button>
-                    )}
-
-                    <button
-                      type='button'
-                      onClick={() => void onCancel(task.id)}
-                      className={`${compactActionButtonClassName} border border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/10`}
-                    >
-                      取消
-                    </button>
-                  </div>
+                <div
+                  className={`absolute left-3 top-3 inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium backdrop-blur-sm ${getActiveTaskGroupStatusBadgeClassName(
+                    group
+                  )}`}
+                >
+                  {getActiveTaskGroupStatusBadgeLabel(group)}
                 </div>
 
-                <div className='flex items-center gap-3'>
-                  <div className='h-2 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800'>
-                    <div
-                      className='h-full rounded-full bg-emerald-500 transition-all'
-                      style={{ width: `${task.progress}%` }}
-                    />
+                <div className='absolute right-3 top-3 inline-flex rounded-full border border-white/15 bg-black/35 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm'>
+                  {group.progress}%
+                </div>
+
+                <div className='absolute inset-x-0 bottom-0 p-3 text-white'>
+                  <div
+                    className='line-clamp-2 text-base font-semibold leading-tight'
+                    title={group.title}
+                  >
+                    {group.title}
                   </div>
-                  <div className='w-12 text-right text-xs font-medium text-gray-500 dark:text-gray-400'>
-                    {task.progress}%
+                  <div className='mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-white/75'>
+                    <span>{group.sourceName}</span>
+                    {group.year && group.year !== 'unknown' && (
+                      <span>{group.year}</span>
+                    )}
+                    <span>{group.tasks.length} 个任务</span>
                   </div>
                 </div>
               </div>
 
-              {task.errorMessage && task.status === 'error' && (
-                <div className='mt-3 rounded-xl border border-red-200/70 bg-red-50/80 px-3 py-2 text-xs text-red-600 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-400'>
-                  {task.errorMessage}
+              <div className='space-y-2 px-3 pb-3 pt-2'>
+                <div className='grid grid-cols-2 gap-3 text-xs text-gray-500 dark:text-gray-400'>
+                  <span className='line-clamp-3 min-h-12 break-words leading-4'>
+                    {getActiveTaskGroupResourceSummary(group)}
+                  </span>
+                  <span className='line-clamp-3 min-h-12 break-words text-right leading-4'>
+                    {formatTaskSizeProgress({
+                      sizeBytes: group.currentSizeBytes,
+                      currentSizeBytes: group.currentSizeBytes,
+                      estimatedTotalSizeBytes: group.estimatedTotalSizeBytes,
+                    })}
+                  </span>
                 </div>
-              )}
-            </div>
+                <div className='flex items-center justify-between text-xs text-gray-500 dark:text-gray-400'>
+                  <span>
+                    总速 {formatTransferRate(group.downloadSpeedBytesPerSecond)}
+                  </span>
+                  <span>{formatDateTime(group.updatedAt)}</span>
+                </div>
+                <div className='h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800'>
+                  <div
+                    className='h-full rounded-full bg-emerald-500 transition-all'
+                    style={{ width: `${group.progress}%` }}
+                  />
+                </div>
+              </div>
+            </button>
           ))}
         </div>
       )}
     </section>
+  );
+}
+
+function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
+  const activeTasks = useMemo(() => sortActiveDownloadTasks(group.tasks), [
+    group.tasks,
+  ]);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setActionError(null);
+    setPendingTaskId(null);
+  }, [group.contentId]);
+
+  const handleTaskAction = async (
+    taskId: string,
+    action: 'pause' | 'resume' | 'cancel'
+  ) => {
+    try {
+      setActionError(null);
+      setPendingTaskId(taskId);
+
+      if (action === 'pause') {
+        await downloadManager.pauseTask(taskId);
+        return;
+      }
+
+      if (action === 'resume') {
+        await downloadManager.resumeTask(taskId);
+        return;
+      }
+
+      await downloadManager.cancelTask(taskId);
+    } catch (error) {
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : action === 'pause'
+          ? '暂停下载失败'
+          : action === 'resume'
+          ? '恢复下载失败'
+          : '取消下载失败'
+      );
+    } finally {
+      setPendingTaskId(null);
+    }
+  };
+
+  if (typeof document === 'undefined') {
+    return null;
+  }
+
+  return createPortal(
+    <div className='fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6'>
+      <button
+        type='button'
+        aria-label='关闭进行中任务详情'
+        className='absolute inset-0 bg-black/75 backdrop-blur-sm'
+        onClick={onClose}
+      />
+
+      <div className='relative z-[10001] flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#040b15]/95 text-white shadow-2xl shadow-black/50'>
+        <div className='border-b border-white/10 px-5 py-5 lg:px-6'>
+          <div className='flex items-start justify-between gap-4'>
+            <div className='space-y-3'>
+              <div className='text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/80'>
+                进行中的任务
+              </div>
+              <div className='text-2xl font-semibold text-white'>
+                {group.title}
+              </div>
+              <div className='flex flex-wrap items-center gap-2 text-sm text-gray-300'>
+                <span>{group.sourceName}</span>
+                {group.year && group.year !== 'unknown' && (
+                  <span>{group.year}</span>
+                )}
+                <span>{group.tasks.length} 个任务</span>
+                <span>{group.progress}%</span>
+              </div>
+            </div>
+
+            <button
+              type='button'
+              onClick={onClose}
+              className='rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+            >
+              关闭
+            </button>
+          </div>
+
+          <div className='mt-4 flex flex-wrap gap-2 text-xs'>
+            {group.downloadingCount > 0 ? (
+              <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-emerald-200'>
+                下载中 {group.downloadingCount}
+              </span>
+            ) : null}
+            {group.queuedCount > 0 ? (
+              <span className='rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-amber-200'>
+                排队中 {group.queuedCount}
+              </span>
+            ) : null}
+            {group.pausedCount > 0 ? (
+              <span className='rounded-full border border-orange-500/20 bg-orange-500/10 px-3 py-1 text-orange-200'>
+                已暂停 {group.pausedCount}
+              </span>
+            ) : null}
+            {group.errorCount > 0 ? (
+              <span className='rounded-full border border-red-500/20 bg-red-500/10 px-3 py-1 text-red-200'>
+                下载失败 {group.errorCount}
+              </span>
+            ) : null}
+            <span className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300'>
+              {getActiveTaskGroupResourceSummary(group)}
+            </span>
+          </div>
+        </div>
+
+        <div className='grid min-h-0 flex-1 lg:grid-cols-[260px_minmax(0,1fr)]'>
+          <div className='overflow-y-auto border-b border-white/10 p-4 lg:border-b-0 lg:border-r lg:border-white/10 lg:p-6'>
+            <div className='space-y-4'>
+              <div className='relative aspect-[4/5] overflow-hidden rounded-3xl bg-black/40'>
+                {group.poster ? (
+                  <Image
+                    src={processImageUrl(group.poster)}
+                    alt={group.title}
+                    fill
+                    className='object-cover'
+                    referrerPolicy='no-referrer'
+                    sizes='260px'
+                  />
+                ) : (
+                  <div className='absolute inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-700/70 via-gray-900 to-black text-5xl font-semibold text-white/80'>
+                    {group.title.slice(0, 1)}
+                  </div>
+                )}
+                <div className='absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent' />
+                <div className='absolute inset-x-0 bottom-0 p-4'>
+                  <div className='line-clamp-2 text-xl font-semibold text-white'>
+                    {group.title}
+                  </div>
+                </div>
+              </div>
+
+              <div className='flex flex-wrap gap-2 text-xs'>
+                <span
+                  className={`rounded-full border px-3 py-1 ${getActiveTaskGroupStatusBadgeClassName(
+                    group
+                  )}`}
+                >
+                  {getActiveTaskGroupStatusBadgeLabel(group)}
+                </span>
+                <span className='rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1 text-sky-200'>
+                  {group.progress}%
+                </span>
+                <span className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300'>
+                  {formatTaskSizeProgress({
+                    sizeBytes: group.currentSizeBytes,
+                    currentSizeBytes: group.currentSizeBytes,
+                    estimatedTotalSizeBytes: group.estimatedTotalSizeBytes,
+                  })}
+                </span>
+                <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-emerald-200'>
+                  总速 {formatTransferRate(group.downloadSpeedBytesPerSecond)}
+                </span>
+              </div>
+
+              <div className='space-y-2 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-gray-300'>
+                <div className='flex items-center justify-between gap-3'>
+                  <span className='text-gray-400'>资源进度</span>
+                  <span>{getActiveTaskGroupResourceSummary(group)}</span>
+                </div>
+                <div className='flex items-center justify-between gap-3'>
+                  <span className='text-gray-400'>大小进度</span>
+                  <span>
+                    {formatTaskSizeProgress({
+                      sizeBytes: group.currentSizeBytes,
+                      currentSizeBytes: group.currentSizeBytes,
+                      estimatedTotalSizeBytes: group.estimatedTotalSizeBytes,
+                    })}
+                  </span>
+                </div>
+                <div className='flex items-center justify-between gap-3'>
+                  <span className='text-gray-400'>总下载速度</span>
+                  <span>{formatTransferRate(group.downloadSpeedBytesPerSecond)}</span>
+                </div>
+                <div className='flex items-center justify-between gap-3'>
+                  <span className='text-gray-400'>最近更新</span>
+                  <span>{formatDateTime(group.updatedAt)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className='min-h-0 overflow-y-auto p-4 lg:p-6'>
+            <div className='space-y-4'>
+              {actionError ? (
+                <div className='rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200'>
+                  {actionError}
+                </div>
+              ) : null}
+
+              <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+                {activeTasks.map((task) => {
+                  const isPending = pendingTaskId === task.id;
+
+                  return (
+                    <div
+                      key={task.id}
+                      className='rounded-xl border border-white/10 bg-black/20 p-3 text-left'
+                    >
+                      <div className='flex items-start justify-between gap-3'>
+                        <div className='min-w-0'>
+                          <div className='flex min-w-0 items-center gap-2'>
+                            <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
+                              {formatEpisodeCode(task.episodeIndex)}
+                            </span>
+                            <div
+                              className='truncate text-sm font-semibold text-white'
+                              title={task.episodeTitle}
+                            >
+                              {task.episodeTitle}
+                            </div>
+                          </div>
+                        </div>
+
+                        <span
+                          className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${getActiveTaskStatusClassName(
+                            task
+                          )}`}
+                        >
+                          {getDownloadStatusLabel(task.status)}
+                        </span>
+                      </div>
+
+                      <div className='mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300'>
+                        {task.totalResources > 0 ? (
+                          <span>
+                            {task.downloadedResources}/{task.totalResources} 个资源
+                          </span>
+                        ) : (
+                          <span>等待资源清单</span>
+                        )}
+                        <span>{task.progress}%</span>
+                      </div>
+
+                      <div className='mt-2 flex items-center justify-between gap-3 text-[11px] text-gray-300'>
+                        <span>{formatTaskSizeProgress(task)}</span>
+                        <span>{formatTransferRate(task.downloadSpeedBytesPerSecond)}</span>
+                      </div>
+
+                      <div className='mt-3 h-1.5 overflow-hidden rounded-full bg-white/10'>
+                        <div
+                          className='h-full rounded-full bg-emerald-500 transition-all'
+                          style={{ width: `${task.progress}%` }}
+                        />
+                      </div>
+
+                      {task.errorMessage && task.status === 'error' ? (
+                        <div className='mt-3 text-xs text-red-200'>
+                          {task.errorMessage}
+                        </div>
+                      ) : null}
+
+                      <div className='mt-3 flex flex-wrap gap-2'>
+                        {task.status === 'downloading' ? (
+                          <button
+                            type='button'
+                            onClick={() =>
+                              void handleTaskAction(task.id, 'pause')
+                            }
+                            disabled={isPending}
+                            className={`${compactActionButtonClassName} border border-emerald-300 text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-50`}
+                          >
+                            暂停
+                          </button>
+                        ) : null}
+
+                        {['paused', 'error'].includes(task.status) ? (
+                          <button
+                            type='button'
+                            onClick={() =>
+                              void handleTaskAction(task.id, 'resume')
+                            }
+                            disabled={isPending}
+                            className={`${compactActionButtonClassName} bg-emerald-600 text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-400`}
+                          >
+                            {task.status === 'error' ? '重试' : '继续'}
+                          </button>
+                        ) : null}
+
+                        {task.status === 'queued' ? (
+                          <span className='rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-gray-300'>
+                            排队中
+                          </span>
+                        ) : null}
+
+                        <button
+                          type='button'
+                          onClick={() => void handleTaskAction(task.id, 'cancel')}
+                          disabled={isPending}
+                          className={`${compactActionButtonClassName} border border-white/15 text-gray-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50`}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {activeTasks.length === 0 ? (
+                <div className='rounded-2xl border border-dashed border-white/10 px-6 py-10 text-center text-sm text-gray-400'>
+                  当前没有进行中的任务。
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -407,6 +974,8 @@ function DownloadedContentDialog({
   const [isMoreDownloadsOpen, setIsMoreDownloadsOpen] = useState(false);
   const [downloadableDetail, setDownloadableDetail] =
     useState<SearchResult | null>(null);
+  const [downloadableAvailableSources, setDownloadableAvailableSources] =
+    useState<SearchResult[]>([]);
   const [isLoadingDownloadableDetail, setIsLoadingDownloadableDetail] =
     useState(false);
   const [moreDownloadsError, setMoreDownloadsError] = useState<string | null>(
@@ -434,35 +1003,54 @@ function DownloadedContentDialog({
     allEpisodeIndexes.every((episodeIndex) =>
       selectedEpisodeIndexSet.has(episodeIndex)
     );
+  const downloadableSources = useMemo(
+    () =>
+      downloadableDetail
+        ? mergeDownloadableSources(
+            downloadableDetail,
+            downloadableAvailableSources
+          )
+        : [],
+    [downloadableAvailableSources, downloadableDetail]
+  );
   const moreDownloadEpisodeOptions = useMemo<MoreDownloadEpisodeOption[]>(() => {
-    if (!downloadableDetail) {
+    if (!downloadableSources.length) {
       return [];
     }
 
-    return downloadableDetail.episodes.flatMap((episodeUrl, episodeIndex) => {
+    const totalEpisodeCount = downloadableSources.reduce(
+      (maxCount, source) => Math.max(maxCount, source.episodes.length),
+      0
+    );
+
+    return Array.from({ length: totalEpisodeCount }, (_, episodeIndex) => {
       const task = tasks[buildDownloadTaskId(content.contentId, episodeIndex)];
       const isDownloaded =
         downloadedEpisodeIndexSet.has(episodeIndex) || task?.status === 'done';
 
       if (isDownloaded) {
-        return [];
+        return null;
       }
+
+      const hasSource = downloadableSources.some((source) =>
+        Boolean(source.episodes[episodeIndex])
+      );
 
       return {
         episodeIndex,
-        episodeTitle:
-          downloadableDetail.episodes_titles[episodeIndex] ||
-          `第 ${episodeIndex + 1} 集`,
-        hasSource: Boolean(episodeUrl),
+        episodeTitle: getEpisodeTitleFromSources(
+          downloadableSources,
+          episodeIndex
+        ),
+        hasSource,
         task,
         isActionable:
-          Boolean(episodeUrl) &&
-          (!task || ['paused', 'error'].includes(task.status)),
+          hasSource && (!task || ['paused', 'error'].includes(task.status)),
       };
-    });
+    }).filter(Boolean) as MoreDownloadEpisodeOption[];
   }, [
     content.contentId,
-    downloadableDetail,
+    downloadableSources,
     downloadedEpisodeIndexSet,
     tasks,
   ]);
@@ -475,6 +1063,7 @@ function DownloadedContentDialog({
     setIsDeletingSelected(false);
     setIsMoreDownloadsOpen(false);
     setDownloadableDetail(null);
+    setDownloadableAvailableSources([]);
     setIsLoadingDownloadableDetail(false);
     setMoreDownloadsError(null);
     setMoreDownloadsFeedback(null);
@@ -549,28 +1138,50 @@ function DownloadedContentDialog({
       setIsLoadingDownloadableDetail(true);
       setMoreDownloadsError(null);
 
-      const searchParams = new URLSearchParams({
-        source: content.source,
-        id: content.vodId,
-      });
-      const response = await fetch(`/api/detail?${searchParams.toString()}`, {
-        cache: 'no-store',
-      });
-      const payload = (await response.json()) as SearchResult & {
-        error?: string;
-      };
+      const [detailResponse, matchedSources] = await Promise.all([
+        (async () => {
+          const searchParams = new URLSearchParams({
+            source: content.source,
+            id: content.vodId,
+          });
+          const response = await fetch(
+            `/api/detail?${searchParams.toString()}`,
+            {
+              cache: 'no-store',
+            }
+          );
+          const payload = (await response.json()) as SearchResult & {
+            error?: string;
+          };
 
-      if (!response.ok) {
-        throw new Error(payload.error || '获取可下载剧集失败');
-      }
+          if (!response.ok) {
+            throw new Error(payload.error || '获取可下载剧集失败');
+          }
 
-      const normalizedDetail = normalizeVodDetailForPlayback(payload);
+          return payload;
+        })(),
+        searchPlaybackSources({
+          title: content.title,
+          year:
+            content.year && content.year !== 'unknown'
+              ? content.year
+              : undefined,
+          doubanId: content.doubanId,
+        }).catch(() => []),
+      ]);
+
+      const normalizedDetail = normalizeVodDetailForPlayback(detailResponse);
+      const nextAvailableSources = matchedSources.filter(
+        (source) =>
+          buildSearchResultKey(source) !== buildSearchResultKey(normalizedDetail)
+      );
 
       if (detailRequestKeyRef.current !== requestKey) {
         return null;
       }
 
       setDownloadableDetail(normalizedDetail);
+      setDownloadableAvailableSources(nextAvailableSources);
       return normalizedDetail;
     } catch (error) {
       if (detailRequestKeyRef.current === requestKey) {
@@ -602,7 +1213,18 @@ function DownloadedContentDialog({
       return;
     }
 
-    if (!detail.episodes[episodeIndex]) {
+    const candidateSources = mergeDownloadableSources(
+      detail,
+      downloadableAvailableSources
+    );
+    const availableSources = candidateSources.filter(
+      (source) => buildSearchResultKey(source) !== buildSearchResultKey(detail)
+    );
+    const hasEpisodeSource = candidateSources.some((source) =>
+      Boolean(source.episodes[episodeIndex])
+    );
+
+    if (!hasEpisodeSource) {
       setMoreDownloadsError('当前剧集缺少可下载地址');
       return;
     }
@@ -613,10 +1235,11 @@ function DownloadedContentDialog({
       await downloadManager.startEpisodeDownload({
         detail,
         episodeIndex,
+        availableSources,
       });
       setMoreDownloadsFeedback(
         `已将 ${
-          detail.episodes_titles[episodeIndex] || `第 ${episodeIndex + 1} 集`
+          getEpisodeTitleFromSources(candidateSources, episodeIndex)
         } 加入下载队列。`
       );
     } catch (error) {
@@ -1114,16 +1737,32 @@ export default function DownloadsClient() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [storageOrigin, setStorageOrigin] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [selectedActiveTaskContentId, setSelectedActiveTaskContentId] =
+    useState<string | null>(null);
   const [selectedContentId, setSelectedContentId] = useState<string | null>(
     null
   );
   const isDevelopment = process.env.NODE_ENV === 'development';
   const hasHydrated = useDownloadStore((state) => state.hasHydrated);
+  const tasks = useDownloadStore((state) => state.tasks);
   const maxConcurrentTasks = useDownloadStore(
     (state) => state.maxConcurrentTasks
   );
   const setMaxConcurrentTasks = useDownloadStore(
     (state) => state.setMaxConcurrentTasks
+  );
+  const activeTaskGroups = useMemo(
+    () => buildActiveTaskGroups(tasks),
+    [tasks]
+  );
+  const selectedActiveTaskGroup = useMemo(
+    () =>
+      selectedActiveTaskContentId
+        ? activeTaskGroups.find(
+            (group) => group.contentId === selectedActiveTaskContentId
+          ) || null
+        : null,
+    [activeTaskGroups, selectedActiveTaskContentId]
   );
   const selectedContent = useDownloadStore((state) =>
     selectedContentId ? state.library[selectedContentId] || null : null
@@ -1144,7 +1783,17 @@ export default function DownloadsClient() {
   }, [selectedContentId, selectedContent]);
 
   useEffect(() => {
-    if (!isSettingsOpen && !selectedContentId) {
+    if (selectedActiveTaskContentId && !selectedActiveTaskGroup) {
+      setSelectedActiveTaskContentId(null);
+    }
+  }, [selectedActiveTaskContentId, selectedActiveTaskGroup]);
+
+  useEffect(() => {
+    if (
+      !isSettingsOpen &&
+      !selectedContentId &&
+      !selectedActiveTaskContentId
+    ) {
       return;
     }
     if (typeof document === 'undefined') {
@@ -1158,6 +1807,10 @@ export default function DownloadsClient() {
           setSelectedContentId(null);
           return;
         }
+        if (selectedActiveTaskContentId) {
+          setSelectedActiveTaskContentId(null);
+          return;
+        }
         setIsSettingsOpen(false);
       }
     };
@@ -1169,34 +1822,7 @@ export default function DownloadsClient() {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isSettingsOpen, selectedContentId]);
-
-  const handlePause = async (taskId: string) => {
-    try {
-      setActionError(null);
-      await downloadManager.pauseTask(taskId);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : '暂停下载失败');
-    }
-  };
-
-  const handleResume = async (taskId: string) => {
-    try {
-      setActionError(null);
-      await downloadManager.resumeTask(taskId);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : '恢复下载失败');
-    }
-  };
-
-  const handleCancel = async (taskId: string) => {
-    try {
-      setActionError(null);
-      await downloadManager.cancelTask(taskId);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : '取消下载失败');
-    }
-  };
+  }, [isSettingsOpen, selectedContentId, selectedActiveTaskContentId]);
 
   const handleDeleteEpisode = async (
     contentId: string,
@@ -1220,7 +1846,17 @@ export default function DownloadsClient() {
     downloadManager.refreshScheduling();
   };
 
+  const handleOpenActiveTaskContent = (contentId: string) => {
+    setSelectedContentId(null);
+    setSelectedActiveTaskContentId(contentId);
+  };
+
+  const handleCloseActiveTaskContent = () => {
+    setSelectedActiveTaskContentId(null);
+  };
+
   const handleOpenDownloadedContent = (contentId: string) => {
+    setSelectedActiveTaskContentId(null);
     setSelectedContentId(contentId);
   };
 
@@ -1280,15 +1916,22 @@ export default function DownloadsClient() {
       )}
 
       <ActiveTasksSection
-        onPause={handlePause}
-        onResume={handleResume}
-        onCancel={handleCancel}
+        activeTaskGroups={activeTaskGroups}
+        activeContentId={selectedActiveTaskContentId}
+        onOpenContent={handleOpenActiveTaskContent}
       />
 
       <DownloadedContentsSection
         activeContentId={selectedContentId}
         onOpenContent={handleOpenDownloadedContent}
       />
+
+      {selectedActiveTaskGroup ? (
+        <ActiveTaskDialog
+          group={selectedActiveTaskGroup}
+          onClose={handleCloseActiveTaskContent}
+        />
+      ) : null}
 
       {selectedContent ? (
         <DownloadedContentDialog

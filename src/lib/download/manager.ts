@@ -46,6 +46,16 @@ interface TaskRunnerState {
   failureError?: Error;
 }
 
+interface DownloadResourceTransferProgress {
+  loadedBytes: number;
+  totalBytes: number;
+}
+
+interface DownloadResourceTransferResult {
+  sizeBytes: number;
+  totalBytes: number;
+}
+
 interface QueueEpisodeDownloadResult {
   task: DownloadTask;
   queued: boolean;
@@ -59,6 +69,7 @@ interface BatchDownloadResult {
 
 const RESOURCE_DOWNLOAD_WORKER_COUNT = 3;
 const MAX_RESOURCE_DOWNLOAD_RETRIES = 2;
+const PROGRESS_FLUSH_INTERVAL_MS = 250;
 const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
 
@@ -232,6 +243,9 @@ function buildInitialTask(
     totalResources: 0,
     downloadedResources: 0,
     sizeBytes: 0,
+    currentSizeBytes: 0,
+    estimatedTotalSizeBytes: 0,
+    downloadSpeedBytesPerSecond: 0,
     createdAt,
     updatedAt: createdAt,
   };
@@ -262,8 +276,9 @@ export function applyLibraryMetadataFallback(
 
 async function downloadAndCacheUrl(
   url: string,
-  controller: AbortController
-): Promise<number> {
+  controller: AbortController,
+  onProgress?: (progress: DownloadResourceTransferProgress) => void
+): Promise<DownloadResourceTransferResult> {
   const response = await fetch(url, {
     cache: 'no-store',
     credentials: 'same-origin',
@@ -277,9 +292,68 @@ async function downloadAndCacheUrl(
     throw new Error(`下载资源失败: ${response.status}`);
   }
 
-  const sizeBytes = Number(response.headers.get('content-length') || 0);
-  await putDownloadResponse(url, response.clone());
-  return Number.isFinite(sizeBytes) ? sizeBytes : 0;
+  const contentLengthHeader = Number(response.headers.get('content-length') || 0);
+  const totalBytes =
+    Number.isFinite(contentLengthHeader) && contentLengthHeader > 0
+      ? contentLengthHeader
+      : 0;
+
+  if (!response.body) {
+    await putDownloadResponse(url, response.clone());
+    onProgress?.({
+      loadedBytes: totalBytes,
+      totalBytes,
+    });
+    return {
+      sizeBytes: totalBytes,
+      totalBytes,
+    };
+  }
+
+  const [cacheStream, measureStream] = response.body.tee();
+  const cachePromise = putDownloadResponse(
+    url,
+    new Response(cacheStream, {
+      headers: new Headers(response.headers),
+      status: response.status,
+      statusText: response.statusText,
+    })
+  );
+  const reader = measureStream.getReader();
+  let loadedBytes = 0;
+
+  onProgress?.({
+    loadedBytes,
+    totalBytes,
+  });
+
+  try {
+    let isDone = false;
+
+    while (!isDone) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        isDone = true;
+        continue;
+      }
+
+      loadedBytes += value?.byteLength || 0;
+      onProgress?.({
+        loadedBytes,
+        totalBytes,
+      });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  await cachePromise;
+
+  return {
+    sizeBytes: loadedBytes,
+    totalBytes: Math.max(totalBytes, loadedBytes),
+  };
 }
 
 function isRetryableDownloadError(error: unknown): boolean {
@@ -452,6 +526,20 @@ class DownloadManager {
   ): void {
     patchTask(taskId, (task) => ({
       ...task,
+      ...(status === 'downloading'
+        ? {}
+        : {
+            currentSizeBytes:
+              typeof extra.currentSizeBytes === 'number'
+                ? extra.currentSizeBytes
+                : typeof extra.sizeBytes === 'number'
+                ? extra.sizeBytes
+                : task.sizeBytes,
+            downloadSpeedBytesPerSecond:
+              typeof extra.downloadSpeedBytesPerSecond === 'number'
+                ? extra.downloadSpeedBytesPerSecond
+                : 0,
+          }),
       ...extra,
       status,
       updatedAt: now(),
@@ -706,6 +794,15 @@ class DownloadManager {
       controllers: new Set(),
       task,
     };
+    let latestCompletedSizeBytes = Math.max(task.sizeBytes, 0);
+    const initialCurrentSizeBytes = Math.max(
+      task.currentSizeBytes || task.sizeBytes,
+      latestCompletedSizeBytes
+    );
+    let latestEstimatedTotalSizeBytes = Math.max(
+      task.estimatedTotalSizeBytes || initialCurrentSizeBytes,
+      initialCurrentSizeBytes
+    );
     this.runners.set(taskId, runner);
     this.setTaskStatus(taskId, 'downloading', {
       errorMessage: undefined,
@@ -791,34 +888,151 @@ class DownloadManager {
         totalResources
       );
       let resolvedResources = 0;
-      let sizeBytes = Math.max(task.sizeBytes, 0);
+      let completedSizeBytes = Math.max(task.sizeBytes, 0);
+      let completedSizedResourcesCount = initialDownloadedResources;
+      let smoothedSpeedBytesPerSecond = 0;
+      let lastFlushedAt = 0;
       let lastFlushedDownloadedResources = -1;
-      let lastFlushedSizeBytes = -1;
+      let lastFlushedCompletedSizeBytes = -1;
+      let lastFlushedCurrentSizeBytes = -1;
+      let lastFlushedEstimatedTotalSizeBytes = -1;
+      let lastFlushedSpeedBytesPerSecond = -1;
+      let lastSpeedSampleAt = now();
+      let lastSpeedSampleBytes = completedSizeBytes;
+      const activeTransfers = new Map<string, DownloadResourceTransferProgress>();
+
+      const getCurrentSizeBytes = (): number => {
+        let currentSizeBytes = completedSizeBytes;
+
+        activeTransfers.forEach((transfer) => {
+          currentSizeBytes += transfer.loadedBytes;
+        });
+
+        return currentSizeBytes;
+      };
+
+      const getEstimatedTotalSizeBytes = (
+        downloadedResources: number,
+        currentSizeBytes: number
+      ): number => {
+        if (totalResources <= 0) {
+          return currentSizeBytes;
+        }
+
+        const averageCompletedResourceSize =
+          completedSizedResourcesCount > 0
+            ? completedSizeBytes / completedSizedResourcesCount
+            : 0;
+        let activeEstimatedSizeBytes = 0;
+
+        activeTransfers.forEach((transfer) => {
+          activeEstimatedSizeBytes +=
+            transfer.totalBytes > 0
+              ? transfer.totalBytes
+              : Math.max(transfer.loadedBytes, averageCompletedResourceSize);
+        });
+
+        const pendingResourceCount = Math.max(
+          0,
+          totalResources - downloadedResources - activeTransfers.size
+        );
+        const estimatedTotalSizeBytes =
+          completedSizeBytes +
+          activeEstimatedSizeBytes +
+          averageCompletedResourceSize * pendingResourceCount;
+
+        return Math.max(currentSizeBytes, Math.round(estimatedTotalSizeBytes));
+      };
+
       const flushProgress = (force = false): void => {
+        const currentTimestamp = now();
         const downloadedResources = Math.min(
           totalResources,
           Math.max(initialDownloadedResources, resolvedResources)
+        );
+        const currentSizeBytes = getCurrentSizeBytes();
+        const estimatedTotalSizeBytes = getEstimatedTotalSizeBytes(
+          downloadedResources,
+          currentSizeBytes
+        );
+
+        if (
+          !force &&
+          currentTimestamp - lastFlushedAt < PROGRESS_FLUSH_INTERVAL_MS &&
+          downloadedResources === lastFlushedDownloadedResources &&
+          completedSizeBytes === lastFlushedCompletedSizeBytes &&
+          currentSizeBytes === lastFlushedCurrentSizeBytes &&
+          estimatedTotalSizeBytes === lastFlushedEstimatedTotalSizeBytes
+        ) {
+          return;
+        }
+
+        const speedSampleElapsed = currentTimestamp - lastSpeedSampleAt;
+        if (speedSampleElapsed > 0) {
+          const transferredSizeDelta = Math.max(
+            0,
+            currentSizeBytes - lastSpeedSampleBytes
+          );
+
+          if (
+            transferredSizeDelta > 0 &&
+            (force || speedSampleElapsed >= PROGRESS_FLUSH_INTERVAL_MS)
+          ) {
+            const instantSpeedBytesPerSecond =
+              (transferredSizeDelta * 1000) / speedSampleElapsed;
+            smoothedSpeedBytesPerSecond =
+              smoothedSpeedBytesPerSecond > 0
+                ? smoothedSpeedBytesPerSecond * 0.45 +
+                  instantSpeedBytesPerSecond * 0.55
+                : instantSpeedBytesPerSecond;
+            lastSpeedSampleAt = currentTimestamp;
+            lastSpeedSampleBytes = currentSizeBytes;
+          } else if (force || speedSampleElapsed >= PROGRESS_FLUSH_INTERVAL_MS) {
+            smoothedSpeedBytesPerSecond =
+              activeTransfers.size > 0
+                ? smoothedSpeedBytesPerSecond * 0.75
+                : 0;
+            lastSpeedSampleAt = currentTimestamp;
+            lastSpeedSampleBytes = currentSizeBytes;
+          }
+        }
+
+        const roundedSpeedBytesPerSecond = Math.max(
+          0,
+          Math.round(smoothedSpeedBytesPerSecond)
         );
 
         if (
           !force &&
           downloadedResources === lastFlushedDownloadedResources &&
-          sizeBytes === lastFlushedSizeBytes
+          completedSizeBytes === lastFlushedCompletedSizeBytes &&
+          currentSizeBytes === lastFlushedCurrentSizeBytes &&
+          estimatedTotalSizeBytes === lastFlushedEstimatedTotalSizeBytes &&
+          roundedSpeedBytesPerSecond === lastFlushedSpeedBytesPerSecond
         ) {
           return;
         }
 
+        lastFlushedAt = currentTimestamp;
         lastFlushedDownloadedResources = downloadedResources;
-        lastFlushedSizeBytes = sizeBytes;
+        lastFlushedCompletedSizeBytes = completedSizeBytes;
+        lastFlushedCurrentSizeBytes = currentSizeBytes;
+        lastFlushedEstimatedTotalSizeBytes = estimatedTotalSizeBytes;
+        lastFlushedSpeedBytesPerSecond = roundedSpeedBytesPerSecond;
+        latestCompletedSizeBytes = completedSizeBytes;
+        latestEstimatedTotalSizeBytes = estimatedTotalSizeBytes;
 
         patchTask(taskId, (currentTask) => ({
           ...currentTask,
           playbackManifestUrl: manifestResult.playbackManifestUrl,
           totalResources,
           downloadedResources,
-          sizeBytes,
+          sizeBytes: completedSizeBytes,
+          currentSizeBytes,
+          estimatedTotalSizeBytes,
+          downloadSpeedBytesPerSecond: roundedSpeedBytesPerSecond,
           progress: calculateProgress(downloadedResources, totalResources),
-          updatedAt: now(),
+          updatedAt: currentTimestamp,
         }));
       };
 
@@ -857,12 +1071,21 @@ class DownloadManager {
             const controller = createTrackedController();
 
             try {
-              resourceSize = await downloadAndCacheUrl(
+              const resourceResult = await downloadAndCacheUrl(
                 resource.url,
-                controller
+                controller,
+                (transferProgress) => {
+                  activeTransfers.set(resource.url, transferProgress);
+                  flushProgress();
+                }
               );
+              resourceSize = resourceResult.sizeBytes;
               break;
             } catch (error) {
+              if (activeTransfers.delete(resource.url)) {
+                flushProgress(true);
+              }
+
               if (controller.signal.aborted && runner.mode !== 'running') {
                 ensureRunnerActive();
               }
@@ -895,7 +1118,9 @@ class DownloadManager {
           ensureRunnerActive();
 
           resolvedResources += 1;
-          sizeBytes += resourceSize;
+          completedSizeBytes += resourceSize;
+          completedSizedResourcesCount += 1;
+          activeTransfers.delete(resource.url);
           flushProgress(true);
         }
       };
@@ -923,7 +1148,7 @@ class DownloadManager {
         manifestResult.playbackManifestUrl,
         manifestResult.rootManifestUrl,
         manifestResult.resources.length,
-        sizeBytes
+        completedSizeBytes
       );
 
       upsertLibraryItem(nextLibraryItem);
@@ -933,7 +1158,10 @@ class DownloadManager {
         totalResources: manifestResult.resources.length,
         downloadedResources: manifestResult.resources.length,
         progress: 100,
-        sizeBytes,
+        sizeBytes: completedSizeBytes,
+        currentSizeBytes: completedSizeBytes,
+        estimatedTotalSizeBytes: completedSizeBytes,
+        downloadSpeedBytesPerSecond: 0,
         errorMessage: undefined,
       });
     } catch (error) {
@@ -950,6 +1178,13 @@ class DownloadManager {
       if (runnerState?.mode === 'paused') {
         if (currentTask?.status === 'paused') {
           this.setTaskStatus(taskId, 'paused', {
+            sizeBytes: latestCompletedSizeBytes,
+            currentSizeBytes: latestCompletedSizeBytes,
+            estimatedTotalSizeBytes: Math.max(
+              latestEstimatedTotalSizeBytes,
+              latestCompletedSizeBytes
+            ),
+            downloadSpeedBytesPerSecond: 0,
             errorMessage: undefined,
           });
         }
@@ -964,6 +1199,13 @@ class DownloadManager {
       } else {
         if (currentTask) {
           this.setTaskStatus(taskId, 'error', {
+            sizeBytes: latestCompletedSizeBytes,
+            currentSizeBytes: latestCompletedSizeBytes,
+            estimatedTotalSizeBytes: Math.max(
+              latestEstimatedTotalSizeBytes,
+              latestCompletedSizeBytes
+            ),
+            downloadSpeedBytesPerSecond: 0,
             errorMessage:
               taskError instanceof Error
                 ? taskError.message

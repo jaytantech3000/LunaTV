@@ -5,7 +5,11 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { isOfflineDownloadSupported } from '@/lib/download/cache';
-import { formatBytes, getDownloadStatusLabel } from '@/lib/download/format';
+import {
+  formatTaskSizeProgress,
+  formatTransferRate,
+  getDownloadStatusLabel,
+} from '@/lib/download/format';
 import { downloadManager } from '@/lib/download/manager';
 import {
   buildOfflinePlayHref,
@@ -730,11 +734,17 @@ export default function CurrentEpisodeDownloadControl({
                 `第 ${episodeIndex + 1} 集`}
             </div>
             {task && (
-              <div className='text-xs text-gray-600 dark:text-gray-400'>
-                {getDownloadStatusLabel(task.status)}
-                {task.totalResources > 0 &&
-                  ` · ${task.downloadedResources}/${task.totalResources}`}
-                {task.sizeBytes > 0 && ` · ${formatBytes(task.sizeBytes)}`}
+              <div className='space-y-1 text-xs text-gray-600 dark:text-gray-400'>
+                <div>
+                  {getDownloadStatusLabel(task.status)}
+                  {task.totalResources > 0 &&
+                    ` · ${task.downloadedResources}/${task.totalResources}`}
+                </div>
+                <div>
+                  {formatTaskSizeProgress(task)}
+                  {task.status === 'downloading' &&
+                    ` · ${formatTransferRate(task.downloadSpeedBytesPerSecond)}`}
+                </div>
               </div>
             )}
           </div>

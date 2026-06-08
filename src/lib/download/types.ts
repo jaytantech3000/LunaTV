@@ -36,6 +36,9 @@ export interface DownloadTask {
   totalResources: number;
   downloadedResources: number;
   sizeBytes: number;
+  currentSizeBytes: number;
+  estimatedTotalSizeBytes: number;
+  downloadSpeedBytesPerSecond: number;
   createdAt: number;
   updatedAt: number;
   errorMessage?: string;

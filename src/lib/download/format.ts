@@ -17,6 +17,60 @@ export function formatBytes(sizeBytes: number): string {
   return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+export function formatTransferRate(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
+    return '0 B/s';
+  }
+
+  return `${formatBytes(bytesPerSecond)}/s`;
+}
+
+export function getTaskCurrentSizeBytes(
+  task: Pick<DownloadTaskLike, 'sizeBytes' | 'currentSizeBytes'>
+): number {
+  return Math.max(
+    0,
+    typeof task.currentSizeBytes === 'number'
+      ? task.currentSizeBytes
+      : task.sizeBytes
+  );
+}
+
+export function getTaskEstimatedTotalSizeBytes(
+  task: Pick<
+    DownloadTaskLike,
+    'sizeBytes' | 'currentSizeBytes' | 'estimatedTotalSizeBytes'
+  >
+): number {
+  const currentSizeBytes = getTaskCurrentSizeBytes(task);
+  const estimatedTotalSizeBytes =
+    typeof task.estimatedTotalSizeBytes === 'number'
+      ? task.estimatedTotalSizeBytes
+      : currentSizeBytes;
+
+  return Math.max(currentSizeBytes, estimatedTotalSizeBytes);
+}
+
+export function formatTaskSizeProgress(
+  task: Pick<
+    DownloadTaskLike,
+    'sizeBytes' | 'currentSizeBytes' | 'estimatedTotalSizeBytes'
+  >
+): string {
+  const currentSizeBytes = getTaskCurrentSizeBytes(task);
+  const estimatedTotalSizeBytes = getTaskEstimatedTotalSizeBytes(task);
+
+  if (estimatedTotalSizeBytes > currentSizeBytes) {
+    return `${formatBytes(currentSizeBytes)} / ${formatBytes(
+      estimatedTotalSizeBytes
+    )}`;
+  }
+
+  return `${formatBytes(currentSizeBytes)} / ${formatBytes(
+    estimatedTotalSizeBytes
+  )}`;
+}
+
 export function getDownloadStatusLabel(status: DownloadTaskStatus): string {
   switch (status) {
     case 'queued':
@@ -32,4 +86,10 @@ export function getDownloadStatusLabel(status: DownloadTaskStatus): string {
     default:
       return status;
   }
+}
+
+interface DownloadTaskLike {
+  sizeBytes: number;
+  currentSizeBytes: number;
+  estimatedTotalSizeBytes: number;
 }
