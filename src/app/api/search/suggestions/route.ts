@@ -2,7 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
+import { AuthContextError, requireAuthContextFromRequest } from '@/lib/auth';
 import { getContentSuggestions } from '@/lib/core/content/service';
 import { buildQueryCacheHeaders } from '@/lib/server/http-cache';
 
@@ -11,15 +11,10 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
-    // 从 cookie 获取用户信息
-    const authInfo = getAuthInfoFromCookie(request);
-    if (!authInfo || !authInfo.username) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const authContext = requireAuthContextFromRequest(request);
     const { searchParams } = new URL(request.url);
     const { suggestions, cacheTime } = await getContentSuggestions({
-      username: authInfo.username,
+      authContext,
       query: searchParams.get('q'),
     });
 
@@ -34,6 +29,13 @@ export async function GET(request: NextRequest) {
       }
     );
   } catch (error) {
+    if (error instanceof AuthContextError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      );
+    }
+
     console.error('获取搜索建议失败', error);
     return NextResponse.json({ error: '获取搜索建议失败' }, { status: 500 });
   }

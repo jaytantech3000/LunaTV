@@ -5,7 +5,10 @@ import { Inter } from 'next/font/google';
 
 import './globals.css';
 
-import { getConfig } from '@/lib/config';
+import {
+  buildPublicRuntimeConfig,
+  resolveSitePresentation,
+} from '@/lib/runtime/public-config';
 
 import { GlobalErrorIndicator } from '../components/GlobalErrorIndicator';
 import { SiteProvider } from '../components/SiteProvider';
@@ -16,12 +19,7 @@ export const dynamic = 'force-dynamic';
 
 // 动态生成 metadata，支持配置更新后的标题变化
 export async function generateMetadata(): Promise<Metadata> {
-  const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
-  const config = await getConfig();
-  let siteName = process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTV';
-  if (storageType !== 'localstorage') {
-    siteName = config.SiteConfig.SiteName;
-  }
+  const { siteName } = await resolveSitePresentation();
 
   return {
     title: siteName,
@@ -39,61 +37,10 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
-
-  let siteName = process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTV';
-  let announcement =
-    process.env.ANNOUNCEMENT ||
-    '本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。';
-
-  let doubanProxyType = process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent';
-  let doubanProxy = process.env.NEXT_PUBLIC_DOUBAN_PROXY || '';
-  let doubanImageProxyType =
-    process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'cmliussss-cdn-tencent';
-  let doubanImageProxy = process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '';
-  let disableYellowFilter =
-    process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true';
-  let fluidSearch = process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false';
-  let enableWebLive = false;
-  let customCategories = [] as {
-    name: string;
-    type: 'movie' | 'tv';
-    query: string;
-  }[];
-  if (storageType !== 'localstorage') {
-    const config = await getConfig();
-    siteName = config.SiteConfig.SiteName;
-    announcement = config.SiteConfig.Announcement;
-
-    doubanProxyType = config.SiteConfig.DoubanProxyType;
-    doubanProxy = config.SiteConfig.DoubanProxy;
-    doubanImageProxyType = config.SiteConfig.DoubanImageProxyType;
-    doubanImageProxy = config.SiteConfig.DoubanImageProxy;
-    disableYellowFilter = config.SiteConfig.DisableYellowFilter;
-    customCategories = config.CustomCategories.filter(
-      (category) => !category.disabled
-    ).map((category) => ({
-      name: category.name || '',
-      type: category.type,
-      query: category.query,
-    }));
-    fluidSearch = config.SiteConfig.FluidSearch;
-    enableWebLive = config.SiteConfig.EnableWebLive ?? false;
-  }
-
-  // 将运行时配置注入到全局 window 对象，供客户端在运行时读取
-  const runtimeConfig = {
-    STORAGE_TYPE: process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage',
-    DOUBAN_PROXY_TYPE: doubanProxyType,
-    DOUBAN_PROXY: doubanProxy,
-    DOUBAN_IMAGE_PROXY_TYPE: doubanImageProxyType,
-    DOUBAN_IMAGE_PROXY: doubanImageProxy,
-    DISABLE_YELLOW_FILTER: disableYellowFilter,
-    CUSTOM_CATEGORIES: customCategories,
-    FLUID_SEARCH: fluidSearch,
-    ENABLE_WEB_LIVE: enableWebLive,
-    API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || '',
-  };
+  const [{ siteName, announcement }, runtimeConfig] = await Promise.all([
+    resolveSitePresentation(),
+    buildPublicRuntimeConfig(),
+  ]);
 
   return (
     <html lang='zh-CN' suppressHydrationWarning>

@@ -2,48 +2,44 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getConfig } from '@/lib/config';
-import { db } from '@/lib/db';
+import { AuthContextError } from '@/lib/auth';
+import { ProfileServiceError } from '@/lib/core/profile/service';
+import {
+  deleteSkipConfig,
+  getAllSkipConfigs,
+  getSkipConfig,
+  setSkipConfig,
+} from '@/lib/core/profile/user-data-service';
+import { requireProfileContextFromRequest } from '@/lib/server/profile-context';
 import { SkipConfig } from '@/lib/types';
 
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
   try {
-    const authInfo = getAuthInfoFromCookie(request);
-    if (!authInfo || !authInfo.username) {
-      return NextResponse.json({ error: '未登录' }, { status: 401 });
-    }
-
-    const config = await getConfig();
-    if (authInfo.username !== process.env.USERNAME) {
-      // 非站长，检查用户存在或被封禁
-      const user = config.UserConfig.Users.find(
-        (u) => u.username === authInfo.username
-      );
-      if (!user) {
-        return NextResponse.json({ error: '用户不存在' }, { status: 401 });
-      }
-      if (user.banned) {
-        return NextResponse.json({ error: '用户已被封禁' }, { status: 401 });
-      }
-    }
-
+    const profileContext = await requireProfileContextFromRequest(request);
     const { searchParams } = new URL(request.url);
     const source = searchParams.get('source');
     const id = searchParams.get('id');
 
     if (source && id) {
-      // 获取单个配置
-      const config = await db.getSkipConfig(authInfo.username, source, id);
+      const config = await getSkipConfig(profileContext, source, id);
       return NextResponse.json(config);
     } else {
-      // 获取所有配置
-      const configs = await db.getAllSkipConfigs(authInfo.username);
+      const configs = await getAllSkipConfigs(profileContext);
       return NextResponse.json(configs);
     }
   } catch (error) {
+    if (
+      error instanceof AuthContextError ||
+      error instanceof ProfileServiceError
+    ) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      );
+    }
+
     console.error('获取跳过片头片尾配置失败:', error);
     return NextResponse.json(
       { error: '获取跳过片头片尾配置失败' },
@@ -54,25 +50,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const authInfo = getAuthInfoFromCookie(request);
-    if (!authInfo || !authInfo.username) {
-      return NextResponse.json({ error: '未登录' }, { status: 401 });
-    }
-
-    const adminConfig = await getConfig();
-    if (authInfo.username !== process.env.USERNAME) {
-      // 非站长，检查用户存在或被封禁
-      const user = adminConfig.UserConfig.Users.find(
-        (u) => u.username === authInfo.username
-      );
-      if (!user) {
-        return NextResponse.json({ error: '用户不存在' }, { status: 401 });
-      }
-      if (user.banned) {
-        return NextResponse.json({ error: '用户已被封禁' }, { status: 401 });
-      }
-    }
-
+    const profileContext = await requireProfileContextFromRequest(request);
     const body = await request.json();
     const { key, config } = body;
 
@@ -80,23 +58,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
     }
 
-    // 解析key为source和id
-    const [source, id] = key.split('+');
-    if (!source || !id) {
-      return NextResponse.json({ error: '无效的key格式' }, { status: 400 });
-    }
-
-    // 验证配置格式
-    const skipConfig: SkipConfig = {
-      enable: Boolean(config.enable),
-      intro_time: Number(config.intro_time) || 0,
-      outro_time: Number(config.outro_time) || 0,
-    };
-
-    await db.setSkipConfig(authInfo.username, source, id, skipConfig);
+    await setSkipConfig(profileContext, {
+      key,
+      config: config as SkipConfig,
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (
+      error instanceof AuthContextError ||
+      error instanceof ProfileServiceError
+    ) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      );
+    }
+
     console.error('保存跳过片头片尾配置失败:', error);
     return NextResponse.json(
       { error: '保存跳过片头片尾配置失败' },
@@ -107,25 +85,7 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    const authInfo = getAuthInfoFromCookie(request);
-    if (!authInfo || !authInfo.username) {
-      return NextResponse.json({ error: '未登录' }, { status: 401 });
-    }
-
-    const adminConfig = await getConfig();
-    if (authInfo.username !== process.env.USERNAME) {
-      // 非站长，检查用户存在或被封禁
-      const user = adminConfig.UserConfig.Users.find(
-        (u) => u.username === authInfo.username
-      );
-      if (!user) {
-        return NextResponse.json({ error: '用户不存在' }, { status: 401 });
-      }
-      if (user.banned) {
-        return NextResponse.json({ error: '用户已被封禁' }, { status: 401 });
-      }
-    }
-
+    const profileContext = await requireProfileContextFromRequest(request);
     const { searchParams } = new URL(request.url);
     const key = searchParams.get('key');
 
@@ -133,16 +93,20 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
     }
 
-    // 解析key为source和id
-    const [source, id] = key.split('+');
-    if (!source || !id) {
-      return NextResponse.json({ error: '无效的key格式' }, { status: 400 });
-    }
-
-    await db.deleteSkipConfig(authInfo.username, source, id);
+    await deleteSkipConfig(profileContext, key);
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (
+      error instanceof AuthContextError ||
+      error instanceof ProfileServiceError
+    ) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      );
+    }
+
     console.error('删除跳过片头片尾配置失败:', error);
     return NextResponse.json(
       { error: '删除跳过片头片尾配置失败' },

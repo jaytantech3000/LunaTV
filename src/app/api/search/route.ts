@@ -2,24 +2,19 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
+import { AuthContextError, requireAuthContextFromRequest } from '@/lib/auth';
 import { searchContent } from '@/lib/core/content/service';
 import { buildQueryCacheHeaders } from '@/lib/server/http-cache';
 
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
-  const authInfo = getAuthInfoFromCookie(request);
-  if (!authInfo || !authInfo.username) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const { searchParams } = new URL(request.url);
-  const query = searchParams.get('q');
-
   try {
+    const authContext = requireAuthContextFromRequest(request);
+    const { searchParams } = new URL(request.url);
+    const query = searchParams.get('q');
     const { results, cacheTime } = await searchContent({
-      username: authInfo.username,
+      authContext,
       query,
     });
 
@@ -44,6 +39,13 @@ export async function GET(request: NextRequest) {
       }
     );
   } catch (error) {
+    if (error instanceof AuthContextError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      );
+    }
+
     console.error('搜索失败:', error);
     return NextResponse.json({ error: '搜索失败' }, { status: 500 });
   }

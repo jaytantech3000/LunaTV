@@ -3,17 +3,11 @@
 import { AdminConfig } from './admin.types';
 import { KvrocksStorage } from './kvrocks.db';
 import { RedisStorage } from './redis.db';
+import { getConfiguredStorageType } from './runtime/storage-mode';
 import { Favorite, IStorage, PlayRecord, SkipConfig } from './types';
 import { UpstashRedisStorage } from './upstash.db';
 
-// storage type 常量: 'localstorage' | 'redis' | 'upstash'，默认 'localstorage'
-const STORAGE_TYPE =
-  (process.env.NEXT_PUBLIC_STORAGE_TYPE as
-    | 'localstorage'
-    | 'redis'
-    | 'upstash'
-    | 'kvrocks'
-    | undefined) || 'localstorage';
+const STORAGE_TYPE = getConfiguredStorageType();
 
 // 创建存储实例
 function createStorage(): IStorage {
@@ -54,14 +48,17 @@ export class DbManager {
     this.storage = getStorage();
     // 启动时自动触发数据迁移（异步，不阻塞构造）
     if (this.storage && typeof this.storage.migrateData === 'function') {
-      this.migrationPromise = this.storage.migrateData().then(async () => {
-        // 数据结构迁移完成后，执行密码哈希迁移
-        if (typeof this.storage.migratePasswords === 'function') {
-          await this.storage.migratePasswords();
-        }
-      }).catch((err) => {
-        console.error('数据迁移异常:', err);
-      });
+      this.migrationPromise = this.storage
+        .migrateData()
+        .then(async () => {
+          // 数据结构迁移完成后，执行密码哈希迁移
+          if (typeof this.storage.migratePasswords === 'function') {
+            await this.storage.migratePasswords();
+          }
+        })
+        .catch((err) => {
+          console.error('数据迁移异常:', err);
+        });
     }
   }
 

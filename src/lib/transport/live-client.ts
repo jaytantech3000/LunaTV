@@ -1,5 +1,5 @@
 import { apiFetch } from './api-client';
-import { buildApiUrl } from './endpoint';
+import { buildLiveLogoProxyUrl, buildLiveProxyM3u8Url } from './media-proxy';
 
 export interface LiveSource {
   key: string;
@@ -49,20 +49,9 @@ export function buildLiveLogoUrl(
   logoUrl: string,
   sourceKey?: string | null
 ): string {
-  const normalizedLogoUrl = logoUrl?.trim();
-  const normalizedSourceKey = sourceKey?.trim() || '';
-
-  if (!normalizedLogoUrl) {
-    return '';
-  }
-
-  if (!normalizedSourceKey) {
-    return normalizedLogoUrl;
-  }
-
-  return buildApiUrl('/proxy/logo', {
-    source: normalizedSourceKey,
-    url: normalizedLogoUrl,
+  return buildLiveLogoProxyUrl({
+    url: logoUrl,
+    sourceKey,
   });
 }
 
@@ -70,9 +59,9 @@ export function buildLiveStreamProxyUrl(
   videoUrl: string,
   sourceKey: string
 ): string {
-  return buildApiUrl('/proxy/m3u8', {
+  return buildLiveProxyM3u8Url({
     url: videoUrl,
-    'moontv-source': sourceKey,
+    sourceKey,
   });
 }
 

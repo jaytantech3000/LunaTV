@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
+import { AuthContextError, requireAuthContextFromRequest } from '@/lib/auth';
 import {
   ContentServiceError,
   getContentDetail,
@@ -10,16 +10,13 @@ import { buildQueryCacheHeaders } from '@/lib/server/http-cache';
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
-  const authInfo = getAuthInfoFromCookie(request);
-  if (!authInfo || !authInfo.username) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
   const sourceCode = searchParams.get('source');
 
   try {
+    const authContext = requireAuthContextFromRequest(request);
+
     if (!id || !sourceCode) {
       return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
     }
@@ -29,7 +26,7 @@ export async function GET(request: NextRequest) {
     }
 
     const { result, cacheTime } = await getContentDetail({
-      username: authInfo.username,
+      authContext,
       id,
       sourceCode,
     });
@@ -38,6 +35,13 @@ export async function GET(request: NextRequest) {
       headers: buildQueryCacheHeaders(cacheTime),
     });
   } catch (error) {
+    if (error instanceof AuthContextError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      );
+    }
+
     if (error instanceof ContentServiceError) {
       return NextResponse.json(
         { error: error.message },

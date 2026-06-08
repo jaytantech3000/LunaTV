@@ -41,6 +41,11 @@ function buildSearchResult(partial: Partial<SearchResult>): SearchResult {
   };
 }
 
+const authContext = {
+  username: 'demo',
+  source: 'internal',
+} as const;
+
 describe('content service', () => {
   const mockedGetConfig = getConfig as jest.Mock;
   const mockedGetAvailableApiSites = getAvailableApiSites as jest.Mock;
@@ -92,7 +97,7 @@ describe('content service', () => {
 
   it('returns cached empty search response without loading full context', async () => {
     const result = await searchContent({
-      username: 'demo',
+      authContext,
       query: '   ',
     });
 
@@ -123,7 +128,7 @@ describe('content service', () => {
     mockedFilterAdultContentResults.mockReturnValue([filteredResult]);
 
     const result = await searchContent({
-      username: 'demo',
+      authContext,
       query: '正常结果',
     });
 
@@ -161,7 +166,7 @@ describe('content service', () => {
 
     await expect(
       searchContentInResource({
-        username: 'demo',
+        authContext,
         query: '雨霖铃',
         resourceId: 'alpha',
       })
@@ -172,7 +177,7 @@ describe('content service', () => {
 
     await expect(
       searchContentInResource({
-        username: 'demo',
+        authContext,
         query: '雨霖铃',
         resourceId: 'missing',
       })
@@ -202,11 +207,11 @@ describe('content service', () => {
     );
 
     const suggestionResult = await getContentSuggestions({
-      username: 'demo',
+      authContext,
       query: '雨霖铃',
     });
     const detailResult = await getContentDetail({
-      username: 'demo',
+      authContext,
       id: 'detail-id',
       sourceCode: 'beta',
     });

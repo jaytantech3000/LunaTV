@@ -1,3 +1,4 @@
+import { AuthContext } from '@/lib/auth';
 import {
   ApiSite,
   getAvailableApiSites,
@@ -45,11 +46,11 @@ function applyAdultContentFilter(
 }
 
 async function loadContentServiceContext(
-  username: string
+  authContext: AuthContext
 ): Promise<ContentServiceContext> {
   const config = await getConfig();
   const [apiSites, cacheTime] = await Promise.all([
-    getAvailableApiSites(username, config),
+    getAvailableApiSites(authContext.username, config),
     getCacheTime(config),
   ]);
 
@@ -142,7 +143,7 @@ function buildSuggestions(
 }
 
 export async function searchContent(params: {
-  username: string;
+  authContext: AuthContext;
   query: string | null;
 }): Promise<{
   results: SearchResult[];
@@ -157,7 +158,7 @@ export async function searchContent(params: {
     };
   }
 
-  const context = await loadContentServiceContext(params.username);
+  const context = await loadContentServiceContext(params.authContext);
   const searchResults = await Promise.allSettled(
     context.apiSites.map((site) =>
       searchSiteWithTimeout(site, query, context.maxSearchPages).catch(
@@ -188,7 +189,7 @@ export async function searchContent(params: {
 }
 
 export async function searchContentInResource(params: {
-  username: string;
+  authContext: AuthContext;
   query: string;
   resourceId: string;
 }): Promise<{
@@ -197,7 +198,7 @@ export async function searchContentInResource(params: {
 }> {
   const query = normalizeQuery(params.query);
   const resourceId = params.resourceId.trim();
-  const context = await loadContentServiceContext(params.username);
+  const context = await loadContentServiceContext(params.authContext);
   const targetSite = context.apiSites.find((site) => site.key === resourceId);
 
   if (!targetSite) {
@@ -221,14 +222,14 @@ export async function searchContentInResource(params: {
 }
 
 export async function getContentResources(params: {
-  username: string;
+  authContext: AuthContext;
 }): Promise<ApiSite[]> {
-  const context = await loadContentServiceContext(params.username);
+  const context = await loadContentServiceContext(params.authContext);
   return context.apiSites;
 }
 
 export async function getContentSuggestions(params: {
-  username: string;
+  authContext: AuthContext;
   query: string | null;
 }): Promise<{
   suggestions: ContentSuggestion[];
@@ -242,7 +243,7 @@ export async function getContentSuggestions(params: {
     };
   }
 
-  const context = await loadContentServiceContext(params.username);
+  const context = await loadContentServiceContext(params.authContext);
   const firstSite = context.apiSites[0];
 
   if (!firstSite) {
@@ -267,14 +268,14 @@ export async function getContentSuggestions(params: {
 }
 
 export async function getContentDetail(params: {
-  username: string;
+  authContext: AuthContext;
   id: string;
   sourceCode: string;
 }): Promise<{
   result: SearchResult;
   cacheTime: number;
 }> {
-  const context = await loadContentServiceContext(params.username);
+  const context = await loadContentServiceContext(params.authContext);
   const apiSite = context.apiSites.find(
     (site) => site.key === params.sourceCode
   );

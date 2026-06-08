@@ -6,6 +6,7 @@ export interface RuntimeCustomCategory {
 
 export interface AppRuntimeConfig {
   STORAGE_TYPE?: string;
+  PROFILE_MODE?: 'single-user-local' | 'shared-multi-user';
   DOUBAN_PROXY_TYPE?: string;
   DOUBAN_PROXY?: string;
   DOUBAN_IMAGE_PROXY_TYPE?: string;
@@ -15,6 +16,8 @@ export interface AppRuntimeConfig {
   FLUID_SEARCH?: boolean;
   ENABLE_WEB_LIVE?: boolean;
   API_BASE_URL?: string;
+  MEDIA_PROXY_BASE_URL?: string;
+  ENABLE_ADMIN_PANEL?: boolean;
 }
 
 declare global {

@@ -1,33 +1,26 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+import { NextRequest, NextResponse } from 'next/server';
 
-import { NextResponse } from 'next/server';
-
-import { getConfig } from '@/lib/config';
+import {
+  createLiveProxyErrorResponse,
+  createLiveProxyHeaders,
+  fetchLiveProxyUpstream,
+  resolveLiveProxySource,
+} from '@/lib/core/media/live-proxy';
 
 export const runtime = 'nodejs';
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const imageUrl = searchParams.get('url');
-  const source = searchParams.get('moontv-source');
-
-  if (!imageUrl) {
-    return NextResponse.json({ error: 'Missing image URL' }, { status: 400 });
-  }
-
-  const config = await getConfig();
-  const liveSource = config.LiveConfig?.find((s: any) => s.key === source);
-  const ua = liveSource?.ua || 'AptvPlayer/1.4.10';
-
+export async function GET(request: NextRequest) {
   try {
-    const decodedUrl = decodeURIComponent(imageUrl);
-    const imageResponse = await fetch(decodedUrl, {
-      cache: 'no-cache',
-      redirect: 'follow',
-      credentials: 'same-origin',
-      headers: {
-        'User-Agent': ua,
-      },
+    const upstreamUrl = request.nextUrl.searchParams.get('url');
+    const liveSource = await resolveLiveProxySource(
+      request.nextUrl.searchParams.get('moontv-source'),
+      {
+        required: false,
+      }
+    );
+    const imageResponse = await fetchLiveProxyUpstream({
+      liveSource,
+      upstreamUrl,
     });
 
     if (!imageResponse.ok) {
@@ -46,24 +39,13 @@ export async function GET(request: Request) {
       );
     }
 
-    // 创建响应头
-    const headers = new Headers();
-    if (contentType) {
-      headers.set('Content-Type', contentType);
-    }
-
-    // 设置缓存头
-    headers.set('Cache-Control', 'public, max-age=86400, s-maxage=86400'); // 缓存一天
-
-    // 直接返回图片流
     return new Response(imageResponse.body, {
-      status: 200,
-      headers,
+      status: imageResponse.status,
+      headers: createLiveProxyHeaders(imageResponse, contentType || undefined, {
+        cacheControl: 'public, max-age=86400, s-maxage=86400',
+      }),
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: 'Error fetching image' },
-      { status: 500 }
-    );
+    return createLiveProxyErrorResponse(error);
   }
 }

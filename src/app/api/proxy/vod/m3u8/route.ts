@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { requireAuthContextFromRequest } from '@/lib/auth';
 import {
   createVodProxyErrorResponse,
   createVodProxyHeaders,
@@ -15,12 +16,17 @@ async function handleRequest(
   method: 'GET' | 'HEAD'
 ): Promise<Response> {
   try {
-    const { source, upstreamUrl, apiSite } = await resolveVodProxyRequest(request);
-    const upstreamResponse = await fetchVodProxyUpstream(
-      request,
+    const authContext = requireAuthContextFromRequest(request);
+    const { source, upstreamUrl, apiSite } = await resolveVodProxyRequest({
+      authContext,
+      source: request.nextUrl.searchParams.get('source'),
+      upstreamUrl: request.nextUrl.searchParams.get('url'),
+    });
+    const upstreamResponse = await fetchVodProxyUpstream({
       apiSite,
-      upstreamUrl
-    );
+      upstreamUrl,
+      requestHeaders: request.headers,
+    });
 
     if (!upstreamResponse.ok) {
       return NextResponse.json(

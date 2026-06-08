@@ -1,6 +1,4 @@
-import type { NextRequest } from 'next/server';
-
-import { getAuthInfoFromCookie } from '@/lib/auth';
+import { AuthContext } from '@/lib/auth';
 import { ApiSite, getAvailableApiSites } from '@/lib/config';
 import { getBaseUrl, resolveUrl } from '@/lib/live';
 
@@ -12,49 +10,60 @@ import {
 } from './proxy-url';
 import { sanitizeVodManifestLines } from './sanitize-manifest';
 
+export class VodProxyError extends Error {
+  status: number;
+
+  constructor(message: string, status = 500) {
+    super(message);
+    this.name = 'VodProxyError';
+    this.status = status;
+  }
+}
+
 function buildSourceHeaders(
   apiSite: ApiSite,
-  request: NextRequest
-): HeadersInit {
-  const headers: Record<string, string> = {};
+  requestHeaders?: HeadersInit
+): Headers {
+  const headers = new Headers();
   const customUserAgent = apiSite.ua?.trim();
   const customReferer = apiSite.referer?.trim();
-  const rangeHeader = request.headers.get('range');
+  const rangeHeader = requestHeaders
+    ? new Headers(requestHeaders).get('range')
+    : null;
 
   if (customUserAgent) {
-    headers['User-Agent'] = customUserAgent;
+    headers.set('User-Agent', customUserAgent);
   }
 
   if (customReferer) {
-    headers.Referer = customReferer;
+    headers.set('Referer', customReferer);
   }
 
   if (rangeHeader) {
-    headers.Range = rangeHeader;
+    headers.set('Range', rangeHeader);
   }
 
   return headers;
 }
 
-export async function resolveVodProxyRequest(
-  request: NextRequest
-): Promise<{ source: string; upstreamUrl: string; apiSite: ApiSite }> {
-  const authInfo = getAuthInfoFromCookie(request);
-  if (!authInfo?.username) {
-    throw new Error('Unauthorized');
-  }
-
-  const source = request.nextUrl.searchParams.get('source')?.trim();
-  const upstreamUrl = request.nextUrl.searchParams.get('url')?.trim();
+export async function resolveVodProxyRequest(params: {
+  authContext: AuthContext;
+  source: string | null | undefined;
+  upstreamUrl: string | null | undefined;
+}): Promise<{ source: string; upstreamUrl: string; apiSite: ApiSite }> {
+  const source = params.source?.trim();
+  const upstreamUrl = params.upstreamUrl?.trim();
 
   if (!source || !upstreamUrl) {
-    throw new Error('Missing source or url');
+    throw new VodProxyError('Missing source or url', 400);
   }
 
-  const availableApiSites = await getAvailableApiSites(authInfo.username);
+  const availableApiSites = await getAvailableApiSites(
+    params.authContext.username
+  );
   const apiSite = availableApiSites.find((item) => item.key === source);
   if (!apiSite) {
-    throw new Error('Invalid source');
+    throw new VodProxyError('Invalid source', 400);
   }
 
   return {
@@ -64,15 +73,15 @@ export async function resolveVodProxyRequest(
   };
 }
 
-export async function fetchVodProxyUpstream(
-  request: NextRequest,
-  apiSite: ApiSite,
-  upstreamUrl: string
-): Promise<Response> {
-  return fetch(upstreamUrl, {
+export async function fetchVodProxyUpstream(params: {
+  apiSite: ApiSite;
+  upstreamUrl: string;
+  requestHeaders?: HeadersInit;
+}): Promise<Response> {
+  return fetch(params.upstreamUrl, {
     cache: 'no-store',
     credentials: 'same-origin',
-    headers: buildSourceHeaders(apiSite, request),
+    headers: buildSourceHeaders(params.apiSite, params.requestHeaders),
     redirect: 'follow',
   });
 }
@@ -263,12 +272,11 @@ export function createVodProxyErrorResponse(error: unknown): Response {
   const message =
     error instanceof Error ? error.message : 'Proxy request failed';
   const status =
-    message === 'Unauthorized'
-      ? 401
-      : message === 'Missing source or url'
-      ? 400
-      : message === 'Invalid source'
-      ? 400
+    typeof error === 'object' &&
+    error !== null &&
+    'status' in error &&
+    typeof error.status === 'number'
+      ? error.status
       : 500;
 
   return new Response(JSON.stringify({ error: message }), {

@@ -54,10 +54,10 @@
 
 ### 2. 盘点并收敛媒体 URL 构建
 
-- [ ] 收敛 VOD 代理 URL 构建逻辑
-- [ ] 收敛直播代理 URL 构建逻辑
-- [ ] 识别所有“资源 URL 不是 fetch JSON，而是播放器直接消费”的路径
-- [ ] 为桌面本地服务预留可配置 proxy base
+- [x] 收敛 VOD 代理 URL 构建逻辑
+- [x] 收敛直播代理 URL 构建逻辑
+- [x] 识别所有“资源 URL 不是 fetch JSON，而是播放器直接消费”的路径
+- [x] 为桌面本地服务预留可配置 proxy base
 
 关键文件：
 
@@ -100,9 +100,9 @@
 
 ### 5. 抽离平台无关的媒体代理核心
 
-- [ ] 把 VOD manifest 重写、headers 生成、上游解析抽离成可复用 core
-- [ ] 把 IPTV m3u8 / segment / key 代理核心收敛成独立 service
-- [ ] 明确本地桌面服务要复用的最小接口
+- [x] 把 VOD manifest 重写、headers 生成、上游解析抽离成可复用 core
+- [x] 把 IPTV m3u8 / segment / key 代理核心收敛成独立 service
+- [x] 明确本地桌面服务要复用的最小接口
 
 关键文件：
 
@@ -116,9 +116,9 @@
 
 ### 6. 抽离配置来源
 
-- [ ] 把 `getConfig()` 背后的来源拆开
-- [ ] 区分“配置模型”“配置文件读取”“数据库读取”“运行时注入”
-- [ ] 停止让 UI 初始化直接依赖服务端 `getConfig()`
+- [x] 把 `getConfig()` 背后的来源拆开
+- [x] 区分“配置模型”“配置文件读取”“数据库读取”“运行时注入”
+- [x] 停止让 UI 初始化直接依赖服务端 `getConfig()`
 
 关键文件：
 
@@ -128,9 +128,9 @@
 
 ### 7. 抽离认证上下文
 
-- [ ] 停止让核心逻辑直接依赖 cookie
-- [ ] 为核心服务定义显式 `AuthContext` / `ProfileContext`
-- [ ] 让 Next middleware 和 route handler 只做 Web 适配
+- [x] 停止让核心逻辑直接依赖 cookie
+- [x] 为核心服务定义显式 `AuthContext` / `ProfileContext`
+- [x] 让 Next middleware 和 route handler 只做 Web 适配
 
 关键文件：
 
@@ -141,9 +141,9 @@
 
 ### 8. 收敛本地用户数据能力
 
-- [ ] 明确桌面 v1 默认只支持本地单用户
-- [ ] 盘点 `db.ts` / `db.client.ts` 中哪些能力可以直接复用
-- [ ] 把“本地 profile 数据”与“远程共享存储”拆开
+- [x] 明确桌面 v1 默认只支持本地单用户
+- [x] 盘点 `db.ts` / `db.client.ts` 中哪些能力可以直接复用
+- [x] 把“本地 profile 数据”与“远程共享存储”拆开
 
 关键文件：
 
@@ -153,30 +153,30 @@
 
 ### 9. 降级管理员后台
 
-- [ ] 明确桌面 v1 不迁移全部 `admin/*`
-- [ ] 为后续保留接口，但不把后台迁移作为第一阶段阻塞项
-- [ ] 可考虑在第一阶段先隐藏桌面端后台入口
+- [x] 明确桌面 v1 不迁移全部 `admin/*`
+- [x] 为后续保留接口，但不把后台迁移作为第一阶段阻塞项
+- [x] 可考虑在第一阶段先隐藏桌面端后台入口
 
 ### 10. 为后续桌面本地服务定义最小协议
 
-- [ ] 先定义，不实现完整桌面服务
-- [ ] 明确以下最小接口：
+- [x] 先定义，不实现完整桌面服务
+- [x] 明确以下最小接口：
 
 必需：
 
-- [ ] `GET /content/search`
-- [ ] `GET /content/detail`
-- [ ] `GET /media/vod/m3u8`
-- [ ] `GET /media/vod/segment`
-- [ ] `GET /media/vod/key`
-- [ ] `GET /live/sources`
-- [ ] `GET /live/channels`
-- [ ] `GET /live/epg`
+- [x] `GET /content/search`
+- [x] `GET /content/detail`
+- [x] `GET /media/vod/m3u8`
+- [x] `GET /media/vod/segment`
+- [x] `GET /media/vod/key`
+- [x] `GET /live/sources`
+- [x] `GET /live/channels`
+- [x] `GET /live/epg`
 
 可选：
 
-- [ ] `GET /metadata/bangumi/calendar`
-- [ ] `GET /metadata/douban/*`
+- [x] `GET /metadata/bangumi/calendar`
+- [x] `GET /metadata/douban/*`
 
 本阶段只需要协议稳定，不要求全部实现。
 

@@ -1,7 +1,13 @@
-import { getApiBaseUrl } from '@/lib/transport/endpoint';
+import {
+  buildVodProxyKeyMediaUrl,
+  buildVodProxyM3u8MediaUrl,
+  buildVodProxySegmentMediaUrl,
+  getVodProxyBasePath as getTransportVodProxyBasePath,
+  VOD_PROXY_PATHS,
+} from '@/lib/transport/media-proxy';
 
-const VOD_PROXY_BASE_PATH = '/api/proxy/vod';
-const VOD_PROXY_M3U8_PATH = `${VOD_PROXY_BASE_PATH}/m3u8`;
+const VOD_PROXY_BASE_PATH = getTransportVodProxyBasePath();
+const VOD_PROXY_M3U8_PATH = VOD_PROXY_PATHS.m3u8;
 
 export type VodProxyAssetKind = 'm3u8' | 'segment' | 'key';
 
@@ -10,11 +16,28 @@ function buildVodProxyUrl(
   source: string,
   url: string
 ): string {
-  const searchParams = new URLSearchParams({
-    source,
-    url,
-  });
-  return `${getApiBaseUrl()}${VOD_PROXY_BASE_PATH}/${kind}?${searchParams.toString()}`;
+  switch (kind) {
+    case 'm3u8':
+      return buildVodProxyM3u8MediaUrl({
+        source,
+        url,
+      });
+    case 'segment':
+      return buildVodProxySegmentMediaUrl({
+        source,
+        url,
+      });
+    case 'key':
+      return buildVodProxyKeyMediaUrl({
+        source,
+        url,
+      });
+    default:
+      return buildVodProxyM3u8MediaUrl({
+        source,
+        url,
+      });
+  }
 }
 
 export function buildVodProxyM3u8Url(params: {
@@ -63,9 +86,7 @@ export function looksLikeManifestUrl(url: string): boolean {
       /\.m3u8($|[?#])/i.test(parsedUrl.pathname + parsedUrl.search)
     );
   } catch (error) {
-    return (
-      url.includes(VOD_PROXY_M3U8_PATH) || /\.m3u8($|[?#])/i.test(url)
-    );
+    return url.includes(VOD_PROXY_M3U8_PATH) || /\.m3u8($|[?#])/i.test(url);
   }
 }
 

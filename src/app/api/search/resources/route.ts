@@ -2,24 +2,28 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
+import { AuthContextError, requireAuthContextFromRequest } from '@/lib/auth';
 import { getContentResources } from '@/lib/core/content/service';
 
 export const runtime = 'nodejs';
 
 // OrionTV 兼容接口
 export async function GET(request: NextRequest) {
-  const authInfo = getAuthInfoFromCookie(request);
-  if (!authInfo || !authInfo.username) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
   try {
+    const authContext = requireAuthContextFromRequest(request);
     const apiSites = await getContentResources({
-      username: authInfo.username,
+      authContext,
     });
 
     return NextResponse.json(apiSites);
   } catch (error) {
+    if (error instanceof AuthContextError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      );
+    }
+
     return NextResponse.json({ error: '获取资源失败' }, { status: 500 });
   }
 }

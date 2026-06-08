@@ -1,11 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, no-console, @typescript-eslint/no-non-null-assertion */
 
-import fs from 'fs';
-import path from 'path';
-
-import { db } from '@/lib/db';
-
 import { AdminConfig } from './admin.types';
+import {
+  loadStoredAdminConfig,
+  loadStoredUsernames,
+  readBundledDefaultConfigFile,
+  saveStoredAdminConfig,
+  shouldBootstrapFromDefaultConfig,
+} from './runtime/config-source';
 
 export interface ApiSite {
   key: string;
@@ -60,28 +62,6 @@ export const API_CONFIG = {
 
 // 在模块加载时根据环境决定配置来源
 let cachedConfig: AdminConfig;
-
-function readDefaultConfigFile(): string {
-  try {
-    const examplePath = path.join(process.cwd(), 'config.example.json');
-    if (fs.existsSync(examplePath)) {
-      return fs.readFileSync(examplePath, 'utf-8');
-    }
-  } catch (e) {
-    console.warn('读取 config.example.json 失败:', e);
-  }
-
-  return '';
-}
-
-function shouldBootstrapFromDefaultConfig(adminConfig: AdminConfig): boolean {
-  const hasConfigFile = !!adminConfig.ConfigFile?.trim();
-  const hasSources = !!adminConfig.SourceConfig?.length;
-  const hasCategories = !!adminConfig.CustomCategories?.length;
-  const hasLives = !!adminConfig.LiveConfig?.length;
-
-  return !hasConfigFile && !hasSources && !hasCategories && !hasLives;
-}
 
 // 从配置文件补充管理员配置
 export function refineConfig(adminConfig: AdminConfig): AdminConfig {
@@ -262,12 +242,7 @@ async function getInitConfig(
   };
 
   // 补充用户信息
-  let userNames: string[] = [];
-  try {
-    userNames = await db.getAllUsers();
-  } catch (e) {
-    console.error('获取用户列表失败:', e);
-  }
+  const userNames = await loadStoredUsernames();
   const allUsers = userNames
     .filter((u) => u !== process.env.USERNAME)
     .map((u) => ({
@@ -333,15 +308,9 @@ export async function getConfig(): Promise<AdminConfig> {
     return cachedConfig;
   }
 
-  const defaultConfigFile = readDefaultConfigFile();
+  const defaultConfigFile = readBundledDefaultConfigFile();
 
-  // 读 db
-  let adminConfig: AdminConfig | null = null;
-  try {
-    adminConfig = await db.getAdminConfig();
-  } catch (e) {
-    console.error('获取管理员配置失败:', e);
-  }
+  let adminConfig = await loadStoredAdminConfig();
 
   // db 中无配置，执行一次初始化
   if (!adminConfig) {
@@ -356,11 +325,7 @@ export async function getConfig(): Promise<AdminConfig> {
   adminConfig = configSelfCheck(adminConfig);
   cachedConfig = adminConfig;
 
-  try {
-    await db.saveAdminConfig(cachedConfig);
-  } catch (e) {
-    console.error('保存管理员配置失败:', e);
-  }
+  await saveStoredAdminConfig(cachedConfig);
 
   return cachedConfig;
 }
@@ -459,12 +424,7 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
 }
 
 export async function resetConfig() {
-  let originConfig: AdminConfig | null = null;
-  try {
-    originConfig = await db.getAdminConfig();
-  } catch (e) {
-    console.error('获取管理员配置失败:', e);
-  }
+  let originConfig = await loadStoredAdminConfig();
   if (!originConfig) {
     originConfig = {} as AdminConfig;
   }
@@ -473,7 +433,7 @@ export async function resetConfig() {
     originConfig.ConfigSubscribtion
   );
   cachedConfig = adminConfig;
-  await db.saveAdminConfig(adminConfig);
+  await saveStoredAdminConfig(adminConfig);
 
   return;
 }

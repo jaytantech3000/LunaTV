@@ -1,20 +1,10 @@
-/* eslint-disable no-console */
+import { NextResponse } from 'next/server';
 
-import { NextRequest, NextResponse } from 'next/server';
-
-import { getConfig } from '@/lib/config';
-import { CURRENT_VERSION } from '@/lib/version'
+import { buildServerConfigPayload } from '@/lib/runtime/public-config';
 
 export const runtime = 'nodejs';
 
-export async function GET(request: NextRequest) {
-  console.log('server-config called: ', request.url);
-
-  const config = await getConfig();
-  const result = {
-    SiteName: config.SiteConfig.SiteName,
-    StorageType: process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage',
-    Version: CURRENT_VERSION,
-  };
+export async function GET() {
+  const result = await buildServerConfigPayload();
   return NextResponse.json(result);
 }

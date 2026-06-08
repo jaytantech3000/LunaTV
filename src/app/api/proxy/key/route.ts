@@ -1,47 +1,44 @@
-/* eslint-disable no-console,@typescript-eslint/no-explicit-any */
+import { NextRequest, NextResponse } from 'next/server';
 
-import { NextResponse } from "next/server";
-
-import { getConfig } from "@/lib/config";
+import {
+  createLiveProxyErrorResponse,
+  createLiveProxyHeaders,
+  fetchLiveProxyUpstream,
+  resolveLiveProxySource,
+} from '@/lib/core/media/live-proxy';
 
 export const runtime = 'nodejs';
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const url = searchParams.get('url');
-  const source = searchParams.get('moontv-source');
-  if (!url) {
-    return NextResponse.json({ error: 'Missing url' }, { status: 400 });
-  }
-
-  const config = await getConfig();
-  const liveSource = config.LiveConfig?.find((s: any) => s.key === source);
-  if (!liveSource) {
-    return NextResponse.json({ error: 'Source not found' }, { status: 404 });
-  }
-  const ua = liveSource.ua || 'AptvPlayer/1.4.10';
-
+export async function GET(request: NextRequest) {
   try {
-    const decodedUrl = decodeURIComponent(url);
-    console.log(decodedUrl);
-    const response = await fetch(decodedUrl, {
-      headers: {
-        'User-Agent': ua,
-      },
+    const upstreamUrl = request.nextUrl.searchParams.get('url');
+    const liveSource = await resolveLiveProxySource(
+      request.nextUrl.searchParams.get('moontv-source')
+    );
+    const upstreamResponse = await fetchLiveProxyUpstream({
+      liveSource,
+      upstreamUrl,
     });
-    if (!response.ok) {
-      return NextResponse.json({ error: 'Failed to fetch key' }, { status: 500 });
+    if (!upstreamResponse.ok) {
+      return NextResponse.json(
+        { error: 'Failed to fetch key' },
+        { status: 500 }
+      );
     }
-    const keyData = await response.arrayBuffer();
+
+    const keyData = await upstreamResponse.arrayBuffer();
     return new Response(keyData, {
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Cache-Control': 'public, max-age=3600'
-      },
+      status: upstreamResponse.status,
+      headers: createLiveProxyHeaders(
+        upstreamResponse,
+        upstreamResponse.headers.get('Content-Type') ||
+          'application/octet-stream',
+        {
+          cacheControl: 'public, max-age=3600',
+        }
+      ),
     });
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to fetch key' }, { status: 500 });
+    return createLiveProxyErrorResponse(error);
   }
 }
