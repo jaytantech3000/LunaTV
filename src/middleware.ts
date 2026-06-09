@@ -9,6 +9,11 @@ const ROOT_DOMAIN = 'hkcu.qzz.io';
 export async function middleware(request: NextRequest) {
   const host = normalizeHost(request.headers.get('host'));
   const { pathname } = request.nextUrl;
+  const appTarget = process.env.NEXT_PUBLIC_APP_TARGET || process.env.APP_TARGET;
+
+  if (appTarget === 'desktop') {
+    return NextResponse.next();
+  }
 
   if (process.env.NODE_ENV !== 'development' && !isAllowedHost(host)) {
     return new NextResponse('Access Denied: Please use the official domain.', {

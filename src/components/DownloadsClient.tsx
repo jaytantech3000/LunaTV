@@ -708,7 +708,7 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
                   <span>{getActiveTaskGroupResourceSummary(group)}</span>
                 </div>
                 <div className='flex items-center justify-between gap-3'>
-                  <span className='text-gray-400'>大小进度</span>
+                  <span className='text-gray-400'>已下载 / 预估大小</span>
                   <span>
                     {formatTaskSizeProgress({
                       sizeBytes: group.currentSizeBytes,
@@ -782,8 +782,15 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
                       </div>
 
                       <div className='mt-2 flex items-center justify-between gap-3 text-[11px] text-gray-300'>
-                        <span>{formatTaskSizeProgress(task)}</span>
-                        <span>{formatTransferRate(task.downloadSpeedBytesPerSecond)}</span>
+                        <span
+                          className='min-w-0 truncate'
+                          title={formatTaskSizeProgress(task)}
+                        >
+                          {formatTaskSizeProgress(task)}
+                        </span>
+                        <span className='shrink-0'>
+                          {formatTransferRate(task.downloadSpeedBytesPerSecond)}
+                        </span>
                       </div>
 
                       <div className='mt-3 h-1.5 overflow-hidden rounded-full bg-white/10'>

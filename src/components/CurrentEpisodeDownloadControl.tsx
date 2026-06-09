@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { isOfflineDownloadSupported } from '@/lib/download/cache';
+import { getOfflineDownloadSupportState } from '@/lib/download/cache';
 import {
   formatTaskSizeProgress,
   formatTransferRate,
@@ -168,6 +168,7 @@ export default function CurrentEpisodeDownloadControl({
   const task = useDownloadStore((state) => state.tasks[taskId]);
   const content = useDownloadStore((state) => state.library[contentId]);
   const downloadedEpisode = getDownloadedEpisodeMeta(content, episodeIndex);
+  const downloadSupport = useMemo(() => getOfflineDownloadSupportState(), []);
 
   const downloadedEpisodeIndexes = new Set(
     content?.episodes.map((episode) => episode.episodeIndex) || []
@@ -297,10 +298,10 @@ export default function CurrentEpisodeDownloadControl({
     return null;
   }
 
-  if (!isOfflineDownloadSupported()) {
+  if (!downloadSupport.supported) {
     return (
       <div className='rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-800/50 dark:bg-amber-950/20 dark:text-amber-300'>
-        当前浏览器不支持离线下载。
+        {downloadSupport.reason || '当前环境不支持离线下载。'}
       </div>
     );
   }

@@ -4839,6 +4839,18 @@ function AdminPageClient() {
         setLoading(true);
       }
 
+      if (typeof window !== 'undefined' && window.RUNTIME_CONFIG?.APP_TARGET === 'desktop') {
+        const authInfo = getAuthInfoFromBrowserCookie();
+        if (!authInfo?.username) {
+          window.location.href = '/login?redirect=%2Fadmin';
+          return;
+        }
+
+        if (authInfo.role !== 'owner' && authInfo.role !== 'admin') {
+          throw new Error('当前账号没有管理面板权限');
+        }
+      }
+
       const response = await apiFetch('/admin/config');
 
       if (!response.ok) {
@@ -4848,7 +4860,16 @@ function AdminPageClient() {
 
       const data = (await response.json()) as AdminConfigResult;
       setConfig(data.Config);
-      setRole(data.Role);
+      if (typeof window !== 'undefined' && window.RUNTIME_CONFIG?.APP_TARGET === 'desktop') {
+        const authInfo = getAuthInfoFromBrowserCookie();
+        setRole(
+          authInfo?.role === 'owner' || authInfo?.role === 'admin'
+            ? authInfo.role
+            : null
+        );
+      } else {
+        setRole(data.Role);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : '获取配置失败';
       showError(msg, showAlert);

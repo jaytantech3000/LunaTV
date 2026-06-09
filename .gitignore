@@ -12,6 +12,7 @@
 # next.js
 /.next/
 /.next-build/
+/.next-web-sync/
 /.next-desktop/
 /out/
 /desktop-shell-dist/

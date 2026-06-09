@@ -1,20 +1,30 @@
 # LunaTV Desktop Local Service Protocol v1
 
+> **2026-06-09 方向修正**
+>
+> 这份协议最初只覆盖“桌面本地数据面 + 远端帐号/用户数据同步”的最小复用面。
+> 当前产品方向已改为“桌面尽量复刻 Web 版能力”，所以本协议不再排除管理员后台和本地多用户能力。
+>
+> 当前解释应更新为：
+>
+> - 本地 loopback service 仍然是桌面数据面主通道
+> - `/api/admin/*` 进入桌面版主线，需要逐步在本地服务中补齐
+> - 远端 `profile_sync` 退回为可选扩展，不再是桌面协议的中心
+
 ## 目标
 
 这个协议定义桌面本地 loopback service 的最小复用面。
 
-- 目标对象是桌面 v1，本地单用户 profile
-- 不要求兼容管理员后台
-- 不要求保留 cookie 鉴权
+- 目标对象是桌面版独立部署形态，本地数据面优先，同时逐步补齐本地后台与本地多用户能力
 - 优先复用现有前端、播放器、下载链路的数据结构和媒体 URL 语义
 
 ## 运行假设
 
 - 服务运行在本地回环地址，例如 `http://127.0.0.1:8787`
 - 服务实现为 Rust 独立进程，由 Tauri 负责启动和监管
-- 桌面端默认使用隐式本地 profile，不通过 cookie 传递身份
-- Web 版本继续由 Next route adapter 把 cookie 解析为 `AuthContext / ProfileContext`
+- 桌面端搜索、详情、播放、下载和媒体代理只访问本地服务
+- 若配置 `profile_sync.api_base_url`，本地服务代理远端 Web 的账号与用户数据接口
+- 本地服务使用 `reqwest` cookie store 维护远端会话，桌面前端不直连远端 Web 后端
 - JSON 接口保持当前响应结构，媒体接口继续保持 HTTP 流式响应
 
 ## 控制面与数据面
@@ -74,6 +84,51 @@
 - 供桌面静态前端在启动时同步本地 JSON 配置投影
 - 不替代 `read_app_config` / `write_app_config` 这类 IPC 控制面能力
 - 推荐同时保留兼容路径 `GET /api/runtime/public-config`
+
+### GET `/api/profile-sync/status`
+
+响应：
+
+```json
+{
+  "enabled": true,
+  "reachable": true,
+  "authenticated": false,
+  "username": null,
+  "role": null,
+  "storageType": "redis",
+  "profileMode": "shared-multi-user",
+  "error": null
+}
+```
+
+说明：
+
+- 用于桌面前端判断是否启用了远端帐号同步、远端后端是否可达、当前是否已登录
+- `enabled=false` 表示当前保持纯本地桌面模式
+
+### GET `/api/server-config`
+
+说明：
+
+- 当启用账号同步时，本地服务代理远端 `GET /api/server-config`
+- 当未启用账号同步时，返回本地回退值：`StorageType=localstorage`、`ProfileMode=single-user-local`
+
+### `/api/login` `/api/logout` `/api/change-password`
+
+说明：
+
+- 这些接口在启用账号同步时由本地服务代理远端 Web 后端
+- 远端登录成功后，本地服务保存远端会话，并向桌面前端返回远端登录结果
+- 桌面本地访问密码只在未启用账号同步时作为回退认证方案
+
+### `/api/playrecords` `/api/favorites` `/api/searchhistory` `/api/skipconfigs`
+
+说明：
+
+- 当启用账号同步时，这些接口由本地服务代理远端 Web 用户数据接口
+- 当未启用账号同步时，桌面前端回退到本地 profile 存储方案
+- 桌面版只同步用户资料，不同步媒体缓存、下载任务和资源站配置
 
 ### GET `/content/search`
 
@@ -246,6 +301,6 @@
 以下内容不进入 v1 协议阻塞范围：
 
 - `admin/*`
-- 多用户远程共享存储
+- 媒体与下载数据云同步
 - 配置订阅自动更新
 - 桌面壳生命周期接口

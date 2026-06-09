@@ -12,6 +12,7 @@ export interface DesktopRuntimePublicConfigPayload {
   doubanImageProxyType?: string | null;
   doubanImageProxy?: string | null;
   enableWebLive?: boolean;
+  profileSyncEnabled?: boolean;
   customCategories?: RuntimeCustomCategory[] | null;
 }
 
@@ -67,6 +68,8 @@ export function mergeDesktopRuntimePublicConfig(
       payload.doubanImageProxy ?? currentConfig.DOUBAN_IMAGE_PROXY,
     ENABLE_WEB_LIVE:
       payload.enableWebLive ?? currentConfig.ENABLE_WEB_LIVE ?? false,
+    PROFILE_SYNC_ENABLED:
+      payload.profileSyncEnabled ?? currentConfig.PROFILE_SYNC_ENABLED ?? false,
     CUSTOM_CATEGORIES:
       payload.customCategories !== undefined
         ? normalizeCustomCategories(payload.customCategories)

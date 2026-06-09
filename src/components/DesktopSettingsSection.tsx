@@ -11,9 +11,12 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
+import { BROWSER_AUTH_UPDATED_EVENT } from '@/lib/auth';
 import { requestDesktopRuntimeRefresh } from '@/lib/desktop/runtime-config';
 import {
+  DesktopAuthStatus,
   DesktopLocalServiceStatus,
+  getDesktopAuthStatus,
   getLocalServiceStatus,
   isDesktopTauriRuntimeAvailable,
   readDesktopAppConfig,
@@ -87,6 +90,7 @@ export default function DesktopSettingsSection({
   const [ipcAvailable, setIpcAvailable] = useState(false);
   const [serviceStatus, setServiceStatus] =
     useState<DesktopLocalServiceStatus | null>(null);
+  const [authStatus, setAuthStatus] = useState<DesktopAuthStatus | null>(null);
   const [configText, setConfigText] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -100,6 +104,7 @@ export default function DesktopSettingsSection({
 
     if (!available) {
       setServiceStatus(null);
+      setAuthStatus(null);
       return;
     }
 
@@ -107,13 +112,15 @@ export default function DesktopSettingsSection({
     setErrorMessage('');
 
     try {
-      const [nextStatus, nextConfig] = await Promise.all([
+      const [nextStatus, nextConfig, nextAuthStatus] = await Promise.all([
         getLocalServiceStatus(),
         readDesktopAppConfig(),
+        getDesktopAuthStatus(),
       ]);
 
       setServiceStatus(nextStatus);
       setConfigText(JSON.stringify(nextConfig, null, 2));
+      setAuthStatus(nextAuthStatus);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -150,8 +157,12 @@ export default function DesktopSettingsSection({
         await stopLocalService();
       }
 
-      const nextStatus = await startLocalService();
+      const [nextStatus, nextAuthStatus] = await Promise.all([
+        startLocalService(),
+        getDesktopAuthStatus(),
+      ]);
       setServiceStatus(nextStatus);
+      setAuthStatus(nextAuthStatus);
       requestDesktopRuntimeRefresh();
       setInfoMessage('本地服务已重启');
     } catch (error) {
@@ -175,9 +186,14 @@ export default function DesktopSettingsSection({
     try {
       const parsedConfig = JSON.parse(configText) as Record<string, unknown>;
       await writeDesktopAppConfig(parsedConfig);
-      const nextStatus = await startLocalService();
+      const [nextStatus, nextAuthStatus] = await Promise.all([
+        startLocalService(),
+        getDesktopAuthStatus(),
+      ]);
       setServiceStatus(nextStatus);
+      setAuthStatus(nextAuthStatus);
       requestDesktopRuntimeRefresh();
+      window.dispatchEvent(new Event(BROWSER_AUTH_UPDATED_EVENT));
       setInfoMessage('配置已保存，并已重新加载本地服务');
     } catch (error) {
       if (error instanceof SyntaxError) {
@@ -268,13 +284,37 @@ export default function DesktopSettingsSection({
             />
           </div>
 
+          <div className='space-y-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-3 dark:border-gray-700 dark:bg-gray-800/60'>
+            <div>
+              <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                访问控制
+              </h4>
+              <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                本地单用户认证由配置文件中的 `auth.username` / `auth.password`
+                控制。若需要和网页版共用帐号及用户数据，请配置
+                `profile_sync.api_base_url` 指向 Web
+                后端；未配置时保持纯本地模式。
+              </p>
+            </div>
+            <div className='grid gap-2 sm:grid-cols-2'>
+              <div className='rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'>
+                管理账号：{authStatus?.username || 'owner'}
+              </div>
+              <div className='rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'>
+                访问密码：
+                {authStatus?.passwordRequired ? '已启用' : '未启用'}
+              </div>
+            </div>
+          </div>
+
           <div className='space-y-2'>
             <div>
               <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
                 桌面配置文件
               </h4>
               <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                这里直接编辑本地 JSON 配置。保存后会自动重启本地服务。
+                这里直接编辑本地 JSON
+                配置。保存后会自动重启本地服务，并刷新桌面运行时配置。
               </p>
             </div>
 

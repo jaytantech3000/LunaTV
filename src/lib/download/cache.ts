@@ -1,6 +1,10 @@
+import { getRuntimeConfig } from '@/lib/runtime-config';
+
 import { DOWNLOAD_CACHE_NAME } from './types';
 
 const CACHE_DELETE_BATCH_SIZE = 50;
+const DESKTOP_DOWNLOAD_SAME_ORIGIN_PROXY_FLAG =
+  process.env.NEXT_PUBLIC_DESKTOP_DOWNLOAD_SAME_ORIGIN_PROXY === 'true';
 
 function assertCacheStorageAvailable(): void {
   if (typeof window === 'undefined' || typeof caches === 'undefined') {
@@ -51,12 +55,49 @@ async function openDownloadCache(): Promise<Cache> {
   return caches.open(DOWNLOAD_CACHE_NAME);
 }
 
+export function getOfflineDownloadSupportState(): {
+  supported: boolean;
+  reason?: string;
+} {
+  if (typeof window === 'undefined') {
+    return {
+      supported: false,
+      reason: '当前环境不支持离线下载',
+    };
+  }
+
+  if (typeof caches === 'undefined') {
+    return {
+      supported: false,
+      reason: '当前环境不支持 Cache Storage',
+    };
+  }
+
+  if (typeof indexedDB === 'undefined') {
+    return {
+      supported: false,
+      reason: '当前环境不支持 IndexedDB',
+    };
+  }
+
+  if (
+    getRuntimeConfig().APP_TARGET === 'desktop' &&
+    (!DESKTOP_DOWNLOAD_SAME_ORIGIN_PROXY_FLAG ||
+      process.env.NODE_ENV !== 'development')
+  ) {
+    return {
+      supported: false,
+      reason: '当前桌面运行时尚未接入可用的离线下载能力',
+    };
+  }
+
+  return {
+    supported: true,
+  };
+}
+
 export function isOfflineDownloadSupported(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof caches !== 'undefined' &&
-    typeof indexedDB !== 'undefined'
-  );
+  return getOfflineDownloadSupportState().supported;
 }
 
 export async function putDownloadResponse(

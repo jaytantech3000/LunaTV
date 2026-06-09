@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ExternalLink,
   KeyRound,
+  LogIn,
   LogOut,
   Settings,
   Shield,
@@ -17,7 +18,15 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import {
+  BROWSER_AUTH_UPDATED_EVENT,
+  getAuthInfoFromBrowserCookie,
+} from '@/lib/auth';
+import {
+  buildLoginPath,
+  getDesktopAuthRequirement,
+  logoutDesktopSession,
+} from '@/lib/desktop/auth-session';
 import { purgeOfflineDownloads } from '@/lib/download/session';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
@@ -42,6 +51,10 @@ export const UserMenu: React.FC = () => {
   const [storageType, setStorageType] = useState<string>('localstorage');
   const [adminPanelEnabled, setAdminPanelEnabled] = useState(true);
   const [isDesktopTarget, setIsDesktopTarget] = useState(false);
+  const [desktopProfileSyncEnabled, setDesktopProfileSyncEnabled] =
+    useState(false);
+  const [desktopAuthRequired, setDesktopAuthRequired] = useState(false);
+  const [desktopAuthUsername, setDesktopAuthUsername] = useState('');
   const [supportsFluidSearch, setSupportsFluidSearch] = useState(true);
   const [mounted, setMounted] = useState(false);
 
@@ -130,16 +143,66 @@ export const UserMenu: React.FC = () => {
 
   // 获取认证信息和存储类型
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    let active = true;
+
+    const syncMenuState = async () => {
+      if (typeof window === 'undefined') {
+        return;
+      }
+
       const auth = getAuthInfoFromBrowserCookie();
       const runtimeConfig = getRuntimeConfig();
+      const isDesktop = runtimeConfig.APP_TARGET === 'desktop';
+      const profileSyncEnabled =
+        isDesktop && runtimeConfig.PROFILE_SYNC_ENABLED === true;
+      if (!active) {
+        return;
+      }
+
       setAuthInfo(auth);
-      const type = runtimeConfig.STORAGE_TYPE || 'localstorage';
-      setStorageType(type);
+      setStorageType(
+        profileSyncEnabled
+          ? runtimeConfig.PROFILE_SYNC_STORAGE_TYPE ||
+              runtimeConfig.STORAGE_TYPE ||
+              'localstorage'
+          : runtimeConfig.STORAGE_TYPE || 'localstorage'
+      );
       setAdminPanelEnabled(runtimeConfig.ENABLE_ADMIN_PANEL !== false);
-      setIsDesktopTarget(runtimeConfig.APP_TARGET === 'desktop');
-      setSupportsFluidSearch(runtimeConfig.APP_TARGET !== 'desktop');
-    }
+      setIsDesktopTarget(isDesktop);
+      setDesktopProfileSyncEnabled(profileSyncEnabled);
+      setSupportsFluidSearch(!isDesktop);
+
+      if (!isDesktop || profileSyncEnabled) {
+        setDesktopAuthRequired(false);
+        setDesktopAuthUsername('');
+        return;
+      }
+
+      try {
+        const authRequirement = await getDesktopAuthRequirement();
+        if (!active || !authRequirement) {
+          return;
+        }
+
+        setDesktopAuthRequired(authRequirement.passwordRequired);
+        setDesktopAuthUsername(authRequirement.username);
+      } catch (_) {
+        if (!active) {
+          return;
+        }
+
+        setDesktopAuthRequired(false);
+        setDesktopAuthUsername('');
+      }
+    };
+
+    void syncMenuState();
+    window.addEventListener(BROWSER_AUTH_UPDATED_EVENT, syncMenuState);
+
+    return () => {
+      active = false;
+      window.removeEventListener(BROWSER_AUTH_UPDATED_EVENT, syncMenuState);
+    };
   }, []);
 
   // 从 localStorage 读取设置
@@ -321,11 +384,28 @@ export const UserMenu: React.FC = () => {
     setIsOpen(false);
   };
 
+  const handleLogin = () => {
+    setIsOpen(false);
+    const currentPath =
+      typeof window === 'undefined'
+        ? '/'
+        : `${window.location.pathname}${window.location.search}`;
+    router.push(buildLoginPath(currentPath));
+  };
+
   const handleLogout = async () => {
+    setIsOpen(false);
+
     try {
       await purgeOfflineDownloads();
     } catch (error) {
       console.error('清理离线下载失败:', error);
+    }
+
+    if (isDesktopTarget && !desktopProfileSyncEnabled) {
+      logoutDesktopSession();
+      window.location.href = '/';
+      return;
     }
 
     try {
@@ -336,10 +416,22 @@ export const UserMenu: React.FC = () => {
     } catch (error) {
       console.error('注销请求失败:', error);
     }
+
+    if (isDesktopTarget) {
+      logoutDesktopSession();
+    }
+
     window.location.href = '/';
   };
 
   const handleAdminPanel = () => {
+    setIsOpen(false);
+
+    if (isDesktopTarget) {
+      router.push('/admin');
+      return;
+    }
+
     router.push('/admin');
   };
 
@@ -547,13 +639,22 @@ export const UserMenu: React.FC = () => {
   };
 
   // 检查是否显示管理面板按钮
-  const showAdminPanel =
-    adminPanelEnabled &&
-    (authInfo?.role === 'owner' || authInfo?.role === 'admin');
+  const isAuthenticated = Boolean(authInfo?.username);
+  const showAdminPanel = isDesktopTarget
+    ? isAuthenticated &&
+      (authInfo?.role === 'owner' || authInfo?.role === 'admin')
+    : adminPanelEnabled &&
+      (authInfo?.role === 'owner' || authInfo?.role === 'admin');
 
   // 检查是否显示修改密码按钮
   const showChangePassword =
-    authInfo?.role !== 'owner' && storageType !== 'localstorage';
+    isAuthenticated &&
+    authInfo?.role !== 'owner' &&
+    storageType !== 'localstorage';
+  const showLoginAction = !isAuthenticated;
+  const showLogoutAction =
+    isAuthenticated &&
+    (!isDesktopTarget || desktopProfileSyncEnabled || desktopAuthRequired);
 
   // 角色中文映射
   const getRoleText = (role?: string) => {
@@ -565,7 +666,7 @@ export const UserMenu: React.FC = () => {
       case 'user':
         return '用户';
       default:
-        return '';
+        return '未登录';
     }
   };
 
@@ -589,25 +690,38 @@ export const UserMenu: React.FC = () => {
               </span>
               <span
                 className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                  (authInfo?.role || 'user') === 'owner'
+                  !isAuthenticated
+                    ? 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-200'
+                    : (authInfo?.role || 'user') === 'owner'
                     ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
                     : (authInfo?.role || 'user') === 'admin'
                     ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
                     : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
                 }`}
               >
-                {getRoleText(authInfo?.role || 'user')}
+                {isAuthenticated
+                  ? getRoleText(authInfo?.role || 'user')
+                  : '未登录'}
               </span>
             </div>
             <div className='flex items-center justify-between'>
               <div className='font-semibold text-gray-900 dark:text-gray-100 text-sm truncate'>
-                {authInfo?.username || 'default'}
+                {authInfo?.username || '未登录'}
               </div>
               <div className='text-[10px] text-gray-400 dark:text-gray-500'>
                 数据存储：
                 {storageType === 'localstorage' ? '本地' : storageType}
               </div>
             </div>
+            {!isAuthenticated &&
+            isDesktopTarget &&
+            !desktopProfileSyncEnabled &&
+            desktopAuthRequired &&
+            desktopAuthUsername ? (
+              <div className='text-[11px] text-gray-500 dark:text-gray-400'>
+                本地管理账号：{desktopAuthUsername}
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -644,19 +758,30 @@ export const UserMenu: React.FC = () => {
             </button>
           )}
 
-          {/* 分割线 */}
-          <div className='my-1 border-t border-gray-200 dark:border-gray-700'></div>
+          {(showLoginAction || showLogoutAction || showChangePassword) ? (
+            <div className='my-1 border-t border-gray-200 dark:border-gray-700'></div>
+          ) : null}
 
-          {/* 登出按钮 */}
-          <button
-            onClick={handleLogout}
-            className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm'
-          >
-            <LogOut className='w-4 h-4' />
-            <span className='font-medium'>登出</span>
-          </button>
+          {showLoginAction ? (
+            <button
+              onClick={handleLogin}
+              className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors text-sm'
+            >
+              <LogIn className='w-4 h-4' />
+              <span className='font-medium'>登录</span>
+            </button>
+          ) : null}
 
-          {/* 分割线 */}
+          {showLogoutAction ? (
+            <button
+              onClick={handleLogout}
+              className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm'
+            >
+              <LogOut className='w-4 h-4' />
+              <span className='font-medium'>登出</span>
+            </button>
+          ) : null}
+
           <div className='my-1 border-t border-gray-200 dark:border-gray-700'></div>
 
           {/* 版本信息 */}

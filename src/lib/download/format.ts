@@ -51,6 +51,15 @@ export function getTaskEstimatedTotalSizeBytes(
   return Math.max(currentSizeBytes, estimatedTotalSizeBytes);
 }
 
+export function hasEstimatedTaskTotalSize(
+  task: Pick<
+    DownloadTaskLike,
+    'sizeBytes' | 'currentSizeBytes' | 'estimatedTotalSizeBytes'
+  >
+): boolean {
+  return getTaskEstimatedTotalSizeBytes(task) > getTaskCurrentSizeBytes(task);
+}
+
 export function formatTaskSizeProgress(
   task: Pick<
     DownloadTaskLike,
@@ -60,8 +69,8 @@ export function formatTaskSizeProgress(
   const currentSizeBytes = getTaskCurrentSizeBytes(task);
   const estimatedTotalSizeBytes = getTaskEstimatedTotalSizeBytes(task);
 
-  if (estimatedTotalSizeBytes > currentSizeBytes) {
-    return `${formatBytes(currentSizeBytes)} / ${formatBytes(
+  if (hasEstimatedTaskTotalSize(task)) {
+    return `${formatBytes(currentSizeBytes)} / 约 ${formatBytes(
       estimatedTotalSizeBytes
     )}`;
   }

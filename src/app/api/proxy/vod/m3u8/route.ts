@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireAuthContextFromRequest } from '@/lib/auth';
+import { proxyDesktopDevVodRequest } from '@/lib/desktop/dev-vod-proxy';
 import {
   createVodProxyErrorResponse,
   createVodProxyHeaders,
@@ -16,6 +17,17 @@ async function handleRequest(
   method: 'GET' | 'HEAD'
 ): Promise<Response> {
   try {
+    const desktopProxyResponse = await proxyDesktopDevVodRequest(
+      request,
+      '/api/proxy/vod/m3u8',
+      {
+        rewriteManifest: true,
+      }
+    );
+    if (desktopProxyResponse) {
+      return desktopProxyResponse;
+    }
+
     const authContext = requireAuthContextFromRequest(request);
     const { source, upstreamUrl, apiSite } = await resolveVodProxyRequest({
       authContext,

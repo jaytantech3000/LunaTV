@@ -2,6 +2,11 @@
 
 import { useEffect } from 'react';
 
+import { ensureDesktopAuthSession } from '@/lib/desktop/auth-session';
+import {
+  applyDesktopProfileSyncStatus,
+  getDesktopProfileSyncStatus,
+} from '@/lib/desktop/profile-sync';
 import {
   applyDesktopRuntimePublicConfig,
   DESKTOP_RUNTIME_REFRESH_EVENT,
@@ -24,6 +29,17 @@ async function refreshDesktopRuntimeConfig() {
 
   const payload = (await response.json()) as DesktopRuntimePublicConfigPayload;
   applyDesktopRuntimePublicConfig(payload);
+  const nextRuntimeConfig = getRuntimeConfig();
+
+  if (nextRuntimeConfig.PROFILE_SYNC_ENABLED) {
+    const profileSyncStatus = await getDesktopProfileSyncStatus();
+    if (profileSyncStatus) {
+      applyDesktopProfileSyncStatus(profileSyncStatus);
+    }
+  } else {
+    await ensureDesktopAuthSession();
+  }
+
   window.dispatchEvent(new Event(DESKTOP_RUNTIME_UPDATED_EVENT));
 }
 

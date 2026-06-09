@@ -11,6 +11,18 @@ export interface DesktopLocalServiceStatus {
 
 export type DesktopAppConfig = Record<string, unknown>;
 
+export interface DesktopAuthStatus {
+  username: string;
+  passwordRequired: boolean;
+  multiUser: boolean;
+  ownerPasswordConfigured: boolean;
+}
+
+export interface DesktopAuthSession {
+  username: string;
+  role: 'owner' | 'admin' | 'user';
+}
+
 declare global {
   interface Window {
     __TAURI__?: unknown;
@@ -71,5 +83,19 @@ export function writeDesktopAppConfig(
 ): Promise<DesktopAppConfig> {
   return invokeDesktopCommand<DesktopAppConfig>('write_app_config', {
     config,
+  });
+}
+
+export function getDesktopAuthStatus(): Promise<DesktopAuthStatus> {
+  return invokeDesktopCommand<DesktopAuthStatus>('get_desktop_auth_status');
+}
+
+export function desktopLogin(
+  username?: string,
+  password?: string
+): Promise<DesktopAuthSession> {
+  return invokeDesktopCommand<DesktopAuthSession>('desktop_login', {
+    username,
+    password,
   });
 }

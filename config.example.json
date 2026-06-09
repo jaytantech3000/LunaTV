@@ -1,5 +1,12 @@
 {
   "cache_time": 7200,
+  "auth": {
+    "username": "owner",
+    "password": ""
+  },
+  "profile_sync": {
+    "api_base_url": ""
+  },
   "api_site": {
     "wolong": {
       "api": "https://collect.wolongzyw.com/api.php/provide/vod",

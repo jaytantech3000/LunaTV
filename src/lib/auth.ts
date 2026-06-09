@@ -13,6 +13,17 @@ export interface AuthCookiePayload {
   signature?: string;
   timestamp?: number;
   role?: 'owner' | 'admin' | 'user';
+  sessionMode?: 'desktop-local' | 'desktop-profile-sync';
+}
+
+export const DESKTOP_AUTH_STORAGE_KEY = 'lunatv:desktop-auth-session';
+export const BROWSER_AUTH_UPDATED_EVENT = 'lunatv:browser-auth-updated';
+
+declare global {
+  interface Window {
+    __TAURI__?: unknown;
+    __TAURI_INTERNALS__?: unknown;
+  }
 }
 
 export interface AuthContext {
@@ -55,6 +66,90 @@ function toAuthContext(
   };
 }
 
+function parseAuthCookiePayload(rawValue: string): AuthCookiePayload | null {
+  try {
+    let decoded = decodeURIComponent(rawValue);
+
+    if (decoded.includes('%')) {
+      decoded = decodeURIComponent(decoded);
+    }
+
+    return JSON.parse(decoded) as AuthCookiePayload;
+  } catch (_) {
+    return null;
+  }
+}
+
+function isDesktopBrowserContext(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return Boolean(
+    window.__TAURI__ ||
+      window.__TAURI_INTERNALS__ ||
+      window.RUNTIME_CONFIG?.APP_TARGET === 'desktop'
+  );
+}
+
+function readDesktopAuthInfoFromStorage(): AuthCookiePayload | null {
+  if (typeof window === 'undefined' || !isDesktopBrowserContext()) {
+    return null;
+  }
+
+  try {
+    const rawValue = localStorage.getItem(DESKTOP_AUTH_STORAGE_KEY);
+    if (!rawValue) {
+      return null;
+    }
+
+    return JSON.parse(rawValue) as AuthCookiePayload;
+  } catch (_) {
+    return null;
+  }
+}
+
+function persistDesktopAuthInfo(payload: AuthCookiePayload | null) {
+  if (typeof window === 'undefined' || !isDesktopBrowserContext()) {
+    return;
+  }
+
+  try {
+    if (payload) {
+      localStorage.setItem(DESKTOP_AUTH_STORAGE_KEY, JSON.stringify(payload));
+    } else {
+      localStorage.removeItem(DESKTOP_AUTH_STORAGE_KEY);
+    }
+  } catch (_) {
+    // Ignore storage write failures in restricted contexts.
+  }
+}
+
+function writeAuthCookie(payload: AuthCookiePayload | null) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  if (!payload) {
+    document.cookie =
+      'auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+    return;
+  }
+
+  const expires = new Date();
+  expires.setDate(expires.getDate() + 7);
+  const value = encodeURIComponent(JSON.stringify(payload));
+  document.cookie = `auth=${value}; path=/; expires=${expires.toUTCString()}; SameSite=Lax`;
+}
+
+function dispatchBrowserAuthUpdated() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(new Event(BROWSER_AUTH_UPDATED_EVENT));
+}
+
 export function createProfileContext(
   authContext: AuthContext,
   options: {
@@ -72,12 +167,23 @@ export function createProfileContext(
   };
 }
 
+export function setAuthInfoInBrowser(payload: AuthCookiePayload | null) {
+  writeAuthCookie(payload);
+  persistDesktopAuthInfo(payload);
+  dispatchBrowserAuthUpdated();
+}
+
+export function clearAuthInfoInBrowser() {
+  setAuthInfoInBrowser(null);
+}
+
 // 从cookie获取认证信息 (服务端使用)
 export function getAuthInfoFromCookie(request: NextRequest): {
   password?: string;
   username?: string;
   signature?: string;
   timestamp?: number;
+  sessionMode?: 'desktop-local' | 'desktop-profile-sync';
 } | null {
   const authCookie = request.cookies.get('auth');
 
@@ -101,6 +207,7 @@ export function getAuthInfoFromBrowserCookie(): {
   signature?: string;
   timestamp?: number;
   role?: 'owner' | 'admin' | 'user';
+  sessionMode?: 'desktop-local' | 'desktop-profile-sync';
 } | null {
   if (typeof window === 'undefined') {
     return null;
@@ -124,22 +231,17 @@ export function getAuthInfoFromBrowserCookie(): {
     }, {} as Record<string, string>);
 
     const authCookie = cookies['auth'];
-    if (!authCookie) {
-      return null;
+    const cookieAuthInfo = authCookie
+      ? parseAuthCookiePayload(authCookie)
+      : null;
+
+    if (cookieAuthInfo) {
+      return cookieAuthInfo;
     }
 
-    // 处理可能的双重编码
-    let decoded = decodeURIComponent(authCookie);
-
-    // 如果解码后仍然包含 %，说明是双重编码，需要再次解码
-    if (decoded.includes('%')) {
-      decoded = decodeURIComponent(decoded);
-    }
-
-    const authData = JSON.parse(decoded);
-    return authData;
+    return readDesktopAuthInfoFromStorage();
   } catch (error) {
-    return null;
+    return readDesktopAuthInfoFromStorage();
   }
 }
 

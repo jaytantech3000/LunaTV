@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -7,7 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, RunEvent, State};
 
 const LOCAL_SERVICE_PORT: u16 = 8787;
@@ -15,6 +16,7 @@ const LOCAL_SERVICE_HEALTH_PATH: &str = "/health";
 const LOCAL_SERVICE_BINARY_NAME: &str = "moontv-local-service";
 const LOCAL_SERVICE_CONFIG_FILE_NAME: &str = "desktop.config.json";
 const LOCAL_SERVICE_DB_FILE_NAME: &str = "moontv-desktop.sqlite3";
+const ADMIN_PERSISTENCE_FILE_NAME: &str = "desktop-admin-state.json";
 
 const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
 
@@ -40,6 +42,76 @@ struct LocalServiceStatus {
     config_path: String,
     data_dir: String,
     sqlite_path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopAuthStatus {
+    username: String,
+    password_required: bool,
+    multi_user: bool,
+    owner_password_configured: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopAuthSession {
+    username: String,
+    role: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DesktopAppConfigDocument {
+    #[serde(default)]
+    auth: DesktopAuthConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DesktopAuthConfig {
+    username: Option<String>,
+    password: Option<String>,
+}
+
+struct ResolvedDesktopAuthConfig {
+    username: String,
+    password: Option<String>,
+    local_users: Vec<DesktopLocalAuthUser>,
+}
+
+#[derive(Debug)]
+struct DesktopLocalAuthUser {
+    username: String,
+    role: String,
+    password: Option<String>,
+    banned: bool,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DesktopAdminPersistenceDocument {
+    #[serde(default)]
+    config: DesktopAdminConfigDocument,
+    #[serde(rename = "userPasswords", default)]
+    user_passwords: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DesktopAdminConfigDocument {
+    #[serde(rename = "UserConfig", default)]
+    user_config: DesktopUserConfigDocument,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DesktopUserConfigDocument {
+    #[serde(rename = "Users", default)]
+    users: Vec<DesktopUserConfigItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DesktopUserConfigItem {
+    username: String,
+    role: String,
+    #[serde(default)]
+    banned: bool,
 }
 
 #[tauri::command]
@@ -87,6 +159,65 @@ fn write_app_config(
     Ok(config)
 }
 
+#[tauri::command]
+fn get_desktop_auth_status(app: AppHandle) -> Result<DesktopAuthStatus, String> {
+    let auth_config = resolve_desktop_auth_config(&app).map_err(|error| error.to_string())?;
+    Ok(DesktopAuthStatus {
+        username: auth_config.username,
+        password_required: auth_config.password.is_some() || !auth_config.local_users.is_empty(),
+        multi_user: !auth_config.local_users.is_empty(),
+        owner_password_configured: auth_config.password.is_some(),
+    })
+}
+
+#[tauri::command]
+fn desktop_login(
+    app: AppHandle,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<DesktopAuthSession, String> {
+    let auth_config = resolve_desktop_auth_config(&app).map_err(|error| error.to_string())?;
+    let requested_username =
+        normalize_optional_string(username).unwrap_or_else(|| auth_config.username.clone());
+    let provided_password = password.unwrap_or_default();
+
+    if requested_username == auth_config.username {
+        if let Some(expected_password) = auth_config.password {
+            if provided_password.trim() != expected_password {
+                return Err("用户名或密码错误".to_string());
+            }
+        }
+
+        return Ok(DesktopAuthSession {
+            username: requested_username,
+            role: "owner".to_string(),
+        });
+    }
+
+    let target_user = auth_config
+        .local_users
+        .into_iter()
+        .find(|user| user.username == requested_username)
+        .ok_or_else(|| "用户名或密码错误".to_string())?;
+
+    if target_user.banned {
+        return Err("账号已被禁用".to_string());
+    }
+
+    let expected_password = target_user
+        .password
+        .ok_or_else(|| "该账号未配置密码".to_string())?;
+
+    if provided_password.trim() != expected_password {
+        return Err("用户名或密码错误".to_string());
+    }
+
+    Ok(DesktopAuthSession {
+        username: target_user.username,
+        role: target_user.role,
+    })
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -113,6 +244,8 @@ pub fn run() {
             get_local_service_status,
             read_app_config,
             write_app_config,
+            get_desktop_auth_status,
+            desktop_login,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build LunaTV desktop shell");
@@ -351,6 +484,75 @@ fn ensure_desktop_config_file(config_path: &Path) -> Result<()> {
 
     fs::write(config_path, DEFAULT_DESKTOP_CONFIG)
         .with_context(|| format!("failed to write {}", config_path.display()))
+}
+
+fn read_desktop_app_config_value(app: &AppHandle) -> Result<serde_json::Value> {
+    let paths = resolve_runtime_paths(app)?;
+    ensure_desktop_config_file(&paths.config_path)?;
+    let contents = fs::read_to_string(&paths.config_path)
+        .with_context(|| format!("failed to read {}", paths.config_path.display()))?;
+    serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse {}", paths.config_path.display()))
+}
+
+fn resolve_desktop_auth_config(app: &AppHandle) -> Result<ResolvedDesktopAuthConfig> {
+    let config_value = read_desktop_app_config_value(app)?;
+    let config_document =
+        serde_json::from_value::<DesktopAppConfigDocument>(config_value).unwrap_or_default();
+    let username = normalize_optional_string(config_document.auth.username)
+        .unwrap_or_else(|| "owner".to_string());
+    let password = normalize_optional_string(config_document.auth.password);
+    let persistence = read_desktop_admin_persistence_document(app).unwrap_or_default();
+    let local_users = persistence
+        .config
+        .user_config
+        .users
+        .into_iter()
+        .filter(|user| user.username != username)
+        .map(|user| DesktopLocalAuthUser {
+            password: persistence
+                .user_passwords
+                .get(&user.username)
+                .cloned()
+                .and_then(|password| normalize_optional_string(Some(password))),
+            username: user.username,
+            role: match user.role.as_str() {
+                "owner" | "admin" => user.role,
+                _ => "user".to_string(),
+            },
+            banned: user.banned,
+        })
+        .collect();
+
+    Ok(ResolvedDesktopAuthConfig {
+        username,
+        password,
+        local_users,
+    })
+}
+
+fn read_desktop_admin_persistence_document(app: &AppHandle) -> Result<DesktopAdminPersistenceDocument> {
+    let paths = resolve_runtime_paths(app)?;
+    let path = paths.data_dir.join(ADMIN_PERSISTENCE_FILE_NAME);
+
+    if !path.exists() {
+        return Ok(DesktopAdminPersistenceDocument::default());
+    }
+
+    let contents =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&contents).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|text| {
+        let normalized = text.trim().to_string();
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    })
 }
 
 fn resolve_sidecar_binary_path(app: &AppHandle) -> Result<PathBuf> {

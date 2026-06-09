@@ -75,7 +75,11 @@ export async function POST(req: NextRequest) {
 
       // 未配置 PASSWORD 时直接放行
       if (!envPassword) {
-        const response = NextResponse.json({ ok: true });
+        const response = NextResponse.json({
+          ok: true,
+          username: process.env.USERNAME || 'owner',
+          role: 'owner',
+        });
 
         // 清除可能存在的认证cookie
         response.cookies.set('auth', '', {
@@ -102,7 +106,11 @@ export async function POST(req: NextRequest) {
       }
 
       // 验证成功，设置认证cookie
-      const response = NextResponse.json({ ok: true });
+      const response = NextResponse.json({
+        ok: true,
+        username: process.env.USERNAME || 'owner',
+        role: 'owner',
+      });
       const cookieValue = await generateAuthCookie(
         process.env.USERNAME,
         password,
@@ -139,7 +147,11 @@ export async function POST(req: NextRequest) {
       password === process.env.PASSWORD
     ) {
       // 验证成功，设置认证cookie
-      const response = NextResponse.json({ ok: true });
+      const response = NextResponse.json({
+        ok: true,
+        username,
+        role: 'owner',
+      });
       const cookieValue = await generateAuthCookie(
         username,
         password,
@@ -179,7 +191,11 @@ export async function POST(req: NextRequest) {
       }
 
       // 验证成功，设置认证cookie
-      const response = NextResponse.json({ ok: true });
+      const response = NextResponse.json({
+        ok: true,
+        username,
+        role: user?.role || 'user',
+      });
       const cookieValue = await generateAuthCookie(
         username,
         password,
