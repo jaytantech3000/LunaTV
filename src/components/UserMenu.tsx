@@ -24,6 +24,7 @@ import { apiFetch } from '@/lib/transport/api-client';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
+import DesktopSettingsSection from './DesktopSettingsSection';
 import { VersionPanel } from './VersionPanel';
 
 interface AuthInfo {
@@ -40,6 +41,7 @@ export const UserMenu: React.FC = () => {
   const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
   const [storageType, setStorageType] = useState<string>('localstorage');
   const [adminPanelEnabled, setAdminPanelEnabled] = useState(true);
+  const [isDesktopTarget, setIsDesktopTarget] = useState(false);
   const [supportsFluidSearch, setSupportsFluidSearch] = useState(true);
   const [mounted, setMounted] = useState(false);
 
@@ -129,6 +131,7 @@ export const UserMenu: React.FC = () => {
       const type = runtimeConfig.STORAGE_TYPE || 'localstorage';
       setStorageType(type);
       setAdminPanelEnabled(runtimeConfig.ENABLE_ADMIN_PANEL !== false);
+      setIsDesktopTarget(runtimeConfig.APP_TARGET === 'desktop');
       setSupportsFluidSearch(runtimeConfig.APP_TARGET !== 'desktop');
     }
   }, []);
@@ -1015,12 +1018,18 @@ export const UserMenu: React.FC = () => {
                 </div>
               </label>
             </div>
+
+            {isDesktopTarget ? (
+              <DesktopSettingsSection isOpen={isSettingsOpen} />
+            ) : null}
           </div>
 
           {/* 底部说明 */}
           <div className='mt-6 pt-4 border-t border-gray-200 dark:border-gray-700'>
             <p className='text-xs text-gray-500 dark:text-gray-400 text-center'>
-              这些设置保存在本地浏览器中
+              {isDesktopTarget
+                ? '浏览器偏好仍保存在本地 localStorage，桌面服务配置保存在本地 JSON 配置文件中'
+                : '这些设置保存在本地浏览器中'}
             </p>
           </div>
         </div>

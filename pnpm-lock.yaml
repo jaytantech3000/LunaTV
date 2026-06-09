@@ -29,6 +29,9 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.19
         version: 3.13.19(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@tauri-apps/api':
+        specifier: ^2.11.0
+        version: 2.11.0
       '@types/crypto-js':
         specifier: ^4.2.2
         version: 4.2.2
@@ -1436,6 +1439,9 @@ packages:
 
   '@tanstack/virtual-core@3.13.19':
     resolution: {integrity: sha512-/BMP7kNhzKOd7wnDeB8NrIRNLwkf5AhCYCvtfZV2GXWbBieFm/el0n6LOAXlTi6ZwHICSNnQcIxRCWHrLzDY+g==}
+
+  '@tauri-apps/api@2.11.0':
+    resolution: {integrity: sha512-7CinYODhky9lmO23xHnUFv0Xt43fbtWMyxZcLcRBlFkcgXKuEirBvHpmtJ89YMhyeGcq20Wuc47Fa4XjyniywA==}
 
   '@tauri-apps/cli-darwin-arm64@2.11.2':
     resolution: {integrity: sha512-+4UZzLt+eOAEQCwgd+TqKgyUJMrvx+BgdXLLaqJYmPqzP+nE6YZr/hY6CWLYGQb8jFn99jEkmC6uA3tNvamA1w==}
@@ -6999,6 +7005,8 @@ snapshots:
       react-dom: 18.3.1(react@18.3.1)
 
   '@tanstack/virtual-core@3.13.19': {}
+
+  '@tauri-apps/api@2.11.0': {}
 
   '@tauri-apps/cli-darwin-arm64@2.11.2':
     optional: true

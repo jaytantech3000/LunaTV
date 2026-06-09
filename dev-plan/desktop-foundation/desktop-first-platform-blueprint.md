@@ -461,6 +461,7 @@ src/lib/platform/
 
 - Tauri `beforeBuildCommand` 已接入桌面静态前端构建和 release sidecar 同步
 - 本地 Rust 服务已覆盖 `/health`、`/content/search`、`/content/detail`、`/content/suggestions`、`/metadata/douban/ratings` 以及 VOD 代理链路
+- 前端已接入 Tauri IPC，可在设置面板中查看本地服务状态、编辑桌面 JSON 配置并重启本地服务
 - 已通过 `pnpm desktop:check`、`pnpm desktop:test`、`pnpm desktop:build` 验证桌面壳、sidecar 和前端产物可闭环
 - 当前已实际产出 macOS 测试包：
   - `target/release/bundle/macos/LunaTV Desktop.app`
