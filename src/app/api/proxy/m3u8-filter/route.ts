@@ -312,10 +312,14 @@ async function readTextWithLimit(
   const decoder = new TextDecoder();
   let received = 0;
   let text = '';
+  let done = false;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
+  while (!done) {
+    const { value, done: nextDone } = await reader.read();
+    done = nextDone;
+    if (done || !value) {
+      continue;
+    }
     received += value.byteLength;
     if (received > maxBytes) {
       await reader.cancel();
