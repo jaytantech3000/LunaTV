@@ -1,0 +1,83 @@
+name: Build Desktop App
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - desktop
+  pull_request:
+    branches:
+      - desktop
+
+concurrency:
+  group: desktop-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Intel
+            runner: macos-15-intel
+            artifact_name: lunatv-desktop-macos-intel
+          - name: macOS Apple Silicon
+            runner: macos-15
+            artifact_name: lunatv-desktop-macos-arm64
+          - name: Windows x64
+            runner: windows-2022
+            artifact_name: lunatv-desktop-windows-x64
+
+    env:
+      CI: true
+      HUSKY: 0
+      CARGO_TERM_COLOR: always
+      NEXT_TELEMETRY_DISABLED: 1
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Signing and notarization are intentionally left out for now.
+      # This workflow produces unsigned artifacts for internal testing.
+      - name: Build desktop bundle
+        run: pnpm desktop:build
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: target/release/bundle/
+          if-no-files-found: error
+          retention-days: 14
