@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = join(__dirname, '..');
+const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 const outputDir = join(projectRoot, 'desktop-shell-dist');
 const legacyExportDir = join(projectRoot, 'out');
 const tempDir = join(projectRoot, '.desktop-build-temp');
@@ -90,13 +91,13 @@ try {
     recursive: true,
   });
 
-  execFileSync('pnpm', ['gen:manifest'], {
+  execFileSync(pnpmCommand, ['gen:manifest'], {
     cwd: projectRoot,
     env: desktopEnv,
     stdio: 'inherit',
   });
 
-  execFileSync('pnpm', ['exec', 'next', 'build'], {
+  execFileSync(pnpmCommand, ['exec', 'next', 'build'], {
     cwd: projectRoot,
     env: desktopEnv,
     stdio: 'inherit',
