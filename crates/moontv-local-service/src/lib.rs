@@ -16,7 +16,7 @@ use axum::{
         header::{
             ACCEPT_RANGES, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
             ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, CACHE_CONTROL,
-            CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE, REFERER, USER_AGENT,
+            CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ORIGIN, RANGE, REFERER, USER_AGENT,
         },
     },
     middleware::{self, Next},
@@ -44,6 +44,8 @@ const DEFAULT_SEARCH_TIMEOUT_MS: u64 = 8_000;
 const DEFAULT_DETAIL_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PROXY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+const DEFAULT_DOUBAN_API_BASE_URL: &str = "https://m.douban.com";
+const MAX_DOUBAN_RATING_IDS_PER_REQUEST: usize = 20;
 
 const ADULT_SOURCE_MARKERS: &[&str] = &["🔞", "成人", "情色", "三级片", "三級", "porn", "av"];
 
@@ -216,6 +218,23 @@ struct SearchResponse {
     results: Vec<SearchResult>,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq)]
+struct ContentSuggestion {
+    text: String,
+    r#type: &'static str,
+    score: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct SuggestionsResponse {
+    suggestions: Vec<ContentSuggestion>,
+}
+
+#[derive(Debug, Serialize)]
+struct DoubanRatingsResponse {
+    ratings: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: &'static str,
@@ -229,6 +248,11 @@ struct HealthResponse {
 #[derive(Debug, Deserialize)]
 struct SearchQueryParams {
     q: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanRatingsQueryParams {
+    ids: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -314,12 +338,16 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(get_health))
         .route("/content/search", get(get_content_search))
+        .route("/content/suggestions", get(get_content_suggestions))
         .route("/content/detail", get(get_content_detail))
+        .route("/metadata/douban/ratings", get(get_douban_ratings))
         .route("/media/vod/m3u8", get(get_vod_m3u8))
         .route("/media/vod/segment", get(get_vod_segment))
         .route("/media/vod/key", get(get_vod_key))
         .route("/api/search", get(get_content_search))
+        .route("/api/search/suggestions", get(get_content_suggestions))
         .route("/api/detail", get(get_content_detail))
+        .route("/api/douban/ratings", get(get_douban_ratings))
         .route("/api/proxy/vod/m3u8", get(get_vod_m3u8))
         .route("/api/proxy/vod/segment", get(get_vod_segment))
         .route("/api/proxy/vod/key", get(get_vod_key))
@@ -394,6 +422,45 @@ async fn get_content_search(
     Ok(response)
 }
 
+async fn get_content_suggestions(
+    State(state): State<AppState>,
+    Query(params): Query<SearchQueryParams>,
+) -> AppResult<Response> {
+    let query = params.q.unwrap_or_default().trim().to_string();
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    if query.is_empty() {
+        return Ok(Json(SuggestionsResponse {
+            suggestions: Vec::new(),
+        })
+        .into_response());
+    }
+
+    let Some(first_site) = config.api_sites.first() else {
+        let mut response = Json(SuggestionsResponse {
+            suggestions: Vec::new(),
+        })
+        .into_response();
+        apply_query_cache_headers(response.headers_mut(), config.cache_time);
+        return Ok(response);
+    };
+
+    let mut results = search_site(&state.client, first_site, &query, config.max_search_pages)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    if config.adult_content_filter_enabled {
+        results = filter_adult_content_results(results);
+    }
+
+    let suggestions = build_content_suggestions(&query, &results);
+    let mut response = Json(SuggestionsResponse { suggestions }).into_response();
+    apply_query_cache_headers(response.headers_mut(), config.cache_time);
+    Ok(response)
+}
+
 async fn get_content_detail(
     State(state): State<AppState>,
     Query(params): Query<DetailQueryParams>,
@@ -422,6 +489,34 @@ async fn get_content_detail(
     let result = fetch_content_detail(&state.client, &api_site, &id).await?;
     let mut response = Json(result).into_response();
     apply_query_cache_headers(response.headers_mut(), config.cache_time);
+    Ok(response)
+}
+
+async fn get_douban_ratings(
+    State(state): State<AppState>,
+    Query(params): Query<DoubanRatingsQueryParams>,
+) -> AppResult<Response> {
+    let ids = parse_douban_ids(params.ids.as_deref());
+    if ids.is_empty() {
+        let mut response = Json(DoubanRatingsResponse {
+            ratings: BTreeMap::new(),
+        })
+        .into_response();
+        response.headers_mut().insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("private, max-age=300"),
+        );
+        return Ok(response);
+    }
+
+    let ratings = fetch_douban_ratings_by_ids(&state.client, &ids)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let mut response = Json(DoubanRatingsResponse { ratings }).into_response();
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=300"),
+    );
     Ok(response)
 }
 
@@ -1183,6 +1278,145 @@ fn contains_adult_marker(text: &str) -> bool {
         .any(|marker| normalized.contains(&marker.to_lowercase()))
 }
 
+fn build_content_suggestions(query: &str, results: &[SearchResult]) -> Vec<ContentSuggestion> {
+    let query_lower = query.to_lowercase();
+    let query_words = query_lower
+        .split(|character: char| matches!(character, ' ' | '-' | ':' | '：' | '·' | '、'))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let mut seen = BTreeMap::<String, ContentSuggestion>::new();
+
+    for keyword in results
+        .iter()
+        .map(|result| result.title.as_str())
+        .flat_map(|title| {
+            title
+                .split(|character: char| matches!(character, ' ' | '-' | ':' | '：' | '·' | '、'))
+                .filter(|word| word.chars().count() > 1)
+                .map(str::trim)
+                .filter(|word| !word.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+    {
+        let keyword_lower = keyword.to_lowercase();
+        if !keyword_lower.contains(&query_lower) {
+            continue;
+        }
+
+        let (score, suggestion_type) = if keyword_lower == query_lower {
+            (2.0, "exact")
+        } else if keyword_lower.starts_with(&query_lower) || keyword_lower.ends_with(&query_lower) {
+            (1.8, "related")
+        } else if query_words.iter().any(|query_word| keyword_lower.contains(query_word)) {
+            (1.5, "related")
+        } else {
+            (1.0, "suggestion")
+        };
+
+        seen.entry(keyword.clone()).or_insert(ContentSuggestion {
+            text: keyword,
+            r#type: suggestion_type,
+            score,
+        });
+
+        if seen.len() >= 8 {
+            break;
+        }
+    }
+
+    let mut suggestions = seen.into_values().collect::<Vec<_>>();
+    suggestions.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| suggestion_type_priority(right.r#type).cmp(&suggestion_type_priority(left.r#type)))
+            .then_with(|| left.text.cmp(&right.text))
+    });
+    suggestions.truncate(8);
+    suggestions
+}
+
+fn suggestion_type_priority(value: &str) -> usize {
+    match value {
+        "exact" => 3,
+        "related" => 2,
+        _ => 1,
+    }
+}
+
+fn parse_douban_ids(ids: Option<&str>) -> Vec<u64> {
+    ids.unwrap_or_default()
+        .split(',')
+        .filter_map(|id| id.trim().parse::<u64>().ok())
+        .filter(|id| *id > 0)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .take(MAX_DOUBAN_RATING_IDS_PER_REQUEST)
+        .collect()
+}
+
+async fn fetch_douban_ratings_by_ids(
+    client: &reqwest::Client,
+    ids: &[u64],
+) -> Result<BTreeMap<String, String>> {
+    let tasks = ids.iter().copied().map(|id| {
+        let client = client.clone();
+        async move { fetch_single_douban_rating(&client, id).await.map(|rating| (id, rating)) }
+    });
+
+    let mut ratings = BTreeMap::new();
+    for result in join_all(tasks).await {
+        match result {
+            Ok((id, rating)) => {
+                ratings.insert(id.to_string(), rating);
+            }
+            Err(error) => warn!("failed to fetch douban rating: {}", error),
+        }
+    }
+
+    Ok(ratings)
+}
+
+async fn fetch_single_douban_rating(client: &reqwest::Client, id: u64) -> Result<String> {
+    let response = client
+        .get(format!(
+            "{DEFAULT_DOUBAN_API_BASE_URL}/rexxar/api/v2/subject/{id}?for_mobile=1"
+        ))
+        .headers(build_douban_headers())
+        .timeout(Duration::from_millis(DEFAULT_DETAIL_TIMEOUT_MS))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("douban rating request failed with {}", response.status());
+    }
+
+    let payload = response.json::<Value>().await?;
+    let rating = payload
+        .get("rating")
+        .and_then(|item| item.get("value"))
+        .and_then(|item| item.as_f64())
+        .filter(|value| value.is_finite())
+        .map(|value| format!("{value:.1}"))
+        .unwrap_or_default();
+
+    Ok(rating)
+}
+
+fn build_douban_headers() -> ReqwestHeaderMap {
+    let mut headers = ReqwestHeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(DEFAULT_WEB_UA));
+    headers.insert(REFERER, HeaderValue::from_static("https://movie.douban.com/"));
+    headers.insert(
+        reqwest::header::ACCEPT,
+        HeaderValue::from_static("application/json, text/plain, */*"),
+    );
+    headers.insert(ORIGIN, HeaderValue::from_static("https://movie.douban.com"));
+    headers
+}
+
 fn resolve_vod_proxy_request(
     config: &ServiceConfig,
     params: VodProxyQueryParams,
@@ -1845,6 +2079,70 @@ segment0.ts
         );
 
         upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn content_suggestions_endpoint_returns_keywords() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Resource"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/search/suggestions?q=Mock")
+                    .body(Body::empty())
+                    .expect("suggestions request"),
+            )
+            .await
+            .expect("suggestions response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("suggestions body");
+        let payload: Value = serde_json::from_slice(&body).expect("suggestions payload json");
+
+        assert_eq!(
+            payload
+                .get("suggestions")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("text"))
+                .and_then(Value::as_str),
+            Some("Mock")
+        );
+
+        upstream.abort();
+    }
+
+    #[test]
+    fn parse_douban_ids_dedupes_and_limits() {
+        let ids = parse_douban_ids(Some(
+            "1,2,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21",
+        ));
+
+        assert_eq!(ids.len(), MAX_DOUBAN_RATING_IDS_PER_REQUEST);
+        assert_eq!(ids.first().copied(), Some(1));
+        assert_eq!(ids.last().copied(), Some(20));
     }
 
     #[tokio::test]

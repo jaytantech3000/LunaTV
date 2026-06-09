@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any,no-console,no-case-declarations */
 
+import { apiFetch } from './transport/api-client';
 import { DoubanItem, DoubanResult } from './types';
 
 interface DoubanCategoriesParams {
@@ -210,9 +211,15 @@ export async function getDoubanCategories(
       return fetchDoubanCategories(params, proxyUrl);
     case 'direct':
     default:
-      const response = await fetch(
-        `/api/douban/categories?kind=${kind}&category=${category}&type=${type}&limit=${pageLimit}&start=${pageStart}`
-      );
+      const response = await apiFetch('/douban/categories', {
+        searchParams: {
+          kind,
+          category,
+          type,
+          limit: pageLimit,
+          start: pageStart,
+        },
+      });
 
       return response.json();
   }
@@ -243,9 +250,14 @@ export async function getDoubanList(
       return fetchDoubanList(params, proxyUrl);
     case 'direct':
     default:
-      const response = await fetch(
-        `/api/douban?tag=${tag}&type=${type}&pageSize=${pageLimit}&pageStart=${pageStart}`
-      );
+      const response = await apiFetch('/douban', {
+        searchParams: {
+          tag,
+          type,
+          pageSize: pageLimit,
+          pageStart,
+        },
+      });
 
       return response.json();
   }
@@ -369,9 +381,20 @@ export async function getDoubanRecommends(
       return fetchDoubanRecommends(params, proxyUrl);
     case 'direct':
     default:
-      const response = await fetch(
-        `/api/douban/recommends?kind=${kind}&limit=${pageLimit}&start=${pageStart}&category=${category}&format=${format}&region=${region}&year=${year}&platform=${platform}&sort=${sort}&label=${label}`
-      );
+      const response = await apiFetch('/douban/recommends', {
+        searchParams: {
+          kind,
+          limit: pageLimit,
+          start: pageStart,
+          category,
+          format,
+          region,
+          year,
+          platform,
+          sort,
+          label,
+        },
+      });
 
       return response.json();
   }
@@ -387,11 +410,13 @@ export async function getDoubanTitleSearch(
     throw new Error('query 参数不能为空');
   }
 
-  const response = await fetch(
-    `/api/douban/search?q=${encodeURIComponent(
-      normalizedQuery
-    )}&limit=${pageLimit}&start=${pageStart}`
-  );
+  const response = await apiFetch('/douban/search', {
+    searchParams: {
+      q: normalizedQuery,
+      limit: pageLimit,
+      start: pageStart,
+    },
+  });
 
   return response.json();
 }

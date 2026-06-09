@@ -12,7 +12,10 @@
 # next.js
 /.next/
 /.next-build/
+/.next-desktop/
 /out/
+/desktop-shell-dist/
+/.desktop-build-temp/
 
 # production
 /build

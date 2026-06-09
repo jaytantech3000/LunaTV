@@ -5,6 +5,7 @@
   "identifier": "com.lunatv.desktop",
   "build": {
     "beforeDevCommand": "pnpm desktop:dev:bootstrap",
+    "beforeBuildCommand": "pnpm desktop:build:frontend && pnpm desktop:prepare:sidecar:release",
     "devUrl": "http://127.0.0.1:3000",
     "frontendDist": "../desktop-shell-dist"
   },

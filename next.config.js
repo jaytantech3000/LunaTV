@@ -5,16 +5,20 @@ const defaultRuntimeCaching = require('next-pwa/cache');
 
 const isVercel = Boolean(process.env.VERCEL);
 const enablePwaInDev = process.env.ENABLE_PWA_DEV === 'true';
+const buildTarget = process.env.NEXT_BUILD_TARGET || 'web';
+const isDesktopBuild = buildTarget === 'desktop';
 const distDir =
   process.env.NEXT_DIST_DIR ||
-  // Vercel's Next.js runtime expects the default `.next` directory unless the
-  // project-level output directory is changed in Vercel settings.
-  (process.env.NODE_ENV === 'production' && !isVercel
-    ? '.next-build'
-    : '.next');
+  (isDesktopBuild
+    ? '.next-desktop'
+    : // Vercel's Next.js runtime expects the default `.next` directory unless the
+      // project-level output directory is changed in Vercel settings.
+      process.env.NODE_ENV === 'production' && !isVercel
+      ? '.next-build'
+      : '.next');
 
 const nextConfig = {
-  output: 'standalone',
+  output: isDesktopBuild ? 'export' : 'standalone',
   // Keep dev and local production build artifacts isolated so a local
   // `next build` never corrupts a running `next dev` instance.
   distDir,
@@ -105,7 +109,9 @@ const runtimeCaching = defaultRuntimeCaching.map((entry) => {
 
 const withPWA = require('next-pwa')({
   dest: 'public',
-  disable: process.env.NODE_ENV === 'development' && !enablePwaInDev,
+  disable:
+    isDesktopBuild ||
+    (process.env.NODE_ENV === 'development' && !enablePwaInDev),
   ...(enablePwaInDev
     ? {
         mode: 'production',

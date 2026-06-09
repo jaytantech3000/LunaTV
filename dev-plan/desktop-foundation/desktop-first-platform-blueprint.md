@@ -436,6 +436,14 @@ src/lib/platform/
 
 - 前端不依赖 Next SSR 才能启动
 
+2026-06-09 当前落地状态：
+
+- 已增加 `NEXT_BUILD_TARGET=desktop` 构建模式，桌面前端走静态导出并输出到 `desktop-shell-dist/`
+- 已在桌面构建时临时移出 `src/app/api` 与 `src/middleware.ts`，避免静态导出继续绑定 Web route handler
+- 已将搜索建议、详情、豆瓣评分等桌面用户路径改为统一 transport 访问，不再要求 same-origin `/api/*`
+- 已在桌面目标下强制关闭 PWA、fluid search、后台入口，确保桌面 alpha 先收敛到可用主链路
+- 已通过 `pnpm desktop:build:frontend` 验证静态前端可独立构建
+
 ## Phase 4：Tauri 桌面壳
 
 目标：
@@ -448,6 +456,15 @@ src/lib/platform/
 
 - 可交付桌面测试版
 - 不依赖 Vercel 跑媒体代理
+
+2026-06-09 当前落地状态：
+
+- Tauri `beforeBuildCommand` 已接入桌面静态前端构建和 release sidecar 同步
+- 本地 Rust 服务已覆盖 `/health`、`/content/search`、`/content/detail`、`/content/suggestions`、`/metadata/douban/ratings` 以及 VOD 代理链路
+- 已通过 `pnpm desktop:check`、`pnpm desktop:test`、`pnpm desktop:build` 验证桌面壳、sidecar 和前端产物可闭环
+- 当前已实际产出 macOS 测试包：
+  - `target/release/bundle/macos/LunaTV Desktop.app`
+  - `target/release/bundle/dmg/LunaTV Desktop_0.1.0_x64.dmg`
 
 ## Phase 5：手机版
 

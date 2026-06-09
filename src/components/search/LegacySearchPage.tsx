@@ -21,6 +21,9 @@ import {
   filterItemsByMinimumRating,
   passesGlobalRatingFilter,
 } from '@/lib/rating-filter';
+import { getRuntimeConfig } from '@/lib/runtime-config';
+import { apiFetch } from '@/lib/transport/api-client';
+import { buildApiUrl } from '@/lib/transport/endpoint';
 import { SearchResult } from '@/lib/types';
 
 import {
@@ -48,6 +51,24 @@ import {
 } from '@/stores/useSearchCacheStore';
 
 const GLOBAL_DOUBAN_AGGREGATE_CACHE_KEY = 'default-douban-aggregate';
+
+function getPreferredFluidSearchSetting(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const runtimeConfig = getRuntimeConfig();
+  if (runtimeConfig.APP_TARGET === 'desktop') {
+    return false;
+  }
+
+  const savedFluidSearch = localStorage.getItem('fluidSearch');
+  if (savedFluidSearch !== null) {
+    return JSON.parse(savedFluidSearch);
+  }
+
+  return runtimeConfig.FLUID_SEARCH !== false;
+}
 
 interface LegacySearchPageClientProps {
   active?: boolean;
@@ -371,9 +392,11 @@ function LegacySearchPageClient({
 
       void (async () => {
         try {
-          const response = await fetch(
-            `/api/douban/ratings?ids=${batch.join(',')}`
-          );
+          const response = await apiFetch('/douban/ratings', {
+            searchParams: {
+              ids: batch.join(','),
+            },
+          });
 
           if (!response.ok) {
             throw new Error('获取豆瓣评分失败');
@@ -600,14 +623,7 @@ function LegacySearchPageClient({
 
     // 读取流式搜索设置
     if (typeof window !== 'undefined') {
-      const savedFluidSearch = localStorage.getItem('fluidSearch');
-      const defaultFluidSearch =
-        (window as any).RUNTIME_CONFIG?.FLUID_SEARCH !== false;
-      if (savedFluidSearch !== null) {
-        setUseFluidSearch(JSON.parse(savedFluidSearch));
-      } else if (defaultFluidSearch !== undefined) {
-        setUseFluidSearch(defaultFluidSearch);
-      }
+      setUseFluidSearch(getPreferredFluidSearchSetting());
     }
 
     // 监听搜索历史更新事件
@@ -805,14 +821,7 @@ function LegacySearchPageClient({
       // 每次搜索时重新读取设置，确保使用最新的配置
       let currentFluidSearch = useFluidSearch;
       if (typeof window !== 'undefined') {
-        const savedFluidSearch = localStorage.getItem('fluidSearch');
-        if (savedFluidSearch !== null) {
-          currentFluidSearch = JSON.parse(savedFluidSearch);
-        } else {
-          const defaultFluidSearch =
-            (window as any).RUNTIME_CONFIG?.FLUID_SEARCH !== false;
-          currentFluidSearch = defaultFluidSearch;
-        }
+        currentFluidSearch = getPreferredFluidSearchSetting();
       }
 
       // 如果读取的配置与当前状态不同，更新状态
@@ -823,7 +832,9 @@ function LegacySearchPageClient({
       if (currentFluidSearch) {
         // 流式搜索：打开新的流式连接
         const es = new EventSource(
-          `/api/search/ws?q=${encodeURIComponent(trimmed)}`
+          buildApiUrl('/search/ws', {
+            q: trimmed,
+          })
         );
         eventSourceRef.current = es;
 
@@ -918,7 +929,11 @@ function LegacySearchPageClient({
         };
       } else {
         // 传统搜索：使用普通接口
-        fetch(`/api/search?q=${encodeURIComponent(trimmed)}`)
+        apiFetch('/search', {
+          searchParams: {
+            q: trimmed,
+          },
+        })
           .then((response) => response.json())
           .then((data) => {
             if (currentQueryRef.current !== trimmed) return;

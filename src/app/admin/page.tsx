@@ -44,6 +44,7 @@ import { createPortal } from 'react-dom';
 import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { apiFetch } from '@/lib/transport/api-client';
+import { buildApiUrl } from '@/lib/transport/endpoint';
 import { isAdultSourceCandidate } from '@/lib/yellow';
 
 import DataMigration from '@/components/DataMigration';
@@ -2317,7 +2318,11 @@ const VideoSourceConfig = ({
 
       try {
         // 使用EventSource接收流式数据
-        const eventSource = new EventSource(`/api/admin/source/validate?q=${encodeURIComponent(searchKeyword.trim())}`);
+        const eventSource = new EventSource(
+          buildApiUrl('/admin/source/validate', {
+            q: searchKeyword.trim(),
+          })
+        );
 
         eventSource.onmessage = (event) => {
           try {
@@ -4834,7 +4839,7 @@ function AdminPageClient() {
         setLoading(true);
       }
 
-      const response = await fetch(`/api/admin/config`);
+      const response = await apiFetch('/admin/config');
 
       if (!response.ok) {
         const data = (await response.json()) as any;
@@ -4876,7 +4881,7 @@ function AdminPageClient() {
   const handleConfirmResetConfig = async () => {
     await withLoading('resetConfig', async () => {
       try {
-        const response = await fetch(`/api/admin/reset`);
+        const response = await apiFetch('/admin/reset');
         if (!response.ok) {
           throw new Error(`重置失败: ${response.status}`);
         }

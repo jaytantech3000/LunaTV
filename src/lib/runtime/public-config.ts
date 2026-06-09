@@ -56,7 +56,11 @@ export async function buildPublicRuntimeConfig(
   config?: AdminConfig
 ): Promise<AppRuntimeConfig> {
   const storageType = getConfiguredStorageType();
+  const appTarget =
+    (process.env.NEXT_PUBLIC_APP_TARGET as AppRuntimeConfig['APP_TARGET']) ||
+    'web';
   const baseRuntimeConfig: AppRuntimeConfig = {
+    APP_TARGET: appTarget,
     STORAGE_TYPE: storageType,
     PROFILE_MODE: getProfileMode(storageType),
     DOUBAN_PROXY_TYPE:
@@ -69,14 +73,18 @@ export async function buildPublicRuntimeConfig(
     DISABLE_YELLOW_FILTER:
       process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
     CUSTOM_CATEGORIES: [],
-    FLUID_SEARCH: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
+    FLUID_SEARCH:
+      appTarget === 'desktop'
+        ? false
+        : process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
     ENABLE_WEB_LIVE: false,
     API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || '',
     MEDIA_PROXY_BASE_URL:
       process.env.NEXT_PUBLIC_MEDIA_PROXY_BASE_URL ||
       process.env.NEXT_PUBLIC_API_BASE_URL ||
       '',
-    ENABLE_ADMIN_PANEL: isAdminPanelEnabled(),
+    ENABLE_ADMIN_PANEL:
+      appTarget === 'desktop' ? false : isAdminPanelEnabled(),
   };
 
   if (!shouldUseServerConfigProjection(storageType)) {

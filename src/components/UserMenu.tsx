@@ -19,6 +19,7 @@ import { createPortal } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { purgeOfflineDownloads } from '@/lib/download/session';
+import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
@@ -39,6 +40,7 @@ export const UserMenu: React.FC = () => {
   const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
   const [storageType, setStorageType] = useState<string>('localstorage');
   const [adminPanelEnabled, setAdminPanelEnabled] = useState(true);
+  const [supportsFluidSearch, setSupportsFluidSearch] = useState(true);
   const [mounted, setMounted] = useState(false);
 
   // Body 滚动锁定 - 使用 overflow 方式避免布局问题
@@ -122,14 +124,12 @@ export const UserMenu: React.FC = () => {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const auth = getAuthInfoFromBrowserCookie();
+      const runtimeConfig = getRuntimeConfig();
       setAuthInfo(auth);
-
-      const type =
-        (window as any).RUNTIME_CONFIG?.STORAGE_TYPE || 'localstorage';
+      const type = runtimeConfig.STORAGE_TYPE || 'localstorage';
       setStorageType(type);
-      setAdminPanelEnabled(
-        (window as any).RUNTIME_CONFIG?.ENABLE_ADMIN_PANEL !== false
-      );
+      setAdminPanelEnabled(runtimeConfig.ENABLE_ADMIN_PANEL !== false);
+      setSupportsFluidSearch(runtimeConfig.APP_TARGET !== 'desktop');
     }
   }, []);
 
@@ -199,9 +199,15 @@ export const UserMenu: React.FC = () => {
       }
 
       const savedFluidSearch = localStorage.getItem('fluidSearch');
+      const runtimeConfig = getRuntimeConfig();
       const defaultFluidSearch =
-        (window as any).RUNTIME_CONFIG?.FLUID_SEARCH !== false;
-      if (savedFluidSearch !== null) {
+        runtimeConfig.APP_TARGET === 'desktop'
+          ? false
+          : runtimeConfig.FLUID_SEARCH !== false;
+      if (!supportsFluidSearch) {
+        setFluidSearch(false);
+        localStorage.setItem('fluidSearch', JSON.stringify(false));
+      } else if (savedFluidSearch !== null) {
         setFluidSearch(JSON.parse(savedFluidSearch));
       } else if (defaultFluidSearch !== undefined) {
         setFluidSearch(defaultFluidSearch);
@@ -212,7 +218,7 @@ export const UserMenu: React.FC = () => {
         setLiveDirectConnect(JSON.parse(savedLiveDirectConnect));
       }
     }
-  }, []);
+  }, [supportsFluidSearch]);
 
   // 版本检查
   useEffect(() => {
@@ -386,6 +392,11 @@ export const UserMenu: React.FC = () => {
   };
 
   const handleFluidSearchToggle = (value: boolean) => {
+    if (!supportsFluidSearch) {
+      setFluidSearch(false);
+      return;
+    }
+
     setFluidSearch(value);
     if (typeof window !== 'undefined') {
       localStorage.setItem('fluidSearch', JSON.stringify(value));
@@ -456,8 +467,11 @@ export const UserMenu: React.FC = () => {
     }
     const defaultDoubanImageProxyUrl =
       (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY || '';
+    const runtimeConfig = getRuntimeConfig();
     const defaultFluidSearch =
-      (window as any).RUNTIME_CONFIG?.FLUID_SEARCH !== false;
+      supportsFluidSearch &&
+      runtimeConfig.APP_TARGET !== 'desktop' &&
+      runtimeConfig.FLUID_SEARCH !== false;
 
     setDefaultAggregateSearch(true);
     setEnableOptimization(true);
@@ -952,15 +966,22 @@ export const UserMenu: React.FC = () => {
                   流式搜索输出
                 </h4>
                 <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                  启用搜索结果实时流式输出，关闭后使用传统一次性搜索
+                  {supportsFluidSearch
+                    ? '启用搜索结果实时流式输出，关闭后使用传统一次性搜索'
+                    : '桌面版当前阶段固定关闭，避免进入未接入的 SSE 搜索链路'}
                 </p>
               </div>
-              <label className='flex items-center cursor-pointer'>
+              <label
+                className={`flex items-center ${
+                  supportsFluidSearch ? 'cursor-pointer' : 'cursor-not-allowed'
+                }`}
+              >
                 <div className='relative'>
                   <input
                     type='checkbox'
                     className='sr-only peer'
                     checked={fluidSearch}
+                    disabled={!supportsFluidSearch}
                     onChange={(e) => handleFluidSearchToggle(e.target.checked)}
                   />
                   <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>

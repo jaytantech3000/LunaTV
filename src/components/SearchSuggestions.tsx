@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { apiFetch } from '@/lib/transport/api-client';
+
 interface SearchSuggestionsProps {
   query: string;
   isVisible: boolean;
@@ -41,12 +43,12 @@ export default function SearchSuggestions({
     abortControllerRef.current = controller;
 
     try {
-      const response = await fetch(
-        `/api/search/suggestions?q=${encodeURIComponent(searchQuery)}`,
-        {
-          signal: controller.signal,
-        }
-      );
+      const response = await apiFetch('/search/suggestions', {
+        searchParams: {
+          q: searchQuery,
+        },
+        signal: controller.signal,
+      });
       if (response.ok) {
         const data = await response.json();
         const apiSuggestions = data.suggestions.map(

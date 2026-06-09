@@ -35,6 +35,7 @@ import {
   MIN_CONCURRENT_DOWNLOAD_TASKS,
 } from '@/lib/download/types';
 import { searchPlaybackSources } from '@/lib/playback-source-prefetch';
+import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 
@@ -1144,12 +1145,10 @@ function DownloadedContentDialog({
             source: content.source,
             id: content.vodId,
           });
-          const response = await fetch(
-            `/api/detail?${searchParams.toString()}`,
-            {
-              cache: 'no-store',
-            }
-          );
+          const response = await apiFetch('/detail', {
+            searchParams,
+            cache: 'no-store',
+          });
           const payload = (await response.json()) as SearchResult & {
             error?: string;
           };

@@ -5,6 +5,7 @@ export interface RuntimeCustomCategory {
 }
 
 export interface AppRuntimeConfig {
+  APP_TARGET?: 'web' | 'desktop';
   STORAGE_TYPE?: string;
   PROFILE_MODE?: 'single-user-local' | 'shared-multi-user';
   DOUBAN_PROXY_TYPE?: string;
@@ -32,4 +33,12 @@ export function getRuntimeConfig(): AppRuntimeConfig {
   }
 
   return window.RUNTIME_CONFIG || {};
+}
+
+export function getAppTarget(): 'web' | 'desktop' {
+  return getRuntimeConfig().APP_TARGET || 'web';
+}
+
+export function isDesktopAppTarget(): boolean {
+  return getAppTarget() === 'desktop';
 }
