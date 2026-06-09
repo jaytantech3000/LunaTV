@@ -95,6 +95,9 @@ export const UserMenu: React.FC = () => {
     { value: 'cmliussss-cdn-ali', label: '豆瓣 CDN By CMLiussss（阿里云）' },
     { value: 'custom', label: '自定义代理' },
   ];
+  const availableDoubanDataSourceOptions = isDesktopTarget
+    ? doubanDataSourceOptions.filter((option) => option.value !== 'direct')
+    : doubanDataSourceOptions;
 
   // 豆瓣图片代理选项
   const doubanImageProxyTypeOptions = [
@@ -106,6 +109,9 @@ export const UserMenu: React.FC = () => {
     { value: 'cmliussss-cdn-ali', label: '豆瓣 CDN By CMLiussss（阿里云）' },
     { value: 'custom', label: '自定义代理' },
   ];
+  const availableDoubanImageProxyTypeOptions = isDesktopTarget
+    ? doubanImageProxyTypeOptions.filter((option) => option.value !== 'server')
+    : doubanImageProxyTypeOptions;
 
   // 修改密码相关状态
   const [newPassword, setNewPassword] = useState('');
@@ -139,6 +145,7 @@ export const UserMenu: React.FC = () => {
   // 从 localStorage 读取设置
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      const runtimeConfig = getRuntimeConfig();
       const savedAggregateSearch = localStorage.getItem(
         'defaultAggregateSearch'
       );
@@ -150,10 +157,26 @@ export const UserMenu: React.FC = () => {
       const defaultDoubanProxyType =
         (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE ||
         'cmliussss-cdn-tencent';
+      const normalizedDesktopDoubanProxyType =
+        runtimeConfig.APP_TARGET === 'desktop' &&
+        defaultDoubanProxyType === 'direct'
+          ? 'cmliussss-cdn-tencent'
+          : defaultDoubanProxyType;
       if (savedDoubanDataSource !== null) {
-        setDoubanDataSource(savedDoubanDataSource);
-      } else if (defaultDoubanProxyType) {
-        setDoubanDataSource(defaultDoubanProxyType);
+        const normalizedSavedDoubanDataSource =
+          runtimeConfig.APP_TARGET === 'desktop' &&
+          savedDoubanDataSource === 'direct'
+            ? 'cmliussss-cdn-tencent'
+            : savedDoubanDataSource;
+        setDoubanDataSource(normalizedSavedDoubanDataSource);
+        if (normalizedSavedDoubanDataSource !== savedDoubanDataSource) {
+          localStorage.setItem(
+            'doubanDataSource',
+            normalizedSavedDoubanDataSource
+          );
+        }
+      } else if (normalizedDesktopDoubanProxyType) {
+        setDoubanDataSource(normalizedDesktopDoubanProxyType);
       }
 
       const savedDoubanProxyUrl = localStorage.getItem('doubanProxyUrl');
@@ -174,13 +197,30 @@ export const UserMenu: React.FC = () => {
       // 兼容历史数据：直连和豆瓣官方精品 CDN 统一使用服务器代理
       const normalizeImageProxyType = (type: string) =>
         type === 'direct' || type === 'img3' ? 'server' : type;
+      const normalizeDesktopImageProxyType = (type: string) =>
+        runtimeConfig.APP_TARGET === 'desktop' && type === 'server'
+          ? 'cmliussss-cdn-tencent'
+          : type;
       if (savedDoubanImageProxyType !== null) {
-        setDoubanImageProxyType(
+        const normalizedSavedDoubanImageProxyType =
+          normalizeDesktopImageProxyType(
+            normalizeImageProxyType(savedDoubanImageProxyType)
+          );
+        setDoubanImageProxyType(normalizedSavedDoubanImageProxyType);
+        if (
+          normalizedSavedDoubanImageProxyType !==
           normalizeImageProxyType(savedDoubanImageProxyType)
-        );
+        ) {
+          localStorage.setItem(
+            'doubanImageProxyType',
+            normalizedSavedDoubanImageProxyType
+          );
+        }
       } else if (defaultDoubanImageProxyType) {
         setDoubanImageProxyType(
-          normalizeImageProxyType(defaultDoubanImageProxyType)
+          normalizeDesktopImageProxyType(
+            normalizeImageProxyType(defaultDoubanImageProxyType)
+          )
         );
       }
 
@@ -202,7 +242,6 @@ export const UserMenu: React.FC = () => {
       }
 
       const savedFluidSearch = localStorage.getItem('fluidSearch');
-      const runtimeConfig = getRuntimeConfig();
       const defaultFluidSearch =
         runtimeConfig.APP_TARGET === 'desktop'
           ? false
@@ -457,6 +496,10 @@ export const UserMenu: React.FC = () => {
     const defaultDoubanProxyType =
       (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE ||
       'cmliussss-cdn-tencent';
+    const normalizedDesktopDoubanProxyType =
+      isDesktopTarget && defaultDoubanProxyType === 'direct'
+        ? 'cmliussss-cdn-tencent'
+        : defaultDoubanProxyType;
     const defaultDoubanProxy =
       (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY || '';
     let defaultDoubanImageProxyType =
@@ -467,6 +510,9 @@ export const UserMenu: React.FC = () => {
       defaultDoubanImageProxyType === 'img3'
     ) {
       defaultDoubanImageProxyType = 'server';
+    }
+    if (isDesktopTarget && defaultDoubanImageProxyType === 'server') {
+      defaultDoubanImageProxyType = 'cmliussss-cdn-tencent';
     }
     const defaultDoubanImageProxyUrl =
       (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY || '';
@@ -481,7 +527,7 @@ export const UserMenu: React.FC = () => {
     setFluidSearch(defaultFluidSearch);
     setLiveDirectConnect(false);
     setDoubanProxyUrl(defaultDoubanProxy);
-    setDoubanDataSource(defaultDoubanProxyType);
+    setDoubanDataSource(normalizedDesktopDoubanProxyType);
     setDoubanImageProxyType(defaultDoubanImageProxyType);
     setDoubanImageProxyUrl(defaultDoubanImageProxyUrl);
 
@@ -491,7 +537,10 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('fluidSearch', JSON.stringify(defaultFluidSearch));
       localStorage.setItem('liveDirectConnect', JSON.stringify(false));
       localStorage.setItem('doubanProxyUrl', defaultDoubanProxy);
-      localStorage.setItem('doubanDataSource', defaultDoubanProxyType);
+      localStorage.setItem(
+        'doubanDataSource',
+        normalizedDesktopDoubanProxyType
+      );
       localStorage.setItem('doubanImageProxyType', defaultDoubanImageProxyType);
       localStorage.setItem('doubanImageProxyUrl', defaultDoubanImageProxyUrl);
     }
@@ -703,7 +752,9 @@ export const UserMenu: React.FC = () => {
                   豆瓣数据代理
                 </h4>
                 <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                  选择获取豆瓣数据的方式
+                  {isDesktopTarget
+                    ? '桌面版当前支持 CDN 和自定义代理；直连模式待本地服务接入后开放'
+                    : '选择获取豆瓣数据的方式'}
                 </p>
               </div>
               <div className='relative' data-dropdown='douban-datasource'>
@@ -714,9 +765,9 @@ export const UserMenu: React.FC = () => {
                   className='w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left'
                 >
                   {
-                    doubanDataSourceOptions.find(
+                    availableDoubanDataSourceOptions.find(
                       (option) => option.value === doubanDataSource
-                    )?.label
+                    )?.label || availableDoubanDataSourceOptions[0]?.label
                   }
                 </button>
 
@@ -732,7 +783,7 @@ export const UserMenu: React.FC = () => {
                 {/* 下拉选项列表 */}
                 {isDoubanDropdownOpen && (
                   <div className='absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-auto'>
-                    {doubanDataSourceOptions.map((option) => (
+                    {availableDoubanDataSourceOptions.map((option) => (
                       <button
                         key={option.value}
                         type='button'
@@ -809,7 +860,9 @@ export const UserMenu: React.FC = () => {
                   豆瓣图片代理
                 </h4>
                 <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                  选择获取豆瓣图片的方式
+                  {isDesktopTarget
+                    ? '桌面版当前支持 CDN 和自定义图片代理；服务端图片代理待本地服务接入后开放'
+                    : '选择获取豆瓣图片的方式'}
                 </p>
               </div>
               <div className='relative' data-dropdown='douban-image-proxy'>
@@ -824,9 +877,9 @@ export const UserMenu: React.FC = () => {
                   className='w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left'
                 >
                   {
-                    doubanImageProxyTypeOptions.find(
+                    availableDoubanImageProxyTypeOptions.find(
                       (option) => option.value === doubanImageProxyType
-                    )?.label
+                    )?.label || availableDoubanImageProxyTypeOptions[0]?.label
                   }
                 </button>
 
@@ -842,7 +895,7 @@ export const UserMenu: React.FC = () => {
                 {/* 下拉选项列表 */}
                 {isDoubanImageProxyDropdownOpen && (
                   <div className='absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-auto'>
-                    {doubanImageProxyTypeOptions.map((option) => (
+                    {availableDoubanImageProxyTypeOptions.map((option) => (
                       <button
                         key={option.value}
                         type='button'

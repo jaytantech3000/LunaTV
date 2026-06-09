@@ -44,6 +44,7 @@ const DEFAULT_SEARCH_TIMEOUT_MS: u64 = 8_000;
 const DEFAULT_DETAIL_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PROXY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+const DEFAULT_BANGUMI_API_BASE_URL: &str = "https://api.bgm.tv";
 const DEFAULT_DOUBAN_API_BASE_URL: &str = "https://m.douban.com";
 const MAX_DOUBAN_RATING_IDS_PER_REQUEST: usize = 20;
 
@@ -102,6 +103,7 @@ pub struct AppState {
     data_dir: PathBuf,
     sqlite_path: PathBuf,
     client: reqwest::Client,
+    bangumi_api_base_url: String,
 }
 
 impl AppState {
@@ -149,6 +151,7 @@ impl AppState {
             data_dir,
             sqlite_path,
             client: reqwest::Client::new(),
+            bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
         }
     }
 
@@ -340,6 +343,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/content/search", get(get_content_search))
         .route("/content/suggestions", get(get_content_suggestions))
         .route("/content/detail", get(get_content_detail))
+        .route("/metadata/bangumi/calendar", get(get_bangumi_calendar))
         .route("/metadata/douban/ratings", get(get_douban_ratings))
         .route("/media/vod/m3u8", get(get_vod_m3u8))
         .route("/media/vod/segment", get(get_vod_segment))
@@ -347,6 +351,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/search", get(get_content_search))
         .route("/api/search/suggestions", get(get_content_suggestions))
         .route("/api/detail", get(get_content_detail))
+        .route("/api/bangumi/calendar", get(get_bangumi_calendar))
         .route("/api/douban/ratings", get(get_douban_ratings))
         .route("/api/proxy/vod/m3u8", get(get_vod_m3u8))
         .route("/api/proxy/vod/segment", get(get_vod_segment))
@@ -517,6 +522,18 @@ async fn get_douban_ratings(
         CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=300"),
     );
+    Ok(response)
+}
+
+async fn get_bangumi_calendar(State(state): State<AppState>) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let payload = fetch_bangumi_calendar(&state.client, &state.bangumi_api_base_url)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let mut response = Json(payload).into_response();
+    apply_query_cache_headers(response.headers_mut(), config.cache_time);
     Ok(response)
 }
 
@@ -1379,6 +1396,31 @@ async fn fetch_douban_ratings_by_ids(
     Ok(ratings)
 }
 
+async fn fetch_bangumi_calendar(client: &reqwest::Client, api_base_url: &str) -> Result<Value> {
+    let response = client
+        .get(format!("{}/calendar", api_base_url.trim_end_matches('/')))
+        .headers(build_bangumi_headers())
+        .timeout(Duration::from_millis(DEFAULT_DETAIL_TIMEOUT_MS))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("bangumi calendar request failed with {}", response.status());
+    }
+
+    response.json::<Value>().await.map_err(Into::into)
+}
+
+fn build_bangumi_headers() -> ReqwestHeaderMap {
+    let mut headers = ReqwestHeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(DEFAULT_WEB_UA));
+    headers.insert(
+        reqwest::header::ACCEPT,
+        HeaderValue::from_static("application/json"),
+    );
+    headers
+}
+
 async fn fetch_single_douban_rating(client: &reqwest::Client, id: u64) -> Result<String> {
     let response = client
         .get(format!(
@@ -2134,6 +2176,63 @@ segment0.ts
         upstream.abort();
     }
 
+    #[tokio::test]
+    async fn bangumi_calendar_endpoint_returns_payload() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.bangumi_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/bangumi/calendar")
+                    .body(Body::empty())
+                    .expect("bangumi request"),
+            )
+            .await
+            .expect("bangumi response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("public, max-age=7200")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("bangumi body");
+        let payload: Value = serde_json::from_slice(&body).expect("bangumi payload json");
+
+        assert_eq!(
+            payload
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("weekday"))
+                .and_then(|item| item.get("en"))
+                .and_then(Value::as_str),
+            Some("Mon")
+        );
+
+        upstream.abort();
+    }
+
     #[test]
     fn parse_douban_ids_dedupes_and_limits() {
         let ids = parse_douban_ids(Some(
@@ -2338,6 +2437,34 @@ segment0.ts
             [(CONTENT_TYPE, "application/octet-stream")],
             vec![0_u8, 1, 2, 3],
           )
+        }),
+      )
+      .route(
+        "/calendar",
+        get(|| async move {
+          Json(json!([
+            {
+              "weekday": {
+                "en": "Mon"
+              },
+              "items": [{
+                "id": 1,
+                "name": "Mock Bangumi",
+                "name_cn": "模拟番剧",
+                "rating": {
+                  "score": 8.1
+                },
+                "air_date": "2026-06-09",
+                "images": {
+                  "large": "https://img.example.com/bangumi-large.jpg",
+                  "common": "https://img.example.com/bangumi-common.jpg",
+                  "medium": "https://img.example.com/bangumi-medium.jpg",
+                  "small": "https://img.example.com/bangumi-small.jpg",
+                  "grid": "https://img.example.com/bangumi-grid.jpg"
+                }
+              }]
+            }
+          ]))
         }),
       )
     }
