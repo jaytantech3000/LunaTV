@@ -12,10 +12,17 @@
 # next.js
 /.next/
 /.next-build/
+/.next-web-sync/
+/.next-desktop/
 /out/
+/desktop-shell-dist/
+/.desktop-build-temp/
 
 # production
 /build
+/target
+/src-tauri/binaries/
+/.lunatv-desktop/
 
 # misc
 .DS_Store
@@ -48,6 +55,8 @@ sitemap-*.xml
 src/lib/runtime.ts
 public/manifest.json
 public/sw.js
+public/sw.js.map
 public/workbox-*.js
+public/workbox-*.js.map
 public/worker-*.js
 public/fallback-*.js
