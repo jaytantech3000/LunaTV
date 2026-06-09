@@ -45,6 +45,13 @@ describe('download proxy url helpers', () => {
     expect(looksLikeManifestUrl(proxiedUrl)).toBe(true);
     expect(getVodProxyAssetKind(proxiedUrl)).toBe('m3u8');
     expect(normalizeVodEpisodeUrl('demo', proxiedUrl)).toBe(proxiedUrl);
+
+    const signedProxyUrl =
+      '/api/proxy/m3u8-filter?source=demo&url=https%3A%2F%2Fexample.com%2Findex.m3u8&sig=test';
+    expect(isVodProxyUrl(signedProxyUrl)).toBe(true);
+    expect(looksLikeManifestUrl(signedProxyUrl)).toBe(true);
+    expect(getVodProxyAssetKind(signedProxyUrl)).toBe('m3u8');
+    expect(normalizeVodEpisodeUrl('demo', signedProxyUrl)).toBe(signedProxyUrl);
   });
 
   it('normalizes upstream manifest urls to same-origin proxy urls', () => {
