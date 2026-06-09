@@ -9,7 +9,6 @@ import { reportGitHubError } from './ci-annotations.mjs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = join(__dirname, '..');
-const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 const outputDir = join(projectRoot, 'desktop-shell-dist');
 const legacyExportDir = join(projectRoot, 'out');
 const tempDir = join(projectRoot, '.desktop-build-temp');
@@ -78,6 +77,23 @@ function resolveDesktopExportDir() {
   return null;
 }
 
+function runPnpm(args, env) {
+  if (process.platform === 'win32') {
+    execFileSync('cmd.exe', ['/d', '/s', '/c', `pnpm ${args.join(' ')}`], {
+      cwd: projectRoot,
+      env,
+      stdio: 'inherit',
+    });
+    return;
+  }
+
+  execFileSync('pnpm', args, {
+    cwd: projectRoot,
+    env,
+    stdio: 'inherit',
+  });
+}
+
 let exitCode = 0;
 
 try {
@@ -94,17 +110,8 @@ try {
     recursive: true,
   });
 
-  execFileSync(pnpmCommand, ['gen:manifest'], {
-    cwd: projectRoot,
-    env: desktopEnv,
-    stdio: 'inherit',
-  });
-
-  execFileSync(pnpmCommand, ['exec', 'next', 'build'], {
-    cwd: projectRoot,
-    env: desktopEnv,
-    stdio: 'inherit',
-  });
+  runPnpm(['gen:manifest'], desktopEnv);
+  runPnpm(['exec', 'next', 'build'], desktopEnv);
 
   const desktopExportDir = resolveDesktopExportDir();
   if (!desktopExportDir) {
