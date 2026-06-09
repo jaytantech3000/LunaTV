@@ -16,6 +16,9 @@
 
 # production
 /build
+/target
+/src-tauri/binaries/
+/.lunatv-desktop/
 
 # misc
 .DS_Store

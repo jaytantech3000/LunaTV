@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LunaTV Desktop",
+  "version": "0.1.0",
+  "identifier": "com.lunatv.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm desktop:dev:bootstrap",
+    "devUrl": "http://127.0.0.1:3000",
+    "frontendDist": "../desktop-shell-dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "LunaTV Desktop",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1080,
+        "minHeight": 720,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/moontv-local-service"]
+  }
+}
