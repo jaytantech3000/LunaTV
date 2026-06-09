@@ -181,7 +181,7 @@ async fn start_local_service_impl(
         .arg(&paths.data_dir)
         .arg("--sqlite-path")
         .arg(&paths.sqlite_path)
-        .current_dir(project_root())
+        .current_dir(&paths.data_dir)
         .stdin(Stdio::null())
         .stdout(if cfg!(debug_assertions) {
             Stdio::inherit()
@@ -354,20 +354,28 @@ fn ensure_desktop_config_file(config_path: &Path) -> Result<()> {
 }
 
 fn resolve_sidecar_binary_path(app: &AppHandle) -> Result<PathBuf> {
-    let sidecar_file_name = sidecar_binary_file_name();
     if cfg!(debug_assertions) {
         return Ok(project_root()
             .join("src-tauri")
             .join("binaries")
-            .join(sidecar_file_name));
+            .join(sidecar_binary_file_name()));
     }
 
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .context("failed to resolve Tauri resource directory")?;
-
-    Ok(resource_dir.join("binaries").join(sidecar_file_name))
+    sidecar_release_candidates(app)?
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "failed to locate bundled local service sidecar; checked: {}",
+                sidecar_release_candidates(app)
+                    .ok()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
 }
 
 fn sidecar_binary_file_name() -> String {
@@ -382,6 +390,40 @@ fn sidecar_binary_file_name() -> String {
         env!("LUNATV_TARGET_TRIPLE"),
         extension
     )
+}
+
+fn sidecar_runtime_file_name() -> String {
+    let extension = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
+
+    format!("{LOCAL_SERVICE_BINARY_NAME}{extension}")
+}
+
+fn sidecar_release_candidates(app: &AppHandle) -> Result<Vec<PathBuf>> {
+    let current_exe =
+        std::env::current_exe().context("failed to resolve current executable path")?;
+    let executable_dir = current_exe
+        .parent()
+        .context("failed to resolve executable directory")?;
+    let bundled_sidecar_name = sidecar_runtime_file_name();
+    let dev_sidecar_name = sidecar_binary_file_name();
+    let mut candidates = vec![
+        executable_dir.join(&bundled_sidecar_name),
+        executable_dir.join(&dev_sidecar_name),
+    ];
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join("binaries").join(&dev_sidecar_name));
+        candidates.push(resource_dir.join("binaries").join(&bundled_sidecar_name));
+        candidates.push(resource_dir.join(&bundled_sidecar_name));
+        candidates.push(resource_dir.join(&dev_sidecar_name));
+    }
+
+    candidates.dedup();
+    Ok(candidates)
 }
 
 fn project_root() -> PathBuf {
