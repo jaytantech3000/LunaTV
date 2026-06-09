@@ -12,9 +12,22 @@
 ## 运行假设
 
 - 服务运行在本地回环地址，例如 `http://127.0.0.1:8787`
+- 服务实现为 Rust 独立进程，由 Tauri 负责启动和监管
 - 桌面端默认使用隐式本地 profile，不通过 cookie 传递身份
 - Web 版本继续由 Next route adapter 把 cookie 解析为 `AuthContext / ProfileContext`
 - JSON 接口保持当前响应结构，媒体接口继续保持 HTTP 流式响应
+
+## 控制面与数据面
+
+桌面版明确区分两类通道：
+
+- HTTP 数据面：播放器、下载器、前端业务查询走本协议
+- Tauri IPC 控制面：服务生命周期、配置读写、SQLite/JSON 管理、文件系统和桌面原生能力
+
+不采用的方案：
+
+- 不把 `m3u8 / segment / key / logo` 等媒体链路改成 IPC 返回
+- 不让播放器或下载器通过 IPC 逐块拉取媒体数据
 
 ## 兼容约束
 
@@ -23,6 +36,19 @@
 - `m3u8` 重写后仍返回播放器可直接消费的 URL
 - `segment / key / logo` 继续返回可流式消费的字节流
 - 媒体代理必须保留 `Range / Content-Range / Accept-Ranges / CORS` 语义
+
+## 建议配套 IPC
+
+以下不是本 HTTP 协议的一部分，但桌面壳应同步提供：
+
+- `start_local_service`
+- `stop_local_service`
+- `get_local_service_status`
+- `read_app_config`
+- `write_app_config`
+- `open_data_directory`
+- `export_app_snapshot`
+- `import_app_snapshot`
 
 ## 必需接口
 

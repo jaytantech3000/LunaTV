@@ -28,6 +28,8 @@
 - 先保留当前单仓库结构，不立即改成 monorepo
 - 先抽“平台无关核心逻辑”，再加桌面壳
 - 桌面端媒体链路采用“本地 loopback HTTP 服务”，而不是把流媒体代理改成纯 Tauri command
+- 桌面端最终采用 `Tauri 2 + Rust 独立本地 HTTP 服务 + SQLite/JSON + 静态前端` 组合
+- 数据面走 HTTP，控制面走 Tauri IPC；不要把播放器、下载器、HLS 资源链路改成 IPC 拉流
 - 桌面 v1 优先支持本地单用户、本地配置、本地播放记录/收藏/搜索历史
 
 ### 暂不采用
@@ -97,14 +99,19 @@
 ```text
 Desktop Shell (Tauri 2)
   ├─ Static Frontend Bundle
-  ├─ UI State / Download Cache / Local IndexedDB
-  └─ Local App Service (loopback HTTP)
+  ├─ Tauri IPC Control Plane
+  │   ├─ app lifecycle
+  │   ├─ config read/write
+  │   ├─ sqlite/json access
+  │   ├─ file dialogs / import-export
+  │   └─ window / tray / updater / logging
+  └─ Local App Service (Rust sidecar, loopback HTTP)
       ├─ content service
       ├─ live service
       ├─ media proxy service
       ├─ metadata service
       ├─ profile/config service
-      └─ local storage adapters
+      └─ local storage adapters (SQLite / JSON)
 ```
 
 ### 为什么桌面端要用本地 loopback HTTP 服务
@@ -121,6 +128,23 @@ Desktop Shell (Tauri 2)
 如果桌面端仍保留“URL 资源流”这层抽象，现有播放器和下载管理器可以最大限度复用。  
 因此，桌面代理服务应优先保留 HTTP 语义，而不是把所有请求都塞进原生桥。
 
+### 为什么不用 IPC 承载媒体链路
+
+Tauri IPC 适合命令式控制操作，不适合本项目的媒体主链路。
+
+当前播放器和下载器依赖的是：
+
+- HLS.js 直接消费 `m3u8` URL
+- 视频元素直接消费媒体 URL
+- 下载器直接 `fetch()` manifest / segment / key
+- 代理层继续保留 `Range / Content-Range / Accept-Ranges` 语义
+
+如果改成 IPC 拉流，就必须重写播放器接入、下载器、缓存链路和资源 URL 抽象，收益不足。  
+因此桌面版采用：
+
+- HTTP：媒体面 + 共享业务协议
+- IPC：控制面 + 原生能力
+
 ## 推荐的阶段性技术决策
 
 ### 决策 1：第一阶段不拆仓库
@@ -135,6 +159,8 @@ Desktop Shell (Tauri 2)
 - 尽量保留现有页面、组件、播放器和下载器
 - 把直接依赖 `/api/*` 的代码收敛到统一 transport 层
 - 把 route handler 中的真正业务逻辑抽到平台无关模块
+
+这一步完成后，桌面端不再以“复用 TS 服务运行时”为目标，而是以“复用协议、输入输出结构和迁移参考实现”为目标。
 
 ### 决策 3：桌面 v1 只做本地单用户
 
@@ -349,16 +375,43 @@ src/lib/platform/
 
 目标：
 
-- 在本地起一个最小服务原型
+- 在本地起一个最小 Rust 服务原型
 - 先证明媒体代理链路可行
+
+实现形态：
+
+- `src-tauri/` 负责桌面壳和进程托管
+- `crates/moontv-local-service/` 负责本地 HTTP 服务
+- Tauri 负责 sidecar 启停、健康检查、崩溃重启和退出清理
+
+建议技术栈：
+
+- HTTP：`axum`
+- async runtime：`tokio`
+- 数据层：`rusqlite` 或 `sqlx/sqlite`
+- 配置：JSON 文件
+
+控制面和数据面分工：
+
+- HTTP：`/media/*`、`/content/*`、`/live/*`
+- IPC：配置读写、SQLite 管理、导入导出、下载任务控制、原生能力
+
+建议最先实现的控制面 IPC：
+
+- `start_local_service`
+- `stop_local_service`
+- `get_local_service_status`
+- `read_app_config`
+- `write_app_config`
 
 建议优先打通：
 
-- `/proxy/vod/m3u8`
-- `/proxy/vod/segment`
-- `/proxy/vod/key`
-- `/search`
-- `/detail`
+- `/health`
+- `/media/vod/m3u8`
+- `/media/vod/segment`
+- `/media/vod/key`
+- `/content/search`
+- `/content/detail`
 
 退出标准：
 
@@ -388,7 +441,7 @@ src/lib/platform/
 目标：
 
 - 引入桌面壳
-- 启动本地服务
+- 启动并托管 Rust 本地服务
 - 加入桌面文件系统、日志、窗口、自动更新等能力
 
 退出标准：
