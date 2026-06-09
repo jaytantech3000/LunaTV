@@ -14,6 +14,7 @@ type Action =
   | 'edit'
   | 'disable'
   | 'enable'
+  | 'update_ad_filter'
   | 'delete'
   | 'sort'
   | 'batch_disable'
@@ -55,7 +56,18 @@ export async function POST(request: NextRequest) {
     const username = authInfo.username;
 
     // 基础校验
-    const ACTIONS: Action[] = ['add', 'edit', 'disable', 'enable', 'delete', 'sort', 'batch_disable', 'batch_enable', 'batch_delete'];
+    const ACTIONS: Action[] = [
+      'add',
+      'edit',
+      'disable',
+      'enable',
+      'update_ad_filter',
+      'delete',
+      'sort',
+      'batch_disable',
+      'batch_enable',
+      'batch_delete',
+    ];
     if (!username || !action || !ACTIONS.includes(action)) {
       return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
     }
@@ -178,6 +190,19 @@ export async function POST(request: NextRequest) {
         if (!entry)
           return NextResponse.json({ error: '源不存在' }, { status: 404 });
         entry.disabled = false;
+        break;
+      }
+      case 'update_ad_filter': {
+        const { key, disable_ad_filter } = body as {
+          key?: string;
+          disable_ad_filter?: boolean;
+        };
+        if (!key)
+          return NextResponse.json({ error: '缺少 key 参数' }, { status: 400 });
+        const entry = adminConfig.SourceConfig.find((s) => s.key === key);
+        if (!entry)
+          return NextResponse.json({ error: '源不存在' }, { status: 404 });
+        entry.disable_ad_filter = !!disable_ad_filter;
         break;
       }
       case 'delete': {

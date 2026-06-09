@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
+import { rewriteEpisodesForAdFilterMany } from '@/lib/episode-rewriter';
 import { filterAdultContentResults } from '@/lib/yellow';
 
 export const runtime = 'nodejs';
@@ -65,8 +66,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ results: [] }, { status: 200 });
     }
 
+    const rewrittenResults = await rewriteEpisodesForAdFilterMany(
+      flattenedResults,
+      request
+    );
+
     return NextResponse.json(
-      { results: flattenedResults },
+      { results: rewrittenResults },
       {
         headers: {
           'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,

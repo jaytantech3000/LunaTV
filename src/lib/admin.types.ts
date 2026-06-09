@@ -40,6 +40,7 @@ export interface AdminConfig {
     referer?: string;
     from: 'config' | 'custom';
     disabled?: boolean;
+    disable_ad_filter?: boolean;
   }[];
   CustomCategories: {
     name?: string;
@@ -58,6 +59,9 @@ export interface AdminConfig {
     channelNumber?: number;
     disabled?: boolean;
   }[];
+  AdFilterConfig?: {
+    enabled: boolean;
+  };
 }
 
 export interface AdminConfigResult {

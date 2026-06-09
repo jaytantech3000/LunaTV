@@ -14,6 +14,7 @@ export interface ApiSite {
   detail?: string;
   ua?: string;
   referer?: string;
+  disable_ad_filter?: boolean;
 }
 
 export interface LiveCfg {
@@ -120,6 +121,7 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
         referer: site.referer,
         from: 'config',
         disabled: false,
+        disable_ad_filter: false,
       });
     }
   });
@@ -257,6 +259,9 @@ async function getInitConfig(configFile: string, subConfig: {
     SourceConfig: [],
     CustomCategories: [],
     LiveConfig: [],
+    AdFilterConfig: {
+      enabled: true,
+    },
   };
 
   // 补充用户信息
@@ -289,6 +294,7 @@ async function getInitConfig(configFile: string, subConfig: {
       referer: site.referer,
       from: 'config',
       disabled: false,
+      disable_ad_filter: false,
     });
   });
 
@@ -374,6 +380,12 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   }
   if (!adminConfig.LiveConfig || !Array.isArray(adminConfig.LiveConfig)) {
     adminConfig.LiveConfig = [];
+  }
+  if (
+    !adminConfig.AdFilterConfig ||
+    typeof adminConfig.AdFilterConfig.enabled !== 'boolean'
+  ) {
+    adminConfig.AdFilterConfig = { enabled: true };
   }
 
   // 站长变更自检
@@ -484,6 +496,7 @@ export async function getAvailableApiSites(user?: string): Promise<ApiSite[]> {
       detail: s.detail,
       ua: s.ua,
       referer: s.referer,
+      disable_ad_filter: s.disable_ad_filter,
     }));
   }
 
@@ -507,6 +520,7 @@ export async function getAvailableApiSites(user?: string): Promise<ApiSite[]> {
         detail: s.detail,
         ua: s.ua,
         referer: s.referer,
+        disable_ad_filter: s.disable_ad_filter,
       }));
     }
   }
