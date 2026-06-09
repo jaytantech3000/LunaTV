@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { reportGitHubError } from './ci-annotations.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -77,6 +78,8 @@ function resolveDesktopExportDir() {
   return null;
 }
 
+let exitCode = 0;
+
 try {
   moveForDesktopBuild('src/app/api', 'src-app-api');
   moveForDesktopBuild('src/middleware.ts', 'src-middleware.ts');
@@ -120,6 +123,13 @@ try {
   });
 
   console.log(`Prepared desktop frontend dist at ${outputDir}`);
+} catch (error) {
+  reportGitHubError('desktop-build-frontend', error);
+  exitCode = error?.status ?? 1;
 } finally {
   restoreMovedPaths();
+}
+
+if (exitCode !== 0) {
+  process.exit(exitCode);
 }

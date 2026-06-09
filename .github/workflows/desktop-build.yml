@@ -68,9 +68,13 @@ jobs:
 
       # Signing and notarization are intentionally left out for now.
       # This workflow produces unsigned artifacts for internal testing.
-      - name: Prepare Windows desktop bundle
+      - name: Prepare Windows desktop frontend
         if: runner.os == 'Windows'
-        run: node scripts/desktop-before-build.mjs
+        run: pnpm desktop:build:frontend
+
+      - name: Prepare Windows desktop sidecar
+        if: runner.os == 'Windows'
+        run: pnpm desktop:prepare:sidecar:release
 
       - name: Build desktop bundle
         if: runner.os != 'Windows'
