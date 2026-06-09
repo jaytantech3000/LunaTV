@@ -460,8 +460,9 @@ src/lib/platform/
 2026-06-09 当前落地状态：
 
 - Tauri `beforeBuildCommand` 已接入桌面静态前端构建和 release sidecar 同步
-- 本地 Rust 服务已覆盖 `/health`、`/content/search`、`/content/detail`、`/content/suggestions`、`/metadata/bangumi/calendar`、`/metadata/douban/ratings` 以及 VOD 代理链路
+- 本地 Rust 服务已覆盖 `/health`、`/runtime/public-config`、`/content/search`、`/content/detail`、`/content/suggestions`、`/metadata/bangumi/calendar`、`/metadata/douban/ratings`、`/live/sources`、`/live/channels`、`/live/epg`、`/live/precheck` 以及直播/VOD 代理链路
 - 前端已接入 Tauri IPC，可在设置面板中查看本地服务状态、编辑桌面 JSON 配置并重启本地服务
+- 桌面静态前端已增加运行时配置同步层，启动时会从本地服务拉取本地 JSON 投影，驱动直播入口、自定义分类、豆瓣代理和站点展示信息
 - 已在桌面设置中收敛当前尚未接入本地服务的 Douban 直连 / 服务端图片代理选项，避免用户切换到已知 404 路径
 - 已通过 `pnpm desktop:check`、`pnpm desktop:test`、`pnpm desktop:build` 验证桌面壳、sidecar 和前端产物可闭环
 - 当前已实际产出 macOS 测试包：

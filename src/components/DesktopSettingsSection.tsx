@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
+import { requestDesktopRuntimeRefresh } from '@/lib/desktop/runtime-config';
 import {
   DesktopLocalServiceStatus,
   getLocalServiceStatus,
@@ -151,6 +152,7 @@ export default function DesktopSettingsSection({
 
       const nextStatus = await startLocalService();
       setServiceStatus(nextStatus);
+      requestDesktopRuntimeRefresh();
       setInfoMessage('本地服务已重启');
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -175,6 +177,7 @@ export default function DesktopSettingsSection({
       await writeDesktopAppConfig(parsedConfig);
       const nextStatus = await startLocalService();
       setServiceStatus(nextStatus);
+      requestDesktopRuntimeRefresh();
       setInfoMessage('配置已保存，并已重新加载本地服务');
     } catch (error) {
       if (error instanceof SyntaxError) {
@@ -236,9 +239,7 @@ export default function DesktopSettingsSection({
               className='inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800'
             >
               <RotateCcw
-                className={`h-3.5 w-3.5 ${
-                  isRestarting ? 'animate-spin' : ''
-                }`}
+                className={`h-3.5 w-3.5 ${isRestarting ? 'animate-spin' : ''}`}
               />
               重启服务
             </button>
@@ -299,7 +300,8 @@ export default function DesktopSettingsSection({
         </>
       ) : (
         <div className='rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-200'>
-          当前运行在浏览器桌面前端模式，Tauri IPC 不可用。请通过桌面壳运行，才能读取桌面配置文件并控制本地服务。
+          当前运行在浏览器桌面前端模式，Tauri IPC
+          不可用。请通过桌面壳运行，才能读取桌面配置文件并控制本地服务。
         </div>
       )}
 

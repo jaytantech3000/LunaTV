@@ -11,6 +11,58 @@
 
 ---
 
+## 2026-06-09 - 桌面应用 v1 首版闭环
+
+- 分支：`desktop-foundation`
+- 方案文档：
+  - `dev-plan/desktop-foundation/desktop-first-platform-blueprint.md`
+  - `dev-plan/desktop-foundation/desktop-local-service-protocol-v1.md`
+
+### 目标
+
+- 让桌面版从“桌面基础设施可构建”推进到“桌面主链路可用”。
+- 补齐静态前端在桌面壳中的运行时配置同步。
+- 打通直播播放所需的本地服务接口与媒体代理链路。
+
+### 核心实现
+
+- Rust 本地服务新增桌面运行时配置投影接口：
+  - `GET /runtime/public-config`
+  - `GET /api/runtime/public-config`
+- Rust 本地服务补齐直播数据面：
+  - `GET /live/sources`
+  - `GET /live/channels`
+  - `GET /live/epg`
+  - `GET /live/precheck`
+  - `GET /media/live/m3u8`
+  - `GET /media/live/segment`
+  - `GET /media/live/key`
+  - `GET /media/live/logo`
+  - 以及对应 `/api/*` 兼容路径
+- 本地服务增加 M3U 解析、EPG 解析、直播源内存缓存、直播 manifest 重写与 Range 透传能力。
+- 前端增加桌面运行时同步层：
+  - `src/components/DesktopRuntimeSync.tsx`
+  - `src/lib/desktop/runtime-config.ts`
+  - 启动时从本地服务同步 `ENABLE_WEB_LIVE`、`CUSTOM_CATEGORIES`、豆瓣代理配置和站点展示信息。
+- 设置面板保存/重启本地服务后会主动刷新桌面运行时配置，导航和相关页面可跟随更新。
+
+### 验证结论
+
+- `cargo test -p moontv-local-service` 已通过。
+- `pnpm typecheck` 已通过。
+- `pnpm desktop:check` 已通过。
+- `pnpm desktop:build:frontend` 已通过。
+- `pnpm desktop:build` 已通过。
+- 当前产物：
+  - `target/release/bundle/macos/LunaTV Desktop.app`
+  - `target/release/bundle/dmg/LunaTV Desktop_0.1.0_x64.dmg`
+
+### 当前约束
+
+- 管理后台仍然不是桌面 v1 的主目标，入口继续保持关闭。
+- 多用户、远程共享存储、配置订阅自动更新仍未纳入桌面 v1。
+- 本地配置修改后，发现页与导航会刷新；若用户正在播放或停留在复杂页面，建议按桌面应用常规重新进入相关页面完成重建。
+
 ## 2026-06-04 - 离线下载与离线播放 v1
 
 - 分支：`cache-and-download`

@@ -26,6 +26,8 @@ import {
   useState,
 } from 'react';
 
+import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
+
 import { useSite } from './SiteProvider';
 
 interface SidebarContextType {
@@ -130,6 +132,50 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
     isCollapsed,
   };
 
+  const buildDiscoveryMenuItems = useCallback(() => {
+    const runtimeConfig = (window as any).RUNTIME_CONFIG;
+    const nextItems = [
+      {
+        icon: Film,
+        label: '电影',
+        href: '/douban?type=movie',
+      },
+      {
+        icon: Tv,
+        label: '剧集',
+        href: '/douban?type=tv',
+      },
+      {
+        icon: Cat,
+        label: '动漫',
+        href: '/douban?type=anime',
+      },
+      {
+        icon: Clover,
+        label: '综艺',
+        href: '/douban?type=show',
+      },
+    ];
+
+    if (runtimeConfig?.ENABLE_WEB_LIVE) {
+      nextItems.push({
+        icon: Radio,
+        label: '直播',
+        href: '/live',
+      });
+    }
+
+    if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
+      nextItems.push({
+        icon: Star,
+        label: '自定义',
+        href: '/douban?type=custom',
+      });
+    }
+
+    return nextItems;
+  }, []);
+
   const [menuItems, setMenuItems] = useState([
     {
       icon: Film,
@@ -154,35 +200,23 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
   ]);
 
   useEffect(() => {
-    const runtimeConfig = (window as any).RUNTIME_CONFIG;
-    if (runtimeConfig?.ENABLE_WEB_LIVE) {
-      setMenuItems((prevItems) => {
-        if (prevItems.some((item) => item.href === '/live')) return prevItems;
-        return [
-          ...prevItems,
-          {
-            icon: Radio,
-            label: '直播',
-            href: '/live',
-          },
-        ];
-      });
-    }
-    if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
-      setMenuItems((prevItems) => {
-        if (prevItems.some((item) => item.href === '/douban?type=custom'))
-          return prevItems;
-        return [
-          ...prevItems,
-          {
-            icon: Star,
-            label: '自定义',
-            href: '/douban?type=custom',
-          },
-        ];
-      });
-    }
-  }, []);
+    const applyRuntimeMenuItems = () => {
+      setMenuItems(buildDiscoveryMenuItems());
+    };
+
+    applyRuntimeMenuItems();
+    window.addEventListener(
+      DESKTOP_RUNTIME_UPDATED_EVENT,
+      applyRuntimeMenuItems
+    );
+
+    return () => {
+      window.removeEventListener(
+        DESKTOP_RUNTIME_UPDATED_EVENT,
+        applyRuntimeMenuItems
+      );
+    };
+  }, [buildDiscoveryMenuItems]);
 
   const prefetchRoute = useCallback(
     (href: string) => {

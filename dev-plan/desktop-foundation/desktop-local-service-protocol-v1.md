@@ -52,6 +52,29 @@
 
 ## 必需接口
 
+### GET `/runtime/public-config`
+
+响应：
+
+```json
+{
+  "siteName": "string",
+  "announcement": "string",
+  "doubanProxyType": "string",
+  "doubanProxy": "string",
+  "doubanImageProxyType": "string",
+  "doubanImageProxy": "string",
+  "enableWebLive": true,
+  "customCategories": []
+}
+```
+
+说明：
+
+- 供桌面静态前端在启动时同步本地 JSON 配置投影
+- 不替代 `read_app_config` / `write_app_config` 这类 IPC 控制面能力
+- 推荐同时保留兼容路径 `GET /api/runtime/public-config`
+
 ### GET `/content/search`
 
 查询参数：

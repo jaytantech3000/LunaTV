@@ -14,6 +14,7 @@ import {
 } from 'react';
 
 import { GetBangumiCalendarData } from '@/lib/bangumi.client';
+import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 import {
   getDoubanCategories,
   getDoubanList,
@@ -215,10 +216,23 @@ function DoubanPageClient() {
 
   // 获取自定义分类数据
   useEffect(() => {
-    const runtimeConfig = (window as any).RUNTIME_CONFIG;
-    if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
-      setCustomCategories(runtimeConfig.CUSTOM_CATEGORIES);
-    }
+    const syncCustomCategories = () => {
+      const runtimeConfig = (window as any).RUNTIME_CONFIG;
+      setCustomCategories(runtimeConfig?.CUSTOM_CATEGORIES || []);
+    };
+
+    syncCustomCategories();
+    window.addEventListener(
+      DESKTOP_RUNTIME_UPDATED_EVENT,
+      syncCustomCategories
+    );
+
+    return () => {
+      window.removeEventListener(
+        DESKTOP_RUNTIME_UPDATED_EVENT,
+        syncCustomCategories
+      );
+    };
   }, []);
 
   // 同步最新参数值到 ref

@@ -1,6 +1,17 @@
 'use client';
 
-import { createContext, ReactNode, useContext } from 'react';
+import {
+  createContext,
+  ReactNode,
+  useContext,
+  useEffect,
+  useState,
+} from 'react';
+
+import {
+  DESKTOP_RUNTIME_UPDATED_EVENT,
+  getDesktopSitePresentation,
+} from '@/lib/desktop/runtime-config';
 
 const SiteContext = createContext<{ siteName: string; announcement?: string }>({
   // 默认值
@@ -20,8 +31,40 @@ export function SiteProvider({
   siteName: string;
   announcement?: string;
 }) {
+  const [sitePresentation, setSitePresentation] = useState({
+    siteName,
+    announcement,
+  });
+
+  useEffect(() => {
+    const applyDesktopSitePresentation = () => {
+      const desktopSitePresentation = getDesktopSitePresentation();
+
+      setSitePresentation({
+        siteName: desktopSitePresentation.siteName || siteName,
+        announcement:
+          desktopSitePresentation.announcement !== undefined
+            ? desktopSitePresentation.announcement
+            : announcement,
+      });
+    };
+
+    applyDesktopSitePresentation();
+    window.addEventListener(
+      DESKTOP_RUNTIME_UPDATED_EVENT,
+      applyDesktopSitePresentation
+    );
+
+    return () => {
+      window.removeEventListener(
+        DESKTOP_RUNTIME_UPDATED_EVENT,
+        applyDesktopSitePresentation
+      );
+    };
+  }, [announcement, siteName]);
+
   return (
-    <SiteContext.Provider value={{ siteName, announcement }}>
+    <SiteContext.Provider value={sitePresentation}>
       {children}
     </SiteContext.Provider>
   );

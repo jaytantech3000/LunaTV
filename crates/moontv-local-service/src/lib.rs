@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -30,6 +30,7 @@ use reqwest::header::HeaderMap as ReqwestHeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 use url::{Url, form_urlencoded};
 
@@ -44,6 +45,7 @@ const DEFAULT_SEARCH_TIMEOUT_MS: u64 = 8_000;
 const DEFAULT_DETAIL_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PROXY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+const DEFAULT_LIVE_PROXY_USER_AGENT: &str = "AptvPlayer/1.4.10";
 const DEFAULT_BANGUMI_API_BASE_URL: &str = "https://api.bgm.tv";
 const DEFAULT_DOUBAN_API_BASE_URL: &str = "https://m.douban.com";
 const MAX_DOUBAN_RATING_IDS_PER_REQUEST: usize = 20;
@@ -104,6 +106,7 @@ pub struct AppState {
     sqlite_path: PathBuf,
     client: reqwest::Client,
     bangumi_api_base_url: String,
+    live_channels_cache: Arc<RwLock<BTreeMap<String, LiveChannelsCache>>>,
 }
 
 impl AppState {
@@ -152,6 +155,7 @@ impl AppState {
             sqlite_path,
             client: reqwest::Client::new(),
             bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
+            live_channels_cache: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
 
@@ -169,8 +173,19 @@ struct RawServiceConfig {
     cache_time: Option<u64>,
     search_downstream_max_page: Option<usize>,
     disable_yellow_filter: Option<bool>,
+    site_name: Option<String>,
+    announcement: Option<String>,
+    douban_proxy_type: Option<String>,
+    douban_proxy: Option<String>,
+    douban_image_proxy_type: Option<String>,
+    douban_image_proxy: Option<String>,
+    enable_web_live: Option<bool>,
     #[serde(default)]
     api_site: BTreeMap<String, RawApiSite>,
+    #[serde(default)]
+    custom_category: Vec<RawCustomCategory>,
+    #[serde(default)]
+    lives: BTreeMap<String, RawLiveSource>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -182,12 +197,39 @@ struct RawApiSite {
     referer: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+struct RawCustomCategory {
+    name: Option<String>,
+    #[serde(rename = "type")]
+    category_type: String,
+    query: String,
+    disabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct RawLiveSource {
+    name: String,
+    url: String,
+    ua: Option<String>,
+    epg: Option<String>,
+    disabled: Option<bool>,
+}
+
 #[derive(Debug, Clone)]
 struct ServiceConfig {
     cache_time: u64,
     max_search_pages: usize,
     adult_content_filter_enabled: bool,
+    site_name: Option<String>,
+    announcement: Option<String>,
+    douban_proxy_type: Option<String>,
+    douban_proxy: Option<String>,
+    douban_image_proxy_type: Option<String>,
+    douban_image_proxy: Option<String>,
+    enable_web_live_override: Option<bool>,
     api_sites: Vec<ApiSite>,
+    custom_categories: Vec<RuntimeCustomCategory>,
+    live_sources: Vec<LiveSourceConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +240,16 @@ struct ApiSite {
     detail: Option<String>,
     ua: Option<String>,
     referer: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LiveSourceConfig {
+    key: String,
+    name: String,
+    url: String,
+    ua: Option<String>,
+    epg: Option<String>,
+    disabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -239,6 +291,77 @@ struct DoubanRatingsResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimePublicConfigResponse {
+    site_name: Option<String>,
+    announcement: Option<String>,
+    douban_proxy_type: Option<String>,
+    douban_proxy: Option<String>,
+    douban_image_proxy_type: Option<String>,
+    douban_image_proxy: Option<String>,
+    enable_web_live: bool,
+    custom_categories: Vec<RuntimeCustomCategory>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RuntimeCustomCategory {
+    name: String,
+    #[serde(rename = "type")]
+    category_type: String,
+    query: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LiveSourceResponse {
+    key: String,
+    name: String,
+    url: String,
+    ua: Option<String>,
+    epg: Option<String>,
+    from: &'static str,
+    channel_number: usize,
+    disabled: bool,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LiveChannel {
+    id: String,
+    #[serde(rename = "tvgId")]
+    tvg_id: String,
+    name: String,
+    logo: String,
+    group: String,
+    url: String,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+struct LiveProgram {
+    start: String,
+    end: String,
+    title: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LiveEpgData {
+    #[serde(rename = "tvgId")]
+    tvg_id: String,
+    source: String,
+    epg_url: String,
+    programs: Vec<LiveProgram>,
+}
+
+#[derive(Debug, Clone)]
+struct LiveChannelsCache {
+    channel_number: usize,
+    channels: Vec<LiveChannel>,
+    epg_url: String,
+    epgs: BTreeMap<String, Vec<LiveProgram>>,
+}
+
+#[derive(Debug, Serialize)]
 struct HealthResponse {
     status: &'static str,
     port: u16,
@@ -251,6 +374,34 @@ struct HealthResponse {
 #[derive(Debug, Deserialize)]
 struct SearchQueryParams {
     q: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LiveChannelsQueryParams {
+    source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LiveEpgQueryParams {
+    source: Option<String>,
+    #[serde(rename = "tvgId")]
+    tvg_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LivePrecheckQueryParams {
+    url: Option<String>,
+    #[serde(rename = "moontv-source")]
+    source_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LiveProxyQueryParams {
+    url: Option<String>,
+    #[serde(rename = "moontv-source")]
+    source_key: Option<String>,
+    #[serde(rename = "allowCORS")]
+    allow_cors: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -340,19 +491,37 @@ pub async fn run(cli: Cli) -> Result<()> {
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(get_health))
+        .route("/runtime/public-config", get(get_runtime_public_config))
         .route("/content/search", get(get_content_search))
         .route("/content/suggestions", get(get_content_suggestions))
         .route("/content/detail", get(get_content_detail))
+        .route("/live/sources", get(get_live_sources))
+        .route("/live/channels", get(get_live_channels))
+        .route("/live/epg", get(get_live_epg))
+        .route("/live/precheck", get(get_live_precheck))
         .route("/metadata/bangumi/calendar", get(get_bangumi_calendar))
         .route("/metadata/douban/ratings", get(get_douban_ratings))
+        .route("/media/live/m3u8", get(get_live_m3u8))
+        .route("/media/live/segment", get(get_live_segment))
+        .route("/media/live/key", get(get_live_key))
+        .route("/media/live/logo", get(get_live_logo))
         .route("/media/vod/m3u8", get(get_vod_m3u8))
         .route("/media/vod/segment", get(get_vod_segment))
         .route("/media/vod/key", get(get_vod_key))
+        .route("/api/runtime/public-config", get(get_runtime_public_config))
         .route("/api/search", get(get_content_search))
         .route("/api/search/suggestions", get(get_content_suggestions))
         .route("/api/detail", get(get_content_detail))
+        .route("/api/live/sources", get(get_live_sources))
+        .route("/api/live/channels", get(get_live_channels))
+        .route("/api/live/epg", get(get_live_epg))
+        .route("/api/live/precheck", get(get_live_precheck))
         .route("/api/bangumi/calendar", get(get_bangumi_calendar))
         .route("/api/douban/ratings", get(get_douban_ratings))
+        .route("/api/proxy/m3u8", get(get_live_m3u8))
+        .route("/api/proxy/segment", get(get_live_segment))
+        .route("/api/proxy/key", get(get_live_key))
+        .route("/api/proxy/logo", get(get_live_logo))
         .route("/api/proxy/vod/m3u8", get(get_vod_m3u8))
         .route("/api/proxy/vod/segment", get(get_vod_segment))
         .route("/api/proxy/vod/key", get(get_vod_key))
@@ -401,6 +570,18 @@ async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
         data_dir: state.data_dir.display().to_string(),
         sqlite_path: state.sqlite_path.display().to_string(),
     })
+}
+
+async fn get_runtime_public_config(State(state): State<AppState>) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let payload = build_runtime_public_config_response(&config);
+    let mut response = Json(payload).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 async fn get_content_search(
@@ -534,6 +715,352 @@ async fn get_bangumi_calendar(State(state): State<AppState>) -> AppResult<Respon
         .map_err(|error| AppError::internal(error.to_string()))?;
     let mut response = Json(payload).into_response();
     apply_query_cache_headers(response.headers_mut(), config.cache_time);
+    Ok(response)
+}
+
+async fn get_live_sources(State(state): State<AppState>) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let cached_channels = state.live_channels_cache.read().await;
+    let data = config
+        .live_sources
+        .iter()
+        .filter(|source| !source.disabled)
+        .map(|source| LiveSourceResponse {
+            key: source.key.clone(),
+            name: source.name.clone(),
+            url: source.url.clone(),
+            ua: source.ua.clone(),
+            epg: source.epg.clone(),
+            from: "config",
+            channel_number: cached_channels
+                .get(&source.key)
+                .map(|item| item.channel_number)
+                .unwrap_or(0),
+            disabled: false,
+        })
+        .collect::<Vec<_>>();
+
+    let mut response = Json(json!({
+      "success": true,
+      "data": data
+    }))
+    .into_response();
+    apply_query_cache_headers(response.headers_mut(), config.cache_time);
+    Ok(response)
+}
+
+async fn get_live_channels(
+    State(state): State<AppState>,
+    Query(params): Query<LiveChannelsQueryParams>,
+) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let source_key = params.source.unwrap_or_default().trim().to_string();
+
+    if source_key.is_empty() {
+        return Err(AppError::bad_request("缺少直播源参数"));
+    }
+
+    let live_source = resolve_live_source(&config, &source_key)?;
+    let cache = get_or_refresh_live_channels_cache(&state, &live_source).await?;
+    let mut response = Json(json!({
+      "success": true,
+      "data": cache.channels
+    }))
+    .into_response();
+    apply_query_cache_headers(response.headers_mut(), config.cache_time);
+    Ok(response)
+}
+
+async fn get_live_epg(
+    State(state): State<AppState>,
+    Query(params): Query<LiveEpgQueryParams>,
+) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let source_key = params.source.unwrap_or_default().trim().to_string();
+    let tvg_id = params.tvg_id.unwrap_or_default().trim().to_string();
+
+    if source_key.is_empty() {
+        return Err(AppError::bad_request("缺少直播源参数"));
+    }
+
+    if tvg_id.is_empty() {
+        return Err(AppError::bad_request("缺少频道tvg-id参数"));
+    }
+
+    let live_source = resolve_live_source(&config, &source_key)?;
+    let cache = get_or_refresh_live_channels_cache(&state, &live_source).await?;
+    let programs = cache.epgs.get(&tvg_id).cloned().unwrap_or_default();
+    let payload = LiveEpgData {
+        tvg_id,
+        source: source_key,
+        epg_url: cache.epg_url,
+        programs,
+    };
+
+    let mut response = Json(json!({
+      "success": true,
+      "data": payload
+    }))
+    .into_response();
+    apply_query_cache_headers(response.headers_mut(), config.cache_time);
+    Ok(response)
+}
+
+async fn get_live_precheck(
+    State(state): State<AppState>,
+    Query(params): Query<LivePrecheckQueryParams>,
+) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let upstream_url = params.url.unwrap_or_default().trim().to_string();
+    let source_key = params.source_key.unwrap_or_default().trim().to_string();
+
+    if upstream_url.is_empty() {
+        return Err(AppError::bad_request("Missing url"));
+    }
+
+    let live_source = resolve_live_source(&config, &source_key)?;
+    let upstream_response = fetch_live_proxy_upstream(
+        &state.client,
+        Some(&live_source),
+        &upstream_url,
+        None,
+        false,
+    )
+    .await?;
+
+    if !upstream_response.status().is_success() {
+        return Err(AppError::internal(format!(
+            "Failed to fetch live stream: {}",
+            upstream_response.status()
+        )));
+    }
+
+    let payload = json!({
+      "success": true,
+      "type": detect_live_stream_type(
+        upstream_response
+          .headers()
+          .get(CONTENT_TYPE)
+          .and_then(|value| value.to_str().ok())
+      )
+    });
+    let mut response = Json(payload).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn get_live_m3u8(
+    method: Method,
+    State(state): State<AppState>,
+    Query(params): Query<LiveProxyQueryParams>,
+) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let upstream_url = params.url.unwrap_or_default().trim().to_string();
+    let source_key = params.source_key.unwrap_or_default().trim().to_string();
+    let allow_cors = params.allow_cors.unwrap_or(false);
+    let live_source = resolve_live_source(&config, &source_key)?;
+    let upstream_response = fetch_live_proxy_upstream(
+        &state.client,
+        Some(&live_source),
+        &upstream_url,
+        None,
+        false,
+    )
+    .await?;
+
+    if !upstream_response.status().is_success() {
+        return Err(AppError::internal(format!(
+            "Failed to fetch live manifest: {}",
+            upstream_response.status()
+        )));
+    }
+
+    let meta = upstream_response_meta(&upstream_response);
+
+    if should_rewrite_live_manifest(meta.content_type.as_deref(), &meta.final_url, &upstream_url) {
+        let manifest_content = upstream_response
+            .text()
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let rewritten_content = rewrite_live_manifest_content(
+            &manifest_content,
+            &meta.final_url,
+            &source_key,
+            &state.public_base_url,
+            allow_cors,
+        );
+        let mut response = if method == Method::HEAD {
+            Response::new(Body::empty())
+        } else {
+            Response::new(Body::from(rewritten_content.clone()))
+        };
+        *response.status_mut() = meta.status;
+        *response.headers_mut() = create_live_proxy_headers(
+            &meta,
+            meta.content_type
+                .as_deref()
+                .unwrap_or("application/vnd.apple.mpegurl"),
+            Some(rewritten_content.len().to_string()),
+            true,
+            Some("no-cache"),
+        );
+        return Ok(response);
+    }
+
+    let stream = upstream_response.bytes_stream();
+    let mut response = Response::new(Body::from_stream(stream));
+    *response.status_mut() = meta.status;
+    *response.headers_mut() = create_live_proxy_headers(
+        &meta,
+        meta.content_type
+            .as_deref()
+            .unwrap_or("application/octet-stream"),
+        meta.content_length.clone(),
+        true,
+        Some("no-cache"),
+    );
+    Ok(response)
+}
+
+async fn get_live_segment(
+    State(state): State<AppState>,
+    Query(params): Query<LiveProxyQueryParams>,
+    request_headers: HeaderMap,
+) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let upstream_url = params.url.unwrap_or_default().trim().to_string();
+    let source_key = params.source_key.unwrap_or_default().trim().to_string();
+    let live_source = resolve_live_source(&config, &source_key)?;
+    let upstream_response = fetch_live_proxy_upstream(
+        &state.client,
+        Some(&live_source),
+        &upstream_url,
+        Some(&request_headers),
+        true,
+    )
+    .await?;
+
+    if !upstream_response.status().is_success() {
+        return Err(AppError::internal(format!(
+            "Failed to fetch live segment: {}",
+            upstream_response.status()
+        )));
+    }
+
+    let meta = upstream_response_meta(&upstream_response);
+    let stream = upstream_response.bytes_stream();
+    let mut response = Response::new(Body::from_stream(stream));
+    *response.status_mut() = meta.status;
+    *response.headers_mut() = create_live_proxy_headers(
+        &meta,
+        meta.content_type.as_deref().unwrap_or("video/mp2t"),
+        meta.content_length.clone(),
+        true,
+        Some("no-cache"),
+    );
+    Ok(response)
+}
+
+async fn get_live_key(
+    State(state): State<AppState>,
+    Query(params): Query<LiveProxyQueryParams>,
+) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let upstream_url = params.url.unwrap_or_default().trim().to_string();
+    let source_key = params.source_key.unwrap_or_default().trim().to_string();
+    let live_source = resolve_live_source(&config, &source_key)?;
+    let upstream_response = fetch_live_proxy_upstream(
+        &state.client,
+        Some(&live_source),
+        &upstream_url,
+        None,
+        false,
+    )
+    .await?;
+
+    if !upstream_response.status().is_success() {
+        return Err(AppError::internal(format!(
+            "Failed to fetch live key: {}",
+            upstream_response.status()
+        )));
+    }
+
+    let meta = upstream_response_meta(&upstream_response);
+    let key_bytes = upstream_response
+        .bytes()
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let mut response = Response::new(Body::from(key_bytes));
+    *response.status_mut() = meta.status;
+    *response.headers_mut() = create_live_proxy_headers(
+        &meta,
+        meta.content_type
+            .as_deref()
+            .unwrap_or("application/octet-stream"),
+        meta.content_length.clone(),
+        true,
+        Some("public, max-age=3600"),
+    );
+    Ok(response)
+}
+
+async fn get_live_logo(
+    State(state): State<AppState>,
+    Query(params): Query<LiveProxyQueryParams>,
+) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let upstream_url = params.url.unwrap_or_default().trim().to_string();
+    let source_key = params.source_key.unwrap_or_default().trim().to_string();
+    let live_source = if source_key.is_empty() {
+        None
+    } else {
+        Some(resolve_live_source(&config, &source_key)?)
+    };
+    let upstream_response = fetch_live_proxy_upstream(
+        &state.client,
+        live_source.as_ref(),
+        &upstream_url,
+        None,
+        false,
+    )
+    .await?;
+
+    if !upstream_response.status().is_success() {
+        return Err(AppError::internal(format!(
+            "Failed to fetch live logo: {}",
+            upstream_response.status()
+        )));
+    }
+
+    let meta = upstream_response_meta(&upstream_response);
+    let stream = upstream_response.bytes_stream();
+    let mut response = Response::new(Body::from_stream(stream));
+    *response.status_mut() = meta.status;
+    *response.headers_mut() = create_live_proxy_headers(
+        &meta,
+        meta.content_type.as_deref().unwrap_or("image/png"),
+        meta.content_length.clone(),
+        true,
+        Some("public, max-age=86400, s-maxage=86400"),
+    );
     Ok(response)
 }
 
@@ -693,6 +1220,30 @@ fn load_service_config(path: &Path) -> Result<ServiceConfig> {
         })
         .collect();
 
+    let custom_categories = raw_config
+        .custom_category
+        .into_iter()
+        .filter(|category| !category.disabled.unwrap_or(false))
+        .map(|category| RuntimeCustomCategory {
+            name: category.name.unwrap_or_default(),
+            category_type: category.category_type,
+            query: category.query,
+        })
+        .collect::<Vec<_>>();
+
+    let live_sources = raw_config
+        .lives
+        .into_iter()
+        .map(|(key, live)| LiveSourceConfig {
+            key,
+            name: live.name,
+            url: live.url,
+            ua: normalize_optional_string(live.ua),
+            epg: normalize_optional_string(live.epg),
+            disabled: live.disabled.unwrap_or(false),
+        })
+        .collect::<Vec<_>>();
+
     Ok(ServiceConfig {
         cache_time: raw_config.cache_time.unwrap_or(DEFAULT_CACHE_TIME),
         max_search_pages: raw_config
@@ -700,7 +1251,16 @@ fn load_service_config(path: &Path) -> Result<ServiceConfig> {
             .unwrap_or(DEFAULT_SEARCH_MAX_PAGES)
             .max(1),
         adult_content_filter_enabled: !raw_config.disable_yellow_filter.unwrap_or(false),
+        site_name: normalize_optional_string(raw_config.site_name),
+        announcement: normalize_optional_string(raw_config.announcement),
+        douban_proxy_type: normalize_optional_string(raw_config.douban_proxy_type),
+        douban_proxy: normalize_optional_string(raw_config.douban_proxy),
+        douban_image_proxy_type: normalize_optional_string(raw_config.douban_image_proxy_type),
+        douban_image_proxy: normalize_optional_string(raw_config.douban_image_proxy),
+        enable_web_live_override: raw_config.enable_web_live,
         api_sites,
+        custom_categories,
+        live_sources,
     })
 }
 
@@ -1325,7 +1885,10 @@ fn build_content_suggestions(query: &str, results: &[SearchResult]) -> Vec<Conte
             (2.0, "exact")
         } else if keyword_lower.starts_with(&query_lower) || keyword_lower.ends_with(&query_lower) {
             (1.8, "related")
-        } else if query_words.iter().any(|query_word| keyword_lower.contains(query_word)) {
+        } else if query_words
+            .iter()
+            .any(|query_word| keyword_lower.contains(query_word))
+        {
             (1.5, "related")
         } else {
             (1.0, "suggestion")
@@ -1348,7 +1911,9 @@ fn build_content_suggestions(query: &str, results: &[SearchResult]) -> Vec<Conte
             .score
             .partial_cmp(&left.score)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| suggestion_type_priority(right.r#type).cmp(&suggestion_type_priority(left.r#type)))
+            .then_with(|| {
+                suggestion_type_priority(right.r#type).cmp(&suggestion_type_priority(left.r#type))
+            })
             .then_with(|| left.text.cmp(&right.text))
     });
     suggestions.truncate(8);
@@ -1380,7 +1945,11 @@ async fn fetch_douban_ratings_by_ids(
 ) -> Result<BTreeMap<String, String>> {
     let tasks = ids.iter().copied().map(|id| {
         let client = client.clone();
-        async move { fetch_single_douban_rating(&client, id).await.map(|rating| (id, rating)) }
+        async move {
+            fetch_single_douban_rating(&client, id)
+                .await
+                .map(|rating| (id, rating))
+        }
     });
 
     let mut ratings = BTreeMap::new();
@@ -1450,13 +2019,532 @@ async fn fetch_single_douban_rating(client: &reqwest::Client, id: u64) -> Result
 fn build_douban_headers() -> ReqwestHeaderMap {
     let mut headers = ReqwestHeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static(DEFAULT_WEB_UA));
-    headers.insert(REFERER, HeaderValue::from_static("https://movie.douban.com/"));
+    headers.insert(
+        REFERER,
+        HeaderValue::from_static("https://movie.douban.com/"),
+    );
     headers.insert(
         reqwest::header::ACCEPT,
         HeaderValue::from_static("application/json, text/plain, */*"),
     );
     headers.insert(ORIGIN, HeaderValue::from_static("https://movie.douban.com"));
     headers
+}
+
+fn build_runtime_public_config_response(config: &ServiceConfig) -> RuntimePublicConfigResponse {
+    RuntimePublicConfigResponse {
+        site_name: config.site_name.clone(),
+        announcement: config.announcement.clone(),
+        douban_proxy_type: config.douban_proxy_type.clone(),
+        douban_proxy: config.douban_proxy.clone(),
+        douban_image_proxy_type: config.douban_image_proxy_type.clone(),
+        douban_image_proxy: config.douban_image_proxy.clone(),
+        enable_web_live: config
+            .enable_web_live_override
+            .unwrap_or_else(|| config.live_sources.iter().any(|source| !source.disabled)),
+        custom_categories: config.custom_categories.clone(),
+    }
+}
+
+fn resolve_live_source(config: &ServiceConfig, source_key: &str) -> AppResult<LiveSourceConfig> {
+    let normalized_source_key = source_key.trim();
+
+    if normalized_source_key.is_empty() {
+        return Err(AppError::bad_request("Missing source"));
+    }
+
+    config
+        .live_sources
+        .iter()
+        .find(|source| source.key == normalized_source_key && !source.disabled)
+        .cloned()
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Source not found"))
+}
+
+async fn get_or_refresh_live_channels_cache(
+    state: &AppState,
+    live_source: &LiveSourceConfig,
+) -> AppResult<LiveChannelsCache> {
+    if let Some(cached) = state
+        .live_channels_cache
+        .read()
+        .await
+        .get(&live_source.key)
+        .cloned()
+    {
+        return Ok(cached);
+    }
+
+    let refreshed = refresh_live_channels_cache(state, live_source).await?;
+    if refreshed.channels.is_empty() {
+        return Err(AppError::new(StatusCode::NOT_FOUND, "频道信息未找到"));
+    }
+
+    let mut cache = state.live_channels_cache.write().await;
+    cache.insert(live_source.key.clone(), refreshed.clone());
+    Ok(refreshed)
+}
+
+async fn refresh_live_channels_cache(
+    state: &AppState,
+    live_source: &LiveSourceConfig,
+) -> AppResult<LiveChannelsCache> {
+    let upstream_response = fetch_live_proxy_upstream(
+        &state.client,
+        Some(live_source),
+        &live_source.url,
+        None,
+        false,
+    )
+    .await?;
+
+    if !upstream_response.status().is_success() {
+        return Err(AppError::internal(format!(
+            "Failed to fetch live source: {}",
+            upstream_response.status()
+        )));
+    }
+
+    let playlist_content = upstream_response
+        .text()
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let (playlist_epg_url, channels) = parse_live_playlist(&live_source.key, &playlist_content);
+    let epg_url = live_source
+        .epg
+        .clone()
+        .or_else(|| normalize_optional_string(Some(playlist_epg_url)))
+        .unwrap_or_default();
+    let tvg_ids = channels
+        .iter()
+        .map(|channel| channel.tvg_id.clone())
+        .filter(|tvg_id| !tvg_id.is_empty())
+        .collect::<Vec<_>>();
+    let epgs = fetch_live_epg_programs(
+        &state.client,
+        &epg_url,
+        live_source
+            .ua
+            .as_deref()
+            .unwrap_or(DEFAULT_LIVE_PROXY_USER_AGENT),
+        &tvg_ids,
+    )
+    .await
+    .unwrap_or_default();
+
+    Ok(LiveChannelsCache {
+        channel_number: channels.len(),
+        channels,
+        epg_url,
+        epgs,
+    })
+}
+
+async fn fetch_live_epg_programs(
+    client: &reqwest::Client,
+    epg_url: &str,
+    user_agent: &str,
+    tvg_ids: &[String],
+) -> Result<BTreeMap<String, Vec<LiveProgram>>> {
+    let normalized_epg_url = epg_url.trim();
+    if normalized_epg_url.is_empty() || tvg_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let mut headers = ReqwestHeaderMap::new();
+    if let Ok(value) = HeaderValue::from_str(user_agent) {
+        headers.insert(USER_AGENT, value);
+    }
+
+    let response = client
+        .get(normalized_epg_url)
+        .headers(headers)
+        .timeout(Duration::from_millis(DEFAULT_PROXY_TIMEOUT_MS))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Ok(BTreeMap::new());
+    }
+
+    let document = response.text().await?;
+    Ok(parse_live_epg_document(&document, tvg_ids))
+}
+
+fn parse_live_playlist(source_key: &str, content: &str) -> (String, Vec<LiveChannel>) {
+    let mut tvg_url = String::new();
+    let mut channels = Vec::new();
+    let lines = content
+        .split('\n')
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let mut channel_index = 0;
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index];
+        if line.starts_with("#EXTM3U") {
+            if let Some(value) = extract_quoted_attribute(line, "x-tvg-url")
+                .or_else(|| extract_quoted_attribute(line, "url-tvg"))
+            {
+                tvg_url = value
+                    .split(',')
+                    .next()
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string();
+            }
+            index += 1;
+            continue;
+        }
+
+        if !line.starts_with("#EXTINF:") {
+            index += 1;
+            continue;
+        }
+
+        let next_line = lines.get(index + 1).copied().unwrap_or_default();
+        if next_line.is_empty() || next_line.starts_with('#') {
+            index += 1;
+            continue;
+        }
+
+        let tvg_id = extract_quoted_attribute(line, "tvg-id").unwrap_or_default();
+        let tvg_name = extract_quoted_attribute(line, "tvg-name").unwrap_or_default();
+        let logo = extract_quoted_attribute(line, "tvg-logo").unwrap_or_default();
+        let group =
+            extract_quoted_attribute(line, "group-title").unwrap_or_else(|| "无分组".to_string());
+        let title = line
+            .rsplit_once(',')
+            .map(|(_, value)| value.trim().to_string())
+            .unwrap_or_default();
+        let name = if !title.is_empty() { title } else { tvg_name };
+
+        if !name.is_empty() {
+            channels.push(LiveChannel {
+                id: format!("{source_key}-{channel_index}"),
+                tvg_id,
+                name,
+                logo,
+                group,
+                url: next_line.to_string(),
+            });
+            channel_index += 1;
+        }
+
+        index += 2;
+    }
+
+    (tvg_url, channels)
+}
+
+fn parse_live_epg_document(
+    document: &str,
+    tvg_ids: &[String],
+) -> BTreeMap<String, Vec<LiveProgram>> {
+    let interested_channels = tvg_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut programs = BTreeMap::<String, Vec<LiveProgram>>::new();
+    let mut cursor = 0;
+
+    while let Some(start_offset) = document[cursor..].find("<programme") {
+        let start_index = cursor + start_offset;
+        let Some(end_offset) = document[start_index..].find("</programme>") else {
+            break;
+        };
+        let end_index = start_index + end_offset + "</programme>".len();
+        let segment = &document[start_index..end_index];
+        cursor = end_index;
+
+        let Some(open_tag_end) = segment.find('>') else {
+            continue;
+        };
+        let open_tag = &segment[..=open_tag_end];
+        let Some(tvg_id) = extract_quoted_attribute(open_tag, "channel") else {
+            continue;
+        };
+        if !interested_channels.contains(&tvg_id) {
+            continue;
+        }
+
+        let Some(start) = extract_quoted_attribute(open_tag, "start") else {
+            continue;
+        };
+        let Some(end) = extract_quoted_attribute(open_tag, "stop") else {
+            continue;
+        };
+        let Some(title) = extract_xml_element_text(segment, "title") else {
+            continue;
+        };
+
+        let normalized_title = normalize_xml_text(&title);
+        if normalized_title.is_empty() {
+            continue;
+        }
+
+        programs.entry(tvg_id).or_default().push(LiveProgram {
+            start,
+            end,
+            title: normalized_title,
+        });
+    }
+
+    programs
+}
+
+fn extract_quoted_attribute(line: &str, attribute: &str) -> Option<String> {
+    let needle = format!(r#"{attribute}=""#);
+    let start = line.find(&needle)? + needle.len();
+    let tail = &line[start..];
+    let end = tail.find('"')?;
+    Some(tail[..end].to_string())
+}
+
+fn extract_xml_element_text(segment: &str, element_name: &str) -> Option<String> {
+    let open_tag_start = segment.find(&format!("<{element_name}"))?;
+    let content_start = segment[open_tag_start..].find('>')? + open_tag_start + 1;
+    let close_tag = format!("</{element_name}>");
+    let content_end = segment[content_start..].find(&close_tag)? + content_start;
+    Some(segment[content_start..content_end].to_string())
+}
+
+fn normalize_xml_text(value: &str) -> String {
+    let trimmed = value.trim();
+    let cdata_trimmed = trimmed
+        .strip_prefix("<![CDATA[")
+        .and_then(|inner| inner.strip_suffix("]]>"))
+        .unwrap_or(trimmed);
+    html_escape::decode_html_entities(cdata_trimmed.trim()).to_string()
+}
+
+fn build_live_proxy_request_headers(
+    live_source: Option<&LiveSourceConfig>,
+    request_headers: Option<&HeaderMap>,
+    include_range: bool,
+) -> ReqwestHeaderMap {
+    let mut headers = ReqwestHeaderMap::new();
+    let user_agent = live_source
+        .and_then(|source| source.ua.as_deref())
+        .unwrap_or(DEFAULT_LIVE_PROXY_USER_AGENT);
+
+    if let Ok(value) = HeaderValue::from_str(user_agent) {
+        headers.insert(USER_AGENT, value);
+    }
+
+    if include_range {
+        if let Some(range_value) = request_headers.and_then(|headers| headers.get(RANGE)) {
+            headers.insert(RANGE, range_value.clone());
+        }
+    }
+
+    headers
+}
+
+async fn fetch_live_proxy_upstream(
+    client: &reqwest::Client,
+    live_source: Option<&LiveSourceConfig>,
+    upstream_url: &str,
+    request_headers: Option<&HeaderMap>,
+    include_range: bool,
+) -> AppResult<reqwest::Response> {
+    let normalized_upstream_url = upstream_url.trim();
+    if normalized_upstream_url.is_empty() {
+        return Err(AppError::bad_request("Missing url"));
+    }
+
+    client
+        .get(normalized_upstream_url)
+        .headers(build_live_proxy_request_headers(
+            live_source,
+            request_headers,
+            include_range,
+        ))
+        .timeout(Duration::from_millis(DEFAULT_PROXY_TIMEOUT_MS))
+        .send()
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
+fn detect_live_stream_type(content_type: Option<&str>) -> &'static str {
+    let normalized = content_type.unwrap_or_default().to_ascii_lowercase();
+    if normalized.contains("video/mp4") {
+        return "mp4";
+    }
+
+    if normalized.contains("video/x-flv") {
+        return "flv";
+    }
+
+    "m3u8"
+}
+
+fn should_rewrite_live_manifest(
+    content_type: Option<&str>,
+    final_url: &str,
+    upstream_url: &str,
+) -> bool {
+    let normalized_content_type = content_type.unwrap_or_default().to_ascii_lowercase();
+    let target_url = if !final_url.is_empty() {
+        final_url
+    } else {
+        upstream_url
+    };
+
+    normalized_content_type.contains("mpegurl")
+        || normalized_content_type.contains("octet-stream")
+        || manifest_url_regex().is_match(target_url)
+}
+
+fn rewrite_live_manifest_content(
+    content: &str,
+    final_url: &str,
+    source_key: &str,
+    public_base_url: &str,
+    allow_cors: bool,
+) -> String {
+    let base_url = get_base_url(final_url);
+    let lines = content.split('\n').collect::<Vec<_>>();
+    let mut rewritten_lines = Vec::new();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let trimmed_line = lines[index].trim();
+        if trimmed_line.is_empty() {
+            rewritten_lines.push(String::new());
+            index += 1;
+            continue;
+        }
+
+        if trimmed_line.starts_with("#EXT-X-STREAM-INF:") {
+            rewritten_lines.push(trimmed_line.to_string());
+            let next_line = lines
+                .get(index + 1)
+                .map(|line| line.trim())
+                .unwrap_or_default();
+            if !next_line.is_empty() && !next_line.starts_with('#') {
+                let resolved_url = resolve_url(&base_url, next_line);
+                rewritten_lines.push(build_live_proxy_m3u8_url(
+                    public_base_url,
+                    source_key,
+                    &resolved_url,
+                    false,
+                ));
+                index += 2;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+
+        if trimmed_line.starts_with("#EXT-X-MEDIA:")
+            || trimmed_line.starts_with("#EXT-X-I-FRAME-STREAM-INF:")
+            || trimmed_line.starts_with("#EXT-X-RENDITION-REPORT:")
+        {
+            rewritten_lines.push(rewrite_manifest_uri_attribute(
+                trimmed_line,
+                &base_url,
+                |resolved_url| {
+                    build_live_proxy_m3u8_url(public_base_url, source_key, resolved_url, false)
+                },
+            ));
+            index += 1;
+            continue;
+        }
+
+        if trimmed_line.starts_with("#EXT-X-KEY:")
+            || trimmed_line.starts_with("#EXT-X-SESSION-KEY:")
+        {
+            rewritten_lines.push(rewrite_manifest_uri_attribute(
+                trimmed_line,
+                &base_url,
+                |resolved_url| build_live_proxy_key_url(public_base_url, source_key, resolved_url),
+            ));
+            index += 1;
+            continue;
+        }
+
+        if trimmed_line.starts_with("#EXT-X-MAP:")
+            || trimmed_line.starts_with("#EXT-X-PART:")
+            || trimmed_line.starts_with("#EXT-X-PRELOAD-HINT:")
+        {
+            rewritten_lines.push(rewrite_manifest_uri_attribute(
+                trimmed_line,
+                &base_url,
+                |resolved_url| {
+                    build_live_proxy_segment_url(public_base_url, source_key, resolved_url)
+                },
+            ));
+            index += 1;
+            continue;
+        }
+
+        if !trimmed_line.starts_with('#') {
+            let resolved_url = resolve_url(&base_url, trimmed_line);
+            rewritten_lines.push(if allow_cors {
+                resolved_url
+            } else {
+                build_live_proxy_segment_url(public_base_url, source_key, &resolved_url)
+            });
+            index += 1;
+            continue;
+        }
+
+        rewritten_lines.push(trimmed_line.to_string());
+        index += 1;
+    }
+
+    rewritten_lines.join("\n")
+}
+
+fn rewrite_manifest_uri_attribute<F>(line: &str, base_url: &str, builder: F) -> String
+where
+    F: Fn(&str) -> String,
+{
+    let Some(uri) = extract_quoted_attribute(line, "URI") else {
+        return line.to_string();
+    };
+    let resolved_url = resolve_url(base_url, &uri);
+    let target = format!(r#"URI="{uri}""#);
+    let replacement = format!(r#"URI="{}""#, builder(&resolved_url));
+    line.replacen(&target, &replacement, 1)
+}
+
+fn build_live_proxy_m3u8_url(
+    base_url: &str,
+    source_key: &str,
+    url: &str,
+    allow_cors: bool,
+) -> String {
+    build_live_proxy_url(base_url, "/media/live/m3u8", source_key, url, allow_cors)
+}
+
+fn build_live_proxy_segment_url(base_url: &str, source_key: &str, url: &str) -> String {
+    build_live_proxy_url(base_url, "/media/live/segment", source_key, url, false)
+}
+
+fn build_live_proxy_key_url(base_url: &str, source_key: &str, url: &str) -> String {
+    build_live_proxy_url(base_url, "/media/live/key", source_key, url, false)
+}
+
+fn build_live_proxy_url(
+    base_url: &str,
+    path: &str,
+    source_key: &str,
+    url: &str,
+    allow_cors: bool,
+) -> String {
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("moontv-source", source_key);
+    serializer.append_pair("url", url);
+    if allow_cors {
+        serializer.append_pair("allowCORS", "true");
+    }
+    let query = serializer.finish();
+
+    format!("{}{}?{}", base_url.trim_end_matches('/'), path, query)
 }
 
 fn resolve_vod_proxy_request(
@@ -1536,12 +2624,44 @@ fn create_vod_proxy_headers(
     content_length: Option<String>,
     include_content_length: bool,
 ) -> HeaderMap {
+    create_proxy_headers(
+        meta,
+        content_type,
+        content_length,
+        include_content_length,
+        "no-store",
+    )
+}
+
+fn create_live_proxy_headers(
+    meta: &UpstreamResponseMeta,
+    content_type: &str,
+    content_length: Option<String>,
+    include_content_length: bool,
+    cache_control: Option<&str>,
+) -> HeaderMap {
+    create_proxy_headers(
+        meta,
+        content_type,
+        content_length,
+        include_content_length,
+        cache_control.unwrap_or("no-cache"),
+    )
+}
+
+fn create_proxy_headers(
+    meta: &UpstreamResponseMeta,
+    content_type: &str,
+    content_length: Option<String>,
+    include_content_length: bool,
+    cache_control: &str,
+) -> HeaderMap {
     let mut headers = HeaderMap::new();
     let content_type_value = HeaderValue::from_str(content_type)
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
     headers.insert(CONTENT_TYPE, content_type_value);
 
-    if let Ok(value) = HeaderValue::from_str("no-store") {
+    if let Ok(value) = HeaderValue::from_str(cache_control) {
         headers.insert(CACHE_CONTROL, value);
     }
 
@@ -2233,6 +3353,303 @@ segment0.ts
         upstream.abort();
     }
 
+    #[tokio::test]
+    async fn runtime_public_config_endpoint_projects_desktop_settings() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "douban_proxy_type": "custom",
+              "douban_proxy": "https://proxy.example.com/fetch?url=",
+              "douban_image_proxy_type": "custom",
+              "douban_image_proxy": "https://img.example.com/fetch?url=",
+              "custom_category": [
+                {
+                  "name": "热门电影",
+                  "type": "movie",
+                  "query": "热门"
+                },
+                {
+                  "name": "禁用分类",
+                  "type": "tv",
+                  "query": "禁用",
+                  "disabled": true
+                }
+              ],
+              "lives": {
+                "news": {
+                  "name": "News",
+                  "url": "https://example.com/live.m3u"
+                }
+              },
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/runtime/public-config")
+                    .body(Body::empty())
+                    .expect("runtime public config request"),
+            )
+            .await
+            .expect("runtime public config response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("runtime public config body");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("runtime public config payload json");
+
+        assert_eq!(
+            payload.get("doubanProxyType").and_then(Value::as_str),
+            Some("custom")
+        );
+        assert_eq!(
+            payload.get("enableWebLive").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .get("customCategories")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn live_channels_and_epg_endpoints_return_cached_live_data() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {},
+              "lives": {
+                "news": {
+                  "name": "News",
+                  "url": format!("{}/live/source.m3u", upstream.base_url()),
+                  "ua": "Custom Live UA",
+                  "epg": format!("{}/epg.xml", upstream.base_url())
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let channels_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/live/channels?source=news")
+                    .body(Body::empty())
+                    .expect("live channels request"),
+            )
+            .await
+            .expect("live channels response");
+
+        assert_eq!(channels_response.status(), StatusCode::OK);
+        let channels_body = to_bytes(channels_response.into_body(), usize::MAX)
+            .await
+            .expect("live channels body");
+        let channels_payload: Value =
+            serde_json::from_slice(&channels_body).expect("live channels payload json");
+        assert_eq!(
+            channels_payload
+                .get("data")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("tvgId"))
+                .and_then(Value::as_str),
+            Some("cctv1")
+        );
+
+        let epg_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/live/epg?source=news&tvgId=cctv1")
+                    .body(Body::empty())
+                    .expect("live epg request"),
+            )
+            .await
+            .expect("live epg response");
+
+        assert_eq!(epg_response.status(), StatusCode::OK);
+        let epg_body = to_bytes(epg_response.into_body(), usize::MAX)
+            .await
+            .expect("live epg body");
+        let epg_payload: Value = serde_json::from_slice(&epg_body).expect("live epg payload json");
+        assert_eq!(
+            epg_payload
+                .get("data")
+                .and_then(|data| data.get("programs"))
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("title"))
+                .and_then(Value::as_str),
+            Some("朝闻天下")
+        );
+
+        let sources_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/live/sources")
+                    .body(Body::empty())
+                    .expect("live sources request"),
+            )
+            .await
+            .expect("live sources response");
+
+        assert_eq!(sources_response.status(), StatusCode::OK);
+        let sources_body = to_bytes(sources_response.into_body(), usize::MAX)
+            .await
+            .expect("live sources body");
+        let sources_payload: Value =
+            serde_json::from_slice(&sources_body).expect("live sources payload json");
+        assert_eq!(
+            sources_payload
+                .get("data")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("channelNumber"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn live_proxy_m3u8_endpoint_rewrites_proxy_urls() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {},
+              "lives": {
+                "news": {
+                  "name": "News",
+                  "url": format!("{}/live/source.m3u", upstream.base_url()),
+                  "ua": "Custom Live UA"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let manifest_url = format!("{}/live/index.m3u8", upstream.base_url());
+        let service_url = format!(
+            "/api/proxy/m3u8?moontv-source=news&url={}",
+            form_urlencoded::byte_serialize(manifest_url.as_bytes()).collect::<String>()
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(service_url)
+                    .body(Body::empty())
+                    .expect("live proxy m3u8 request"),
+            )
+            .await
+            .expect("live proxy m3u8 response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("live proxy m3u8 body");
+        let manifest = String::from_utf8(body.to_vec()).expect("live manifest utf8");
+
+        assert!(manifest.contains("http://127.0.0.1:8787/media/live/segment"));
+        assert!(manifest.contains("http://127.0.0.1:8787/media/live/key"));
+        assert!(manifest.contains("moontv-source=news"));
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn live_precheck_endpoint_detects_mp4_streams() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {},
+              "lives": {
+                "news": {
+                  "name": "News",
+                  "url": format!("{}/live/source.m3u", upstream.base_url()),
+                  "ua": "Custom Live UA"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let live_url = format!("{}/live/precheck.mp4", upstream.base_url());
+        let service_url = format!(
+            "/api/live/precheck?moontv-source=news&url={}",
+            form_urlencoded::byte_serialize(live_url.as_bytes()).collect::<String>()
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(service_url)
+                    .body(Body::empty())
+                    .expect("live precheck request"),
+            )
+            .await
+            .expect("live precheck response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("live precheck body");
+        let payload: Value = serde_json::from_slice(&body).expect("live precheck payload json");
+        assert_eq!(payload.get("type").and_then(Value::as_str), Some("mp4"));
+
+        upstream.abort();
+    }
+
     #[test]
     fn parse_douban_ids_dedupes_and_limits() {
         let ids = parse_douban_ids(Some(
@@ -2436,6 +3853,93 @@ segment0.ts
           (
             [(CONTENT_TYPE, "application/octet-stream")],
             vec![0_u8, 1, 2, 3],
+          )
+        }),
+      )
+      .route(
+        "/live/source.m3u",
+        get(|| async move {
+          (
+            [(CONTENT_TYPE, "application/vnd.apple.mpegurl")],
+            "#EXTM3U\n#EXTINF:-1 tvg-id=\"cctv1\" tvg-name=\"CCTV-1\" tvg-logo=\"/live/logo.png\" group-title=\"央视频道\",CCTV-1\nhttps://stream.example.com/cctv1/index.m3u8\n",
+          )
+        }),
+      )
+      .route(
+        "/live/index.m3u8",
+        get(|| async move {
+          (
+            [(CONTENT_TYPE, "application/vnd.apple.mpegurl")],
+            "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"enc.key\"\n#EXTINF:4.0,\nsegment0.ts\n",
+          )
+        }),
+      )
+      .route(
+        "/live/segment0.ts",
+        get(|headers: HeaderMap| async move {
+          if headers
+            .get(RANGE)
+            .and_then(|value| value.to_str().ok())
+            == Some("bytes=0-3")
+          {
+            (
+              StatusCode::PARTIAL_CONTENT,
+              [
+                (CONTENT_TYPE, "video/mp2t"),
+                (CONTENT_LENGTH, "4"),
+                (ACCEPT_RANGES, "bytes"),
+                (CONTENT_RANGE, "bytes 0-3/8"),
+              ],
+              "live",
+            )
+              .into_response()
+          } else {
+            (
+              StatusCode::OK,
+              [
+                (CONTENT_TYPE, "video/mp2t"),
+                (CONTENT_LENGTH, "8"),
+                (ACCEPT_RANGES, "bytes"),
+              ],
+              "livedata",
+            )
+              .into_response()
+          }
+        }),
+      )
+      .route(
+        "/live/enc.key",
+        get(|| async move {
+          (
+            [(CONTENT_TYPE, "application/octet-stream")],
+            vec![4_u8, 5, 6, 7],
+          )
+        }),
+      )
+      .route(
+        "/live/logo.png",
+        get(|| async move {
+          (
+            [(CONTENT_TYPE, "image/png")],
+            vec![137_u8, 80, 78, 71],
+          )
+        }),
+      )
+      .route(
+        "/live/precheck.mp4",
+        get(|| async move {
+          (
+            [(CONTENT_TYPE, "video/mp4")],
+            vec![0_u8, 1, 2, 3],
+          )
+        }),
+      )
+      .route(
+        "/epg.xml",
+        get(|| async move {
+          (
+            [(CONTENT_TYPE, "application/xml")],
+            r#"<?xml version="1.0" encoding="UTF-8"?><tv><programme start="20260608080000 +0800" stop="20260608090000 +0800" channel="cctv1"><title lang="zh">朝闻天下</title></programme></tv>"#,
           )
         }),
       )

@@ -2,10 +2,21 @@
 
 'use client';
 
-import { Cat, Clover, Download, Film, Home, Radio, Star, Tv } from 'lucide-react';
+import {
+  Cat,
+  Clover,
+  Download,
+  Film,
+  Home,
+  Radio,
+  Star,
+  Tv,
+} from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
+
+import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 
 interface MobileBottomNavProps {
   /**
@@ -43,11 +54,6 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
       href: '/douban?type=show',
     },
     {
-      icon: Radio,
-      label: '直播',
-      href: '/live',
-    },
-    {
       icon: Download,
       label: '下载',
       href: '/downloads',
@@ -55,17 +61,69 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
   ]);
 
   useEffect(() => {
-    const runtimeConfig = (window as any).RUNTIME_CONFIG;
-    if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
-      setNavItems((prevItems) => [
-        ...prevItems,
+    const applyRuntimeNavItems = () => {
+      const runtimeConfig = (window as any).RUNTIME_CONFIG;
+      const nextItems = [
+        { icon: Home, label: '首页', href: '/' },
         {
+          icon: Film,
+          label: '电影',
+          href: '/douban?type=movie',
+        },
+        {
+          icon: Tv,
+          label: '剧集',
+          href: '/douban?type=tv',
+        },
+        {
+          icon: Cat,
+          label: '动漫',
+          href: '/douban?type=anime',
+        },
+        {
+          icon: Clover,
+          label: '综艺',
+          href: '/douban?type=show',
+        },
+      ];
+
+      if (runtimeConfig?.ENABLE_WEB_LIVE) {
+        nextItems.push({
+          icon: Radio,
+          label: '直播',
+          href: '/live',
+        });
+      }
+
+      if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
+        nextItems.push({
           icon: Star,
           label: '自定义',
           href: '/douban?type=custom',
-        },
-      ]);
-    }
+        });
+      }
+
+      nextItems.push({
+        icon: Download,
+        label: '下载',
+        href: '/downloads',
+      });
+
+      setNavItems(nextItems);
+    };
+
+    applyRuntimeNavItems();
+    window.addEventListener(
+      DESKTOP_RUNTIME_UPDATED_EVENT,
+      applyRuntimeNavItems
+    );
+
+    return () => {
+      window.removeEventListener(
+        DESKTOP_RUNTIME_UPDATED_EVENT,
+        applyRuntimeNavItems
+      );
+    };
   }, []);
 
   const isActive = (href: string) => {
@@ -99,17 +157,21 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
             <li
               key={item.href}
               className='flex-shrink-0'
-              style={{ width: `${100 / navItems.length}vw`, minWidth: `${100 / navItems.length}vw` }}
+              style={{
+                width: `${100 / navItems.length}vw`,
+                minWidth: `${100 / navItems.length}vw`,
+              }}
             >
               <Link
                 href={item.href}
                 className='flex flex-col items-center justify-center w-full h-14 gap-1 text-xs'
               >
                 <item.icon
-                  className={`h-6 w-6 ${active
-                    ? 'text-green-600 dark:text-green-400'
-                    : 'text-gray-500 dark:text-gray-400'
-                    }`}
+                  className={`h-6 w-6 ${
+                    active
+                      ? 'text-green-600 dark:text-green-400'
+                      : 'text-gray-500 dark:text-gray-400'
+                  }`}
                 />
                 <span
                   className={
