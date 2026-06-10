@@ -120,6 +120,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 20
+          package-manager-cache: false
 
       - name: Download build artifacts
         run: gh run download ${{ github.run_id }} --dir .desktop-release/artifacts
