@@ -3,15 +3,16 @@ use std::{
     convert::Infallible,
     env, fs,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{Arc, OnceLock},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
-    extract::{Query, Request, State},
+    extract::{OriginalUri, Query, Request, State},
     http::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
         header::{
@@ -25,7 +26,7 @@ use axum::{
         IntoResponse, Response,
         sse::{Event, Sse},
     },
-    routing::{any, get, post},
+    routing::{any, delete, get, post, put},
 };
 use clap::Parser;
 use futures::{
@@ -35,8 +36,9 @@ use futures::{
 };
 use regex::Regex;
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio::sync::{RwLock, mpsc};
 use tracing::{info, warn};
@@ -48,6 +50,11 @@ const DEFAULT_CONFIG_FILE_NAME: &str = "config.example.json";
 const DEFAULT_DATA_DIR_NAME: &str = ".lunatv-desktop";
 const DEFAULT_SQLITE_FILE_NAME: &str = "moontv-desktop.sqlite3";
 const ADMIN_PERSISTENCE_FILE_NAME: &str = "desktop-admin-state.json";
+const DOWNLOAD_RUNTIME_DIR_NAME: &str = "download-runtime";
+const DOWNLOAD_RUNTIME_CACHE_BODY_DIR_NAME: &str = "cache-body";
+const DOWNLOAD_RUNTIME_CACHE_META_DIR_NAME: &str = "cache-meta";
+const DOWNLOAD_RUNTIME_RESOURCE_INDEX_DIR_NAME: &str = "resource-index";
+const DOWNLOAD_RUNTIME_STORE_FILE_NAME: &str = "download-store.json";
 const DEFAULT_CACHE_TIME: u64 = 7200;
 const DEFAULT_SEARCH_MAX_PAGES: usize = 5;
 const DEFAULT_SEARCH_TIMEOUT_MS: u64 = 8_000;
@@ -326,6 +333,188 @@ impl AppState {
 
     fn admin_persistence_path(&self) -> PathBuf {
         self.data_dir.join(ADMIN_PERSISTENCE_FILE_NAME)
+    }
+
+    fn download_runtime_dir(&self) -> PathBuf {
+        self.data_dir.join(DOWNLOAD_RUNTIME_DIR_NAME)
+    }
+
+    fn download_runtime_cache_body_dir(&self) -> PathBuf {
+        self.download_runtime_dir()
+            .join(DOWNLOAD_RUNTIME_CACHE_BODY_DIR_NAME)
+    }
+
+    fn download_runtime_cache_meta_dir(&self) -> PathBuf {
+        self.download_runtime_dir()
+            .join(DOWNLOAD_RUNTIME_CACHE_META_DIR_NAME)
+    }
+
+    fn download_runtime_resource_index_dir(&self) -> PathBuf {
+        self.download_runtime_dir()
+            .join(DOWNLOAD_RUNTIME_RESOURCE_INDEX_DIR_NAME)
+    }
+
+    fn download_runtime_store_path(&self) -> PathBuf {
+        self.download_runtime_dir()
+            .join(DOWNLOAD_RUNTIME_STORE_FILE_NAME)
+    }
+
+    fn ensure_download_runtime_dirs(&self) -> Result<()> {
+        fs::create_dir_all(self.download_runtime_cache_body_dir()).with_context(|| {
+            format!(
+                "failed to create {}",
+                self.download_runtime_cache_body_dir().display()
+            )
+        })?;
+        fs::create_dir_all(self.download_runtime_cache_meta_dir()).with_context(|| {
+            format!(
+                "failed to create {}",
+                self.download_runtime_cache_meta_dir().display()
+            )
+        })?;
+        fs::create_dir_all(self.download_runtime_resource_index_dir()).with_context(|| {
+            format!(
+                "failed to create {}",
+                self.download_runtime_resource_index_dir().display()
+            )
+        })?;
+        Ok(())
+    }
+
+    fn cached_download_body_path(&self, url: &str) -> PathBuf {
+        self.download_runtime_cache_body_dir()
+            .join(format!("{}.bin", stable_hash_key(url)))
+    }
+
+    fn cached_download_meta_path(&self, url: &str) -> PathBuf {
+        self.download_runtime_cache_meta_dir()
+            .join(format!("{}.json", stable_hash_key(url)))
+    }
+
+    fn resource_index_path(&self, id: &str) -> PathBuf {
+        self.download_runtime_resource_index_dir()
+            .join(format!("{}.json", stable_hash_key(id)))
+    }
+
+    fn write_cached_download(
+        &self,
+        url: &str,
+        status: StatusCode,
+        content_type: Option<&str>,
+        body: &[u8],
+    ) -> Result<DesktopDownloadCacheEntry> {
+        self.ensure_download_runtime_dirs()?;
+        let body_path = self.cached_download_body_path(url);
+        let meta_path = self.cached_download_meta_path(url);
+        let timestamp = current_timestamp_ms();
+        let entry = DesktopDownloadCacheEntry {
+            url: url.to_string(),
+            status: status.as_u16(),
+            content_type: normalize_optional_text(content_type),
+            size_bytes: body.len() as u64,
+            created_at: timestamp,
+            updated_at: timestamp,
+        };
+
+        fs::write(&body_path, body)
+            .with_context(|| format!("failed to write {}", body_path.display()))?;
+        write_json_file(&meta_path, &entry)?;
+        Ok(entry)
+    }
+
+    fn read_cached_download_entry(&self, url: &str) -> Result<Option<DesktopDownloadCacheEntry>> {
+        let meta_path = self.cached_download_meta_path(url);
+        if !meta_path.exists() {
+            return Ok(None);
+        }
+
+        let entry: DesktopDownloadCacheEntry = read_json_file(&meta_path)?;
+        if entry.url != url {
+            return Ok(None);
+        }
+
+        if !self.cached_download_body_path(url).exists() {
+            return Ok(None);
+        }
+
+        Ok(Some(entry))
+    }
+
+    fn read_cached_download_body(&self, url: &str) -> Result<Option<Vec<u8>>> {
+        let body_path = self.cached_download_body_path(url);
+        if !body_path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = fs::read(&body_path)
+            .with_context(|| format!("failed to read {}", body_path.display()))?;
+        Ok(Some(bytes))
+    }
+
+    fn delete_cached_download(&self, url: &str) -> Result<bool> {
+        let body_path = self.cached_download_body_path(url);
+        let meta_path = self.cached_download_meta_path(url);
+        let body_deleted = delete_if_exists(&body_path)?;
+        let meta_deleted = delete_if_exists(&meta_path)?;
+        Ok(body_deleted || meta_deleted)
+    }
+
+    fn clear_cached_downloads(&self) -> Result<()> {
+        remove_dir_contents_if_exists(&self.download_runtime_cache_body_dir())?;
+        remove_dir_contents_if_exists(&self.download_runtime_cache_meta_dir())?;
+        Ok(())
+    }
+
+    fn write_resource_index(
+        &self,
+        record: &DesktopDownloadResourceIndexRecord,
+    ) -> Result<DesktopDownloadResourceIndexRecord> {
+        self.ensure_download_runtime_dirs()?;
+        let path = self.resource_index_path(&record.id);
+        write_json_file(&path, record)?;
+        Ok(record.clone())
+    }
+
+    fn read_resource_index(&self, id: &str) -> Result<Option<DesktopDownloadResourceIndexRecord>> {
+        let path = self.resource_index_path(id);
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let record: DesktopDownloadResourceIndexRecord = read_json_file(&path)?;
+        if record.id != id {
+            return Ok(None);
+        }
+
+        Ok(Some(record))
+    }
+
+    fn delete_resource_index(&self, id: &str) -> Result<bool> {
+        delete_if_exists(&self.resource_index_path(id))
+    }
+
+    fn clear_resource_indexes(&self) -> Result<()> {
+        remove_dir_contents_if_exists(&self.download_runtime_resource_index_dir())?;
+        Ok(())
+    }
+
+    fn write_download_store_snapshot(&self, snapshot: &Value) -> Result<()> {
+        self.ensure_download_runtime_dirs()?;
+        write_json_file(&self.download_runtime_store_path(), snapshot)
+    }
+
+    fn read_download_store_snapshot(&self) -> Result<Option<Value>> {
+        let path = self.download_runtime_store_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let snapshot: Value = read_json_file(&path)?;
+        Ok(Some(snapshot))
+    }
+
+    fn clear_download_store_snapshot(&self) -> Result<bool> {
+        delete_if_exists(&self.download_runtime_store_path())
     }
 
     fn load_admin_persistence(&self) -> Result<DesktopAdminPersistence> {
@@ -1021,6 +1210,16 @@ struct VodProxyQueryParams {
     adfilter: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct DesktopDownloadCacheQueryParams {
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DesktopDownloadResourceIndexQueryParams {
+    id: Option<String>,
+}
+
 #[derive(Debug)]
 struct ResolvedVodProxyRequest {
     source: String,
@@ -1036,6 +1235,42 @@ struct UpstreamResponseMeta {
     content_length: Option<String>,
     accept_ranges: Option<String>,
     content_range: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDownloadCacheEntry {
+    url: String,
+    status: u16,
+    content_type: Option<String>,
+    size_bytes: u64,
+    created_at: u64,
+    updated_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDownloadCacheMetaResponse {
+    exists: bool,
+    url: String,
+    status: Option<u16>,
+    content_type: Option<String>,
+    size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDownloadResourceIndexRecord {
+    id: String,
+    owner_username: String,
+    task_id: String,
+    content_id: String,
+    source: String,
+    vod_id: String,
+    episode_index: i64,
+    urls: Vec<String>,
+    created_at: u64,
+    updated_at: u64,
 }
 
 #[derive(Debug)]
@@ -1122,6 +1357,42 @@ pub fn build_router(state: AppState) -> Router {
             "/api/change-password",
             any(proxy_profile_sync_change_password),
         )
+        .route(
+            "/api/download-runtime/cache",
+            put(put_download_runtime_cache),
+        )
+        .route(
+            "/api/download-runtime/cache/meta",
+            get(get_download_runtime_cache_meta),
+        )
+        .route(
+            "/api/download-runtime/cache/response",
+            get(get_download_runtime_cache_response),
+        )
+        .route(
+            "/api/download-runtime/cache/delete",
+            delete(delete_download_runtime_cache),
+        )
+        .route(
+            "/api/download-runtime/cache/all",
+            delete(clear_download_runtime_cache),
+        )
+        .route(
+            "/api/download-runtime/resource-index",
+            put(put_download_runtime_resource_index)
+                .get(get_download_runtime_resource_index)
+                .delete(delete_download_runtime_resource_index),
+        )
+        .route(
+            "/api/download-runtime/resource-index/all",
+            delete(clear_download_runtime_resource_indexes),
+        )
+        .route(
+            "/api/download-runtime/store",
+            get(get_download_runtime_store_snapshot)
+                .put(put_download_runtime_store_snapshot)
+                .delete(clear_download_runtime_store_snapshot),
+        )
         .route("/api/playrecords", any(proxy_profile_sync_playrecords))
         .route("/api/favorites", any(proxy_profile_sync_favorites))
         .route("/api/searchhistory", any(proxy_profile_sync_search_history))
@@ -1190,7 +1461,9 @@ fn apply_cors_headers(headers: &mut HeaderMap) {
     );
     headers.insert(
         ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("Content-Type, Range, Origin, Accept, Authorization"),
+        HeaderValue::from_static(
+            "Content-Type, Range, Origin, Accept, Authorization, X-MoonTV-Response-Status",
+        ),
     );
     headers.insert(
         ACCESS_CONTROL_EXPOSE_HEADERS,
@@ -1259,6 +1532,168 @@ async fn get_profile_sync_server_config(State(state): State<AppState>) -> AppRes
         .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
 
     response_from_upstream(upstream_response).await
+}
+
+async fn put_download_runtime_cache(
+    State(state): State<AppState>,
+    Query(params): Query<DesktopDownloadCacheQueryParams>,
+    headers: HeaderMap,
+    body: Body,
+) -> AppResult<Response> {
+    let url = require_download_runtime_url(params.url.as_deref())?;
+    let status = parse_download_runtime_status(&headers)?;
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    let body_bytes = to_bytes(body, usize::MAX)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let entry = state
+        .write_cached_download(&url, status, content_type, body_bytes.as_ref())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    no_store_json_response(&entry)
+}
+
+async fn get_download_runtime_cache_meta(
+    State(state): State<AppState>,
+    Query(params): Query<DesktopDownloadCacheQueryParams>,
+) -> AppResult<Response> {
+    let url = require_download_runtime_url(params.url.as_deref())?;
+    let entry = state
+        .read_cached_download_entry(&url)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let payload = DesktopDownloadCacheMetaResponse {
+        exists: entry.is_some(),
+        url,
+        status: entry.as_ref().map(|item| item.status),
+        content_type: entry.as_ref().and_then(|item| item.content_type.clone()),
+        size_bytes: entry.as_ref().map(|item| item.size_bytes),
+    };
+
+    no_store_json_response(&payload)
+}
+
+async fn get_download_runtime_cache_response(
+    method: Method,
+    State(state): State<AppState>,
+    Query(params): Query<DesktopDownloadCacheQueryParams>,
+    request_headers: HeaderMap,
+) -> AppResult<Response> {
+    let url = require_download_runtime_url(params.url.as_deref())?;
+    let entry = state
+        .read_cached_download_entry(&url)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "cached download not found"))?;
+    let body = state
+        .read_cached_download_body(&url)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "cached download body not found"))?;
+
+    Ok(build_cached_download_response(
+        &method,
+        &request_headers,
+        &entry,
+        body,
+    ))
+}
+
+async fn delete_download_runtime_cache(
+    State(state): State<AppState>,
+    Query(params): Query<DesktopDownloadCacheQueryParams>,
+) -> AppResult<Response> {
+    let url = require_download_runtime_url(params.url.as_deref())?;
+    let deleted = state
+        .delete_cached_download(&url)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    no_store_json_response(&json!({
+        "ok": true,
+        "deleted": deleted,
+    }))
+}
+
+async fn clear_download_runtime_cache(State(state): State<AppState>) -> AppResult<Response> {
+    state
+        .clear_cached_downloads()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    no_store_json_response(&json!({ "ok": true }))
+}
+
+async fn put_download_runtime_resource_index(
+    State(state): State<AppState>,
+    Json(record): Json<DesktopDownloadResourceIndexRecord>,
+) -> AppResult<Response> {
+    let normalized_record = normalize_download_runtime_resource_index(record)?;
+    let saved = state
+        .write_resource_index(&normalized_record)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    no_store_json_response(&saved)
+}
+
+async fn get_download_runtime_resource_index(
+    State(state): State<AppState>,
+    Query(params): Query<DesktopDownloadResourceIndexQueryParams>,
+) -> AppResult<Response> {
+    let id = require_download_runtime_index_id(params.id.as_deref())?;
+    let record = state
+        .read_resource_index(&id)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    no_store_json_response(&record)
+}
+
+async fn delete_download_runtime_resource_index(
+    State(state): State<AppState>,
+    Query(params): Query<DesktopDownloadResourceIndexQueryParams>,
+) -> AppResult<Response> {
+    let id = require_download_runtime_index_id(params.id.as_deref())?;
+    let deleted = state
+        .delete_resource_index(&id)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    no_store_json_response(&json!({
+        "ok": true,
+        "deleted": deleted,
+    }))
+}
+
+async fn clear_download_runtime_resource_indexes(
+    State(state): State<AppState>,
+) -> AppResult<Response> {
+    state
+        .clear_resource_indexes()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    no_store_json_response(&json!({ "ok": true }))
+}
+
+async fn get_download_runtime_store_snapshot(State(state): State<AppState>) -> AppResult<Response> {
+    let snapshot = state
+        .read_download_store_snapshot()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    no_store_json_response(&snapshot)
+}
+
+async fn put_download_runtime_store_snapshot(
+    State(state): State<AppState>,
+    Json(snapshot): Json<Value>,
+) -> AppResult<Response> {
+    state
+        .write_download_store_snapshot(&snapshot)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    no_store_json_response(&json!({ "ok": true }))
+}
+
+async fn clear_download_runtime_store_snapshot(
+    State(state): State<AppState>,
+) -> AppResult<Response> {
+    let deleted = state
+        .clear_download_store_snapshot()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    no_store_json_response(&json!({
+        "ok": true,
+        "deleted": deleted,
+    }))
 }
 
 async fn proxy_profile_sync_login(
@@ -3305,12 +3740,57 @@ async fn get_live_logo(
     Ok(response)
 }
 
+fn build_local_request_url(base_url: &str, original_uri: &OriginalUri) -> String {
+    let path_and_query = original_uri
+        .0
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or_else(|| original_uri.0.path());
+
+    format!("{}{}", base_url.trim_end_matches('/'), path_and_query)
+}
+
+fn try_build_cached_vod_proxy_response(
+    state: &AppState,
+    method: &Method,
+    original_uri: &OriginalUri,
+    request_headers: &HeaderMap,
+) -> AppResult<Option<Response>> {
+    let request_url = build_local_request_url(&state.public_base_url, original_uri);
+    let Some(entry) = state
+        .read_cached_download_entry(&request_url)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let Some(body) = state
+        .read_cached_download_body(&request_url)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(build_cached_download_response(
+        method,
+        request_headers,
+        &entry,
+        body,
+    )))
+}
+
 async fn get_vod_m3u8(
     method: Method,
+    original_uri: OriginalUri,
     State(state): State<AppState>,
     Query(params): Query<VodProxyQueryParams>,
     request_headers: HeaderMap,
 ) -> AppResult<Response> {
+    if let Some(response) =
+        try_build_cached_vod_proxy_response(&state, &method, &original_uri, &request_headers)?
+    {
+        return Ok(response);
+    }
+
     let config = state
         .load_config()
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -3378,10 +3858,18 @@ async fn get_vod_m3u8(
 }
 
 async fn get_vod_segment(
+    method: Method,
+    original_uri: OriginalUri,
     State(state): State<AppState>,
     Query(params): Query<VodProxyQueryParams>,
     request_headers: HeaderMap,
 ) -> AppResult<Response> {
+    if let Some(response) =
+        try_build_cached_vod_proxy_response(&state, &method, &original_uri, &request_headers)?
+    {
+        return Ok(response);
+    }
+
     let config = state
         .load_config()
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -3403,7 +3891,11 @@ async fn get_vod_segment(
 
     let meta = upstream_response_meta(&upstream_response);
     let stream = upstream_response.bytes_stream();
-    let mut response = Response::new(Body::from_stream(stream));
+    let mut response = if method == Method::HEAD {
+        Response::new(Body::empty())
+    } else {
+        Response::new(Body::from_stream(stream))
+    };
     *response.status_mut() = meta.status;
     *response.headers_mut() = create_vod_proxy_headers(
         &meta,
@@ -3418,10 +3910,18 @@ async fn get_vod_segment(
 }
 
 async fn get_vod_key(
+    method: Method,
+    original_uri: OriginalUri,
     State(state): State<AppState>,
     Query(params): Query<VodProxyQueryParams>,
     request_headers: HeaderMap,
 ) -> AppResult<Response> {
+    if let Some(response) =
+        try_build_cached_vod_proxy_response(&state, &method, &original_uri, &request_headers)?
+    {
+        return Ok(response);
+    }
+
     let config = state
         .load_config()
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -3446,7 +3946,11 @@ async fn get_vod_key(
         .bytes()
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let mut response = Response::new(Body::from(key_bytes));
+    let mut response = if method == Method::HEAD {
+        Response::new(Body::empty())
+    } else {
+        Response::new(Body::from(key_bytes))
+    };
     *response.status_mut() = meta.status;
     *response.headers_mut() = create_vod_proxy_headers(
         &meta,
@@ -4087,6 +4591,211 @@ fn no_store_json_response<T: Serialize>(payload: &T) -> AppResult<Response> {
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
+}
+
+fn current_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_millis() as u64
+}
+
+fn stable_hash_key(value: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(value.as_bytes());
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn normalize_optional_text(value: Option<&str>) -> Option<String> {
+    value.and_then(|item| {
+        let normalized = item.trim();
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized.to_string())
+        }
+    })
+}
+
+fn write_json_file<T: Serialize>(path: &Path, payload: &T) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let contents = serde_json::to_string_pretty(payload).context("failed to encode json")?;
+    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn read_json_file<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&contents).with_context(|| format!("failed to decode {}", path.display()))
+}
+
+fn delete_if_exists(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))?;
+    Ok(true)
+}
+
+fn remove_dir_contents_if_exists(path: &Path) -> Result<()> {
+    if path.exists() {
+        fs::remove_dir_all(path).with_context(|| format!("failed to remove {}", path.display()))?;
+    }
+    fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))?;
+    Ok(())
+}
+
+fn require_download_runtime_url(value: Option<&str>) -> AppResult<String> {
+    let url = normalize_optional_text(value)
+        .ok_or_else(|| AppError::bad_request("missing download runtime url"))?;
+    Url::parse(&url).map_err(|_| AppError::bad_request("invalid download runtime url"))?;
+    Ok(url)
+}
+
+fn require_download_runtime_index_id(value: Option<&str>) -> AppResult<String> {
+    normalize_optional_string(value.map(|item| item.to_string()))
+        .ok_or_else(|| AppError::bad_request("missing download runtime index id"))
+}
+
+fn parse_download_runtime_status(headers: &HeaderMap) -> AppResult<StatusCode> {
+    let raw_status = headers
+        .get(HeaderName::from_static("x-moontv-response-status"))
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("200")
+        .trim();
+    let numeric_status = raw_status
+        .parse::<u16>()
+        .map_err(|_| AppError::bad_request("invalid download runtime status"))?;
+    StatusCode::from_u16(numeric_status)
+        .map_err(|_| AppError::bad_request("invalid download runtime status"))
+}
+
+fn normalize_download_runtime_resource_index(
+    record: DesktopDownloadResourceIndexRecord,
+) -> AppResult<DesktopDownloadResourceIndexRecord> {
+    let id = require_download_runtime_index_id(Some(&record.id))?;
+    let owner_username = normalize_optional_string(Some(record.owner_username))
+        .ok_or_else(|| AppError::bad_request("missing download runtime ownerUsername"))?;
+    let task_id = normalize_optional_string(Some(record.task_id))
+        .ok_or_else(|| AppError::bad_request("missing download runtime taskId"))?;
+    let content_id = normalize_optional_string(Some(record.content_id))
+        .ok_or_else(|| AppError::bad_request("missing download runtime contentId"))?;
+    let source = normalize_optional_string(Some(record.source))
+        .ok_or_else(|| AppError::bad_request("missing download runtime source"))?;
+    let vod_id = normalize_optional_string(Some(record.vod_id))
+        .ok_or_else(|| AppError::bad_request("missing download runtime vodId"))?;
+    let urls = record
+        .urls
+        .into_iter()
+        .filter_map(|url| normalize_optional_text(Some(&url)))
+        .collect::<Vec<_>>();
+
+    Ok(DesktopDownloadResourceIndexRecord {
+        id,
+        owner_username,
+        task_id,
+        content_id,
+        source,
+        vod_id,
+        episode_index: record.episode_index,
+        urls,
+        created_at: record.created_at,
+        updated_at: record.updated_at.max(record.created_at),
+    })
+}
+
+fn parse_byte_range_header(range_header: &str, total_length: usize) -> Option<(usize, usize)> {
+    let normalized = range_header.trim();
+    let range_value = normalized.strip_prefix("bytes=")?;
+    let (start_raw, end_raw) = range_value.split_once('-')?;
+
+    let start = usize::from_str(start_raw).ok()?;
+    if start >= total_length {
+        return None;
+    }
+
+    let end = if end_raw.trim().is_empty() {
+        total_length.checked_sub(1)?
+    } else {
+        usize::from_str(end_raw)
+            .ok()?
+            .min(total_length.checked_sub(1)?)
+    };
+
+    if end < start {
+        return None;
+    }
+
+    Some((start, end))
+}
+
+fn build_cached_download_response(
+    method: &Method,
+    request_headers: &HeaderMap,
+    entry: &DesktopDownloadCacheEntry,
+    body: Vec<u8>,
+) -> Response {
+    let total_length = body.len();
+    let mut status = StatusCode::from_u16(entry.status).unwrap_or(StatusCode::OK);
+    let mut headers = HeaderMap::new();
+    let content_type = entry
+        .content_type
+        .as_deref()
+        .unwrap_or("application/octet-stream");
+
+    if let Ok(value) = HeaderValue::from_str(content_type) {
+        headers.insert(CONTENT_TYPE, value);
+    }
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    apply_cors_headers(&mut headers);
+
+    let response_bytes = if let Some(range_header) = request_headers
+        .get(RANGE)
+        .and_then(|value| value.to_str().ok())
+    {
+        if let Some((start, end)) = parse_byte_range_header(range_header, total_length) {
+            status = StatusCode::PARTIAL_CONTENT;
+            let sliced = body[start..=end].to_vec();
+            if let Ok(value) = HeaderValue::from_str(&format!("bytes {start}-{end}/{total_length}"))
+            {
+                headers.insert(CONTENT_RANGE, value);
+            }
+            if let Ok(value) = HeaderValue::from_str(&sliced.len().to_string()) {
+                headers.insert(CONTENT_LENGTH, value);
+            }
+            sliced
+        } else {
+            status = StatusCode::RANGE_NOT_SATISFIABLE;
+            if let Ok(value) = HeaderValue::from_str(&format!("bytes */{total_length}")) {
+                headers.insert(CONTENT_RANGE, value);
+            }
+            headers.insert(CONTENT_LENGTH, HeaderValue::from_static("0"));
+            Vec::new()
+        }
+    } else {
+        if let Ok(value) = HeaderValue::from_str(&total_length.to_string()) {
+            headers.insert(CONTENT_LENGTH, value);
+        }
+        body
+    };
+
+    let mut response = if *method == Method::HEAD {
+        Response::new(Body::empty())
+    } else {
+        Response::new(Body::from(response_bytes))
+    };
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    response
 }
 
 fn apply_query_cache_headers(headers: &mut HeaderMap, cache_time: u64) {

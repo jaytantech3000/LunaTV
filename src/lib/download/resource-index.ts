@@ -3,6 +3,13 @@ import {
   DOWNLOAD_RESOURCE_STORE_NAME,
   ResourceIndexRecord,
 } from './types';
+import {
+  clearDesktopResourceIndexes,
+  deleteDesktopResourceIndex,
+  getDesktopResourceIndex,
+  isDesktopLocalDownloadRuntimeEnabled,
+  putDesktopResourceIndex,
+} from './desktop-runtime';
 
 function assertIndexedDbAvailable(): void {
   if (typeof window === 'undefined' || typeof indexedDB === 'undefined') {
@@ -71,6 +78,11 @@ function withStore<T>(
 export async function putResourceIndex(
   record: ResourceIndexRecord
 ): Promise<void> {
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    await putDesktopResourceIndex(record);
+    return;
+  }
+
   await withStore<void>('readwrite', (store, resolve, reject) => {
     const request = store.put(record);
     request.onsuccess = () => resolve();
@@ -81,16 +93,28 @@ export async function putResourceIndex(
 export async function getResourceIndex(
   id: string
 ): Promise<ResourceIndexRecord | null> {
-  return withStore<ResourceIndexRecord | null>('readonly', (store, resolve, reject) => {
-    const request = store.get(id);
-    request.onsuccess = () => {
-      resolve((request.result as ResourceIndexRecord | undefined) || null);
-    };
-    request.onerror = () => reject(request.error);
-  });
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    return getDesktopResourceIndex(id);
+  }
+
+  return withStore<ResourceIndexRecord | null>(
+    'readonly',
+    (store, resolve, reject) => {
+      const request = store.get(id);
+      request.onsuccess = () => {
+        resolve((request.result as ResourceIndexRecord | undefined) || null);
+      };
+      request.onerror = () => reject(request.error);
+    }
+  );
 }
 
 export async function deleteResourceIndex(id: string): Promise<void> {
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    await deleteDesktopResourceIndex(id);
+    return;
+  }
+
   await withStore<void>('readwrite', (store, resolve, reject) => {
     const request = store.delete(id);
     request.onsuccess = () => resolve();
@@ -99,16 +123,24 @@ export async function deleteResourceIndex(id: string): Promise<void> {
 }
 
 export async function listResourceIndexes(): Promise<ResourceIndexRecord[]> {
-  return withStore<ResourceIndexRecord[]>('readonly', (store, resolve, reject) => {
-    const request = store.getAll();
-    request.onsuccess = () => {
-      resolve((request.result as ResourceIndexRecord[] | undefined) || []);
-    };
-    request.onerror = () => reject(request.error);
-  });
+  return withStore<ResourceIndexRecord[]>(
+    'readonly',
+    (store, resolve, reject) => {
+      const request = store.getAll();
+      request.onsuccess = () => {
+        resolve((request.result as ResourceIndexRecord[] | undefined) || []);
+      };
+      request.onerror = () => reject(request.error);
+    }
+  );
 }
 
 export async function clearResourceIndexes(): Promise<void> {
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    await clearDesktopResourceIndexes();
+    return;
+  }
+
   if (typeof window === 'undefined' || typeof indexedDB === 'undefined') {
     return;
   }

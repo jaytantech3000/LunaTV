@@ -11,6 +11,38 @@
 
 ---
 
+## 2026-06-10 - 桌面本地下载运行时 v0
+
+- 分支：`desktop-foundation`
+- 相关文件：
+  - `crates/moontv-local-service/src/lib.rs`
+  - `src/lib/download/cache.ts`
+  - `src/lib/download/resource-index.ts`
+  - `src/lib/download/desktop-runtime.ts`
+  - `src/lib/download/proxy-url.ts`
+  - `package.json`
+  - `scripts/build-desktop-frontend.mjs`
+
+### 目标
+
+- 让桌面版下载/离线播放不再依赖 Web 的 Cache Storage / IndexedDB / Service Worker。
+- 保持现有 `/play`、`/downloads`、manifest 解析和任务 UI 尽量不变。
+
+### 核心实现
+
+- 本地 sidecar 新增桌面下载运行时接口：
+  - 文件缓存写入、读取、删除、全量清理
+  - 资源索引写入、读取、删除、全量清理
+- 桌面版前端新增 `desktop-runtime.ts`，把下载缓存与资源索引切到本地服务。
+- 本地 VOD 代理在桌面端优先命中文件缓存，再决定是否访问上游。
+- 桌面构建和桌面 dev 默认开启 `NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME=true`。
+- 桌面下载 URL 不再继续依赖 dev same-origin `/api/proxy/vod/*` 特判。
+
+### 当前边界
+
+- 当前仍由前端负责下载任务调度与进度计算；sidecar 先接管“存储与回放”，还没有接管“任务执行器”。
+- 桌面在线播放仍复用现有播放页逻辑，但底层媒体缓存/离线命中已经切到本地服务。
+
 ## 2026-06-09 - 桌面 dev 下载链路修复
 
 - 分支：`desktop-foundation`

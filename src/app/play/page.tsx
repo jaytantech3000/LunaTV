@@ -25,6 +25,7 @@ import {
   matchDownloadResponse,
   putDownloadResponse,
 } from '@/lib/download/cache';
+import { isDesktopLocalDownloadRuntimeEnabled } from '@/lib/download/desktop-runtime';
 import { normalizeVodDetailForPlayback } from '@/lib/download/normalize';
 import {
   buildOfflinePlaybackDetail,
@@ -1891,7 +1892,9 @@ function PlayPageClient() {
                 void (async () => {
                   if (isOfflineMode) {
                     const serviceWorkerReady =
-                      await ensureOfflineServiceWorkerReady();
+                      isDesktopLocalDownloadRuntimeEnabled()
+                        ? true
+                        : await ensureOfflineServiceWorkerReady();
                     if (!serviceWorkerReady) {
                       setIsVideoLoading(false);
                       setError(

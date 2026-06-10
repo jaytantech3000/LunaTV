@@ -7,6 +7,8 @@ import {
 } from '@/lib/transport/media-proxy';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
+import { isDesktopLocalDownloadRuntimeEnabled } from './desktop-runtime';
+
 const VOD_PROXY_BASE_PATH = getTransportVodProxyBasePath();
 const VOD_PROXY_M3U8_PATH = VOD_PROXY_PATHS.m3u8;
 
@@ -64,9 +66,7 @@ function buildSameOriginVodProxyUrl(
   return `${path}?${searchParams.toString()}`;
 }
 
-function readVodProxyRequestParams(
-  url: string
-): {
+function readVodProxyRequestParams(url: string): {
   source: string;
   upstreamUrl: string;
   assetKind: VodProxyAssetKind;
@@ -99,6 +99,10 @@ function readVodProxyRequestParams(
 
 export function shouldUseSameOriginDesktopDownloadProxy(): boolean {
   if (typeof window === 'undefined') {
+    return false;
+  }
+
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
     return false;
   }
 

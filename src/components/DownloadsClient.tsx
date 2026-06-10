@@ -3,15 +3,17 @@
 import { Settings2 } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
-import {
-  type ChangeEvent,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import {
+  getLocalServiceStatus,
+  isDesktopTauriRuntimeAvailable,
+} from '@/lib/desktop/tauri-client';
+import {
+  getDesktopDownloadRuntimeLabel,
+  isDesktopLocalDownloadRuntimeEnabled,
+} from '@/lib/download/desktop-runtime';
 import {
   formatBytes,
   formatTaskSizeProgress,
@@ -138,7 +140,9 @@ interface ActiveTaskGroup {
   errorCount: number;
 }
 
-function getMoreDownloadEpisodeStatus(option: MoreDownloadEpisodeOption): string {
+function getMoreDownloadEpisodeStatus(
+  option: MoreDownloadEpisodeOption
+): string {
   if (!option.hasSource) {
     return '当前源缺少可下载地址';
   }
@@ -224,9 +228,21 @@ interface DownloadedContentDialogProps {
 interface DownloadSettingsDialogProps {
   storageOrigin: string;
   isDevelopment: boolean;
+  isDesktopRuntime: boolean;
+  desktopStorageBasePath: string;
+  desktopServiceBaseUrl: string;
   maxConcurrentTasks: number;
   onConcurrentTaskChange: (event: ChangeEvent<HTMLSelectElement>) => void;
   onClose: () => void;
+}
+
+function joinDisplayPath(basePath: string, segment: string): string {
+  if (!basePath) {
+    return segment;
+  }
+
+  const separator = basePath.includes('\\') ? '\\' : '/';
+  return `${basePath.replace(/[\\/]+$/, '')}${separator}${segment}`;
 }
 
 function buildActiveTaskGroups(
@@ -274,8 +290,7 @@ function buildActiveTaskGroups(
         0
       );
       const downloadSpeedBytesPerSecond = sortedTasks.reduce(
-        (sum, task) =>
-          sum + Math.max(0, task.downloadSpeedBytesPerSecond || 0),
+        (sum, task) => sum + Math.max(0, task.downloadSpeedBytesPerSecond || 0),
         0
       );
       const progress =
@@ -363,7 +378,9 @@ function getActiveTaskGroupStatusBadgeLabel(group: ActiveTaskGroup): string {
   return `${group.tasks.length} 集任务`;
 }
 
-function getActiveTaskGroupStatusBadgeClassName(group: ActiveTaskGroup): string {
+function getActiveTaskGroupStatusBadgeClassName(
+  group: ActiveTaskGroup
+): string {
   if (group.downloadingCount > 0) {
     return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
   }
@@ -388,7 +405,9 @@ function getActiveTaskGroupResourceSummary(group: ActiveTaskGroup): string {
     return `${group.downloadedResources}/${group.totalResources} 个资源`;
   }
 
-  return group.tasks.length > 1 ? `${group.tasks.length} 个任务` : '等待资源清单';
+  return group.tasks.length > 1
+    ? `${group.tasks.length} 个任务`
+    : '等待资源清单';
 }
 
 function getActiveTaskStatusClassName(task: DownloadTask): string {
@@ -412,8 +431,7 @@ function ActiveTasksSection({
   onOpenContent,
 }: ActiveTasksSectionProps) {
   const totalTaskCount = useMemo(
-    () =>
-      activeTaskGroups.reduce((sum, group) => sum + group.tasks.length, 0),
+    () => activeTaskGroups.reduce((sum, group) => sum + group.tasks.length, 0),
     [activeTaskGroups]
   );
   const totalDownloadSpeedBytesPerSecond = useMemo(
@@ -539,9 +557,10 @@ function ActiveTasksSection({
 }
 
 function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
-  const activeTasks = useMemo(() => sortActiveDownloadTasks(group.tasks), [
-    group.tasks,
-  ]);
+  const activeTasks = useMemo(
+    () => sortActiveDownloadTasks(group.tasks),
+    [group.tasks]
+  );
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
 
@@ -719,7 +738,9 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
                 </div>
                 <div className='flex items-center justify-between gap-3'>
                   <span className='text-gray-400'>总下载速度</span>
-                  <span>{formatTransferRate(group.downloadSpeedBytesPerSecond)}</span>
+                  <span>
+                    {formatTransferRate(group.downloadSpeedBytesPerSecond)}
+                  </span>
                 </div>
                 <div className='flex items-center justify-between gap-3'>
                   <span className='text-gray-400'>最近更新</span>
@@ -773,7 +794,8 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
                       <div className='mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300'>
                         {task.totalResources > 0 ? (
                           <span>
-                            {task.downloadedResources}/{task.totalResources} 个资源
+                            {task.downloadedResources}/{task.totalResources}{' '}
+                            个资源
                           </span>
                         ) : (
                           <span>等待资源清单</span>
@@ -841,7 +863,9 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
 
                         <button
                           type='button'
-                          onClick={() => void handleTaskAction(task.id, 'cancel')}
+                          onClick={() =>
+                            void handleTaskAction(task.id, 'cancel')
+                          }
                           disabled={isPending}
                           className={`${compactActionButtonClassName} border border-white/15 text-gray-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50`}
                         >
@@ -1021,7 +1045,9 @@ function DownloadedContentDialog({
         : [],
     [downloadableAvailableSources, downloadableDetail]
   );
-  const moreDownloadEpisodeOptions = useMemo<MoreDownloadEpisodeOption[]>(() => {
+  const moreDownloadEpisodeOptions = useMemo<
+    MoreDownloadEpisodeOption[]
+  >(() => {
     if (!downloadableSources.length) {
       return [];
     }
@@ -1100,9 +1126,7 @@ function DownloadedContentDialog({
   };
 
   const handleToggleSelectAll = () => {
-    setSelectedEpisodeIndexes(
-      allEpisodesSelected ? [] : allEpisodeIndexes
-    );
+    setSelectedEpisodeIndexes(allEpisodesSelected ? [] : allEpisodeIndexes);
   };
 
   const handleToggleEpisodeSelection = (episodeIndex: number) => {
@@ -1179,7 +1203,8 @@ function DownloadedContentDialog({
       const normalizedDetail = normalizeVodDetailForPlayback(detailResponse);
       const nextAvailableSources = matchedSources.filter(
         (source) =>
-          buildSearchResultKey(source) !== buildSearchResultKey(normalizedDetail)
+          buildSearchResultKey(source) !==
+          buildSearchResultKey(normalizedDetail)
       );
 
       if (detailRequestKeyRef.current !== requestKey) {
@@ -1244,9 +1269,10 @@ function DownloadedContentDialog({
         availableSources,
       });
       setMoreDownloadsFeedback(
-        `已将 ${
-          getEpisodeTitleFromSources(candidateSources, episodeIndex)
-        } 加入下载队列。`
+        `已将 ${getEpisodeTitleFromSources(
+          candidateSources,
+          episodeIndex
+        )} 加入下载队列。`
       );
     } catch (error) {
       setMoreDownloadsError(
@@ -1406,9 +1432,7 @@ function DownloadedContentDialog({
                 <button
                   type='button'
                   onClick={() =>
-                    setIsDescriptionExpanded(
-                      (currentState) => !currentState
-                    )
+                    setIsDescriptionExpanded((currentState) => !currentState)
                   }
                   className='w-full rounded-2xl border border-white/10 bg-white/5 p-4 text-left text-sm leading-6 text-gray-300 transition-colors hover:bg-white/10'
                 >
@@ -1433,7 +1457,9 @@ function DownloadedContentDialog({
                   </div>
                   {shouldCollapseDescription ? (
                     <div className='mt-3 text-xs text-emerald-200'>
-                      {isDescriptionExpanded ? '点击收起简介' : '点击查看完整简介'}
+                      {isDescriptionExpanded
+                        ? '点击收起简介'
+                        : '点击查看完整简介'}
                     </div>
                   ) : null}
                 </button>
@@ -1562,7 +1588,9 @@ function DownloadedContentDialog({
                       aria-pressed={isEditing ? isSelected : undefined}
                       aria-label={
                         isEditing
-                          ? `${isSelected ? '取消选择' : '选择'} ${episode.episodeTitle}`
+                          ? `${isSelected ? '取消选择' : '选择'} ${
+                              episode.episodeTitle
+                            }`
                           : `离线播放 ${episode.episodeTitle}`
                       }
                       className={`rounded-xl border p-3 text-left transition-colors ${
@@ -1600,7 +1628,9 @@ function DownloadedContentDialog({
 
                         <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300'>
                           <span>{formatBytes(episode.sizeBytes)}</span>
-                          <span>下载于 {formatDateTime(episode.downloadedAt)}</span>
+                          <span>
+                            下载于 {formatDateTime(episode.downloadedAt)}
+                          </span>
                         </div>
                       </div>
                     </button>
@@ -1619,6 +1649,9 @@ function DownloadedContentDialog({
 function DownloadSettingsDialog({
   storageOrigin,
   isDevelopment,
+  isDesktopRuntime,
+  desktopStorageBasePath,
+  desktopServiceBaseUrl,
   maxConcurrentTasks,
   onConcurrentTaskChange,
   onClose,
@@ -1688,43 +1721,100 @@ function DownloadSettingsDialog({
                 离线保存位置
               </div>
               <div className='mt-3 inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-200'>
-                当前浏览器离线缓存
+                {getDesktopDownloadRuntimeLabel()}
               </div>
               <div className='mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4'>
                 <div className='text-xs font-medium uppercase tracking-wide text-emerald-200'>
-                  逻辑存储位置
+                  {isDesktopRuntime ? '桌面运行时位置' : '逻辑存储位置'}
                 </div>
                 <div className='mt-4 grid gap-3 text-xs text-gray-300'>
-                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                    <span className='font-medium text-gray-200'>站点</span>
-                    <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                      {storageOrigin || '当前站点'}
-                    </code>
-                  </div>
-                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                    <span className='font-medium text-gray-200'>Cache</span>
-                    <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                      {DOWNLOAD_CACHE_NAME}
-                    </code>
-                  </div>
-                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                    <span className='font-medium text-gray-200'>IndexedDB</span>
-                    <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                      {DOWNLOAD_RESOURCE_DB_NAME}
-                    </code>
-                  </div>
-                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                    <span className='font-medium text-gray-200'>对象仓库</span>
-                    <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                      {DOWNLOAD_RESOURCE_STORE_NAME}
-                    </code>
-                  </div>
+                  {isDesktopRuntime ? (
+                    <>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>
+                          本地服务
+                        </span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {desktopServiceBaseUrl ||
+                            storageOrigin ||
+                            'http://127.0.0.1:8787'}
+                        </code>
+                      </div>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>
+                          数据目录
+                        </span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {desktopStorageBasePath || '桌面应用数据目录'}
+                        </code>
+                      </div>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>
+                          缓存目录
+                        </span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {desktopStorageBasePath
+                            ? joinDisplayPath(
+                                desktopStorageBasePath,
+                                'download-runtime/cache-body'
+                              )
+                            : 'download-runtime/cache-body'}
+                        </code>
+                      </div>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>
+                          索引目录
+                        </span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {desktopStorageBasePath
+                            ? joinDisplayPath(
+                                desktopStorageBasePath,
+                                'download-runtime/resource-index'
+                              )
+                            : 'download-runtime/resource-index'}
+                        </code>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>站点</span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {storageOrigin || '当前站点'}
+                        </code>
+                      </div>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>Cache</span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {DOWNLOAD_CACHE_NAME}
+                        </code>
+                      </div>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>
+                          IndexedDB
+                        </span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {DOWNLOAD_RESOURCE_DB_NAME}
+                        </code>
+                      </div>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>
+                          对象仓库
+                        </span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {DOWNLOAD_RESOURCE_STORE_NAME}
+                        </code>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
               <p className='mt-4 text-xs leading-5 text-gray-400'>
-                实际磁盘位置由浏览器站点沙箱托管，Web 版暂不支持直接显示系统路径、打开系统文件夹或自定义磁盘目录。
+                {isDesktopRuntime
+                  ? '桌面版离线资源由本地 sidecar 服务托管，播放与下载不再依赖浏览器 Cache Storage、IndexedDB 或 Service Worker。'
+                  : '实际磁盘位置由浏览器站点沙箱托管，Web 版暂不支持直接显示系统路径、打开系统文件夹或自定义磁盘目录。'}
               </p>
-              {isDevelopment && (
+              {isDevelopment && !isDesktopRuntime && (
                 <p className='mt-2 text-xs leading-5 text-amber-300'>
                   本地验证离线播放时，请使用独立预览模式；开发模式不会提供完整的离线缓存链路。
                 </p>
@@ -1742,6 +1832,9 @@ export default function DownloadsClient() {
   const searchParams = useSearchParams();
   const [actionError, setActionError] = useState<string | null>(null);
   const [storageOrigin, setStorageOrigin] = useState('');
+  const [desktopStorageBasePath, setDesktopStorageBasePath] = useState('');
+  const [desktopServiceBaseUrl, setDesktopServiceBaseUrl] = useState('');
+  const [isDesktopRuntime, setIsDesktopRuntime] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedActiveTaskContentId, setSelectedActiveTaskContentId] =
     useState<string | null>(null);
@@ -1757,10 +1850,7 @@ export default function DownloadsClient() {
   const setMaxConcurrentTasks = useDownloadStore(
     (state) => state.setMaxConcurrentTasks
   );
-  const activeTaskGroups = useMemo(
-    () => buildActiveTaskGroups(tasks),
-    [tasks]
-  );
+  const activeTaskGroups = useMemo(() => buildActiveTaskGroups(tasks), [tasks]);
   const selectedActiveTaskGroup = useMemo(
     () =>
       selectedActiveTaskContentId
@@ -1780,6 +1870,19 @@ export default function DownloadsClient() {
     }
 
     setStorageOrigin(window.location.origin);
+    const desktopRuntimeEnabled = isDesktopLocalDownloadRuntimeEnabled();
+    setIsDesktopRuntime(desktopRuntimeEnabled);
+
+    if (!desktopRuntimeEnabled || !isDesktopTauriRuntimeAvailable()) {
+      return;
+    }
+
+    void getLocalServiceStatus()
+      .then((status) => {
+        setDesktopStorageBasePath(status.dataDir || '');
+        setDesktopServiceBaseUrl(status.baseUrl || '');
+      })
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -1795,11 +1898,7 @@ export default function DownloadsClient() {
   }, [selectedActiveTaskContentId, selectedActiveTaskGroup]);
 
   useEffect(() => {
-    if (
-      !isSettingsOpen &&
-      !selectedContentId &&
-      !selectedActiveTaskContentId
-    ) {
+    if (!isSettingsOpen && !selectedContentId && !selectedActiveTaskContentId) {
       return;
     }
     if (typeof document === 'undefined') {
@@ -1951,6 +2050,9 @@ export default function DownloadsClient() {
         <DownloadSettingsDialog
           storageOrigin={storageOrigin}
           isDevelopment={isDevelopment}
+          isDesktopRuntime={isDesktopRuntime}
+          desktopStorageBasePath={desktopStorageBasePath}
+          desktopServiceBaseUrl={desktopServiceBaseUrl}
           maxConcurrentTasks={maxConcurrentTasks}
           onConcurrentTaskChange={handleConcurrentTaskChange}
           onClose={handleCloseSettings}
