@@ -50,6 +50,7 @@
 - [自动更新](#自动更新)
 - [环境变量](#环境变量)
 - [客户端](#客户端)
+  - [桌面内部发布](#桌面内部发布)
 - [AndroidTV 使用](#AndroidTV-使用)
 - [Roadmap](#roadmap)
 - [安全与隐私提醒](#安全与隐私提醒)
@@ -375,6 +376,10 @@ NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE 选项解释：
 ## 客户端
 
 v100.0.0 以上版本可配合 [Selene](https://github.com/MoonTechLab/Selene) 使用，移动端体验更加友好，数据完全同步
+
+### 桌面内部发布
+
+桌面版的 unsigned internal release 流程见 [docs/desktop-internal-release.md](docs/desktop-internal-release.md)。
 
 ## AndroidTV 使用
 

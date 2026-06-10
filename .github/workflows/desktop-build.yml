@@ -2,6 +2,12 @@ name: Build Desktop App
 
 on:
   workflow_dispatch:
+    inputs:
+      internal_release:
+        description: Create an unsigned internal prerelease after all desktop builds pass
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - desktop
@@ -94,3 +100,33 @@ jobs:
           path: target/release/bundle/
           if-no-files-found: error
           retention-days: 14
+
+  publish_internal_release:
+    name: Publish Internal Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.internal_release }}
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Download build artifacts
+        run: gh run download ${{ github.run_id }} --dir .desktop-release/artifacts
+
+      - name: Prepare internal release assets
+        id: prepare_release
+        run: node scripts/prepare-desktop-internal-release.mjs --artifacts-root .desktop-release/artifacts --output-dir .desktop-release/dist --github-output "$GITHUB_OUTPUT"
+
+      - name: Create GitHub prerelease
+        run: gh release create "${{ steps.prepare_release.outputs.tag }}" .desktop-release/dist/assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "${{ steps.prepare_release.outputs.title }}" --notes-file .desktop-release/dist/RELEASE_NOTES.md --prerelease

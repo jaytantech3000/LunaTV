@@ -17,6 +17,7 @@
 /out/
 /desktop-shell-dist/
 /.desktop-build-temp/
+/.desktop-release/
 
 # production
 /build
