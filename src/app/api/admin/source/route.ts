@@ -12,6 +12,7 @@ export const runtime = 'nodejs';
 type Action =
   | 'add'
   | 'edit'
+  | 'update_ad_filter'
   | 'disable'
   | 'enable'
   | 'delete'
@@ -55,7 +56,7 @@ export async function POST(request: NextRequest) {
     const username = authInfo.username;
 
     // 基础校验
-    const ACTIONS: Action[] = ['add', 'edit', 'disable', 'enable', 'delete', 'sort', 'batch_disable', 'batch_enable', 'batch_delete'];
+    const ACTIONS: Action[] = ['add', 'edit', 'update_ad_filter', 'disable', 'enable', 'delete', 'sort', 'batch_disable', 'batch_enable', 'batch_delete'];
     if (!username || !action || !ACTIONS.includes(action)) {
       return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
     }
@@ -111,6 +112,7 @@ export async function POST(request: NextRequest) {
           referer,
           from: 'custom',
           disabled: false,
+          disable_ad_filter: false,
         });
         break;
       }
@@ -158,6 +160,28 @@ export async function POST(request: NextRequest) {
         entry.detail = detail;
         entry.ua = ua;
         entry.referer = referer;
+        break;
+      }
+      case 'update_ad_filter': {
+        const {
+          key: rawKey,
+          disable_ad_filter: rawDisableAdFilter,
+        } = body as {
+          key?: string;
+          disable_ad_filter?: boolean;
+        };
+        const key = normalizeRequiredString(rawKey);
+
+        if (!key || typeof rawDisableAdFilter !== 'boolean') {
+          return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
+        }
+
+        const entry = adminConfig.SourceConfig.find((s) => s.key === key);
+        if (!entry) {
+          return NextResponse.json({ error: '源不存在' }, { status: 404 });
+        }
+
+        entry.disable_ad_filter = rawDisableAdFilter;
         break;
       }
       case 'disable': {

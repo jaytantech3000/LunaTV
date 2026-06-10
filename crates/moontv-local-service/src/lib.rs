@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     convert::Infallible,
     env, fs,
     path::{Path, PathBuf},
@@ -13,7 +13,7 @@ use axum::{
     body::{Body, to_bytes},
     extract::{Query, Request, State},
     http::{
-        HeaderMap, HeaderValue, Method, StatusCode,
+        HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
         header::{
             ACCEPT_RANGES, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
             ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, CACHE_CONTROL,
@@ -89,6 +89,129 @@ const YELLOW_WORDS: &[&str] = &[
     "电影解说",
     "伦理",
     "日本伦理",
+];
+
+const DEFAULT_VOD_AD_FILTER_MIN_DURATION: f64 = 3.0;
+const DEFAULT_VOD_AD_FILTER_MAX_DURATION: f64 = 120.0;
+const DEFAULT_VOD_AD_FILTER_MAX_SEGMENTS: usize = 15;
+
+const VOD_AD_FILTER_DOMAIN_PATTERNS: &[&str] = &[
+    "doubleclick",
+    "googlesyndication",
+    "googleadservices",
+    "adsystem",
+    "adservice",
+    "baidu.com/adm",
+    "pos.baidu.com",
+    "cpro.baidu",
+    "eclick.baidu",
+    "baidustatic.com/adm",
+    "gdt.qq.com",
+    "l.qq.com",
+    "e.qq.com",
+    "adsmind.gdtimg",
+    "tanx.com",
+    "alimama.com",
+    "mmstat.com",
+    "atanx.alicdn",
+    "ykad.",
+    "ykimg.com/material",
+    "iusmob.",
+    "pangle.",
+    "pangolin.",
+    "bytedance.com/ad",
+    "oceanengine.",
+    "csjad.",
+    "iqiyiad.",
+    "iqiyi.com/cupid",
+    "cupid.iqiyi",
+    "iqiyi.hbuioo.com",
+    "mgtvad.",
+    "admaster.",
+    "miaozhen.",
+    "adcdn.",
+    "ad-cdn.",
+    "/ad/",
+    "/ads/",
+    "advert",
+    "adsrv",
+    "adpush",
+    "adx.",
+    "dsp.",
+    "rtb.",
+    "ssp.",
+    "tracking",
+    "analytics",
+    "commercial",
+    "insert.",
+    "preroll",
+    "midroll",
+    "postroll",
+    "ffzyad",
+    "vip.ffzyad.com",
+    "bytegoofy.com",
+    "mimg.0c1q0l.cn",
+    "mc.usihnbcq.cn",
+    "wan.51img1.com",
+    "casino",
+    "macau",
+    "aomen",
+    "gambling",
+    "bet365",
+    "1xbet",
+    "188bet",
+    "22bet",
+    "bookmaker",
+    "sportsbook",
+];
+
+const VOD_AD_FILTER_SAFE_DOMAINS: &[&str] = &[
+    "hhuus.com",
+    "bvvvvvvvvv1f.com",
+    "play-cdn",
+    "modujx",
+    "ffzy",
+    "sdzy",
+    "wujin",
+    "heimuer",
+    "lzizy",
+    "alicdn.com",
+    "aliyuncs.com",
+    "aliyun",
+    "qcloud",
+    "myqcloud.com",
+    "ksyun",
+    "ks-cdn",
+    "huaweicloud",
+    "hwcdn",
+    "baidubce",
+    "bcebos.com",
+    "cdn.bcebos",
+    "cdn.jsdelivr",
+    "bootcdn",
+    "staticfile",
+    "unpkg",
+    "cdnjs",
+];
+
+const FORCE_VOD_AD_DOMAIN_PATTERNS: &[&str] = &[
+    "ffzyad",
+    "vip.ffzyad.com",
+    "bytegoofy.com",
+    "mimg.0c1q0l.cn",
+    "mc.usihnbcq.cn",
+    "wan.51img1.com",
+    "iqiyi.hbuioo.com",
+    "casino",
+    "macau",
+    "aomen",
+    "gambling",
+    "bet365",
+    "1xbet",
+    "188bet",
+    "22bet",
+    "bookmaker",
+    "sportsbook",
 ];
 
 #[derive(Debug, Clone, Parser)]
@@ -244,6 +367,7 @@ struct RawApiSite {
     ua: Option<String>,
     referer: Option<String>,
     disabled: Option<bool>,
+    disable_ad_filter: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -274,6 +398,7 @@ struct ServiceConfig {
     cache_time: u64,
     max_search_pages: usize,
     adult_content_filter_enabled: bool,
+    vod_ad_filter_enabled: bool,
     site_name: Option<String>,
     announcement: Option<String>,
     douban_proxy_type: Option<String>,
@@ -296,6 +421,7 @@ struct ApiSite {
     ua: Option<String>,
     referer: Option<String>,
     disabled: bool,
+    disable_ad_filter: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -451,6 +577,8 @@ struct DesktopAdminConfig {
     custom_categories: Vec<DesktopCategoryConfigItem>,
     #[serde(rename = "LiveConfig", default)]
     live_config: Vec<DesktopLiveConfigItem>,
+    #[serde(rename = "AdFilterConfig", default)]
+    ad_filter_config: DesktopAdFilterConfig,
 }
 
 impl Default for DesktopAdminConfig {
@@ -463,6 +591,7 @@ impl Default for DesktopAdminConfig {
             source_config: Vec::new(),
             custom_categories: Vec::new(),
             live_config: Vec::new(),
+            ad_filter_config: DesktopAdFilterConfig::default(),
         }
     }
 }
@@ -524,6 +653,17 @@ impl Default for DesktopSiteConfig {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct DesktopAdFilterConfig {
+    enabled: bool,
+}
+
+impl Default for DesktopAdFilterConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 struct DesktopUserConfig {
     #[serde(rename = "Users", default)]
@@ -562,6 +702,8 @@ struct DesktopSourceConfigItem {
     from: String,
     #[serde(default)]
     disabled: bool,
+    #[serde(default)]
+    disable_ad_filter: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -692,6 +834,7 @@ struct DetailQueryParams {
 struct VodProxyQueryParams {
     source: Option<String>,
     url: Option<String>,
+    adfilter: Option<String>,
 }
 
 #[derive(Debug)]
@@ -802,6 +945,7 @@ pub fn build_router(state: AppState) -> Router {
             post(fetch_admin_config_subscription),
         )
         .route("/api/admin/site", post(update_admin_site_config))
+        .route("/api/admin/adfilter", post(update_admin_ad_filter_config))
         .route("/api/admin/source", post(update_admin_source_config))
         .route("/api/admin/source/validate", get(validate_admin_sources))
         .route("/api/admin/category", post(update_admin_category_config))
@@ -1202,8 +1346,15 @@ struct AdminSourceMutationRequest {
     detail: Option<String>,
     ua: Option<String>,
     referer: Option<String>,
+    #[serde(alias = "disable_ad_filter")]
+    disable_ad_filter: Option<bool>,
     order: Option<Vec<String>>,
     keys: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminAdFilterMutationRequest {
+    enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1374,6 +1525,21 @@ async fn update_admin_site_config(
     no_store_json_response(&json!({ "ok": true }))
 }
 
+async fn update_admin_ad_filter_config(
+    State(state): State<AppState>,
+    Json(payload): Json<AdminAdFilterMutationRequest>,
+) -> AppResult<Response> {
+    let mut persistence = state
+        .load_admin_persistence()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    persistence.config.ad_filter_config.enabled = payload.enabled.unwrap_or(true);
+    state
+        .save_admin_persistence(&persistence)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    no_store_json_response(&json!({ "ok": true }))
+}
+
 async fn update_admin_source_config(
     State(state): State<AppState>,
     Json(payload): Json<AdminSourceMutationRequest>,
@@ -1406,6 +1572,7 @@ async fn update_admin_source_config(
                 referer: normalize_owned_string(payload.referer),
                 from: "custom".to_string(),
                 disabled: false,
+                disable_ad_filter: false,
             });
         }
         "edit" => {
@@ -1428,6 +1595,19 @@ async fn update_admin_source_config(
             entry.detail = normalize_owned_string(payload.detail);
             entry.ua = normalize_owned_string(payload.ua);
             entry.referer = normalize_owned_string(payload.referer);
+        }
+        "update_ad_filter" => {
+            let key = require_owned_string(payload.key, "缺少 key 参数")?;
+            let disable_ad_filter = payload
+                .disable_ad_filter
+                .ok_or_else(|| AppError::bad_request("参数格式错误"))?;
+            let entry = persistence
+                .config
+                .source_config
+                .iter_mut()
+                .find(|source| source.key == key)
+                .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "源不存在"))?;
+            entry.disable_ad_filter = disable_ad_filter;
         }
         "disable" | "enable" => {
             let key = require_owned_string(payload.key, "缺少 key 参数")?;
@@ -2442,6 +2622,7 @@ async fn get_vod_m3u8(
     let config = state
         .load_config()
         .map_err(|error| AppError::internal(error.to_string()))?;
+    let ad_filter_query_mode = parse_bool_flag(params.adfilter.as_deref());
     let resolved = resolve_vod_proxy_request(&config, params)?;
     let upstream_response = fetch_vod_proxy_upstream(
         &state.client,
@@ -2469,10 +2650,29 @@ async fn get_vod_m3u8(
         &resolved.source,
         &state.public_base_url,
     );
+    let ad_filter_result = if should_apply_vod_ad_filter(
+        &config,
+        &resolved.api_site,
+        ad_filter_query_mode,
+    ) {
+        filter_vod_manifest_ads(&rewritten_content, &build_vod_ad_filter_config(true))
+    } else {
+        FilteredVodManifest {
+            filtered: rewritten_content.clone(),
+            ads_removed: 0,
+            ads_duration: 0.0,
+            changed: false,
+        }
+    };
+    let response_content = if ad_filter_result.changed {
+        ad_filter_result.filtered.clone()
+    } else {
+        rewritten_content.clone()
+    };
     let mut response = if method == Method::HEAD {
         Response::new(Body::empty())
     } else {
-        Response::new(Body::from(rewritten_content.clone()))
+        Response::new(Body::from(response_content.clone()))
     };
     *response.status_mut() = meta.status;
     *response.headers_mut() = create_vod_proxy_headers(
@@ -2480,9 +2680,10 @@ async fn get_vod_m3u8(
         meta.content_type
             .as_deref()
             .unwrap_or("application/vnd.apple.mpegurl"),
-        Some(rewritten_content.len().to_string()),
+        Some(response_content.len().to_string()),
         true,
     );
+    append_ad_filter_response_headers(response.headers_mut(), &ad_filter_result);
 
     Ok(response)
 }
@@ -2684,6 +2885,7 @@ fn build_default_admin_config(raw_contents: &str, raw_config: &RawServiceConfig)
                 referer: normalize_optional_string(site.referer.clone()),
                 from: "config".to_string(),
                 disabled: site.disabled.unwrap_or(false),
+                disable_ad_filter: site.disable_ad_filter.unwrap_or(false),
             })
             .collect(),
         custom_categories: raw_config
@@ -2716,6 +2918,7 @@ fn build_default_admin_config(raw_contents: &str, raw_config: &RawServiceConfig)
                 disabled: live.disabled.unwrap_or(false),
             })
             .collect(),
+        ad_filter_config: DesktopAdFilterConfig::default(),
     }
 }
 
@@ -2802,6 +3005,9 @@ fn merge_source_config(
                 item.ua = normalize_optional_string(raw_source.ua.clone());
                 item.referer = normalize_optional_string(raw_source.referer.clone());
                 item.from = "config".to_string();
+                item.disable_ad_filter = raw_source
+                    .disable_ad_filter
+                    .unwrap_or(item.disable_ad_filter);
             } else if item.from == "config" {
                 item.from = "custom".to_string();
             }
@@ -2823,6 +3029,7 @@ fn merge_source_config(
             referer: normalize_optional_string(raw_source.referer.clone()),
             from: "config".to_string(),
             disabled: raw_source.disabled.unwrap_or(false),
+            disable_ad_filter: raw_source.disable_ad_filter.unwrap_or(false),
         });
     }
 
@@ -2925,6 +3132,7 @@ fn build_service_config_from_admin(
         cache_time: admin_config.site_config.site_interface_cache_time.max(1),
         max_search_pages: admin_config.site_config.search_downstream_max_page.max(1),
         adult_content_filter_enabled: !admin_config.site_config.disable_yellow_filter,
+        vod_ad_filter_enabled: admin_config.ad_filter_config.enabled,
         site_name: normalize_owned_string(Some(admin_config.site_config.site_name.clone())),
         announcement: normalize_owned_string(Some(admin_config.site_config.announcement.clone())),
         douban_proxy_type: normalize_owned_string(Some(admin_config.site_config.douban_proxy_type.clone())),
@@ -2948,6 +3156,7 @@ fn build_service_config_from_admin(
                 ua: source.ua.clone(),
                 referer: source.referer.clone(),
                 disabled: source.disabled,
+                disable_ad_filter: source.disable_ad_filter,
             })
             .collect(),
         custom_categories: admin_config
@@ -4606,6 +4815,422 @@ fn create_proxy_headers(
     headers
 }
 
+#[derive(Debug, Clone)]
+struct VodAdFilterConfig {
+    enabled: bool,
+    min_ad_duration: f64,
+    max_ad_duration: f64,
+    max_consecutive_ad_segments: usize,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedVodAdSegment {
+    duration: f64,
+    discontinuity_group: usize,
+    line_index: usize,
+    url_line_index: Option<usize>,
+    url: Option<String>,
+    is_ad_domain: bool,
+}
+
+#[derive(Debug)]
+struct ParsedVodAdManifest {
+    lines: Vec<String>,
+    segments: Vec<ParsedVodAdSegment>,
+    discontinuity_count: usize,
+}
+
+#[derive(Debug)]
+struct FilteredVodManifest {
+    filtered: String,
+    ads_removed: usize,
+    ads_duration: f64,
+    changed: bool,
+}
+
+fn parse_bool_flag(value: Option<&str>) -> Option<bool> {
+    let normalized = value?.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "true" | "1" | "on" | "server" | "proxy" => Some(true),
+        "false" | "0" | "off" | "direct" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_f64_env(name: &str, fallback: f64) -> f64 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(fallback)
+}
+
+fn parse_usize_env(name: &str, fallback: usize) -> usize {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(fallback)
+}
+
+fn build_vod_ad_filter_config(enabled: bool) -> VodAdFilterConfig {
+    VodAdFilterConfig {
+        enabled,
+        min_ad_duration: parse_f64_env("AD_FILTER_MIN_DURATION", DEFAULT_VOD_AD_FILTER_MIN_DURATION),
+        max_ad_duration: parse_f64_env("AD_FILTER_MAX_DURATION", DEFAULT_VOD_AD_FILTER_MAX_DURATION),
+        max_consecutive_ad_segments: parse_usize_env(
+            "AD_FILTER_MAX_SEGMENTS",
+            DEFAULT_VOD_AD_FILTER_MAX_SEGMENTS,
+        ),
+    }
+}
+
+fn should_apply_vod_ad_filter(
+    config: &ServiceConfig,
+    api_site: &ApiSite,
+    query_mode: Option<bool>,
+) -> bool {
+    if api_site.disable_ad_filter {
+        return false;
+    }
+
+    if let Some(mode) = query_mode {
+        return mode;
+    }
+
+    if let Some(env_override) = parse_bool_flag(env::var("ENABLE_AD_FILTER").ok().as_deref()) {
+        return env_override;
+    }
+
+    config.vod_ad_filter_enabled
+}
+
+fn is_vod_ad_domain(url: &str) -> bool {
+    if url.trim().is_empty() {
+        return false;
+    }
+
+    let lower_url = url.to_ascii_lowercase();
+
+    for pattern in FORCE_VOD_AD_DOMAIN_PATTERNS {
+        if lower_url.contains(pattern) {
+            return true;
+        }
+    }
+
+    for safe_domain in VOD_AD_FILTER_SAFE_DOMAINS {
+        if lower_url.contains(safe_domain) {
+            return false;
+        }
+    }
+
+    for pattern in VOD_AD_FILTER_DOMAIN_PATTERNS {
+        if lower_url.contains(pattern) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn parse_vod_ad_manifest(content: &str) -> ParsedVodAdManifest {
+    let lines = content
+        .split('\n')
+        .map(|line| line.trim().to_string())
+        .collect::<Vec<_>>();
+    let mut segments = Vec::new();
+    let mut current_segment: Option<ParsedVodAdSegment> = None;
+    let mut discontinuity_count = 0usize;
+    let mut current_discontinuity_group = 0usize;
+
+    for (index, line) in lines.iter().enumerate() {
+        if line.starts_with("#EXT-X-DISCONTINUITY") {
+            discontinuity_count += 1;
+            current_discontinuity_group = discontinuity_count;
+            continue;
+        }
+
+        if let Some(duration) = line
+            .strip_prefix("#EXTINF:")
+            .and_then(|value| value.split(',').next())
+            .and_then(|value| value.parse::<f64>().ok())
+        {
+            current_segment = Some(ParsedVodAdSegment {
+                duration,
+                discontinuity_group: current_discontinuity_group,
+                line_index: index,
+                url_line_index: None,
+                url: None,
+                is_ad_domain: false,
+            });
+            continue;
+        }
+
+        if let Some(segment) = current_segment.as_mut() {
+            if !line.is_empty() && !line.starts_with('#') {
+                segment.url = Some(line.clone());
+                segment.url_line_index = Some(index);
+                segment.is_ad_domain = is_vod_ad_domain(line);
+                segments.push(segment.clone());
+                current_segment = None;
+            }
+        }
+    }
+
+    ParsedVodAdManifest {
+        lines,
+        segments,
+        discontinuity_count,
+    }
+}
+
+fn detect_vod_ad_segment_indices(
+    segments: &[ParsedVodAdSegment],
+    config: &VodAdFilterConfig,
+) -> BTreeSet<usize> {
+    let mut ad_segment_indices = BTreeSet::new();
+    let mut groups = BTreeMap::<usize, Vec<usize>>::new();
+
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.is_ad_domain {
+            ad_segment_indices.insert(index);
+        }
+        groups
+            .entry(segment.discontinuity_group)
+            .or_default()
+            .push(index);
+    }
+
+    if groups.len() <= 1 {
+        return ad_segment_indices;
+    }
+
+    let mut group_durations = BTreeMap::<usize, f64>::new();
+    let mut max_duration = 0.0f64;
+    let mut main_content_group = 0usize;
+
+    for (group_key, indices) in &groups {
+        let duration = indices
+            .iter()
+            .map(|index| segments[*index].duration)
+            .sum::<f64>();
+        group_durations.insert(*group_key, duration);
+
+        if duration > max_duration {
+            max_duration = duration;
+            main_content_group = *group_key;
+        }
+    }
+
+    for (group_key, indices) in &groups {
+        if *group_key == main_content_group {
+            continue;
+        }
+
+        let group_duration = *group_durations.get(group_key).unwrap_or(&0.0);
+        if group_duration > config.max_ad_duration {
+            continue;
+        }
+
+        let is_ad_by_duration =
+            group_duration >= config.min_ad_duration && group_duration <= config.max_ad_duration;
+        let is_ad_by_segment_count = indices.len() <= config.max_consecutive_ad_segments;
+
+        if is_ad_by_duration && is_ad_by_segment_count {
+            for index in indices {
+                ad_segment_indices.insert(*index);
+            }
+        }
+    }
+
+    ad_segment_indices
+}
+
+fn filter_vod_manifest_ads(content: &str, config: &VodAdFilterConfig) -> FilteredVodManifest {
+    if !config.enabled || content.contains("#EXT-X-STREAM-INF") {
+        return FilteredVodManifest {
+            filtered: content.to_string(),
+            ads_removed: 0,
+            ads_duration: 0.0,
+            changed: false,
+        };
+    }
+
+    let parsed = parse_vod_ad_manifest(content);
+    if parsed.discontinuity_count == 0 && !parsed.segments.iter().any(|segment| segment.is_ad_domain)
+    {
+        return FilteredVodManifest {
+            filtered: content.to_string(),
+            ads_removed: 0,
+            ads_duration: 0.0,
+            changed: false,
+        };
+    }
+
+    let ad_indices = detect_vod_ad_segment_indices(&parsed.segments, config);
+    if ad_indices.is_empty() {
+        return FilteredVodManifest {
+            filtered: content.to_string(),
+            ads_removed: 0,
+            ads_duration: 0.0,
+            changed: false,
+        };
+    }
+
+    let url_to_segment_index = parsed
+        .segments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, segment)| segment.url.as_ref().map(|url| (url.clone(), index)))
+        .collect::<BTreeMap<_, _>>();
+
+    let ads_duration = ad_indices
+        .iter()
+        .map(|index| parsed.segments[*index].duration)
+        .sum::<f64>();
+
+    let mut lines_to_remove = BTreeSet::new();
+    for index in &ad_indices {
+        let segment = &parsed.segments[*index];
+        lines_to_remove.insert(segment.line_index);
+        if let Some(url_line_index) = segment.url_line_index {
+            lines_to_remove.insert(url_line_index);
+        }
+    }
+
+    let mut filtered_lines = Vec::new();
+    let mut had_content_before = false;
+    let mut removed_ad_group = false;
+
+    for (index, line) in parsed.lines.iter().enumerate() {
+        if line.starts_with("#EXT-X-DISCONTINUITY") {
+            let mut all_ads = true;
+            let mut has_segments = false;
+            let mut cursor = index + 1;
+
+            while cursor < parsed.lines.len() {
+                let next_line = &parsed.lines[cursor];
+                if next_line.starts_with("#EXT-X-DISCONTINUITY")
+                    || next_line.starts_with("#EXT-X-ENDLIST")
+                {
+                    break;
+                }
+
+                if !next_line.is_empty() && !next_line.starts_with('#') {
+                    has_segments = true;
+                    if let Some(segment_index) = url_to_segment_index.get(next_line) {
+                        if !ad_indices.contains(segment_index) {
+                            all_ads = false;
+                            break;
+                        }
+                    }
+                }
+
+                cursor += 1;
+            }
+
+            if has_segments && all_ads {
+                removed_ad_group = true;
+                continue;
+            }
+
+            if removed_ad_group && had_content_before {
+                filtered_lines.push(line.clone());
+                removed_ad_group = false;
+                continue;
+            }
+        }
+
+        if !lines_to_remove.contains(&index) {
+            filtered_lines.push(line.clone());
+            if !line.is_empty() && !line.starts_with('#') {
+                if let Some(segment_index) = url_to_segment_index.get(line) {
+                    if !ad_indices.contains(segment_index) {
+                        had_content_before = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cleaned_lines = Vec::new();
+    for (index, line) in filtered_lines.iter().enumerate() {
+        if line.starts_with("#EXT-X-DISCONTINUITY") {
+            let mut next_non_empty = "";
+            for next_line in filtered_lines.iter().skip(index + 1) {
+                if !next_line.trim().is_empty() {
+                    next_non_empty = next_line;
+                    break;
+                }
+            }
+
+            if next_non_empty.starts_with("#EXT-X-DISCONTINUITY")
+                || next_non_empty.starts_with("#EXT-X-ENDLIST")
+                || next_non_empty.is_empty()
+            {
+                continue;
+            }
+        }
+
+        cleaned_lines.push(line.clone());
+    }
+
+    let mut final_lines = Vec::new();
+    let mut found_first_segment = false;
+    for line in cleaned_lines {
+        if !found_first_segment && line.starts_with("#EXT-X-DISCONTINUITY") {
+            continue;
+        }
+
+        if line.starts_with("#EXTINF:") {
+            found_first_segment = true;
+        }
+
+        final_lines.push(line);
+    }
+
+    let filtered = final_lines
+        .into_iter()
+        .filter(|line| !line.starts_with("#EXT-X-DISCONTINUITY"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    FilteredVodManifest {
+        filtered,
+        ads_removed: ad_indices.len(),
+        ads_duration,
+        changed: true,
+    }
+}
+
+fn append_ad_filter_response_headers(headers: &mut HeaderMap, result: &FilteredVodManifest) {
+    let existing_exposed_headers = headers
+        .get(ACCESS_CONTROL_EXPOSE_HEADERS)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("Content-Length, Content-Range");
+    let mut header_names = existing_exposed_headers
+        .split(',')
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    header_names.insert("X-Ads-Removed".to_string());
+    header_names.insert("X-Ads-Duration".to_string());
+
+    if let Ok(value) = HeaderValue::from_str(&header_names.into_iter().collect::<Vec<_>>().join(", ")) {
+        headers.insert(ACCESS_CONTROL_EXPOSE_HEADERS, value);
+    }
+
+    if result.ads_removed > 0 {
+        if let Ok(value) = HeaderValue::from_str(&result.ads_removed.to_string()) {
+            headers.insert(HeaderName::from_static("x-ads-removed"), value);
+        }
+        if let Ok(value) = HeaderValue::from_str(&format!("{:.1}", result.ads_duration)) {
+            headers.insert(HeaderName::from_static("x-ads-duration"), value);
+        }
+    }
+}
+
 fn rewrite_vod_manifest_content(
     content: &str,
     final_url: &str,
@@ -5071,6 +5696,27 @@ segment0.ts
     }
 
     #[test]
+    fn vod_ad_filter_removes_known_ad_domains() {
+        let manifest = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:3",
+            "#EXTINF:6.0,",
+            "/api/proxy/vod/segment?source=demo&url=https%3A%2F%2Fvip.ffzyad.com%2Fcasino-roll.ts",
+            "#EXTINF:10.0,",
+            "/api/proxy/vod/segment?source=demo&url=https%3A%2F%2Fvideo.example.com%2Fmain.ts",
+            "#EXT-X-ENDLIST",
+        ]
+        .join("\n");
+
+        let result = filter_vod_manifest_ads(&manifest, &build_vod_ad_filter_config(true));
+
+        assert!(result.changed);
+        assert_eq!(result.ads_removed, 1);
+        assert!(!result.filtered.contains("vip.ffzyad.com"));
+        assert!(result.filtered.contains("video.example.com"));
+    }
+
+    #[test]
     fn parse_detail_payload_extracts_fallback_m3u8() {
         let api_site = ApiSite {
             key: "wolong".into(),
@@ -5080,6 +5726,7 @@ segment0.ts
             ua: None,
             referer: None,
             disabled: false,
+            disable_ad_filter: false,
         };
         let payload = json!({
           "list": [{

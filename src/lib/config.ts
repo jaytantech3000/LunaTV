@@ -16,6 +16,7 @@ export interface ApiSite {
   detail?: string;
   ua?: string;
   referer?: string;
+  disable_ad_filter?: boolean;
 }
 
 export interface LiveCfg {
@@ -87,6 +88,8 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
       existingSource.detail = site.detail;
       existingSource.ua = site.ua;
       existingSource.referer = site.referer;
+      existingSource.disable_ad_filter =
+        site.disable_ad_filter ?? existingSource.disable_ad_filter ?? false;
       existingSource.from = 'config';
     } else {
       // 如果不存在，创建新条目
@@ -97,6 +100,7 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
         detail: site.detail,
         ua: site.ua,
         referer: site.referer,
+        disable_ad_filter: site.disable_ad_filter ?? false,
         from: 'config',
         disabled: false,
       });
@@ -239,6 +243,9 @@ async function getInitConfig(
     SourceConfig: [],
     CustomCategories: [],
     LiveConfig: [],
+    AdFilterConfig: {
+      enabled: true,
+    },
   };
 
   // 补充用户信息
@@ -266,6 +273,7 @@ async function getInitConfig(
       detail: site.detail,
       ua: site.ua,
       referer: site.referer,
+      disable_ad_filter: site.disable_ad_filter ?? false,
       from: 'config',
       disabled: false,
     });
@@ -344,6 +352,10 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   if (!adminConfig.SourceConfig || !Array.isArray(adminConfig.SourceConfig)) {
     adminConfig.SourceConfig = [];
   }
+  adminConfig.SourceConfig = adminConfig.SourceConfig.map((source) => ({
+    ...source,
+    disable_ad_filter: source.disable_ad_filter ?? false,
+  }));
   if (
     !adminConfig.CustomCategories ||
     !Array.isArray(adminConfig.CustomCategories)
@@ -352,6 +364,12 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   }
   if (!adminConfig.LiveConfig || !Array.isArray(adminConfig.LiveConfig)) {
     adminConfig.LiveConfig = [];
+  }
+  if (
+    !adminConfig.AdFilterConfig ||
+    typeof adminConfig.AdFilterConfig.enabled !== 'boolean'
+  ) {
+    adminConfig.AdFilterConfig = { enabled: true };
   }
 
   // 站长变更自检
@@ -473,6 +491,7 @@ export async function getAvailableApiSites(
         detail: s.detail,
         ua: s.ua,
         referer: s.referer,
+        disable_ad_filter: s.disable_ad_filter,
       }));
   }
 
@@ -506,6 +525,7 @@ export async function getAvailableApiSites(
           detail: s.detail,
           ua: s.ua,
           referer: s.referer,
+          disable_ad_filter: s.disable_ad_filter,
         }));
     }
   }

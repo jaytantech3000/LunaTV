@@ -282,6 +282,7 @@ interface DataSource {
   ua?: string;
   referer?: string;
   disabled?: boolean;
+  disable_ad_filter?: boolean;
   from: 'config' | 'custom';
 }
 
@@ -2218,6 +2219,21 @@ const VideoSourceConfig = ({
     });
   };
 
+  const handleToggleAdFilter = (key: string) => {
+    const target = sources.find((s) => s.key === key);
+    if (!target) return;
+    const nextDisable = !target.disable_ad_filter;
+    withLoading(`toggleAdFilter_${key}`, () =>
+      callSourceApi({
+        action: 'update_ad_filter',
+        key,
+        disable_ad_filter: nextDisable,
+      })
+    ).catch(() => {
+      console.error('操作失败', 'update_ad_filter', key);
+    });
+  };
+
   const handleDelete = (key: string) => {
     withLoading(`deleteSource_${key}`, () => callSourceApi({ action: 'delete', key })).catch(() => {
       console.error('操作失败', 'delete', key);
@@ -2505,6 +2521,32 @@ const VideoSourceConfig = ({
           >
             {!source.disabled ? '启用中' : '已禁用'}
           </span>
+        </td>
+        <td className='px-6 py-4 whitespace-nowrap text-center'>
+          <button
+            onClick={() => handleToggleAdFilter(source.key)}
+            disabled={isLoading(`toggleAdFilter_${source.key}`)}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+              !source.disable_ad_filter
+                ? buttonStyles.toggleOn
+                : buttonStyles.toggleOff
+            } ${
+              isLoading(`toggleAdFilter_${source.key}`)
+                ? 'opacity-50 cursor-not-allowed'
+                : 'cursor-pointer hover:opacity-80'
+            }`}
+            title={
+              source.disable_ad_filter
+                ? '已豁免：该源直连上游，不经过广告过滤'
+                : '已启用：该源默认经过广告过滤'
+            }
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                !source.disable_ad_filter ? 'translate-x-5' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
         </td>
         <td className='px-6 py-4 whitespace-nowrap max-w-[1rem]'>
           {(() => {
@@ -2937,6 +2979,9 @@ const VideoSourceConfig = ({
               </th>
               <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'>
                 状态
+              </th>
+              <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'>
+                广告过滤
               </th>
               <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'>
                 有效性
@@ -3681,6 +3726,8 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
     FluidSearch: true,
     EnableWebLive: false,
   });
+  const [adFilterEnabled, setAdFilterEnabled] = useState(true);
+  const [adFilterSaving, setAdFilterSaving] = useState(false);
 
   // 豆瓣数据源相关状态
   const [isDoubanDropdownOpen, setIsDoubanDropdownOpen] = useState(false);
@@ -3740,10 +3787,11 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
             ? 'server'
             : (config.SiteConfig.DoubanImageProxyType || 'cmliussss-cdn-tencent'),
         DoubanImageProxy: config.SiteConfig.DoubanImageProxy || '',
-        DisableYellowFilter: config.SiteConfig.DisableYellowFilter || false,
-        FluidSearch: config.SiteConfig.FluidSearch || true,
+        DisableYellowFilter: config.SiteConfig.DisableYellowFilter ?? false,
+        FluidSearch: config.SiteConfig.FluidSearch ?? true,
         EnableWebLive: config.SiteConfig.EnableWebLive ?? false,
       });
+      setAdFilterEnabled(config.AdFilterConfig?.enabled ?? true);
     }
   }, [config]);
 
@@ -3796,6 +3844,35 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
       ...prev,
       DoubanImageProxyType: value,
     }));
+  };
+
+  const handleToggleAdFilterGlobal = async () => {
+    if (adFilterSaving) return;
+
+    const nextEnabled = !adFilterEnabled;
+    setAdFilterEnabled(nextEnabled);
+    setAdFilterSaving(true);
+
+    try {
+      const resp = await apiFetch('/admin/adfilter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: nextEnabled }),
+      });
+
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        setAdFilterEnabled(!nextEnabled);
+        throw new Error(data.error || `保存失败: ${resp.status}`);
+      }
+
+      await refreshConfig();
+    } catch (err) {
+      setAdFilterEnabled(!nextEnabled);
+      showError(err instanceof Error ? err.message : '保存失败', showAlert);
+    } finally {
+      setAdFilterSaving(false);
+    }
   };
 
   // 保存站点配置
@@ -4194,6 +4271,37 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
         </div>
         <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
           启用后搜索结果将实时流式返回，提升用户体验。
+        </p>
+      </div>
+
+      {/* m3u8 广告过滤 */}
+      <div>
+        <div className='flex items-center justify-between'>
+          <label
+            className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'
+          >
+            启用 m3u8 广告过滤
+          </label>
+          <button
+            type='button'
+            onClick={handleToggleAdFilterGlobal}
+            disabled={adFilterSaving}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${
+              adFilterEnabled ? buttonStyles.toggleOn : buttonStyles.toggleOff
+            } ${adFilterSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full ${buttonStyles.toggleThumb} transition-transform ${
+                adFilterEnabled
+                  ? buttonStyles.toggleThumbOn
+                  : buttonStyles.toggleThumbOff
+              }`}
+            />
+          </button>
+        </div>
+        <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+          自动识别并删除 m3u8 中由 #EXT-X-DISCONTINUITY 拼接的广告分段。
+          可在视频源列表里对单个源单独豁免。
         </p>
       </div>
 
