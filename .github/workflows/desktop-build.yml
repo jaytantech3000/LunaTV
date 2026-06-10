@@ -25,6 +25,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: macOS Intel
+            runner: macos-15-intel
+            artifact_name: lunatv-desktop-macos-intel
           - name: macOS Apple Silicon
             runner: macos-15
             artifact_name: lunatv-desktop-macos-arm64
