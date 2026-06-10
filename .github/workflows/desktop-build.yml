@@ -85,7 +85,7 @@ jobs:
         run: pnpm exec tauri build --ci --bundles nsis --config src-tauri/tauri.windows.ci.conf.json
 
       - name: Upload desktop artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}
           path: target/release/bundle/
