@@ -43,6 +43,7 @@ function buildDesktopRuntimeBootstrapScript() {
           DOUBAN_PROXY: payload.doubanProxy ?? current.DOUBAN_PROXY,
           DOUBAN_IMAGE_PROXY_TYPE: payload.doubanImageProxyType ?? current.DOUBAN_IMAGE_PROXY_TYPE,
           DOUBAN_IMAGE_PROXY: payload.doubanImageProxy ?? current.DOUBAN_IMAGE_PROXY,
+          FLUID_SEARCH: payload.fluidSearch ?? current.FLUID_SEARCH ?? true,
           ENABLE_WEB_LIVE: payload.enableWebLive ?? current.ENABLE_WEB_LIVE ?? false,
           PROFILE_SYNC_ENABLED: payload.profileSyncEnabled ?? current.PROFILE_SYNC_ENABLED ?? false,
           CUSTOM_CATEGORIES: Array.isArray(payload.customCategories)

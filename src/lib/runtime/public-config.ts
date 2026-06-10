@@ -73,10 +73,7 @@ export async function buildPublicRuntimeConfig(
     DISABLE_YELLOW_FILTER:
       process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
     CUSTOM_CATEGORIES: [],
-    FLUID_SEARCH:
-      appTarget === 'desktop'
-        ? false
-        : process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
+    FLUID_SEARCH: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
     ENABLE_WEB_LIVE: false,
     API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || '',
     MEDIA_PROXY_BASE_URL:

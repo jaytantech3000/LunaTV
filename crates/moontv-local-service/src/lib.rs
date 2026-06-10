@@ -28,13 +28,17 @@ use axum::{
     routing::{any, get, post},
 };
 use clap::Parser;
-use futures::{future::join_all, stream};
+use futures::{
+    StreamExt,
+    future::join_all,
+    stream::{self, FuturesUnordered},
+};
 use regex::Regex;
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use tracing::{info, warn};
 use url::{Url, form_urlencoded};
 
@@ -53,11 +57,15 @@ const DEFAULT_WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb
 const DEFAULT_LIVE_PROXY_USER_AGENT: &str = "AptvPlayer/1.4.10";
 const DEFAULT_BANGUMI_API_BASE_URL: &str = "https://api.bgm.tv";
 const DEFAULT_DOUBAN_API_BASE_URL: &str = "https://m.douban.com";
+const DEFAULT_DOUBAN_MOVIE_API_BASE_URL: &str = "https://movie.douban.com";
+const DEFAULT_DOUBAN_SEARCH_API_BASE_URL: &str = "https://search.douban.com";
 const DEFAULT_SITE_NAME: &str = "MoonTV";
 const DEFAULT_SITE_ANNOUNCEMENT: &str = "本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。";
 const DEFAULT_DOUBAN_PROXY_TYPE: &str = "cmliussss-cdn-tencent";
 const DEFAULT_DOUBAN_IMAGE_PROXY_TYPE: &str = "cmliussss-cdn-tencent";
 const MAX_DOUBAN_RATING_IDS_PER_REQUEST: usize = 20;
+const DOUBAN_SEARCH_PAGE_SIZE: usize = 15;
+const MAX_DOUBAN_SEARCH_LIMIT: usize = 60;
 
 const ADULT_SOURCE_MARKERS: &[&str] = &["🔞", "成人", "情色", "三级片", "三級", "porn", "av"];
 
@@ -240,6 +248,9 @@ pub struct AppState {
     profile_sync_client: reqwest::Client,
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
     bangumi_api_base_url: String,
+    douban_api_base_url: String,
+    douban_movie_api_base_url: String,
+    douban_search_api_base_url: String,
     live_channels_cache: Arc<RwLock<BTreeMap<String, LiveChannelsCache>>>,
 }
 
@@ -294,6 +305,9 @@ impl AppState {
                 .expect("failed to build profile sync http client"),
             profile_sync_session: Arc::new(RwLock::new(None)),
             bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
+            douban_api_base_url: DEFAULT_DOUBAN_API_BASE_URL.to_string(),
+            douban_movie_api_base_url: DEFAULT_DOUBAN_MOVIE_API_BASE_URL.to_string(),
+            douban_search_api_base_url: DEFAULT_DOUBAN_SEARCH_API_BASE_URL.to_string(),
             live_channels_cache: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
@@ -399,6 +413,7 @@ struct ServiceConfig {
     max_search_pages: usize,
     adult_content_filter_enabled: bool,
     vod_ad_filter_enabled: bool,
+    fluid_search: bool,
     site_name: Option<String>,
     announcement: Option<String>,
     douban_proxy_type: Option<String>,
@@ -472,6 +487,129 @@ struct DoubanRatingsResponse {
     ratings: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DoubanItem {
+    id: String,
+    title: String,
+    poster: String,
+    rate: String,
+    year: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    play_type: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+struct DoubanResult {
+    code: u16,
+    message: &'static str,
+    list: Vec<DoubanItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanCategoryApiResponse {
+    #[serde(default)]
+    items: Vec<DoubanCategoryApiItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanCategoryApiItem {
+    id: String,
+    title: String,
+    #[serde(default)]
+    card_subtitle: Option<String>,
+    #[serde(default)]
+    pic: Option<DoubanRemotePicture>,
+    #[serde(default)]
+    rating: Option<DoubanRemoteRating>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanListApiResponse {
+    #[serde(default)]
+    subjects: Vec<DoubanListApiItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanListApiItem {
+    id: String,
+    title: String,
+    #[serde(default)]
+    card_subtitle: Option<String>,
+    #[serde(default)]
+    cover: Option<String>,
+    #[serde(default)]
+    rate: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanRecommendApiResponse {
+    #[serde(default)]
+    items: Vec<DoubanRecommendApiItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanRecommendApiItem {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    year: Option<String>,
+    #[serde(rename = "type", default)]
+    item_type: Option<String>,
+    #[serde(default)]
+    pic: Option<DoubanRemotePicture>,
+    #[serde(default)]
+    rating: Option<DoubanRemoteRating>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanRemotePicture {
+    #[serde(default)]
+    large: Option<String>,
+    #[serde(default)]
+    normal: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanRemoteRating {
+    #[serde(default)]
+    value: Option<f64>,
+    #[serde(default)]
+    count: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanSearchPageLabel {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanSearchPageItem {
+    #[serde(default)]
+    tpl_name: Option<String>,
+    #[serde(default)]
+    id: Option<i64>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    cover_url: Option<String>,
+    #[serde(default)]
+    labels: Vec<DoubanSearchPageLabel>,
+    #[serde(default)]
+    rating: Option<DoubanRemoteRating>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanSearchPageData {
+    #[serde(default)]
+    total: usize,
+    #[serde(default)]
+    items: Vec<DoubanSearchPageItem>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimePublicConfigResponse {
@@ -481,6 +619,7 @@ struct RuntimePublicConfigResponse {
     douban_proxy: Option<String>,
     douban_image_proxy_type: Option<String>,
     douban_image_proxy: Option<String>,
+    fluid_search: bool,
     enable_web_live: bool,
     profile_sync_enabled: bool,
     custom_categories: Vec<RuntimeCustomCategory>,
@@ -612,7 +751,10 @@ struct DesktopSiteConfig {
     site_name: String,
     #[serde(rename = "Announcement", default = "default_site_announcement")]
     announcement: String,
-    #[serde(rename = "SearchDownstreamMaxPage", default = "default_search_max_pages")]
+    #[serde(
+        rename = "SearchDownstreamMaxPage",
+        default = "default_search_max_pages"
+    )]
     search_downstream_max_page: usize,
     #[serde(rename = "SiteInterfaceCacheTime", default = "default_cache_time")]
     site_interface_cache_time: u64,
@@ -825,6 +967,48 @@ struct DoubanRatingsQueryParams {
 }
 
 #[derive(Debug, Deserialize)]
+struct DoubanCategoriesQueryParams {
+    kind: Option<String>,
+    category: Option<String>,
+    #[serde(rename = "type")]
+    item_type: Option<String>,
+    limit: Option<String>,
+    start: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanListQueryParams {
+    tag: Option<String>,
+    #[serde(rename = "type")]
+    item_type: Option<String>,
+    #[serde(rename = "pageSize")]
+    page_size: Option<String>,
+    #[serde(rename = "pageStart")]
+    page_start: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanRecommendsQueryParams {
+    kind: Option<String>,
+    limit: Option<String>,
+    start: Option<String>,
+    category: Option<String>,
+    format: Option<String>,
+    label: Option<String>,
+    region: Option<String>,
+    year: Option<String>,
+    platform: Option<String>,
+    sort: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanSearchQueryParams {
+    q: Option<String>,
+    limit: Option<String>,
+    start: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct DetailQueryParams {
     id: Option<String>,
     source: Option<String>,
@@ -909,6 +1093,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(get_health))
         .route("/runtime/public-config", get(get_runtime_public_config))
         .route("/content/search", get(get_content_search))
+        .route("/content/search/ws", get(stream_content_search))
         .route("/content/suggestions", get(get_content_suggestions))
         .route("/content/detail", get(get_content_detail))
         .route("/live/sources", get(get_live_sources))
@@ -917,6 +1102,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/live/precheck", get(get_live_precheck))
         .route("/metadata/bangumi/calendar", get(get_bangumi_calendar))
         .route("/metadata/douban/ratings", get(get_douban_ratings))
+        .route("/douban/search", get(get_douban_title_search))
+        .route("/douban/categories", get(get_douban_categories))
+        .route("/douban", get(get_douban_list))
+        .route("/douban/recommends", get(get_douban_recommends))
         .route("/media/live/m3u8", get(get_live_m3u8))
         .route("/media/live/segment", get(get_live_segment))
         .route("/media/live/key", get(get_live_key))
@@ -953,6 +1142,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/admin/live/refresh", post(refresh_admin_live_sources))
         .route("/api/admin/user", post(update_admin_user_config))
         .route("/api/search", get(get_content_search))
+        .route("/api/search/ws", get(stream_content_search))
         .route("/api/search/suggestions", get(get_content_suggestions))
         .route("/api/detail", get(get_content_detail))
         .route("/api/live/sources", get(get_live_sources))
@@ -960,6 +1150,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/live/epg", get(get_live_epg))
         .route("/api/live/precheck", get(get_live_precheck))
         .route("/api/bangumi/calendar", get(get_bangumi_calendar))
+        .route("/api/douban/search", get(get_douban_title_search))
+        .route("/api/douban/categories", get(get_douban_categories))
+        .route("/api/douban", get(get_douban_list))
+        .route("/api/douban/recommends", get(get_douban_recommends))
         .route("/api/douban/ratings", get(get_douban_ratings))
         .route("/api/proxy/m3u8", get(get_live_m3u8))
         .route("/api/proxy/segment", get(get_live_segment))
@@ -1563,17 +1757,20 @@ async fn update_admin_source_config(
                 return Err(AppError::bad_request("该源已存在"));
             }
 
-            persistence.config.source_config.push(DesktopSourceConfigItem {
-                key,
-                name,
-                api,
-                detail: normalize_owned_string(payload.detail),
-                ua: normalize_owned_string(payload.ua),
-                referer: normalize_owned_string(payload.referer),
-                from: "custom".to_string(),
-                disabled: false,
-                disable_ad_filter: false,
-            });
+            persistence
+                .config
+                .source_config
+                .push(DesktopSourceConfigItem {
+                    key,
+                    name,
+                    api,
+                    detail: normalize_owned_string(payload.detail),
+                    ua: normalize_owned_string(payload.ua),
+                    referer: normalize_owned_string(payload.referer),
+                    from: "custom".to_string(),
+                    disabled: false,
+                    disable_ad_filter: false,
+                });
         }
         "edit" => {
             let key = require_owned_string(payload.key, "缺少 key 参数")?;
@@ -1649,7 +1846,9 @@ async fn update_admin_source_config(
                 .config
                 .source_config
                 .iter()
-                .filter(|source| keys.iter().any(|key| key == &source.key) && source.from != "config")
+                .filter(|source| {
+                    keys.iter().any(|key| key == &source.key) && source.from != "config"
+                })
                 .map(|source| source.key.clone())
                 .collect::<Vec<_>>();
             persistence
@@ -1662,7 +1861,9 @@ async fn update_admin_source_config(
             let order = payload
                 .order
                 .ok_or_else(|| AppError::bad_request("排序列表格式错误"))?;
-            reorder_by_key(&mut persistence.config.source_config, &order, |source| source.key.clone());
+            reorder_by_key(&mut persistence.config.source_config, &order, |source| {
+                source.key.clone()
+            });
         }
         _ => return Err(AppError::bad_request("未知操作")),
     }
@@ -1704,12 +1905,9 @@ async fn validate_admin_sources(
         } else {
             match search_site(&state.client, source, &query, 1).await {
                 Ok(results) => {
-                    let matched = results.iter().any(|result| {
-                        result
-                            .title
-                            .to_lowercase()
-                            .contains(lower_query.as_str())
-                    });
+                    let matched = results
+                        .iter()
+                        .any(|result| result.title.to_lowercase().contains(lower_query.as_str()));
                     if matched {
                         ("source_result", "valid")
                     } else {
@@ -1759,9 +1957,12 @@ async fn update_admin_category_config(
             let name = require_owned_string(payload.name, "缺少必要参数")?;
             let category_type = require_owned_string(payload.category_type, "缺少必要参数")?;
             let query = require_owned_string(payload.query, "缺少必要参数")?;
-            if persistence.config.custom_categories.iter().any(|category| {
-                category.query == query && category.category_type == category_type
-            }) {
+            if persistence
+                .config
+                .custom_categories
+                .iter()
+                .any(|category| category.query == query && category.category_type == category_type)
+            {
                 return Err(AppError::bad_request("该分类已存在"));
             }
             persistence
@@ -1777,7 +1978,8 @@ async fn update_admin_category_config(
         }
         "disable" | "enable" => {
             let query = require_owned_string(payload.query, "缺少 query 或 type 参数")?;
-            let category_type = require_owned_string(payload.category_type, "缺少 query 或 type 参数")?;
+            let category_type =
+                require_owned_string(payload.category_type, "缺少 query 或 type 参数")?;
             let entry = persistence
                 .config
                 .custom_categories
@@ -1788,12 +1990,15 @@ async fn update_admin_category_config(
         }
         "delete" => {
             let query = require_owned_string(payload.query, "缺少 query 或 type 参数")?;
-            let category_type = require_owned_string(payload.category_type, "缺少 query 或 type 参数")?;
+            let category_type =
+                require_owned_string(payload.category_type, "缺少 query 或 type 参数")?;
             let index = persistence
                 .config
                 .custom_categories
                 .iter()
-                .position(|category| category.query == query && category.category_type == category_type)
+                .position(|category| {
+                    category.query == query && category.category_type == category_type
+                })
                 .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "分类不存在"))?;
             if persistence.config.custom_categories[index].from == "config" {
                 return Err(AppError::bad_request("该分类不可删除"));
@@ -1833,7 +2038,12 @@ async fn update_admin_live_config(
             let key = require_owned_string(payload.key, "缺少 key 参数")?;
             let name = require_owned_string(payload.name, "缺少 name 参数")?;
             let url = require_owned_string(payload.url, "缺少 url 参数")?;
-            if persistence.config.live_config.iter().any(|live| live.key == key) {
+            if persistence
+                .config
+                .live_config
+                .iter()
+                .any(|live| live.key == key)
+            {
                 return Err(AppError::bad_request("直播源 key 已存在"));
             }
 
@@ -1904,7 +2114,9 @@ async fn update_admin_live_config(
             let order = payload
                 .order
                 .ok_or_else(|| AppError::bad_request("排序数据格式错误"))?;
-            reorder_by_key(&mut persistence.config.live_config, &order, |live| live.key.clone());
+            reorder_by_key(&mut persistence.config.live_config, &order, |live| {
+                live.key.clone()
+            });
         }
         _ => return Err(AppError::bad_request("未知操作")),
     }
@@ -1952,7 +2164,8 @@ async fn update_admin_user_config(
     match payload.action.as_str() {
         "add" => {
             let target_username = require_owned_string(payload.target_username, "缺少目标用户名")?;
-            let target_password = require_owned_string(payload.target_password, "缺少目标用户密码")?;
+            let target_password =
+                require_owned_string(payload.target_password, "缺少目标用户密码")?;
             if persistence
                 .config
                 .user_config
@@ -1988,8 +2201,9 @@ async fn update_admin_user_config(
         }
         "ban" | "unban" => {
             let target_username = require_owned_string(payload.target_username, "缺少目标用户名")?;
-            let user = find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
-                .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
+            let user =
+                find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
+                    .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
             if user.role == "owner" {
                 return Err(AppError::bad_request("无法操作站长"));
             }
@@ -1997,8 +2211,9 @@ async fn update_admin_user_config(
         }
         "setAdmin" => {
             let target_username = require_owned_string(payload.target_username, "缺少目标用户名")?;
-            let user = find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
-                .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
+            let user =
+                find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
+                    .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
             if user.role == "owner" {
                 return Err(AppError::bad_request("无法操作站长"));
             }
@@ -2006,8 +2221,9 @@ async fn update_admin_user_config(
         }
         "cancelAdmin" => {
             let target_username = require_owned_string(payload.target_username, "缺少目标用户名")?;
-            let user = find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
-                .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
+            let user =
+                find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
+                    .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
             if user.role == "owner" {
                 return Err(AppError::bad_request("无法操作站长"));
             }
@@ -2016,8 +2232,9 @@ async fn update_admin_user_config(
         "changePassword" => {
             let target_username = require_owned_string(payload.target_username, "缺少目标用户名")?;
             let target_password = require_owned_string(payload.target_password, "缺少新密码")?;
-            let user = find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
-                .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
+            let user =
+                find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
+                    .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
             if user.role == "owner" {
                 return Err(AppError::new(StatusCode::UNAUTHORIZED, "无法修改站长密码"));
             }
@@ -2042,8 +2259,9 @@ async fn update_admin_user_config(
         }
         "updateUserApis" => {
             let target_username = require_owned_string(payload.target_username, "缺少目标用户名")?;
-            let user = find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
-                .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
+            let user =
+                find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
+                    .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
             user.enabled_apis = normalize_string_list(payload.enabled_apis.unwrap_or_default());
         }
         "userGroup" => {
@@ -2060,10 +2278,16 @@ async fn update_admin_user_config(
                     {
                         return Err(AppError::bad_request("用户组已存在"));
                     }
-                    persistence.config.user_config.tags.push(DesktopUserTagConfigItem {
-                        name: group_name,
-                        enabled_apis: normalize_string_list(payload.enabled_apis.unwrap_or_default()),
-                    });
+                    persistence
+                        .config
+                        .user_config
+                        .tags
+                        .push(DesktopUserTagConfigItem {
+                            name: group_name,
+                            enabled_apis: normalize_string_list(
+                                payload.enabled_apis.unwrap_or_default(),
+                            ),
+                        });
                 }
                 "edit" => {
                     let tag = persistence
@@ -2073,7 +2297,8 @@ async fn update_admin_user_config(
                         .iter_mut()
                         .find(|tag| tag.name == group_name)
                         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "用户组不存在"))?;
-                    tag.enabled_apis = normalize_string_list(payload.enabled_apis.unwrap_or_default());
+                    tag.enabled_apis =
+                        normalize_string_list(payload.enabled_apis.unwrap_or_default());
                 }
                 "delete" => {
                     let index = persistence
@@ -2084,17 +2309,23 @@ async fn update_admin_user_config(
                         .position(|tag| tag.name == group_name)
                         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "用户组不存在"))?;
                     persistence.config.user_config.tags.remove(index);
-                    persistence.config.user_config.users.iter_mut().for_each(|user| {
-                        user.tags.retain(|tag| tag != &group_name);
-                    });
+                    persistence
+                        .config
+                        .user_config
+                        .users
+                        .iter_mut()
+                        .for_each(|user| {
+                            user.tags.retain(|tag| tag != &group_name);
+                        });
                 }
                 _ => return Err(AppError::bad_request("未知的用户组操作")),
             }
         }
         "updateUserGroups" => {
             let target_username = require_owned_string(payload.target_username, "缺少目标用户名")?;
-            let user = find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
-                .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
+            let user =
+                find_admin_user_mut(&mut persistence.config.user_config.users, &target_username)
+                    .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "目标用户不存在"))?;
             user.tags = filter_known_user_groups(
                 payload.user_groups.unwrap_or_default(),
                 &persistence.config.user_config.tags,
@@ -2106,11 +2337,16 @@ async fn update_admin_user_config(
                 payload.user_groups.unwrap_or_default(),
                 &persistence.config.user_config.tags,
             );
-            persistence.config.user_config.users.iter_mut().for_each(|user| {
-                if usernames.iter().any(|username| username == &user.username) {
-                    user.tags = user_groups.clone();
-                }
-            });
+            persistence
+                .config
+                .user_config
+                .users
+                .iter_mut()
+                .for_each(|user| {
+                    if usernames.iter().any(|username| username == &user.username) {
+                        user.tags = user_groups.clone();
+                    }
+                });
         }
         _ => return Err(AppError::bad_request("未知操作")),
     }
@@ -2154,6 +2390,142 @@ async fn get_content_search(
 
     let mut response = Json(SearchResponse { results }).into_response();
     apply_query_cache_headers(response.headers_mut(), config.cache_time);
+    Ok(response)
+}
+
+async fn stream_content_search(
+    State(state): State<AppState>,
+    Query(params): Query<SearchQueryParams>,
+) -> AppResult<Response> {
+    let query = params.q.unwrap_or_default().trim().to_string();
+    if query.is_empty() {
+        return Err(AppError::bad_request("搜索关键词不能为空"));
+    }
+
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let api_sites = config
+        .api_sites
+        .iter()
+        .filter(|site| !site.disabled)
+        .cloned()
+        .collect::<Vec<_>>();
+    let total_sources = api_sites.len();
+    let max_search_pages = config.max_search_pages;
+    let adult_content_filter_enabled = config.adult_content_filter_enabled;
+    let client = state.client.clone();
+    let (tx, rx) =
+        mpsc::channel::<Result<Event, Infallible>>(total_sources.saturating_mul(2).max(8));
+
+    tokio::spawn(async move {
+        if tx
+            .send(Ok(Event::default().data(
+                json!({
+                    "type": "start",
+                    "query": query.clone(),
+                    "totalSources": total_sources,
+                })
+                .to_string(),
+            )))
+            .await
+            .is_err()
+        {
+            return;
+        }
+
+        if total_sources == 0 {
+            let _ = tx
+                .send(Ok(Event::default().data(
+                    json!({
+                        "type": "complete",
+                        "completedSources": 0,
+                        "totalResults": 0,
+                    })
+                    .to_string(),
+                )))
+                .await;
+            return;
+        }
+
+        let mut tasks = FuturesUnordered::new();
+        for api_site in api_sites {
+            let client = client.clone();
+            let query = query.clone();
+
+            tasks.push(async move {
+                match search_site(&client, &api_site, &query, max_search_pages).await {
+                    Ok(results) => {
+                        let results = if adult_content_filter_enabled {
+                            filter_adult_content_results(results)
+                        } else {
+                            results
+                        };
+                        Ok((api_site, results))
+                    }
+                    Err(error) => Err((api_site, error.to_string())),
+                }
+            });
+        }
+
+        let mut completed_sources = 0_usize;
+        let mut total_results = 0_usize;
+
+        while let Some(task_result) = tasks.next().await {
+            completed_sources += 1;
+
+            let send_result = match task_result {
+                Ok((api_site, results)) => {
+                    total_results += results.len();
+                    tx.send(Ok(Event::default().data(
+                        json!({
+                            "type": "source_result",
+                            "source": api_site.key,
+                            "sourceName": api_site.name,
+                            "results": results,
+                        })
+                        .to_string(),
+                    )))
+                    .await
+                }
+                Err((api_site, error_message)) => {
+                    tx.send(Ok(Event::default().data(
+                        json!({
+                            "type": "source_error",
+                            "source": api_site.key,
+                            "sourceName": api_site.name,
+                            "error": error_message,
+                        })
+                        .to_string(),
+                    )))
+                    .await
+                }
+            };
+
+            if send_result.is_err() {
+                return;
+            }
+        }
+
+        let _ = tx
+            .send(Ok(Event::default().data(
+                json!({
+                    "type": "complete",
+                    "completedSources": completed_sources,
+                    "totalResults": total_results,
+                })
+                .to_string(),
+            )))
+            .await;
+    });
+
+    let event_stream = stream::unfold(rx, |mut rx| async {
+        rx.recv().await.map(|event| (event, rx))
+    });
+    let mut response = Sse::new(event_stream).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     Ok(response)
 }
 
@@ -2252,6 +2624,326 @@ async fn get_douban_ratings(
         CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=300"),
     );
+    Ok(response)
+}
+
+async fn get_douban_categories(
+    State(state): State<AppState>,
+    Query(params): Query<DoubanCategoriesQueryParams>,
+) -> AppResult<Response> {
+    let kind = normalize_owned_string(params.kind).unwrap_or_else(|| "movie".to_string());
+    let category = normalize_owned_string(params.category).unwrap_or_default();
+    let item_type = normalize_owned_string(params.item_type).unwrap_or_default();
+    let page_limit = parse_i64_query_param(params.limit.as_deref(), 20);
+    let page_start = parse_i64_query_param(params.start.as_deref(), 0);
+
+    if category.is_empty() || item_type.is_empty() {
+        return Err(AppError::bad_request(
+            "缺少必要参数: kind 或 category 或 type",
+        ));
+    }
+
+    if kind != "tv" && kind != "movie" {
+        return Err(AppError::bad_request("kind 参数必须是 tv 或 movie"));
+    }
+
+    if !(1..=100).contains(&page_limit) {
+        return Err(AppError::bad_request("pageSize 必须在 1-100 之间"));
+    }
+
+    if page_start < 0 {
+        return Err(AppError::bad_request("pageStart 不能小于 0"));
+    }
+
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let target = build_url_with_query(
+        &state.douban_api_base_url,
+        &format!("/rexxar/api/v2/subject/recent_hot/{kind}"),
+        &[
+            ("start", page_start.to_string()),
+            ("limit", page_limit.to_string()),
+            ("category", category),
+            ("type", item_type),
+        ],
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    let douban_data =
+        fetch_douban_json::<DoubanCategoryApiResponse>(&state.client, &config, &target)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    let list = douban_data
+        .items
+        .into_iter()
+        .map(|item| DoubanItem {
+            id: item.id,
+            title: item.title,
+            poster: item
+                .pic
+                .as_ref()
+                .and_then(|picture| picture.normal.clone().or_else(|| picture.large.clone()))
+                .unwrap_or_default(),
+            rate: format_douban_rating(item.rating.as_ref(), false),
+            year: extract_any_year(item.card_subtitle.as_deref()),
+            play_type: None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut response = Json(DoubanResult {
+        code: 200,
+        message: "获取成功",
+        list,
+    })
+    .into_response();
+    apply_query_cache_headers(response.headers_mut(), config.cache_time);
+    Ok(response)
+}
+
+async fn get_douban_list(
+    State(state): State<AppState>,
+    Query(params): Query<DoubanListQueryParams>,
+) -> AppResult<Response> {
+    let item_type = normalize_owned_string(params.item_type).unwrap_or_default();
+    let tag = normalize_owned_string(params.tag).unwrap_or_default();
+    let page_size = parse_i64_query_param(params.page_size.as_deref(), 16);
+    let page_start = parse_i64_query_param(params.page_start.as_deref(), 0);
+
+    if item_type.is_empty() || tag.is_empty() {
+        return Err(AppError::bad_request("缺少必要参数: type 或 tag"));
+    }
+
+    if item_type != "tv" && item_type != "movie" {
+        return Err(AppError::bad_request("type 参数必须是 tv 或 movie"));
+    }
+
+    if !(1..=100).contains(&page_size) {
+        return Err(AppError::bad_request("pageSize 必须在 1-100 之间"));
+    }
+
+    if page_start < 0 {
+        return Err(AppError::bad_request("pageStart 不能小于 0"));
+    }
+
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let list = if tag == "top250" {
+        fetch_douban_top250(
+            &state.client,
+            &config,
+            &state.douban_movie_api_base_url,
+            page_start as usize,
+        )
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    } else {
+        let target = build_url_with_query(
+            &state.douban_movie_api_base_url,
+            "/j/search_subjects",
+            &[
+                ("type", item_type),
+                ("tag", tag),
+                ("sort", "recommend".to_string()),
+                ("page_limit", page_size.to_string()),
+                ("page_start", page_start.to_string()),
+            ],
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?;
+        let douban_data =
+            fetch_douban_json::<DoubanListApiResponse>(&state.client, &config, &target)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+
+        douban_data
+            .subjects
+            .into_iter()
+            .map(|item| DoubanItem {
+                id: item.id,
+                title: item.title,
+                poster: item.cover.unwrap_or_default(),
+                rate: item.rate.unwrap_or_default(),
+                year: extract_any_year(item.card_subtitle.as_deref()),
+                play_type: None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut response = Json(DoubanResult {
+        code: 200,
+        message: "获取成功",
+        list,
+    })
+    .into_response();
+    apply_query_cache_headers(response.headers_mut(), config.cache_time);
+    Ok(response)
+}
+
+async fn get_douban_recommends(
+    State(state): State<AppState>,
+    Query(params): Query<DoubanRecommendsQueryParams>,
+) -> AppResult<Response> {
+    let kind = normalize_owned_string(params.kind).unwrap_or_default();
+    let page_limit = parse_i64_query_param(params.limit.as_deref(), 20);
+    let page_start = parse_i64_query_param(params.start.as_deref(), 0);
+    let category = normalize_douban_filter_value(params.category);
+    let format = normalize_douban_filter_value(params.format);
+    let label = normalize_douban_filter_value(params.label);
+    let region = normalize_douban_filter_value(params.region);
+    let year = normalize_douban_filter_value(params.year);
+    let platform = normalize_douban_filter_value(params.platform);
+    let sort = normalize_douban_sort_value(params.sort);
+
+    if kind.is_empty() {
+        return Err(AppError::bad_request("缺少必要参数: kind"));
+    }
+
+    if kind != "tv" && kind != "movie" {
+        return Err(AppError::bad_request("kind 参数必须是 tv 或 movie"));
+    }
+
+    if !(1..=100).contains(&page_limit) {
+        return Err(AppError::bad_request("pageSize 必须在 1-100 之间"));
+    }
+
+    if page_start < 0 {
+        return Err(AppError::bad_request("pageStart 不能小于 0"));
+    }
+
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let target = build_douban_recommend_target(
+        &state.douban_api_base_url,
+        &kind,
+        page_start as usize,
+        page_limit as usize,
+        category.as_deref(),
+        format.as_deref(),
+        label.as_deref(),
+        region.as_deref(),
+        year.as_deref(),
+        platform.as_deref(),
+        sort.as_deref(),
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    let douban_data =
+        fetch_douban_json::<DoubanRecommendApiResponse>(&state.client, &config, &target)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    let list = douban_data
+        .items
+        .into_iter()
+        .filter_map(|item| {
+            if !matches!(item.item_type.as_deref(), Some("movie" | "tv")) {
+                return None;
+            }
+
+            Some(DoubanItem {
+                id: item.id.unwrap_or_default(),
+                title: item.title.unwrap_or_default(),
+                poster: item
+                    .pic
+                    .as_ref()
+                    .and_then(|picture| picture.normal.clone().or_else(|| picture.large.clone()))
+                    .unwrap_or_default(),
+                rate: format_douban_rating(item.rating.as_ref(), false),
+                year: item.year.unwrap_or_default(),
+                play_type: None,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut response = Json(DoubanResult {
+        code: 200,
+        message: "获取成功",
+        list,
+    })
+    .into_response();
+    apply_query_cache_headers(response.headers_mut(), config.cache_time);
+    Ok(response)
+}
+
+async fn get_douban_title_search(
+    State(state): State<AppState>,
+    Query(params): Query<DoubanSearchQueryParams>,
+) -> AppResult<Response> {
+    let query = normalize_owned_string(params.q).unwrap_or_default();
+    let limit = normalize_douban_search_limit(params.limit.as_deref());
+    let start = normalize_douban_search_start(params.start.as_deref());
+
+    if query.is_empty() {
+        return Err(AppError::bad_request("缺少必要参数: q"));
+    }
+
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let first_page = fetch_douban_search_page(
+        &state.client,
+        &config,
+        &state.douban_search_api_base_url,
+        &query,
+        start,
+    )
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    let mut collected_items = first_page.items;
+    let total = first_page
+        .total
+        .max(start + count_douban_search_subject_items(&collected_items));
+    let desired_count = limit.min(total.saturating_sub(start));
+
+    if desired_count > DOUBAN_SEARCH_PAGE_SIZE {
+        let page_starts = ((start + DOUBAN_SEARCH_PAGE_SIZE)..(start + desired_count))
+            .step_by(DOUBAN_SEARCH_PAGE_SIZE)
+            .take_while(|page_start| *page_start < total)
+            .collect::<Vec<_>>();
+        let tasks = page_starts.iter().map(|page_start| {
+            fetch_douban_search_page(
+                &state.client,
+                &config,
+                &state.douban_search_api_base_url,
+                &query,
+                *page_start,
+            )
+        });
+
+        for result in join_all(tasks).await {
+            if let Ok(page) = result {
+                collected_items.extend(page.items);
+            }
+        }
+    }
+
+    let mut seen_ids = BTreeSet::new();
+    let mut list = Vec::new();
+    let target_count = if desired_count == 0 {
+        limit
+    } else {
+        desired_count
+    };
+    for item in collected_items
+        .into_iter()
+        .filter(is_douban_search_subject_item)
+    {
+        let id = item.id.expect("search subject item id should exist");
+        if !seen_ids.insert(id) {
+            continue;
+        }
+        list.push(map_douban_search_item(&item));
+        if list.len() >= target_count {
+            break;
+        }
+    }
+
+    let mut response = Json(DoubanResult {
+        code: 200,
+        message: "获取成功",
+        list,
+    })
+    .into_response();
+    apply_query_cache_headers(response.headers_mut(), config.cache_time);
     Ok(response)
 }
 
@@ -2650,20 +3342,17 @@ async fn get_vod_m3u8(
         &resolved.source,
         &state.public_base_url,
     );
-    let ad_filter_result = if should_apply_vod_ad_filter(
-        &config,
-        &resolved.api_site,
-        ad_filter_query_mode,
-    ) {
-        filter_vod_manifest_ads(&rewritten_content, &build_vod_ad_filter_config(true))
-    } else {
-        FilteredVodManifest {
-            filtered: rewritten_content.clone(),
-            ads_removed: 0,
-            ads_duration: 0.0,
-            changed: false,
-        }
-    };
+    let ad_filter_result =
+        if should_apply_vod_ad_filter(&config, &resolved.api_site, ad_filter_query_mode) {
+            filter_vod_manifest_ads(&rewritten_content, &build_vod_ad_filter_config(true))
+        } else {
+            FilteredVodManifest {
+                filtered: rewritten_content.clone(),
+                ads_removed: 0,
+                ads_duration: 0.0,
+                changed: false,
+            }
+        };
     let response_content = if ad_filter_result.changed {
         ad_filter_result.filtered.clone()
     } else {
@@ -2820,7 +3509,10 @@ fn build_default_admin_persistence_from_raw(
     })
 }
 
-fn load_admin_persistence(config_path: &Path, persistence_path: &Path) -> Result<DesktopAdminPersistence> {
+fn load_admin_persistence(
+    config_path: &Path,
+    persistence_path: &Path,
+) -> Result<DesktopAdminPersistence> {
     let (raw_contents, raw_config) = read_raw_service_config(config_path)?;
 
     let base = if persistence_path.exists() {
@@ -2854,7 +3546,10 @@ fn save_admin_persistence(path: &Path, persistence: &DesktopAdminPersistence) ->
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
-fn build_default_admin_config(raw_contents: &str, raw_config: &RawServiceConfig) -> DesktopAdminConfig {
+fn build_default_admin_config(
+    raw_contents: &str,
+    raw_config: &RawServiceConfig,
+) -> DesktopAdminConfig {
     let owner_username = normalize_optional_string(raw_config.auth.username.clone())
         .unwrap_or_else(|| "owner".to_string());
     let site_config = build_default_site_config_from_raw(raw_config);
@@ -2935,9 +3630,12 @@ fn build_default_site_config_from_raw(raw_config: &RawServiceConfig) -> DesktopS
         site_interface_cache_time: raw_config.cache_time.unwrap_or(DEFAULT_CACHE_TIME).max(1),
         douban_proxy_type: normalize_optional_string(raw_config.douban_proxy_type.clone())
             .unwrap_or_else(default_douban_proxy_type),
-        douban_proxy: normalize_optional_string(raw_config.douban_proxy.clone()).unwrap_or_default(),
-        douban_image_proxy_type: normalize_optional_string(raw_config.douban_image_proxy_type.clone())
-            .unwrap_or_else(default_douban_image_proxy_type),
+        douban_proxy: normalize_optional_string(raw_config.douban_proxy.clone())
+            .unwrap_or_default(),
+        douban_image_proxy_type: normalize_optional_string(
+            raw_config.douban_image_proxy_type.clone(),
+        )
+        .unwrap_or_else(default_douban_image_proxy_type),
         douban_image_proxy: normalize_optional_string(raw_config.douban_image_proxy.clone())
             .unwrap_or_default(),
         disable_yellow_filter: raw_config.disable_yellow_filter.unwrap_or(false),
@@ -2973,16 +3671,22 @@ fn merge_admin_persistence_with_raw(
     } else {
         persistence.config.site_config =
             normalize_desktop_site_config(persistence.config.site_config);
-        persistence.config.source_config =
-            merge_source_config(std::mem::take(&mut persistence.config.source_config), &raw_config.api_site);
+        persistence.config.source_config = merge_source_config(
+            std::mem::take(&mut persistence.config.source_config),
+            &raw_config.api_site,
+        );
         persistence.config.custom_categories = merge_category_config(
             std::mem::take(&mut persistence.config.custom_categories),
             &raw_config.custom_category,
         );
-        persistence.config.live_config =
-            merge_live_config(std::mem::take(&mut persistence.config.live_config), &raw_config.lives);
-        persistence.config.user_config =
-            normalize_user_config(std::mem::take(&mut persistence.config.user_config), &owner_username);
+        persistence.config.live_config = merge_live_config(
+            std::mem::take(&mut persistence.config.live_config),
+            &raw_config.lives,
+        );
+        persistence.config.user_config = normalize_user_config(
+            std::mem::take(&mut persistence.config.user_config),
+            &owner_username,
+        );
     }
 
     persistence.profile_sync_api_base_url =
@@ -3133,9 +3837,12 @@ fn build_service_config_from_admin(
         max_search_pages: admin_config.site_config.search_downstream_max_page.max(1),
         adult_content_filter_enabled: !admin_config.site_config.disable_yellow_filter,
         vod_ad_filter_enabled: admin_config.ad_filter_config.enabled,
+        fluid_search: admin_config.site_config.fluid_search,
         site_name: normalize_owned_string(Some(admin_config.site_config.site_name.clone())),
         announcement: normalize_owned_string(Some(admin_config.site_config.announcement.clone())),
-        douban_proxy_type: normalize_owned_string(Some(admin_config.site_config.douban_proxy_type.clone())),
+        douban_proxy_type: normalize_owned_string(Some(
+            admin_config.site_config.douban_proxy_type.clone(),
+        )),
         douban_proxy: normalize_owned_string(Some(admin_config.site_config.douban_proxy.clone())),
         douban_image_proxy_type: normalize_owned_string(Some(
             admin_config.site_config.douban_image_proxy_type.clone(),
@@ -3201,7 +3908,8 @@ fn normalize_owned_string(value: Option<String>) -> Option<String> {
 
 fn normalize_desktop_site_config(site_config: DesktopSiteConfig) -> DesktopSiteConfig {
     DesktopSiteConfig {
-        site_name: normalize_owned_string(Some(site_config.site_name)).unwrap_or_else(default_site_name),
+        site_name: normalize_owned_string(Some(site_config.site_name))
+            .unwrap_or_else(default_site_name),
         announcement: normalize_owned_string(Some(site_config.announcement))
             .unwrap_or_else(default_site_announcement),
         search_downstream_max_page: site_config.search_downstream_max_page.max(1),
@@ -3235,7 +3943,10 @@ fn require_owned_string(value: Option<String>, message: &str) -> AppResult<Strin
     normalize_owned_string(value).ok_or_else(|| AppError::bad_request(message))
 }
 
-fn require_non_empty_string_list(value: Option<Vec<String>>, message: &str) -> AppResult<Vec<String>> {
+fn require_non_empty_string_list(
+    value: Option<Vec<String>>,
+    message: &str,
+) -> AppResult<Vec<String>> {
     let normalized = normalize_string_list(value.unwrap_or_default());
     if normalized.is_empty() {
         return Err(AppError::bad_request(message));
@@ -3339,13 +4050,15 @@ fn normalize_user_config(
         }
     }
 
-    let owner_entry = seen_users.remove(owner_username).unwrap_or(DesktopUserConfigItem {
-        username: owner_username.to_string(),
-        role: "owner".to_string(),
-        banned: false,
-        enabled_apis: Vec::new(),
-        tags: Vec::new(),
-    });
+    let owner_entry = seen_users
+        .remove(owner_username)
+        .unwrap_or(DesktopUserConfigItem {
+            username: owner_username.to_string(),
+            role: "owner".to_string(),
+            banned: false,
+            enabled_apis: Vec::new(),
+            tags: Vec::new(),
+        });
 
     let mut users = vec![DesktopUserConfigItem {
         username: owner_username.to_string(),
@@ -4095,6 +4808,430 @@ fn build_bangumi_headers() -> ReqwestHeaderMap {
     headers
 }
 
+fn build_douban_html_headers() -> ReqwestHeaderMap {
+    let mut headers = ReqwestHeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(DEFAULT_WEB_UA));
+    headers.insert(
+        REFERER,
+        HeaderValue::from_static("https://movie.douban.com/"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT,
+        HeaderValue::from_static(
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        ),
+    );
+    headers
+}
+
+fn parse_i64_query_param(raw_value: Option<&str>, default_value: i64) -> i64 {
+    raw_value
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(default_value)
+}
+
+fn normalize_douban_filter_value(raw_value: Option<String>) -> Option<String> {
+    match normalize_owned_string(raw_value) {
+        Some(value) if value == "all" => None,
+        value => value,
+    }
+}
+
+fn normalize_douban_sort_value(raw_value: Option<String>) -> Option<String> {
+    match normalize_owned_string(raw_value) {
+        Some(value) if value == "T" => None,
+        value => value,
+    }
+}
+
+fn normalize_douban_search_limit(raw_limit: Option<&str>) -> usize {
+    let parsed_limit = raw_limit
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(DOUBAN_SEARCH_PAGE_SIZE);
+    parsed_limit.clamp(1, MAX_DOUBAN_SEARCH_LIMIT)
+}
+
+fn normalize_douban_search_start(raw_start: Option<&str>) -> usize {
+    raw_start
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| *value >= 0)
+        .map(|value| value as usize)
+        .unwrap_or(0)
+}
+
+fn build_url_with_query(base_url: &str, path: &str, params: &[(&str, String)]) -> Result<String> {
+    let normalized_path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    let mut target = Url::parse(&format!(
+        "{}{}",
+        base_url.trim_end_matches('/'),
+        normalized_path
+    ))?;
+    {
+        let mut query_pairs = target.query_pairs_mut();
+        for (key, value) in params {
+            query_pairs.append_pair(key, value);
+        }
+    }
+    Ok(target.into())
+}
+
+fn resolve_douban_request_url(config: &ServiceConfig, target: &str) -> String {
+    match config
+        .douban_proxy_type
+        .as_deref()
+        .unwrap_or(DEFAULT_DOUBAN_PROXY_TYPE)
+    {
+        "cmliussss-cdn-tencent" => target
+            .replace(
+                DEFAULT_DOUBAN_API_BASE_URL,
+                "https://m.douban.cmliussss.net",
+            )
+            .replace(
+                DEFAULT_DOUBAN_MOVIE_API_BASE_URL,
+                "https://movie.douban.cmliussss.net",
+            ),
+        "cmliussss-cdn-ali" => target
+            .replace(
+                DEFAULT_DOUBAN_API_BASE_URL,
+                "https://m.douban.cmliussss.com",
+            )
+            .replace(
+                DEFAULT_DOUBAN_MOVIE_API_BASE_URL,
+                "https://movie.douban.cmliussss.com",
+            ),
+        "cors-proxy-zwei" => build_douban_encoded_proxy_url("https://ciao-cors.is-an.org/", target),
+        "cors-anywhere" => build_douban_direct_proxy_url("https://cors-anywhere.com/", target),
+        "custom" => build_douban_encoded_proxy_url(
+            config.douban_proxy.as_deref().unwrap_or_default(),
+            target,
+        ),
+        _ => target.to_string(),
+    }
+}
+
+fn build_douban_direct_proxy_url(proxy_url: &str, target: &str) -> String {
+    if proxy_url.trim().is_empty() {
+        return target.to_string();
+    }
+
+    format!("{proxy_url}{target}")
+}
+
+fn build_douban_encoded_proxy_url(proxy_url: &str, target: &str) -> String {
+    if proxy_url.trim().is_empty() {
+        return target.to_string();
+    }
+
+    format!(
+        "{proxy_url}{}",
+        form_urlencoded::byte_serialize(target.as_bytes()).collect::<String>()
+    )
+}
+
+async fn fetch_douban_json<T: for<'de> Deserialize<'de>>(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+    target: &str,
+) -> Result<T> {
+    let response = client
+        .get(resolve_douban_request_url(config, target))
+        .headers(build_douban_headers())
+        .timeout(Duration::from_millis(DEFAULT_DETAIL_TIMEOUT_MS))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("douban request failed with {}", response.status());
+    }
+
+    response.json::<T>().await.map_err(Into::into)
+}
+
+fn build_douban_recommend_target(
+    base_url: &str,
+    kind: &str,
+    page_start: usize,
+    page_limit: usize,
+    category: Option<&str>,
+    format: Option<&str>,
+    label: Option<&str>,
+    region: Option<&str>,
+    year: Option<&str>,
+    platform: Option<&str>,
+    sort: Option<&str>,
+) -> Result<String> {
+    let mut selected_categories = serde_json::Map::new();
+    selected_categories.insert(
+        "类型".to_string(),
+        Value::String(category.unwrap_or_default().to_string()),
+    );
+    if let Some(format) = format.filter(|value| !value.is_empty()) {
+        selected_categories.insert("形式".to_string(), Value::String(format.to_string()));
+    }
+    if let Some(region) = region.filter(|value| !value.is_empty()) {
+        selected_categories.insert("地区".to_string(), Value::String(region.to_string()));
+    }
+
+    let mut tags = Vec::new();
+    if let Some(category) = category.filter(|value| !value.is_empty()) {
+        tags.push(category.to_string());
+    }
+    if category.unwrap_or_default().is_empty() {
+        if let Some(format) = format.filter(|value| !value.is_empty()) {
+            tags.push(format.to_string());
+        }
+    }
+    if let Some(label) = label.filter(|value| !value.is_empty()) {
+        tags.push(label.to_string());
+    }
+    if let Some(region) = region.filter(|value| !value.is_empty()) {
+        tags.push(region.to_string());
+    }
+    if let Some(year) = year.filter(|value| !value.is_empty()) {
+        tags.push(year.to_string());
+    }
+    if let Some(platform) = platform.filter(|value| !value.is_empty()) {
+        tags.push(platform.to_string());
+    }
+
+    let mut params = vec![
+        ("refresh", "0".to_string()),
+        ("start", page_start.to_string()),
+        ("count", page_limit.to_string()),
+        (
+            "selected_categories",
+            Value::Object(selected_categories).to_string(),
+        ),
+        ("uncollect", "false".to_string()),
+        ("score_range", "0,10".to_string()),
+        ("tags", tags.join(",")),
+    ];
+    if let Some(sort) = sort.filter(|value| !value.is_empty()) {
+        params.push(("sort", sort.to_string()));
+    }
+
+    build_url_with_query(
+        base_url,
+        &format!("/rexxar/api/v2/{kind}/recommend"),
+        &params,
+    )
+}
+
+async fn fetch_douban_top250(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+    movie_base_url: &str,
+    page_start: usize,
+) -> Result<Vec<DoubanItem>> {
+    let target = build_url_with_query(
+        movie_base_url,
+        "/top250",
+        &[("start", page_start.to_string()), ("filter", String::new())],
+    )?;
+    let response = client
+        .get(resolve_douban_request_url(config, &target))
+        .headers(build_douban_html_headers())
+        .timeout(Duration::from_millis(DEFAULT_DETAIL_TIMEOUT_MS))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("douban top250 request failed with {}", response.status());
+    }
+
+    let html = response.text().await?;
+    Ok(parse_douban_top250_items(&html))
+}
+
+fn douban_top250_item_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r#"<div class="item">[\s\S]*?<a[^>]+href="https?://movie\.douban\.com/subject/(\d+)/"[\s\S]*?<img[^>]+alt="([^"]+)"[^>]*src="([^"]+)"[\s\S]*?<span class="rating_num"[^>]*>([^<]*)</span>[\s\S]*?</div>"#,
+        )
+        .expect("valid douban top250 regex")
+    })
+}
+
+fn parse_douban_top250_items(html: &str) -> Vec<DoubanItem> {
+    douban_top250_item_regex()
+        .captures_iter(html)
+        .map(|capture| DoubanItem {
+            id: capture
+                .get(1)
+                .map(|value| value.as_str().to_string())
+                .unwrap_or_default(),
+            title: capture
+                .get(2)
+                .map(|value| value.as_str().to_string())
+                .unwrap_or_default(),
+            poster: capture
+                .get(3)
+                .map(|value| value.as_str().replace("http://", "https://"))
+                .unwrap_or_default(),
+            rate: capture
+                .get(4)
+                .map(|value| value.as_str().trim().to_string())
+                .unwrap_or_default(),
+            year: String::new(),
+            play_type: None,
+        })
+        .collect()
+}
+
+async fn fetch_douban_search_page(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+    search_base_url: &str,
+    query: &str,
+    start: usize,
+) -> Result<DoubanSearchPageData> {
+    let mut params = vec![
+        ("search_text", query.to_string()),
+        ("cat", "1002".to_string()),
+    ];
+    if start > 0 {
+        params.push(("start", start.to_string()));
+    }
+
+    let target = build_url_with_query(search_base_url, "/movie/subject_search", &params)?;
+    let response = client
+        .get(resolve_douban_request_url(config, &target))
+        .headers(build_douban_html_headers())
+        .timeout(Duration::from_millis(DEFAULT_DETAIL_TIMEOUT_MS))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("douban search request failed with {}", response.status());
+    }
+
+    let html = response.text().await?;
+    extract_douban_search_data(&html)
+}
+
+fn douban_search_data_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"(?s)window\.__DATA__\s*=\s*(\{.*?\})\s*;"#)
+            .expect("valid douban search data regex")
+    })
+}
+
+fn extract_douban_search_data(html: &str) -> Result<DoubanSearchPageData> {
+    let payload = douban_search_data_regex()
+        .captures(html)
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str())
+        .ok_or_else(|| anyhow::anyhow!("未找到豆瓣搜索结果数据"))?;
+
+    serde_json::from_str::<DoubanSearchPageData>(payload).map_err(Into::into)
+}
+
+fn douban_search_year_suffix_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"\s*[（(]\d{4}[)）]\s*$"#).expect("valid douban search year suffix regex")
+    })
+}
+
+fn douban_search_year_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"[（(](\d{4})[)）]\s*$"#).expect("valid douban search year regex")
+    })
+}
+
+fn douban_any_year_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r#"(\d{4})"#).expect("valid douban any year regex"))
+}
+
+fn sanitize_douban_title(raw_title: &str) -> String {
+    let without_mark = raw_title.replace('\u{200e}', "");
+    douban_search_year_suffix_regex()
+        .replace_all(without_mark.trim(), "")
+        .trim()
+        .to_string()
+}
+
+fn extract_search_title_year(raw_title: &str) -> String {
+    douban_search_year_regex()
+        .captures(raw_title)
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str().to_string())
+        .unwrap_or_default()
+}
+
+fn extract_any_year(raw_text: Option<&str>) -> String {
+    raw_text
+        .and_then(|value| douban_any_year_regex().captures(value))
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str().to_string())
+        .unwrap_or_default()
+}
+
+fn format_douban_rating(rating: Option<&DoubanRemoteRating>, require_rating_count: bool) -> String {
+    let Some(rating) = rating else {
+        return String::new();
+    };
+    let Some(value) = rating
+        .value
+        .filter(|value| value.is_finite() && *value > 0.0)
+    else {
+        return String::new();
+    };
+    if require_rating_count && rating.count.unwrap_or_default() == 0 {
+        return String::new();
+    }
+
+    format!("{value:.1}")
+}
+
+fn is_douban_search_subject_item(item: &DoubanSearchPageItem) -> bool {
+    item.tpl_name.as_deref() == Some("search_subject")
+        && item.id.is_some_and(|value| value > 0)
+        && item
+            .title
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+}
+
+fn count_douban_search_subject_items(items: &[DoubanSearchPageItem]) -> usize {
+    items
+        .iter()
+        .filter(|item| is_douban_search_subject_item(item))
+        .count()
+}
+
+fn infer_douban_search_play_type(item: &DoubanSearchPageItem) -> &'static str {
+    if item
+        .labels
+        .iter()
+        .any(|label| label.text.as_deref() == Some("剧集"))
+    {
+        "tv"
+    } else {
+        "movie"
+    }
+}
+
+fn map_douban_search_item(item: &DoubanSearchPageItem) -> DoubanItem {
+    DoubanItem {
+        id: item.id.unwrap_or_default().to_string(),
+        title: sanitize_douban_title(item.title.as_deref().unwrap_or_default()),
+        poster: item.cover_url.clone().unwrap_or_default(),
+        rate: format_douban_rating(item.rating.as_ref(), true),
+        year: extract_search_title_year(item.title.as_deref().unwrap_or_default()),
+        play_type: Some(infer_douban_search_play_type(item)),
+    }
+}
+
 async fn fetch_single_douban_rating(client: &reqwest::Client, id: u64) -> Result<String> {
     let response = client
         .get(format!(
@@ -4144,6 +5281,7 @@ fn build_runtime_public_config_response(config: &ServiceConfig) -> RuntimePublic
         douban_proxy: config.douban_proxy.clone(),
         douban_image_proxy_type: config.douban_image_proxy_type.clone(),
         douban_image_proxy: config.douban_image_proxy.clone(),
+        fluid_search: config.fluid_search,
         enable_web_live: config
             .enable_web_live_override
             .unwrap_or_else(|| config.live_sources.iter().any(|source| !source.disabled)),
@@ -4876,8 +6014,14 @@ fn parse_usize_env(name: &str, fallback: usize) -> usize {
 fn build_vod_ad_filter_config(enabled: bool) -> VodAdFilterConfig {
     VodAdFilterConfig {
         enabled,
-        min_ad_duration: parse_f64_env("AD_FILTER_MIN_DURATION", DEFAULT_VOD_AD_FILTER_MIN_DURATION),
-        max_ad_duration: parse_f64_env("AD_FILTER_MAX_DURATION", DEFAULT_VOD_AD_FILTER_MAX_DURATION),
+        min_ad_duration: parse_f64_env(
+            "AD_FILTER_MIN_DURATION",
+            DEFAULT_VOD_AD_FILTER_MIN_DURATION,
+        ),
+        max_ad_duration: parse_f64_env(
+            "AD_FILTER_MAX_DURATION",
+            DEFAULT_VOD_AD_FILTER_MAX_DURATION,
+        ),
         max_consecutive_ad_segments: parse_usize_env(
             "AD_FILTER_MAX_SEGMENTS",
             DEFAULT_VOD_AD_FILTER_MAX_SEGMENTS,
@@ -5057,7 +6201,8 @@ fn filter_vod_manifest_ads(content: &str, config: &VodAdFilterConfig) -> Filtere
     }
 
     let parsed = parse_vod_ad_manifest(content);
-    if parsed.discontinuity_count == 0 && !parsed.segments.iter().any(|segment| segment.is_ad_domain)
+    if parsed.discontinuity_count == 0
+        && !parsed.segments.iter().any(|segment| segment.is_ad_domain)
     {
         return FilteredVodManifest {
             filtered: content.to_string(),
@@ -5217,7 +6362,9 @@ fn append_ad_filter_response_headers(headers: &mut HeaderMap, result: &FilteredV
     header_names.insert("X-Ads-Removed".to_string());
     header_names.insert("X-Ads-Duration".to_string());
 
-    if let Ok(value) = HeaderValue::from_str(&header_names.into_iter().collect::<Vec<_>>().join(", ")) {
+    if let Ok(value) =
+        HeaderValue::from_str(&header_names.into_iter().collect::<Vec<_>>().join(", "))
+    {
         headers.insert(ACCESS_CONTROL_EXPOSE_HEADERS, value);
     }
 
@@ -6220,6 +7367,63 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn content_search_stream_endpoint_emits_progressive_events() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Resource"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/search/ws?q=test")
+                    .body(Body::empty())
+                    .expect("search stream request"),
+            )
+            .await
+            .expect("search stream response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("search stream body");
+        let body_text = String::from_utf8(body.to_vec()).expect("search stream body text");
+
+        assert!(body_text.contains("\"type\":\"start\""));
+        assert!(body_text.contains("\"totalSources\":1"));
+        assert!(body_text.contains("\"type\":\"source_result\""));
+        assert!(body_text.contains("\"source\":\"mock\""));
+        assert!(body_text.contains("\"type\":\"complete\""));
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
     async fn live_channels_and_epg_endpoints_return_cached_live_data() {
         let upstream = spawn_mock_server(mock_upstream_router()).await;
         let temp_dir = TestDir::new();
@@ -6443,6 +7647,136 @@ segment0.ts
         assert_eq!(ids.len(), MAX_DOUBAN_RATING_IDS_PER_REQUEST);
         assert_eq!(ids.first().copied(), Some(1));
         assert_eq!(ids.last().copied(), Some(20));
+    }
+
+    #[tokio::test]
+    async fn douban_search_endpoint_returns_title_results() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.douban_api_base_url = upstream.base_url();
+        state.douban_movie_api_base_url = upstream.base_url();
+        state.douban_search_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/douban/search?q=%E7%94%84%E5%AC%9B%E4%BC%A0&limit=5")
+                    .body(Body::empty())
+                    .expect("douban search request"),
+            )
+            .await
+            .expect("douban search response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("douban search body");
+        let payload: Value = serde_json::from_slice(&body).expect("douban search json");
+
+        assert_eq!(
+            payload
+                .get("list")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("title"))
+                .and_then(Value::as_str),
+            Some("后宫·甄嬛传")
+        );
+        assert_eq!(
+            payload
+                .get("list")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("playType"))
+                .and_then(Value::as_str),
+            Some("tv")
+        );
+        assert_eq!(
+            payload
+                .get("list")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("year"))
+                .and_then(Value::as_str),
+            Some("2011")
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn douban_recommends_endpoint_filters_non_subject_cards() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.douban_api_base_url = upstream.base_url();
+        state.douban_movie_api_base_url = upstream.base_url();
+        state.douban_search_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/douban/recommends?kind=movie&limit=5&start=0&sort=T")
+                    .body(Body::empty())
+                    .expect("douban recommends request"),
+            )
+            .await
+            .expect("douban recommends response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("douban recommends body");
+        let payload: Value = serde_json::from_slice(&body).expect("douban recommends json");
+        let list = payload
+            .get("list")
+            .and_then(Value::as_array)
+            .expect("douban recommends list array");
+
+        assert_eq!(list.len(), 2);
+        assert_eq!(
+            list.first()
+                .and_then(|item| item.get("id"))
+                .and_then(Value::as_str),
+            Some("1001")
+        );
+        assert_eq!(
+            list.get(1)
+                .and_then(|item| item.get("id"))
+                .and_then(Value::as_str),
+            Some("1002")
+        );
+
+        upstream.abort();
     }
 
     #[tokio::test]
@@ -6753,6 +8087,97 @@ segment0.ts
               }]
             }
           ]))
+        }),
+      )
+      .route(
+        "/movie/subject_search",
+        get(|| async move {
+          let html = r#"<!DOCTYPE html><html><head><script>window.__DATA__ = {"count":2,"start":0,"total":2,"text":"甄嬛传","items":[{"tpl_name":"search_subject","id":4922787,"title":"后宫·甄嬛传（2011）","cover_url":"https://img.example.com/zhenhuan.jpg","labels":[{"text":"剧集"}],"rating":{"value":9.4,"count":1000}},{"tpl_name":"search_subject","id":25812730,"title":"如懿传（2018）","cover_url":"https://img.example.com/ruyi.jpg","labels":[{"text":"剧集"}],"rating":{"value":7.5,"count":500}},{"tpl_name":"other_card","id":1,"title":"ignored"}]};</script></head><body></body></html>"#;
+          (
+            [(CONTENT_TYPE, "text/html; charset=utf-8")],
+            html,
+          )
+        }),
+      )
+      .route(
+        "/rexxar/api/v2/subject/recent_hot/movie",
+        get(|| async move {
+          Json(json!({
+            "total": 1,
+            "items": [{
+              "id": "1001",
+              "title": "Mock Category Item",
+              "card_subtitle": "2026 / 中国大陆 / 剧情",
+              "pic": {
+                "large": "https://img.example.com/category-large.jpg",
+                "normal": "https://img.example.com/category-normal.jpg"
+              },
+              "rating": {
+                "value": 8.6
+              }
+            }]
+          }))
+        }),
+      )
+      .route(
+        "/j/search_subjects",
+        get(|| async move {
+          Json(json!({
+            "subjects": [{
+              "id": "1001",
+              "title": "Mock Douban List Item",
+              "cover": "https://img.example.com/list.jpg",
+              "rate": "8.2",
+              "card_subtitle": "2026 / 中国大陆 / 剧情"
+            }]
+          }))
+        }),
+      )
+      .route(
+        "/rexxar/api/v2/movie/recommend",
+        get(|| async move {
+          Json(json!({
+            "items": [
+              {
+                "id": "playlist-1",
+                "title": "A playlist card",
+                "type": "playlist"
+              },
+              {
+                "data": {
+                  "type": "movie",
+                  "unit": "dale_movie_ad_second_banner"
+                },
+                "type": "ad"
+              },
+              {
+                "id": "1001",
+                "title": "Mock Recommend Movie",
+                "year": "2025",
+                "type": "movie",
+                "pic": {
+                  "large": "https://img.example.com/recommend-large.jpg",
+                  "normal": "https://img.example.com/recommend-normal.jpg"
+                },
+                "rating": {
+                  "value": 8.1
+                }
+              },
+              {
+                "id": "1002",
+                "title": "Mock Recommend TV",
+                "year": "2026",
+                "type": "tv",
+                "pic": {
+                  "large": "https://img.example.com/recommend-tv-large.jpg",
+                  "normal": "https://img.example.com/recommend-tv-normal.jpg"
+                },
+                "rating": {
+                  "value": 7.9
+                }
+              }
+            ]
+          }))
         }),
       )
     }

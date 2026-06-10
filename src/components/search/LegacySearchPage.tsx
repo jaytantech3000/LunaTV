@@ -17,11 +17,11 @@ import {
   getSearchHistory,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { getPreferredFluidSearchSetting } from '@/lib/fluid-search';
 import {
   filterItemsByMinimumRating,
   passesGlobalRatingFilter,
 } from '@/lib/rating-filter';
-import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 import { buildApiUrl } from '@/lib/transport/endpoint';
 import { SearchResult } from '@/lib/types';
@@ -51,24 +51,6 @@ import {
 } from '@/stores/useSearchCacheStore';
 
 const GLOBAL_DOUBAN_AGGREGATE_CACHE_KEY = 'default-douban-aggregate';
-
-function getPreferredFluidSearchSetting(): boolean {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-
-  const runtimeConfig = getRuntimeConfig();
-  if (runtimeConfig.APP_TARGET === 'desktop') {
-    return false;
-  }
-
-  const savedFluidSearch = localStorage.getItem('fluidSearch');
-  if (savedFluidSearch !== null) {
-    return JSON.parse(savedFluidSearch);
-  }
-
-  return runtimeConfig.FLUID_SEARCH !== false;
-}
 
 interface LegacySearchPageClientProps {
   active?: boolean;

@@ -11,6 +11,7 @@ export interface DesktopRuntimePublicConfigPayload {
   doubanProxy?: string | null;
   doubanImageProxyType?: string | null;
   doubanImageProxy?: string | null;
+  fluidSearch?: boolean;
   enableWebLive?: boolean;
   profileSyncEnabled?: boolean;
   customCategories?: RuntimeCustomCategory[] | null;
@@ -66,6 +67,7 @@ export function mergeDesktopRuntimePublicConfig(
       payload.doubanImageProxyType ?? currentConfig.DOUBAN_IMAGE_PROXY_TYPE,
     DOUBAN_IMAGE_PROXY:
       payload.doubanImageProxy ?? currentConfig.DOUBAN_IMAGE_PROXY,
+    FLUID_SEARCH: payload.fluidSearch ?? currentConfig.FLUID_SEARCH ?? true,
     ENABLE_WEB_LIVE:
       payload.enableWebLive ?? currentConfig.ENABLE_WEB_LIVE ?? false,
     PROFILE_SYNC_ENABLED:

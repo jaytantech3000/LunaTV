@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any,no-console,no-case-declarations */
 
 import { apiFetch } from './transport/api-client';
+import { isDesktopAppTarget } from './runtime-config';
 import { DoubanItem, DoubanResult } from './types';
 
 interface DoubanCategoriesParams {
@@ -103,6 +104,13 @@ function getDoubanProxyConfig(): {
     | 'custom';
   proxyUrl: string;
 } {
+  if (typeof window !== 'undefined' && isDesktopAppTarget()) {
+    return {
+      proxyType: 'direct',
+      proxyUrl: '',
+    };
+  }
+
   const doubanProxyType =
     localStorage.getItem('doubanDataSource') ||
     (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE ||

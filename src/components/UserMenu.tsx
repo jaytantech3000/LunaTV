@@ -28,6 +28,12 @@ import {
   logoutDesktopSession,
 } from '@/lib/desktop/auth-session';
 import { purgeOfflineDownloads } from '@/lib/download/session';
+import {
+  getDefaultFluidSearchSetting,
+  getPreferredFluidSearchSetting,
+  isFluidSearchSupported,
+  setPreferredFluidSearchSetting,
+} from '@/lib/fluid-search';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -170,7 +176,7 @@ export const UserMenu: React.FC = () => {
       setAdminPanelEnabled(runtimeConfig.ENABLE_ADMIN_PANEL !== false);
       setIsDesktopTarget(isDesktop);
       setDesktopProfileSyncEnabled(profileSyncEnabled);
-      setSupportsFluidSearch(!isDesktop);
+      setSupportsFluidSearch(isFluidSearchSupported(runtimeConfig));
 
       if (!isDesktop || profileSyncEnabled) {
         setDesktopAuthRequired(false);
@@ -305,17 +311,13 @@ export const UserMenu: React.FC = () => {
       }
 
       const savedFluidSearch = localStorage.getItem('fluidSearch');
-      const defaultFluidSearch =
-        runtimeConfig.APP_TARGET === 'desktop'
-          ? false
-          : runtimeConfig.FLUID_SEARCH !== false;
       if (!supportsFluidSearch) {
         setFluidSearch(false);
-        localStorage.setItem('fluidSearch', JSON.stringify(false));
+        setPreferredFluidSearchSetting(false);
       } else if (savedFluidSearch !== null) {
-        setFluidSearch(JSON.parse(savedFluidSearch));
-      } else if (defaultFluidSearch !== undefined) {
-        setFluidSearch(defaultFluidSearch);
+        setFluidSearch(getPreferredFluidSearchSetting());
+      } else {
+        setFluidSearch(getPreferredFluidSearchSetting());
       }
 
       const savedLiveDirectConnect = localStorage.getItem('liveDirectConnect');
@@ -532,9 +534,7 @@ export const UserMenu: React.FC = () => {
     }
 
     setFluidSearch(value);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('fluidSearch', JSON.stringify(value));
-    }
+    setPreferredFluidSearchSetting(value);
   };
 
   const handleLiveDirectConnectToggle = (value: boolean) => {
@@ -610,9 +610,7 @@ export const UserMenu: React.FC = () => {
       (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY || '';
     const runtimeConfig = getRuntimeConfig();
     const defaultFluidSearch =
-      supportsFluidSearch &&
-      runtimeConfig.APP_TARGET !== 'desktop' &&
-      runtimeConfig.FLUID_SEARCH !== false;
+      supportsFluidSearch && getDefaultFluidSearchSetting(runtimeConfig);
 
     setDefaultAggregateSearch(true);
     setEnableOptimization(true);
@@ -626,7 +624,7 @@ export const UserMenu: React.FC = () => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('defaultAggregateSearch', JSON.stringify(true));
       localStorage.setItem('enableOptimization', JSON.stringify(true));
-      localStorage.setItem('fluidSearch', JSON.stringify(defaultFluidSearch));
+      setPreferredFluidSearchSetting(defaultFluidSearch);
       localStorage.setItem('liveDirectConnect', JSON.stringify(false));
       localStorage.setItem('doubanProxyUrl', defaultDoubanProxy);
       localStorage.setItem(
@@ -1149,7 +1147,7 @@ export const UserMenu: React.FC = () => {
                 <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
                   {supportsFluidSearch
                     ? '启用搜索结果实时流式输出，关闭后使用传统一次性搜索'
-                    : '桌面版当前阶段固定关闭，避免进入未接入的 SSE 搜索链路'}
+                    : '当前运行时未启用流式搜索支持'}
                 </p>
               </div>
               <label
