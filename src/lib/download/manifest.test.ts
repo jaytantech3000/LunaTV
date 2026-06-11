@@ -20,6 +20,17 @@ function createManifestResponse(body: string): Response {
   } as unknown as Response;
 }
 
+function createErrorResponse(status: number, body = ''): Response {
+  return {
+    ok: false,
+    status,
+    clone() {
+      return createErrorResponse(status, body);
+    },
+    text: async () => body,
+  } as unknown as Response;
+}
+
 describe('manifest parsing helpers', () => {
   it('detects master playlists and selects the highest bandwidth variant', () => {
     const manifest = `#EXTM3U
@@ -103,10 +114,9 @@ describe('manifest parsing helpers', () => {
     const originalFetch = global.fetch;
     const fetchMock = jest
       .fn()
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 403,
-      })
+      .mockResolvedValueOnce(
+        createErrorResponse(403, '{"error":"blocked"}')
+      )
       .mockResolvedValueOnce(
         createManifestResponse(
           `#EXTM3U
@@ -127,6 +137,27 @@ describe('manifest parsing helpers', () => {
       expect(result.playbackManifestUrl).toContain('playable.m3u8');
       expect(result.resources).toHaveLength(2);
       expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('includes the manifest url in network failure errors', async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = jest
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Load failed'));
+
+    global.fetch = fetchMock as typeof fetch;
+
+    try {
+      await expect(
+        parseManifestForDownloadWithFallback([
+          '/api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fexample.com%2Fbroken.m3u8',
+        ])
+      ).rejects.toThrow(
+        '获取 manifest 失败: /api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fexample.com%2Fbroken.m3u8 (Load failed)'
+      );
     } finally {
       global.fetch = originalFetch;
     }

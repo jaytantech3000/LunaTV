@@ -5,6 +5,17 @@ import { DownloadResource, ManifestParseResult } from './types';
 const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
 
+function summarizeManifestErrorBody(body: string): string {
+  const normalizedBody = body.replace(/\s+/g, ' ').trim();
+  if (!normalizedBody) {
+    return '';
+  }
+
+  return normalizedBody.length > 160
+    ? `${normalizedBody.slice(0, 157)}...`
+    : normalizedBody;
+}
+
 function splitManifestLines(content: string): string[] {
   return content.split(/\r?\n/).map((line) => line.trim());
 }
@@ -183,24 +194,56 @@ async function fetchManifestText(
   url: string,
   signal?: AbortSignal
 ): Promise<string> {
-  const response = await fetch(url, {
-    cache: 'no-store',
-    credentials: 'same-origin',
-    headers: {
-      [DOWNLOAD_REQUEST_INTENT_HEADER]: BACKGROUND_DOWNLOAD_REQUEST_INTENT,
-    },
-    signal,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: {
+        [DOWNLOAD_REQUEST_INTENT_HEADER]: BACKGROUND_DOWNLOAD_REQUEST_INTENT,
+      },
+      signal,
+    });
+  } catch (error) {
+    if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+      throw error;
+    }
 
-  if (!response.ok) {
-    throw new Error(`获取 manifest 失败: ${response.status}`);
+    throw new Error(
+      `获取 manifest 失败: ${url} (${
+        error instanceof Error ? error.message : '未知网络错误'
+      })`
+    );
   }
 
-  const responseClone = response.clone();
-  const manifestText = await responseClone.text();
+  if (!response.ok) {
+    let detail = '';
+    try {
+      detail = summarizeManifestErrorBody(await response.clone().text());
+    } catch {
+      detail = '';
+    }
+
+    throw new Error(
+      `获取 manifest 失败: ${url} (${response.status}${
+        detail ? `, ${detail}` : ''
+      })`
+    );
+  }
+
+  let manifestText = '';
+  try {
+    manifestText = await response.clone().text();
+  } catch (error) {
+    throw new Error(
+      `读取 manifest 失败: ${url} (${
+        error instanceof Error ? error.message : '未知读取错误'
+      })`
+    );
+  }
 
   if (!manifestText.includes('#EXTM3U')) {
-    throw new Error('上游返回的内容不是合法的 HLS manifest');
+    throw new Error(`上游返回的内容不是合法的 HLS manifest: ${url}`);
   }
 
   await putDownloadResponse(url, response.clone());
