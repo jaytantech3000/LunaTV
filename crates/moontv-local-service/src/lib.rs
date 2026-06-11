@@ -1462,7 +1462,7 @@ fn apply_cors_headers(headers: &mut HeaderMap) {
     headers.insert(
         ACCESS_CONTROL_ALLOW_HEADERS,
         HeaderValue::from_static(
-            "Content-Type, Range, Origin, Accept, Authorization, X-MoonTV-Response-Status",
+            "Content-Type, Range, Origin, Accept, Authorization, X-MoonTV-Response-Status, X-MoonTV-Download-Intent",
         ),
     );
     headers.insert(
@@ -7505,6 +7505,55 @@ mod tests {
         assert_eq!(
             payload.get("port"),
             Some(&Value::Number(DEFAULT_PORT.into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_preflight_allows_download_intent_header() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/api/proxy/vod/m3u8")
+                    .header(ORIGIN, "https://tauri.localhost")
+                    .header("Access-Control-Request-Method", "GET")
+                    .header(
+                        "Access-Control-Request-Headers",
+                        "x-moontv-download-intent",
+                    )
+                    .body(Body::empty())
+                    .expect("cors preflight request"),
+            )
+            .await
+            .expect("cors preflight response");
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let allow_headers = response
+            .headers()
+            .get(ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|value| value.to_str().ok())
+            .expect("cors allow headers");
+        assert!(
+            allow_headers
+                .to_ascii_lowercase()
+                .contains("x-moontv-download-intent"),
+            "expected allow headers to include x-moontv-download-intent, got: {allow_headers}"
         );
     }
 

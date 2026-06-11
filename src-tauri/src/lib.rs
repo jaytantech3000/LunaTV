@@ -6,6 +6,8 @@ use std::{
     sync::Mutex,
     time::Duration,
 };
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -17,6 +19,8 @@ const LOCAL_SERVICE_BINARY_NAME: &str = "moontv-local-service";
 const LOCAL_SERVICE_CONFIG_FILE_NAME: &str = "desktop.config.json";
 const LOCAL_SERVICE_DB_FILE_NAME: &str = "moontv-desktop.sqlite3";
 const ADMIN_PERSISTENCE_FILE_NAME: &str = "desktop-admin-state.json";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
 
@@ -326,6 +330,11 @@ async fn start_local_service_impl(
         } else {
             Stdio::null()
         });
+
+    #[cfg(target_os = "windows")]
+    if !cfg!(debug_assertions) {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
 
     let child = command.spawn().with_context(|| {
         format!(

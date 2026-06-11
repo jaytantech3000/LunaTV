@@ -240,7 +240,7 @@ export function createVodProxyHeaders(
   headers.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
   headers.set(
     'Access-Control-Allow-Headers',
-    'Content-Type, Range, Origin, Accept'
+    'Content-Type, Range, Origin, Accept, Authorization, X-MoonTV-Response-Status, X-MoonTV-Download-Intent'
   );
   headers.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
   headers.set('Cache-Control', 'no-store');

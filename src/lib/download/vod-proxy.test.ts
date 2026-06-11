@@ -64,6 +64,22 @@ describe('createVodProxyHeaders', () => {
 
     expect(headers.get('Content-Length')).toBe('42');
   });
+
+  it('allows the desktop download intent header in CORS responses', () => {
+    const upstreamResponse = {
+      headers: {
+        get() {
+          return null;
+        },
+      },
+    } as unknown as Response;
+
+    const headers = createVodProxyHeaders(upstreamResponse);
+
+    expect(headers.get('Access-Control-Allow-Headers')).toContain(
+      'X-MoonTV-Download-Intent'
+    );
+  });
 });
 
 describe('rewriteVodManifestContent', () => {
