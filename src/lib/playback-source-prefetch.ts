@@ -17,6 +17,7 @@ export interface PlaybackSourcePrefetchParams {
   query?: string;
   doubanId?: number;
   preferBest?: boolean;
+  allowAdultCandidates?: boolean;
 }
 
 const MIN_LOOSE_TITLE_MATCH_LENGTH = 3;
@@ -450,9 +451,11 @@ export function filterPlaybackSearchResults(
   results: SearchResult[],
   params: PlaybackSourcePrefetchParams
 ): SearchResult[] {
-  const safeResults = filterAdultContentResults(results);
+  const candidateResults = params.allowAdultCandidates
+    ? results
+    : filterAdultContentResults(results);
 
-  const scoredResults = safeResults
+  const scoredResults = candidateResults
     .map((result) => ({
       result,
       score: scorePlaybackSearchResult(result, params),

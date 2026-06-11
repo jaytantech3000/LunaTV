@@ -5251,17 +5251,54 @@ fn build_downstream_headers(
 }
 
 fn build_collection_api_url(api_base_url: &str, params: &[(&str, &str)]) -> Result<String> {
-    let mut url =
-        Url::parse(api_base_url).with_context(|| format!("invalid api url: {api_base_url}"))?;
+    let api_base_url = api_base_url.trim();
+    Url::parse(api_base_url).with_context(|| format!("invalid api url: {api_base_url}"))?;
 
-    {
-        let mut query_pairs = url.query_pairs_mut();
-        for (key, value) in params {
-            query_pairs.append_pair(key, value);
-        }
+    if params.is_empty() {
+        return Ok(api_base_url.to_string());
     }
 
-    Ok(url.to_string())
+    let separator = if api_base_url.ends_with('?') || api_base_url.ends_with('&') {
+        ""
+    } else if collection_api_url_uses_wrapped_target(api_base_url) {
+        "?"
+    } else if api_base_url.contains('?') {
+        "&"
+    } else {
+        "?"
+    };
+
+    Ok(format!(
+        "{api_base_url}{separator}{}",
+        build_collection_api_query(params)
+    ))
+}
+
+fn collection_api_url_uses_wrapped_target(api_base_url: &str) -> bool {
+    match Url::parse(api_base_url) {
+        Ok(url) => url.query_pairs().any(|(key, _)| key == "url"),
+        Err(_) => false,
+    }
+}
+
+fn build_collection_api_query(params: &[(&str, &str)]) -> String {
+    params
+        .iter()
+        .map(|(key, value)| {
+            format!(
+                "{}={}",
+                encode_collection_api_query_component(key),
+                encode_collection_api_query_component(value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn encode_collection_api_query_component(value: &str) -> String {
+    form_urlencoded::byte_serialize(value.as_bytes())
+        .collect::<String>()
+        .replace('+', "%20")
 }
 
 fn value_to_string(value: Option<&Value>) -> Option<String> {
@@ -7533,10 +7570,7 @@ mod tests {
                     .uri("/api/proxy/vod/m3u8")
                     .header(ORIGIN, "https://tauri.localhost")
                     .header("Access-Control-Request-Method", "GET")
-                    .header(
-                        "Access-Control-Request-Headers",
-                        "x-moontv-download-intent",
-                    )
+                    .header("Access-Control-Request-Headers", "x-moontv-download-intent")
                     .body(Body::empty())
                     .expect("cors preflight request"),
             )
@@ -7652,6 +7686,48 @@ segment0.ts
         );
     }
 
+    #[test]
+    fn build_collection_api_url_encodes_plain_source_queries_like_web() {
+        let url = build_collection_api_url(
+            "https://example.com/api.php/provide/vod",
+            &[("ac", "videolist"), ("wd", "Anny Walker")],
+        )
+        .expect("plain api url");
+
+        assert_eq!(
+            url,
+            "https://example.com/api.php/provide/vod?ac=videolist&wd=Anny%20Walker"
+        );
+    }
+
+    #[test]
+    fn build_collection_api_url_keeps_wrapped_target_query_inside_url_param() {
+        let url = build_collection_api_url(
+            "https://proxy.example.com/?url=https://91md.me/api.php/provide/vod",
+            &[("ac", "videolist"), ("wd", "Anny Walker")],
+        )
+        .expect("wrapped api url");
+
+        assert_eq!(
+            url,
+            "https://proxy.example.com/?url=https://91md.me/api.php/provide/vod?ac=videolist&wd=Anny%20Walker"
+        );
+    }
+
+    #[test]
+    fn build_collection_api_url_preserves_non_wrapped_query_params() {
+        let url = build_collection_api_url(
+            "https://example.com/api.php/provide/vod?token=demo",
+            &[("ac", "videolist"), ("wd", "Anny Walker")],
+        )
+        .expect("api url with existing query");
+
+        assert_eq!(
+            url,
+            "https://example.com/api.php/provide/vod?token=demo&ac=videolist&wd=Anny%20Walker"
+        );
+    }
+
     #[tokio::test]
     async fn content_search_endpoint_uses_configured_source() {
         let upstream = spawn_mock_server(mock_upstream_router()).await;
@@ -7707,6 +7783,130 @@ segment0.ts
                 .and_then(|item| item.get("source"))
                 .and_then(Value::as_str),
             Some("mock")
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn content_search_endpoint_supports_proxy_wrapped_sources() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {
+                "mock": {
+                  "api": format!(
+                    "{}/proxy?url={}/api.php/provide/vod",
+                    upstream.base_url(),
+                    upstream.base_url()
+                  ),
+                  "name": "Wrapped Mock Resource"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/content/search?q=Anny%20Walker")
+                    .body(Body::empty())
+                    .expect("wrapped search request"),
+            )
+            .await
+            .expect("wrapped search response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("wrapped search body");
+        let payload: Value = serde_json::from_slice(&body).expect("wrapped search payload json");
+
+        assert_eq!(
+            payload
+                .get("results")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            payload
+                .get("results")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("title"))
+                .and_then(Value::as_str),
+            Some("Mock Search Result")
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn content_detail_endpoint_supports_proxy_wrapped_sources() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {
+                "mock": {
+                  "api": format!(
+                    "{}/proxy?url={}/api.php/provide/vod",
+                    upstream.base_url(),
+                    upstream.base_url()
+                  ),
+                  "name": "Wrapped Mock Resource"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/detail?source=mock&id=1")
+                    .body(Body::empty())
+                    .expect("wrapped detail request"),
+            )
+            .await
+            .expect("wrapped detail response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("wrapped detail body");
+        let payload: Value = serde_json::from_slice(&body).expect("wrapped detail payload json");
+
+        assert_eq!(
+            payload.get("title").and_then(Value::as_str),
+            Some("Mock Detail")
+        );
+        assert_eq!(
+            payload
+                .get("episodes")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_str),
+            Some("https://cdn.example.com/mock/index.m3u8")
         );
 
         upstream.abort();
@@ -8647,13 +8847,9 @@ segment0.ts
         upstream.abort();
     }
 
-    fn mock_upstream_router() -> Router {
-        Router::new()
-      .route(
-        "/api.php/provide/vod",
-        get(|Query(params): Query<BTreeMap<String, String>>| async move {
-          let ids = params.get("ids").cloned().unwrap_or_default();
-          if !ids.is_empty() {
+    fn mock_vod_api_response(params: &BTreeMap<String, String>) -> Response {
+        let ids = params.get("ids").cloned().unwrap_or_default();
+        if !ids.is_empty() {
             Json(json!({
               "list": [{
                 "vod_name": "Mock Detail",
@@ -8664,7 +8860,7 @@ segment0.ts
               }]
             }))
             .into_response()
-          } else {
+        } else {
             Json(json!({
               "pagecount": 1,
               "list": [{
@@ -8678,7 +8874,32 @@ segment0.ts
               }]
             }))
             .into_response()
-          }
+        }
+    }
+
+    fn mock_upstream_router() -> Router {
+        Router::new()
+      .route(
+        "/proxy",
+        get(|uri: OriginalUri| async move {
+          let query = uri.query().unwrap_or_default();
+          let Some(target) = query.strip_prefix("url=") else {
+            return StatusCode::BAD_REQUEST.into_response();
+          };
+          let Ok(target_url) = Url::parse(target) else {
+            return StatusCode::BAD_REQUEST.into_response();
+          };
+          let params = target_url
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<BTreeMap<_, _>>();
+          mock_vod_api_response(&params)
+        }),
+      )
+      .route(
+        "/api.php/provide/vod",
+        get(|Query(params): Query<BTreeMap<String, String>>| async move {
+          mock_vod_api_response(&params)
         }),
       )
       .route(

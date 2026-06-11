@@ -252,9 +252,34 @@ async function readOfflineCachedVodResponse(
   );
 }
 
+function buildAvailableSourceKey(source: Pick<SearchResult, 'source' | 'id'>) {
+  return `${source.source}:${source.id}`;
+}
+
+function mergeAvailableSources(
+  prioritySources: SearchResult[],
+  discoveredSources: SearchResult[]
+): SearchResult[] {
+  const mergedSources = [...prioritySources];
+  const seenSourceKeys = new Set(prioritySources.map(buildAvailableSourceKey));
+
+  discoveredSources.forEach((source) => {
+    const sourceKey = buildAvailableSourceKey(source);
+    if (seenSourceKeys.has(sourceKey)) {
+      return;
+    }
+
+    seenSourceKeys.add(sourceKey);
+    mergedSources.push(source);
+  });
+
+  return mergedSources;
+}
+
 function PlayPageClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const allowAdultCandidates = searchParams.get('adult') === '1';
   const isOfflineMode = searchParams.get('offline') === '1';
   const initialEpisodeQueryIndex = (() => {
     const rawEpisode = Number(searchParams.get('episode') || '1');
@@ -896,7 +921,14 @@ function PlayPageClient() {
         setSourceSearchLoading(false);
       }
     };
-    const fetchSourcesData = async (query: string): Promise<SearchResult[]> => {
+    const fetchSourcesData = async (
+      query: string,
+      options: {
+        apply?: boolean;
+      } = {}
+    ): Promise<SearchResult[]> => {
+      const applyResults = options.apply !== false;
+
       // 根据搜索词获取全部源信息
       try {
         const results = await searchPlaybackSources({
@@ -906,15 +938,22 @@ function PlayPageClient() {
           query,
           doubanId: videoDoubanIdRef.current || undefined,
           preferBest: optimizationEnabled,
+          allowAdultCandidates,
         });
-        setAvailableSources(results);
+        if (applyResults) {
+          setAvailableSources(results);
+        }
         return results;
       } catch (err) {
-        setSourceSearchError(err instanceof Error ? err.message : '搜索失败');
-        setAvailableSources([]);
+        if (applyResults) {
+          setSourceSearchError(err instanceof Error ? err.message : '搜索失败');
+          setAvailableSources([]);
+        }
         return [];
       } finally {
-        setSourceSearchLoading(false);
+        if (applyResults) {
+          setSourceSearchLoading(false);
+        }
       }
     };
 
@@ -1017,15 +1056,54 @@ function PlayPageClient() {
 
       setPrecomputedVideoInfo(new Map());
 
-      let sourcesInfo = await fetchSourcesData(searchTitle || videoTitle);
-      if (
-        currentSource &&
-        currentId &&
-        !sourcesInfo.some(
-          (source) => source.source === currentSource && source.id === currentId
-        )
-      ) {
+      const discoveryQuery = searchTitle || videoTitle;
+      const shouldLoadSelectedSourceFirst = Boolean(
+        currentSource && currentId && !needPreferRef.current
+      );
+      let selectedSourceLoaded = false;
+      let sourcesInfo: SearchResult[] = [];
+
+      if (shouldLoadSelectedSourceFirst) {
         sourcesInfo = await fetchSourceDetail(currentSource, currentId);
+        selectedSourceLoaded = sourcesInfo.length > 0;
+
+        if (selectedSourceLoaded && discoveryQuery) {
+          const selectedSource = sourcesInfo[0];
+          const selectedSourceKey = buildAvailableSourceKey(selectedSource);
+
+          void (async () => {
+            const discoveredSources = await fetchSourcesData(discoveryQuery, {
+              apply: false,
+            });
+            if (
+              discoveredSources.length === 0 ||
+              buildAvailableSourceKey({
+                source: currentSourceRef.current,
+                id: currentIdRef.current,
+              }) !== selectedSourceKey
+            ) {
+              return;
+            }
+
+            setAvailableSources(
+              mergeAvailableSources(sourcesInfo, discoveredSources)
+            );
+          })();
+        } else if (discoveryQuery) {
+          sourcesInfo = await fetchSourcesData(discoveryQuery);
+        }
+      } else {
+        sourcesInfo = await fetchSourcesData(discoveryQuery);
+        if (
+          currentSource &&
+          currentId &&
+          !sourcesInfo.some(
+            (source) => source.source === currentSource && source.id === currentId
+          )
+        ) {
+          sourcesInfo = await fetchSourceDetail(currentSource, currentId);
+          selectedSourceLoaded = sourcesInfo.length > 0;
+        }
       }
       if (sourcesInfo.length === 0) {
         setError('未找到匹配结果');
@@ -1035,7 +1113,12 @@ function PlayPageClient() {
 
       let detailData: SearchResult = sourcesInfo[0];
       // 指定源和id且无需优选
-      if (currentSource && currentId && !needPreferRef.current) {
+      if (
+        currentSource &&
+        currentId &&
+        !needPreferRef.current &&
+        selectedSourceLoaded
+      ) {
         const target = sourcesInfo.find(
           (source) => source.source === currentSource && source.id === currentId
         );
@@ -1113,6 +1196,7 @@ function PlayPageClient() {
     searchTitle,
     searchType,
     videoTitle,
+    allowAdultCandidates,
   ]);
 
   useEffect(() => {
