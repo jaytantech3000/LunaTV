@@ -14,12 +14,14 @@ Desktop internal releases are published from the existing `Build Desktop App` Gi
 When all desktop matrix jobs pass, GitHub Actions will:
 
 - create an unsigned prerelease
-- attach only the end-user install packages for macOS Intel, macOS Apple Silicon, and Windows x64
+- attach end-user install packages for macOS Intel, macOS Apple Silicon, and Windows x64
+- attach macOS `.app.tar.gz` archives for both macOS builds
 
 ## Naming
 
 - Tag: `desktop-v<tauri-version>-internal-run<run-number>-a<run-attempt>`
 - Title: `LunaTV Desktop <tauri-version> Internal #<run-number>.<run-attempt>`
+- Assets: prefixed with a platform label such as `macOS-Intel--...`, `macOS-Apple-Silicon--...`, or `Windows-x64--...`
 
 The release version comes from `src-tauri/tauri.conf.json`.
 

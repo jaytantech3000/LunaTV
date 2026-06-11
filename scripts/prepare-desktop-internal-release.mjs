@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 
+import { spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+
+const ARTIFACT_DISPLAY_NAMES = new Map([
+  ['lunatv-desktop-macos-intel', 'macOS-Intel'],
+  ['lunatv-desktop-macos-arm64', 'macOS-Apple-Silicon'],
+  ['lunatv-desktop-windows-x64', 'Windows-x64'],
+]);
 
 function parseArgs(argv) {
   const args = new Map();
@@ -26,24 +33,43 @@ function parseArgs(argv) {
   return args;
 }
 
-function buildAssetName(artifactName, relativePath, assets) {
-  const baseName = path.posix.basename(relativePath);
-  if (!assets.some(asset => asset.assetName === baseName)) {
-    return baseName;
+function getArtifactDisplayName(artifactName) {
+  if (ARTIFACT_DISPLAY_NAMES.has(artifactName)) {
+    return ARTIFACT_DISPLAY_NAMES.get(artifactName);
   }
 
-  return `${artifactName}--${relativePath.replaceAll('/', '--')}`;
+  return artifactName.replace(/^lunatv-desktop-/, '');
+}
+
+function buildAssetName(artifactName, relativePath, assets) {
+  const baseName = path.posix.basename(relativePath);
+  const displayName = getArtifactDisplayName(artifactName);
+  const candidate = `${displayName}--${baseName}`;
+
+  if (!assets.some(asset => asset.assetName === candidate)) {
+    return candidate;
+  }
+
+  return `${displayName}--${relativePath.replaceAll('/', '--')}`;
 }
 
 function isPublishedReleaseAsset(relativePath) {
   return (
     relativePath.endsWith('.dmg') ||
+    relativePath.endsWith('.tar.gz') ||
     relativePath.endsWith('.exe') ||
     relativePath.endsWith('.msi') ||
     relativePath.endsWith('.AppImage') ||
     relativePath.endsWith('.deb') ||
     relativePath.endsWith('.rpm')
   );
+}
+
+function exists(filePath) {
+  return fs
+    .access(filePath)
+    .then(() => true)
+    .catch(() => false);
 }
 
 async function stageFile({
@@ -57,6 +83,34 @@ async function stageFile({
   const outputPath = path.join(assetsDir, assetName);
 
   await fs.copyFile(sourcePath, outputPath);
+
+  const stat = await fs.stat(outputPath);
+  assets.push({
+    artifactName,
+    sourcePath: relativePath,
+    assetName,
+    size: stat.size,
+  });
+}
+
+async function archiveAppBundle({
+  artifactName,
+  sourcePath,
+  relativePath,
+  assetsDir,
+  assets,
+}) {
+  const assetName = buildAssetName(artifactName, `${relativePath}.tar.gz`, assets);
+  const outputPath = path.join(assetsDir, assetName);
+  const result = spawnSync(
+    'tar',
+    ['-czf', outputPath, '-C', path.dirname(sourcePath), path.basename(sourcePath)],
+    { stdio: 'inherit' }
+  );
+
+  if (result.status !== 0) {
+    throw new Error(`Failed to archive app bundle: ${relativePath}`);
+  }
 
   const stat = await fs.stat(outputPath);
   assets.push({
@@ -86,6 +140,18 @@ async function collectAssets({
 
     if (entry.isDirectory()) {
       if (entry.name.endsWith('.app')) {
+        const siblingArchive = path.join(currentDir, `${entry.name}.tar.gz`);
+        if (await exists(siblingArchive)) {
+          continue;
+        }
+
+        await archiveAppBundle({
+          artifactName,
+          sourcePath: entryPath,
+          relativePath,
+          assetsDir,
+          assets,
+        });
         continue;
       }
 
@@ -234,7 +300,7 @@ async function main() {
     '',
     '## Assets',
     '',
-    '- This internal release only includes end-user install packages.',
+    '- This internal release includes end-user install packages and macOS app archives.',
     ...assets.map(asset => `- \`${asset.assetName}\` (${asset.size} bytes)`),
     '',
   ];
