@@ -37,7 +37,8 @@ export default function PlayerEnhancementStatusOverlay({
         </span>
       </div>
       <div className='mt-1 flex items-center gap-3 text-white/85'>
-        <span>峰值 {formatDbValue(status.currentDb)}</span>
+        <span>输入 {formatDbValue(status.inputDb)}</span>
+        <span>输出 {formatDbValue(status.currentDb)}</span>
         <span>上限 {formatDbValue(status.ceilingDb)}</span>
       </div>
       <div className='mt-1 text-white/70'>

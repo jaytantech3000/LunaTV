@@ -36,6 +36,7 @@ interface AudioSpikeProtectionLevelConfig {
 
 export interface AudioSpikeProtectionStatus {
   level: AudioSpikeProtectionLevel;
+  inputDb: number | null;
   currentDb: number | null;
   baselineDb: number | null;
   ceilingDb: number | null;
@@ -59,52 +60,52 @@ const AUDIO_SPIKE_PROTECTION_LEVEL_CONFIG: Record<
   AudioSpikeProtectionLevelConfig
 > = {
   light: {
-    triggerMarginDb: 5.5,
-    deltaRatio: 1.25,
-    maxReductionDb: 12,
-    ceilingDb: -10,
-    baselineRise: 0.028,
-    baselineFall: 0.14,
-    attackTime: 0.035,
-    releaseTime: 0.28,
-    compressorThreshold: -22,
-    compressorKnee: 18,
-    compressorRatio: 5.8,
-    compressorAttack: 0.004,
-    compressorRelease: 0.24,
-    monitorIntervalMs: 120,
-  },
-  standard: {
-    triggerMarginDb: 4.2,
+    triggerMarginDb: 4.8,
     deltaRatio: 1.6,
     maxReductionDb: 18,
-    ceilingDb: -12,
+    ceilingDb: -6.5,
     baselineRise: 0.022,
     baselineFall: 0.12,
-    attackTime: 0.022,
+    attackTime: 0.012,
     releaseTime: 0.22,
-    compressorThreshold: -25,
-    compressorKnee: 14,
-    compressorRatio: 8.5,
-    compressorAttack: 0.003,
-    compressorRelease: 0.2,
-    monitorIntervalMs: 100,
+    compressorThreshold: -24,
+    compressorKnee: 12,
+    compressorRatio: 10,
+    compressorAttack: 0.0028,
+    compressorRelease: 0.18,
+    monitorIntervalMs: 72,
+  },
+  standard: {
+    triggerMarginDb: 3.6,
+    deltaRatio: 2.05,
+    maxReductionDb: 24,
+    ceilingDb: -8.5,
+    baselineRise: 0.018,
+    baselineFall: 0.1,
+    attackTime: 0.008,
+    releaseTime: 0.16,
+    compressorThreshold: -28,
+    compressorKnee: 8,
+    compressorRatio: 16,
+    compressorAttack: 0.0016,
+    compressorRelease: 0.14,
+    monitorIntervalMs: 48,
   },
   strong: {
-    triggerMarginDb: 3.2,
-    deltaRatio: 1.95,
-    maxReductionDb: 24,
-    ceilingDb: -14,
-    baselineRise: 0.017,
-    baselineFall: 0.1,
-    attackTime: 0.014,
-    releaseTime: 0.18,
-    compressorThreshold: -28,
-    compressorKnee: 10,
-    compressorRatio: 12,
-    compressorAttack: 0.002,
-    compressorRelease: 0.16,
-    monitorIntervalMs: 80,
+    triggerMarginDb: 2.9,
+    deltaRatio: 2.55,
+    maxReductionDb: 30,
+    ceilingDb: -10.5,
+    baselineRise: 0.014,
+    baselineFall: 0.085,
+    attackTime: 0.004,
+    releaseTime: 0.12,
+    compressorThreshold: -32,
+    compressorKnee: 6,
+    compressorRatio: 22,
+    compressorAttack: 0.001,
+    compressorRelease: 0.1,
+    monitorIntervalMs: 32,
   },
 };
 
@@ -119,6 +120,50 @@ const VISUAL_ENHANCEMENT_LEVEL_INTENSITY: Record<
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function dbToLinear(db: number): number {
+  return Math.pow(10, db / 20);
+}
+
+function measureAudioBufferLevels(buffer: Float32Array): {
+  rmsDb: number;
+  peakDb: number;
+} {
+  let sum = 0;
+  let peak = 0;
+
+  for (let index = 0; index < buffer.length; index += 1) {
+    const sample = buffer[index];
+    const absolute = Math.abs(sample);
+    sum += sample * sample;
+    if (absolute > peak) {
+      peak = absolute;
+    }
+  }
+
+  const rms = Math.sqrt(sum / buffer.length);
+  return {
+    rmsDb: 20 * Math.log10(Math.max(rms, 0.00001)),
+    peakDb: 20 * Math.log10(Math.max(peak, 0.00001)),
+  };
+}
+
+export function buildHardLimiterCurve(
+  ceilingDb: number,
+  resolution = 4096
+): Float32Array {
+  const safeResolution = Math.max(3, Math.trunc(resolution));
+  const limit = clamp(dbToLinear(ceilingDb), 0.01, 1);
+  const curve = new Float32Array(safeResolution);
+  const lastIndex = safeResolution - 1;
+
+  for (let index = 0; index <= lastIndex; index += 1) {
+    const input = (index / lastIndex) * 2 - 1;
+    curve[index] = clamp(input, -limit, limit);
+  }
+
+  return curve;
 }
 
 function safeDisconnect(node: AudioNode | null | undefined) {
@@ -151,6 +196,7 @@ function buildAudioSpikeProtectionStatus(
 ): AudioSpikeProtectionStatus {
   return {
     level,
+    inputDb: null,
     currentDb: null,
     baselineDb: null,
     ceilingDb:
@@ -211,10 +257,13 @@ export function calculateAspectFitRect(
 class AudioSpikeProtectionController {
   private audioContext: AudioContext | null = null;
   private sourceNode: MediaElementAudioSourceNode | null = null;
-  private analyserNode: AnalyserNode | null = null;
+  private inputAnalyserNode: AnalyserNode | null = null;
+  private outputAnalyserNode: AnalyserNode | null = null;
   private compressorNode: DynamicsCompressorNode | null = null;
+  private limiterNode: WaveShaperNode | null = null;
   private outputGainNode: GainNode | null = null;
-  private analysisBuffer: Float32Array | null = null;
+  private inputAnalysisBuffer: Float32Array | null = null;
+  private outputAnalysisBuffer: Float32Array | null = null;
   private monitorTimerId: number | null = null;
   private baselineDb: number | null = null;
   private level: AudioSpikeProtectionLevel = 'off';
@@ -247,6 +296,7 @@ class AudioSpikeProtectionController {
     this.baselineDb = null;
     this.lastReductionDb = 0;
     this.emitStatus({
+      inputDb: null,
       baselineDb: null,
       reductionDb: 0,
       limited: false,
@@ -295,15 +345,31 @@ class AudioSpikeProtectionController {
       this.sourceNode = this.audioContext.createMediaElementSource(this.video);
     }
 
-    if (!this.analyserNode) {
-      this.analyserNode = this.audioContext.createAnalyser();
-      this.analyserNode.fftSize = 2048;
-      this.analyserNode.smoothingTimeConstant = 0.8;
-      this.analysisBuffer = new Float32Array(this.analyserNode.fftSize);
+    if (!this.inputAnalyserNode) {
+      this.inputAnalyserNode = this.audioContext.createAnalyser();
+      this.inputAnalyserNode.fftSize = 2048;
+      this.inputAnalyserNode.smoothingTimeConstant = 0.72;
+      this.inputAnalysisBuffer = new Float32Array(
+        this.inputAnalyserNode.fftSize
+      );
+    }
+
+    if (!this.outputAnalyserNode) {
+      this.outputAnalyserNode = this.audioContext.createAnalyser();
+      this.outputAnalyserNode.fftSize = 2048;
+      this.outputAnalyserNode.smoothingTimeConstant = 0.58;
+      this.outputAnalysisBuffer = new Float32Array(
+        this.outputAnalyserNode.fftSize
+      );
     }
 
     if (!this.compressorNode) {
       this.compressorNode = this.audioContext.createDynamicsCompressor();
+    }
+
+    if (!this.limiterNode) {
+      this.limiterNode = this.audioContext.createWaveShaper();
+      this.limiterNode.oversample = '4x';
     }
 
     if (!this.outputGainNode) {
@@ -317,7 +383,7 @@ class AudioSpikeProtectionController {
 
   private applyLevelConfig() {
     const config = getAudioSpikeProtectionLevelConfig(this.level);
-    if (!config || !this.compressorNode) {
+    if (!config || !this.compressorNode || !this.limiterNode) {
       return;
     }
 
@@ -326,6 +392,7 @@ class AudioSpikeProtectionController {
     this.compressorNode.ratio.value = config.compressorRatio;
     this.compressorNode.attack.value = config.compressorAttack;
     this.compressorNode.release.value = config.compressorRelease;
+    this.limiterNode.curve = buildHardLimiterCurve(config.ceilingDb);
   }
 
   private bindDocumentListeners() {
@@ -356,24 +423,29 @@ class AudioSpikeProtectionController {
     if (
       !this.audioContext ||
       !this.sourceNode ||
-      !this.analyserNode ||
+      !this.inputAnalyserNode ||
+      !this.outputAnalyserNode ||
       !this.compressorNode ||
+      !this.limiterNode ||
       !this.outputGainNode
     ) {
       return;
     }
 
     safeDisconnect(this.sourceNode);
+    safeDisconnect(this.inputAnalyserNode);
+    safeDisconnect(this.outputAnalyserNode);
     safeDisconnect(this.compressorNode);
+    safeDisconnect(this.limiterNode);
     safeDisconnect(this.outputGainNode);
-    safeDisconnect(this.analyserNode);
-
-    this.sourceNode.connect(this.analyserNode);
 
     if (enabled) {
-      this.sourceNode.connect(this.compressorNode);
+      this.sourceNode.connect(this.inputAnalyserNode);
+      this.inputAnalyserNode.connect(this.compressorNode);
       this.compressorNode.connect(this.outputGainNode);
-      this.outputGainNode.connect(this.audioContext.destination);
+      this.outputGainNode.connect(this.limiterNode);
+      this.limiterNode.connect(this.outputAnalyserNode);
+      this.outputAnalyserNode.connect(this.audioContext.destination);
     } else {
       this.sourceNode.connect(this.audioContext.destination);
     }
@@ -396,31 +468,22 @@ class AudioSpikeProtectionController {
     const config = getAudioSpikeProtectionLevelConfig(this.level);
     if (
       !config ||
-      !this.analyserNode ||
-      !this.analysisBuffer ||
+      !this.inputAnalyserNode ||
+      !this.inputAnalysisBuffer ||
+      !this.outputAnalyserNode ||
+      !this.outputAnalysisBuffer ||
       !this.audioContext ||
-      !this.outputGainNode
+      !this.outputGainNode ||
+      !this.compressorNode
     ) {
       return;
     }
 
-    this.analyserNode.getFloatTimeDomainData(this.analysisBuffer);
-
-    let sum = 0;
-    let peak = 0;
-    for (let index = 0; index < this.analysisBuffer.length; index += 1) {
-      const sample = this.analysisBuffer[index];
-      const absolute = Math.abs(sample);
-      sum += sample * sample;
-      if (absolute > peak) {
-        peak = absolute;
-      }
-    }
-
-    const rms = Math.sqrt(sum / this.analysisBuffer.length);
-    const rmsDb = 20 * Math.log10(Math.max(rms, 0.00001));
-    const peakDb = 20 * Math.log10(Math.max(peak, 0.00001));
-    const referenceDb = Math.max(rmsDb + 1.5, peakDb - 1.5);
+    this.inputAnalyserNode.getFloatTimeDomainData(this.inputAnalysisBuffer);
+    const { rmsDb, peakDb: inputPeakDb } = measureAudioBufferLevels(
+      this.inputAnalysisBuffer
+    );
+    const referenceDb = Math.max(rmsDb + 1.5, inputPeakDb - 1.5);
 
     if (this.baselineDb === null) {
       this.baselineDb = referenceDb;
@@ -438,13 +501,13 @@ class AudioSpikeProtectionController {
     const deltaOvershootDb =
       referenceDb - (this.baselineDb + config.triggerMarginDb);
     const deltaReductionDb = Math.max(0, deltaOvershootDb) * config.deltaRatio;
-    const ceilingReductionDb = Math.max(0, peakDb - config.ceilingDb);
+    const ceilingReductionDb = Math.max(0, inputPeakDb - config.ceilingDb);
     const targetReductionDb = clamp(
       Math.max(deltaReductionDb, ceilingReductionDb),
       0,
       config.maxReductionDb
     );
-    const targetGain = Math.pow(10, -targetReductionDb / 20);
+    const targetGain = dbToLinear(-targetReductionDb);
     const now = this.audioContext.currentTime;
 
     this.outputGainNode.gain.cancelScheduledValues(now);
@@ -456,13 +519,30 @@ class AudioSpikeProtectionController {
         : config.releaseTime
     );
 
-    this.lastReductionDb = targetReductionDb;
+    this.outputAnalyserNode.getFloatTimeDomainData(this.outputAnalysisBuffer);
+    const { peakDb: outputPeakDb } = measureAudioBufferLevels(
+      this.outputAnalysisBuffer
+    );
+    const compressorReductionDb = Math.max(
+      0,
+      Math.abs(this.compressorNode.reduction)
+    );
+    const effectiveReductionDb = Math.max(
+      targetReductionDb,
+      compressorReductionDb
+    );
+
+    this.lastReductionDb = effectiveReductionDb;
     this.emitStatus({
-      currentDb: peakDb,
+      inputDb: inputPeakDb,
+      currentDb: outputPeakDb,
       baselineDb: this.baselineDb,
       ceilingDb: config.ceilingDb,
-      reductionDb: targetReductionDb,
-      limited: targetReductionDb > 0.35,
+      reductionDb: effectiveReductionDb,
+      limited:
+        effectiveReductionDb > 0.35 ||
+        inputPeakDb >= config.ceilingDb + 0.25 ||
+        outputPeakDb >= config.ceilingDb - 0.4,
     });
   }
 
@@ -471,8 +551,10 @@ class AudioSpikeProtectionController {
     if (
       this.monitorTimerId !== null ||
       !config ||
-      !this.analyserNode ||
-      !this.analysisBuffer ||
+      !this.inputAnalyserNode ||
+      !this.inputAnalysisBuffer ||
+      !this.outputAnalyserNode ||
+      !this.outputAnalysisBuffer ||
       !this.audioContext ||
       !this.outputGainNode
     ) {
@@ -568,8 +650,10 @@ class AudioSpikeProtectionController {
     this.video.removeEventListener('loadeddata', this.handleLoadedData);
 
     safeDisconnect(this.sourceNode);
-    safeDisconnect(this.analyserNode);
+    safeDisconnect(this.inputAnalyserNode);
+    safeDisconnect(this.outputAnalyserNode);
     safeDisconnect(this.compressorNode);
+    safeDisconnect(this.limiterNode);
     safeDisconnect(this.outputGainNode);
 
     if (this.audioContext) {
@@ -577,11 +661,14 @@ class AudioSpikeProtectionController {
     }
 
     this.sourceNode = null;
-    this.analyserNode = null;
+    this.inputAnalyserNode = null;
+    this.outputAnalyserNode = null;
     this.compressorNode = null;
+    this.limiterNode = null;
     this.outputGainNode = null;
     this.audioContext = null;
-    this.analysisBuffer = null;
+    this.inputAnalysisBuffer = null;
+    this.outputAnalysisBuffer = null;
     this.graphInitialized = false;
     this.emitStatus({});
   }

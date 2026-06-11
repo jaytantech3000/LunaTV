@@ -1,4 +1,7 @@
-import { calculateAspectFitRect } from '@/lib/player-enhancement-runtime';
+import {
+  buildHardLimiterCurve,
+  calculateAspectFitRect,
+} from '@/lib/player-enhancement-runtime';
 
 describe('player enhancement runtime helpers', () => {
   it('keeps video aspect ratio inside a wider host', () => {
@@ -26,5 +29,16 @@ describe('player enhancement runtime helpers', () => {
       width: 900,
       height: 506.25,
     });
+  });
+
+  it('builds a hard limiter curve that clamps peaks to the configured ceiling', () => {
+    const curve = buildHardLimiterCurve(-12, 5);
+    const expectedLimit = Math.pow(10, -12 / 20);
+
+    expect(curve[0]).toBeCloseTo(-expectedLimit, 5);
+    expect(curve[1]).toBeCloseTo(-expectedLimit, 5);
+    expect(curve[2]).toBeCloseTo(0, 5);
+    expect(curve[3]).toBeCloseTo(expectedLimit, 5);
+    expect(curve[4]).toBeCloseTo(expectedLimit, 5);
   });
 });

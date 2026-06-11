@@ -15,7 +15,10 @@ import {
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
-import { toggleDesktopWindowFullscreenState } from '@/lib/desktop/fullscreen';
+import {
+  bindDesktopPlayerPresentationFullscreenState,
+  toggleDesktopPlayerPresentationFullscreenState,
+} from '@/lib/desktop/fullscreen';
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 import {
   AudioSpikeProtectionStatus,
@@ -263,6 +266,7 @@ function LivePageClient() {
   const artPlayerRef = useRef<any>(null);
   const artRef = useRef<HTMLDivElement | null>(null);
   const enhancementManagerRef = useRef<PlayerEnhancementManager | null>(null);
+  const removeDesktopFullscreenListenerRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -625,6 +629,8 @@ function LivePageClient() {
   const cleanupPlayer = () => {
     enhancementManagerRef.current?.dispose();
     enhancementManagerRef.current = null;
+    removeDesktopFullscreenListenerRef.current?.();
+    removeDesktopFullscreenListenerRef.current = null;
 
     // 重置不支持的类型状态
     setUnsupportedType(null);
@@ -734,16 +740,54 @@ function LivePageClient() {
     });
   };
 
+  const updateDesktopFullscreenControlState = (fullscreen: boolean) => {
+    artPlayerRef.current?.controls?.update?.(
+      buildDesktopFullscreenControl(fullscreen)
+    );
+  };
+
+  const toggleDesktopPlayerFullscreen = async () => {
+    const nextState = await toggleDesktopPlayerPresentationFullscreenState(
+      artPlayerRef.current
+    );
+    if (nextState === null) {
+      if (artPlayerRef.current?.notice) {
+        artPlayerRef.current.notice.show = '当前环境不支持视频全屏';
+      }
+      return null;
+    }
+
+    updateDesktopFullscreenControlState(nextState);
+    return nextState;
+  };
+
+  const bindDesktopFullscreenState = () => {
+    removeDesktopFullscreenListenerRef.current?.();
+
+    if (getRuntimeConfig().APP_TARGET !== 'desktop' || !artPlayerRef.current) {
+      removeDesktopFullscreenListenerRef.current = null;
+      return;
+    }
+
+    removeDesktopFullscreenListenerRef.current =
+      bindDesktopPlayerPresentationFullscreenState(
+        artPlayerRef.current,
+        (fullscreen) => {
+          updateDesktopFullscreenControlState(fullscreen);
+        }
+      );
+  };
+
   const buildDesktopFullscreenControl = (fullscreen = false) => ({
-    name: 'desktop-window-fullscreen',
+    name: 'desktop-player-fullscreen',
     position: 'right',
     index: 70,
-    tooltip: fullscreen ? '退出窗口全屏' : '窗口全屏',
+    tooltip: fullscreen ? '退出全屏' : '视频全屏',
     html: fullscreen
       ? '<i class="art-icon flex"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 4H4v3M15 4h3v3M18 15v3h-3M4 15v3h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 8h6v6H8z" stroke="currentColor" stroke-width="1.8"/></svg></i>'
       : '<i class="art-icon flex"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 4H4v4M14 4h4v4M18 14v4h-4M8 18H4v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></i>',
     click: async function (control: any) {
-      const nextState = await toggleDesktopWindowFullscreenState();
+      const nextState = await toggleDesktopPlayerFullscreen();
       if (nextState === null) {
         return;
       }
@@ -1064,7 +1108,7 @@ function LivePageClient() {
           playbackRate: false,
           aspectRatio: false,
           fullscreen: !isDesktopPlayer,
-          fullscreenWeb: true,
+          fullscreenWeb: !isDesktopPlayer,
           subtitleOffset: false,
           miniProgressBar: false,
           mutex: true,
@@ -1090,6 +1134,7 @@ function LivePageClient() {
           },
         });
         syncPlayerEnhancements();
+        bindDesktopFullscreenState();
 
         // 监听播放器事件
         artPlayerRef.current.on('ready', () => {
@@ -1205,7 +1250,7 @@ function LivePageClient() {
       if (e.key === 'f' || e.key === 'F') {
         if (artPlayerRef.current) {
           if (getRuntimeConfig().APP_TARGET === 'desktop') {
-            void toggleDesktopWindowFullscreenState();
+            void toggleDesktopPlayerFullscreen();
           } else {
             artPlayerRef.current.fullscreen = !artPlayerRef.current.fullscreen;
           }
