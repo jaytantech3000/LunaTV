@@ -1,3 +1,13 @@
+import { getRuntimeConfig } from '@/lib/runtime-config';
+
+import {
+  clearDesktopDownloadCache,
+  deleteDesktopDownloadCacheEntry,
+  getDesktopDownloadCacheMeta,
+  getDesktopDownloadCachedResponse,
+  isDesktopLocalDownloadRuntimeEnabled,
+  putDesktopDownloadCacheEntry,
+} from './desktop-runtime';
 import { DOWNLOAD_CACHE_NAME } from './types';
 
 const CACHE_DELETE_BATCH_SIZE = 50;
@@ -51,18 +61,63 @@ async function openDownloadCache(): Promise<Cache> {
   return caches.open(DOWNLOAD_CACHE_NAME);
 }
 
+export function getOfflineDownloadSupportState(): {
+  supported: boolean;
+  reason?: string;
+} {
+  if (typeof window === 'undefined') {
+    return {
+      supported: false,
+      reason: '当前环境不支持离线下载',
+    };
+  }
+
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    return {
+      supported: true,
+    };
+  }
+
+  if (getRuntimeConfig().APP_TARGET === 'desktop') {
+    return {
+      supported: false,
+      reason: '当前桌面运行时尚未接入可用的离线下载能力',
+    };
+  }
+
+  if (typeof caches === 'undefined') {
+    return {
+      supported: false,
+      reason: '当前环境不支持 Cache Storage',
+    };
+  }
+
+  if (typeof indexedDB === 'undefined') {
+    return {
+      supported: false,
+      reason: '当前环境不支持 IndexedDB',
+    };
+  }
+
+  return {
+    supported: true,
+  };
+}
+
 export function isOfflineDownloadSupported(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof caches !== 'undefined' &&
-    typeof indexedDB !== 'undefined'
-  );
+  return getOfflineDownloadSupportState().supported;
 }
 
 export async function putDownloadResponse(
   input: Request | string,
   response: Response
 ): Promise<void> {
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    const targetUrl = input instanceof Request ? input.url : input;
+    await putDesktopDownloadCacheEntry(targetUrl, response);
+    return;
+  }
+
   const cache = await openDownloadCache();
   await cache.put(toCacheRequest(input), response);
 }
@@ -70,6 +125,19 @@ export async function putDownloadResponse(
 export async function matchDownloadResponse(
   input: Request | string
 ): Promise<Response | undefined> {
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    for (const candidate of buildCacheLookupCandidates(input)) {
+      const matched = await getDesktopDownloadCachedResponse(candidate).catch(
+        () => undefined
+      );
+      if (matched) {
+        return matched;
+      }
+    }
+
+    return undefined;
+  }
+
   const cache = await openDownloadCache();
 
   for (const candidate of buildCacheLookupCandidates(input)) {
@@ -85,6 +153,19 @@ export async function matchDownloadResponse(
 export async function hasCachedDownload(
   input: Request | string
 ): Promise<boolean> {
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    for (const candidate of buildCacheLookupCandidates(input)) {
+      const meta = await getDesktopDownloadCacheMeta(candidate).catch(
+        () => undefined
+      );
+      if (meta?.exists) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   const matched = await matchDownloadResponse(input);
   return Boolean(matched);
 }
@@ -104,6 +185,17 @@ async function deleteCachedDownloadFromCache(
 export async function deleteCachedDownload(
   input: Request | string
 ): Promise<boolean> {
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    let deleted = false;
+    for (const candidate of buildCacheLookupCandidates(input)) {
+      if (await deleteDesktopDownloadCacheEntry(candidate).catch(() => false)) {
+        deleted = true;
+      }
+    }
+
+    return deleted;
+  }
+
   const cache = await openDownloadCache();
   return deleteCachedDownloadFromCache(cache, input);
 }
@@ -117,6 +209,24 @@ function yieldToMainThread(): Promise<void> {
 export async function deleteCachedDownloads(urls: string[]): Promise<void> {
   const uniqueUrls = Array.from(new Set(urls));
   if (uniqueUrls.length === 0) {
+    return;
+  }
+
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    for (
+      let index = 0;
+      index < uniqueUrls.length;
+      index += CACHE_DELETE_BATCH_SIZE
+    ) {
+      const batch = uniqueUrls.slice(index, index + CACHE_DELETE_BATCH_SIZE);
+      await Promise.allSettled(
+        batch.map((url) => deleteDesktopDownloadCacheEntry(url))
+      );
+
+      if (index + CACHE_DELETE_BATCH_SIZE < uniqueUrls.length) {
+        await yieldToMainThread();
+      }
+    }
     return;
   }
 
@@ -139,6 +249,11 @@ export async function deleteCachedDownloads(urls: string[]): Promise<void> {
 }
 
 export async function clearDownloadCache(): Promise<void> {
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    await clearDesktopDownloadCache().catch(() => undefined);
+    return;
+  }
+
   if (typeof window === 'undefined' || typeof caches === 'undefined') {
     return;
   }

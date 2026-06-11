@@ -1,6 +1,12 @@
 import { SearchResult } from '@/lib/types';
 
-import { buildVodProxyM3u8Url, isAbsoluteHttpUrl, isVodProxyUrl } from './proxy-url';
+import {
+  buildDownloadVodProxyM3u8Url,
+  buildVodProxyM3u8Url,
+  isAbsoluteHttpUrl,
+  isVodProxyUrl,
+  normalizeVodProxyUrlForDesktopDownload,
+} from './proxy-url';
 
 export function normalizeVodEpisodeUrl(
   source: string,
@@ -13,7 +19,7 @@ export function normalizeVodEpisodeUrl(
   }
 
   if (isVodProxyUrl(normalizedUrl)) {
-    return normalizedUrl;
+    return normalizeVodProxyUrlForDesktopDownload(normalizedUrl);
   }
 
   if (!isAbsoluteHttpUrl(normalizedUrl)) {
@@ -21,6 +27,30 @@ export function normalizeVodEpisodeUrl(
   }
 
   return buildVodProxyM3u8Url({
+    source,
+    url: normalizedUrl,
+  });
+}
+
+export function normalizeVodEpisodeUrlForDownload(
+  source: string,
+  upstreamUrl: string
+): string {
+  const normalizedUrl = upstreamUrl.trim();
+
+  if (!normalizedUrl) {
+    return normalizedUrl;
+  }
+
+  if (isVodProxyUrl(normalizedUrl)) {
+    return normalizeVodProxyUrlForDesktopDownload(normalizedUrl);
+  }
+
+  if (!isAbsoluteHttpUrl(normalizedUrl)) {
+    return normalizedUrl;
+  }
+
+  return buildDownloadVodProxyM3u8Url({
     source,
     url: normalizedUrl,
   });

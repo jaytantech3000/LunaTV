@@ -137,6 +137,29 @@ describe('playback source prefetch helpers', () => {
     expect(results.map((result) => result.id)).toEqual(['safe-match']);
   });
 
+  it('keeps adult candidates when playback explicitly allows them', () => {
+    const adultMatch = buildSearchResult({
+      id: 'adult-match',
+      title: '糖心Vlog.谁才是派对真正的主角',
+      source: 'adult-source',
+      source_name: '🔞麻豆视频',
+      year: '',
+      episodes: [
+        'https://example.com/adult-episode-1/index.m3u8',
+        'https://example.com/adult-episode-2/index.m3u8',
+      ],
+      episodes_titles: ['第1集', '第2集'],
+    });
+
+    const results = filterPlaybackSearchResults([adultMatch], {
+      title: '糖心Vlog.谁才是派对真正的主角',
+      searchType: 'tv',
+      allowAdultCandidates: true,
+    });
+
+    expect(results.map((result) => result.id)).toEqual(['adult-match']);
+  });
+
   it('does not use loose substring matches for two-character titles', () => {
     const substringOnly = buildSearchResult({
       id: 'substring-only',
@@ -237,15 +260,19 @@ describe('playback source prefetch helpers', () => {
         year: '2026',
         doubanId: 36310054,
       });
+      const firstRequestUrl = new URL(
+        String(fetchMock.mock.calls[0][0]),
+        'http://localhost'
+      );
+      const secondRequestUrl = new URL(
+        String(fetchMock.mock.calls[1][0]),
+        'http://localhost'
+      );
 
       expect(results.map((result) => result.id)).toEqual(['series']);
       expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(String(fetchMock.mock.calls[0][0])).toContain(
-        encodeURIComponent('雨霖铃')
-      );
-      expect(String(fetchMock.mock.calls[1][0])).toContain(
-        encodeURIComponent('雨霖铃 2026')
-      );
+      expect(firstRequestUrl.searchParams.get('q')).toBe('雨霖铃');
+      expect(secondRequestUrl.searchParams.get('q')).toBe('雨霖铃 2026');
     } finally {
       global.fetch = originalFetch;
     }
@@ -292,6 +319,41 @@ describe('playback source prefetch helpers', () => {
       });
 
       expect(results.map((result) => result.id)).toEqual(['safe-match']);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('returns adult results from playback search requests when explicitly allowed', async () => {
+    const originalFetch = global.fetch;
+    const adultMatch = buildSearchResult({
+      id: 'adult-match',
+      title: '糖心Vlog.谁才是派对真正的主角',
+      source: 'adult-source',
+      source_name: '🔞麻豆视频',
+      year: '',
+      episodes: [
+        'https://example.com/adult-episode-1/index.m3u8',
+        'https://example.com/adult-episode-2/index.m3u8',
+      ],
+      episodes_titles: ['第1集', '第2集'],
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [adultMatch] }),
+    });
+
+    global.fetch = fetchMock as typeof fetch;
+
+    try {
+      const results = await searchPlaybackSources({
+        title: '糖心Vlog.谁才是派对真正的主角',
+        searchType: 'tv',
+        allowAdultCandidates: true,
+      });
+
+      expect(results.map((result) => result.id)).toEqual(['adult-match']);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       global.fetch = originalFetch;

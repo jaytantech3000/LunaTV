@@ -1,4 +1,5 @@
 import { normalizeVodSearchResultsForPlayback } from '@/lib/download/normalize';
+import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8 } from '@/lib/utils';
 import { filterAdultContentResults } from '@/lib/yellow';
@@ -16,6 +17,7 @@ export interface PlaybackSourcePrefetchParams {
   query?: string;
   doubanId?: number;
   preferBest?: boolean;
+  allowAdultCandidates?: boolean;
 }
 
 const MIN_LOOSE_TITLE_MATCH_LENGTH = 3;
@@ -405,8 +407,9 @@ function hasHighConfidenceDoubanMatch(
 }
 
 async function fetchPlaybackSearchQuery(query: string): Promise<SearchResult[]> {
-  const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`, {
+  const response = await apiFetch('/search', {
     credentials: 'same-origin',
+    searchParams: { q: query },
   });
 
   if (!response.ok) {
@@ -448,9 +451,11 @@ export function filterPlaybackSearchResults(
   results: SearchResult[],
   params: PlaybackSourcePrefetchParams
 ): SearchResult[] {
-  const safeResults = filterAdultContentResults(results);
+  const candidateResults = params.allowAdultCandidates
+    ? results
+    : filterAdultContentResults(results);
 
-  const scoredResults = safeResults
+  const scoredResults = candidateResults
     .map((result) => ({
       result,
       score: scorePlaybackSearchResult(result, params),

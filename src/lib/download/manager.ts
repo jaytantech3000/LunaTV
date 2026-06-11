@@ -6,12 +6,12 @@ import { useDownloadStore } from '@/stores/downloadStore';
 
 import {
   deleteCachedDownloads,
+  getOfflineDownloadSupportState,
   hasCachedDownload,
-  isOfflineDownloadSupported,
   putDownloadResponse,
 } from './cache';
 import { parseManifestForDownloadWithFallback } from './manifest';
-import { normalizeVodEpisodeUrl } from './normalize';
+import { normalizeVodEpisodeUrlForDownload } from './normalize';
 import {
   deleteResourceIndex,
   getResourceIndex,
@@ -141,7 +141,7 @@ function collectDownloadManifestCandidateUrls(
 ): string[] {
   return mergeManifestCandidateUrls(
     sources.map((candidate) =>
-      normalizeVodEpisodeUrl(
+      normalizeVodEpisodeUrlForDownload(
         candidate.source,
         candidate.episodes[episodeIndex] || ''
       )
@@ -217,7 +217,10 @@ function buildInitialTask(
   );
   const entryManifestUrl =
     manifestCandidateUrls[0] ||
-    normalizeVodEpisodeUrl(detail.source, detail.episodes[episodeIndex] || '');
+    normalizeVodEpisodeUrlForDownload(
+      detail.source,
+      detail.episodes[episodeIndex] || ''
+    );
   const createdAt = now();
 
   return {
@@ -493,8 +496,9 @@ class DownloadManager {
   }
 
   private ensureSupport(): void {
-    if (!isOfflineDownloadSupported()) {
-      throw new Error('当前浏览器不支持离线下载');
+    const supportState = getOfflineDownloadSupportState();
+    if (!supportState.supported) {
+      throw new Error(supportState.reason || '当前环境不支持离线下载');
     }
   }
 

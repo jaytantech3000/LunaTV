@@ -29,9 +29,10 @@ interface DownloadStoreState {
   upsertLibraryItem: (item: DownloadedContentMeta) => void;
   removeLibraryItem: (contentId: string) => void;
   resetDownloads: () => void;
+  replacePersistedState: (snapshot: PersistedDownloadStoreState) => void;
 }
 
-type PersistedDownloadStoreState = Pick<
+export type PersistedDownloadStoreState = Pick<
   DownloadStoreState,
   'maxConcurrentTasks' | 'ownerUsername' | 'tasks' | 'library'
 >;
@@ -42,6 +43,44 @@ const emptyPersistedState: PersistedDownloadStoreState = {
   tasks: {},
   library: {},
 };
+
+export function normalizePersistedDownloadStoreState(
+  snapshot?: Partial<PersistedDownloadStoreState> | null
+): PersistedDownloadStoreState {
+  return {
+    maxConcurrentTasks: normalizeConcurrentDownloadTasks(
+      snapshot?.maxConcurrentTasks
+    ),
+    ownerUsername:
+      typeof snapshot?.ownerUsername === 'string'
+        ? snapshot.ownerUsername
+        : null,
+    tasks: normalizeTasks(snapshot?.tasks, {
+      resetDownloadingStatus: true,
+    }),
+    library: normalizeLibrary(snapshot?.library),
+  };
+}
+
+export function isPersistedDownloadStoreEmpty(
+  snapshot?: Partial<PersistedDownloadStoreState> | null
+): boolean {
+  const normalizedSnapshot = normalizePersistedDownloadStoreState(snapshot);
+  return (
+    !normalizedSnapshot.ownerUsername &&
+    Object.keys(normalizedSnapshot.tasks).length === 0 &&
+    Object.keys(normalizedSnapshot.library).length === 0
+  );
+}
+
+export function buildPersistedDownloadStoreState(
+  state: Pick<
+    DownloadStoreState,
+    'maxConcurrentTasks' | 'ownerUsername' | 'tasks' | 'library'
+  >
+): PersistedDownloadStoreState {
+  return normalizePersistedDownloadStoreState(state);
+}
 
 function normalizeTask(
   task: DownloadTask,
@@ -221,38 +260,35 @@ export const useDownloadStore = create<DownloadStoreState>()(
           library: {},
           hasHydrated: state.hasHydrated,
         })),
+      replacePersistedState: (snapshot) =>
+        set((state) => {
+          const nextState = normalizePersistedDownloadStoreState(snapshot);
+          return {
+            maxConcurrentTasks: nextState.maxConcurrentTasks,
+            ownerUsername: nextState.ownerUsername,
+            tasks: nextState.tasks,
+            library: nextState.library,
+            hasHydrated: state.hasHydrated,
+          };
+        }),
     }),
     {
       name: DOWNLOAD_STORE_KEY,
       storage: createJSONStorage(() => localStorage),
-      partialize: (state): PersistedDownloadStoreState => ({
-        maxConcurrentTasks: normalizeConcurrentDownloadTasks(
-          state.maxConcurrentTasks
-        ),
-        ownerUsername: state.ownerUsername,
-        tasks: normalizeTasks(state.tasks, {
-          resetDownloadingStatus: true,
-        }),
-        library: normalizeLibrary(state.library),
-      }),
+      partialize: (state): PersistedDownloadStoreState =>
+        buildPersistedDownloadStoreState(state),
       merge: (persistedState, currentState) => {
-        const nextState =
+        const nextState = normalizePersistedDownloadStoreState(
           (persistedState as PersistedDownloadStoreState | undefined) ||
-          emptyPersistedState;
+            emptyPersistedState
+        );
 
         return {
           ...currentState,
-          maxConcurrentTasks: normalizeConcurrentDownloadTasks(
-            nextState.maxConcurrentTasks
-          ),
-          ownerUsername:
-            typeof nextState.ownerUsername === 'string'
-              ? nextState.ownerUsername
-              : null,
-          tasks: normalizeTasks(nextState.tasks, {
-            resetDownloadingStatus: true,
-          }),
-          library: normalizeLibrary(nextState.library),
+          maxConcurrentTasks: nextState.maxConcurrentTasks,
+          ownerUsername: nextState.ownerUsername,
+          tasks: nextState.tasks,
+          library: nextState.library,
         };
       },
       onRehydrateStorage: () => (state) => {
