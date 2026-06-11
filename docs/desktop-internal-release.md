@@ -14,9 +14,7 @@ Desktop internal releases are published from the existing `Build Desktop App` Gi
 When all desktop matrix jobs pass, GitHub Actions will:
 
 - create an unsigned prerelease
-- attach the built desktop assets for macOS Intel, macOS Apple Silicon, and Windows x64
-- attach `SHA256SUMS.txt`
-- attach `release-metadata.json`
+- attach only the end-user install packages for macOS Intel, macOS Apple Silicon, and Windows x64
 
 ## Naming
 
@@ -29,5 +27,6 @@ The release version comes from `src-tauri/tauri.conf.json`.
 
 - macOS builds are unsigned and not notarized.
 - Windows installers are unsigned.
+- Internal releases intentionally omit bundle helper files, checksums, and metadata sidecars from the GitHub assets list.
 - This flow is for internal testing only, not public release.
 - Code signing and notarization should be added later without changing the internal-release tag format.

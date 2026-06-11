@@ -1,8 +1,5 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'node:child_process';
-import crypto from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -29,28 +26,24 @@ function parseArgs(argv) {
   return args;
 }
 
-function buildAssetName(artifactName, relativePath) {
+function buildAssetName(artifactName, relativePath, assets) {
+  const baseName = path.posix.basename(relativePath);
+  if (!assets.some(asset => asset.assetName === baseName)) {
+    return baseName;
+  }
+
   return `${artifactName}--${relativePath.replaceAll('/', '--')}`;
 }
 
-function exists(filePath) {
-  return fs
-    .access(filePath)
-    .then(() => true)
-    .catch(() => false);
-}
-
-async function sha256(filePath) {
-  const hash = crypto.createHash('sha256');
-
-  await new Promise((resolve, reject) => {
-    const stream = createReadStream(filePath);
-    stream.on('data', chunk => hash.update(chunk));
-    stream.on('error', reject);
-    stream.on('end', resolve);
-  });
-
-  return hash.digest('hex');
+function isPublishedReleaseAsset(relativePath) {
+  return (
+    relativePath.endsWith('.dmg') ||
+    relativePath.endsWith('.exe') ||
+    relativePath.endsWith('.msi') ||
+    relativePath.endsWith('.AppImage') ||
+    relativePath.endsWith('.deb') ||
+    relativePath.endsWith('.rpm')
+  );
 }
 
 async function stageFile({
@@ -60,49 +53,17 @@ async function stageFile({
   assetsDir,
   assets,
 }) {
-  const assetName = buildAssetName(artifactName, relativePath);
+  const assetName = buildAssetName(artifactName, relativePath, assets);
   const outputPath = path.join(assetsDir, assetName);
 
   await fs.copyFile(sourcePath, outputPath);
 
   const stat = await fs.stat(outputPath);
-  const digest = await sha256(outputPath);
   assets.push({
     artifactName,
     sourcePath: relativePath,
     assetName,
     size: stat.size,
-    sha256: digest,
-  });
-}
-
-async function archiveAppBundle({
-  artifactName,
-  sourcePath,
-  relativePath,
-  assetsDir,
-  assets,
-}) {
-  const assetName = buildAssetName(artifactName, `${relativePath}.tar.gz`);
-  const outputPath = path.join(assetsDir, assetName);
-  const result = spawnSync(
-    'tar',
-    ['-czf', outputPath, '-C', path.dirname(sourcePath), path.basename(sourcePath)],
-    { stdio: 'inherit' }
-  );
-
-  if (result.status !== 0) {
-    throw new Error(`Failed to archive app bundle: ${relativePath}`);
-  }
-
-  const stat = await fs.stat(outputPath);
-  const digest = await sha256(outputPath);
-  assets.push({
-    artifactName,
-    sourcePath: relativePath,
-    assetName,
-    size: stat.size,
-    sha256: digest,
   });
 }
 
@@ -125,18 +86,6 @@ async function collectAssets({
 
     if (entry.isDirectory()) {
       if (entry.name.endsWith('.app')) {
-        const siblingArchive = path.join(currentDir, `${entry.name}.tar.gz`);
-        if (await exists(siblingArchive)) {
-          continue;
-        }
-
-        await archiveAppBundle({
-          artifactName,
-          sourcePath: entryPath,
-          relativePath,
-          assetsDir,
-          assets,
-        });
         continue;
       }
 
@@ -155,6 +104,10 @@ async function collectAssets({
     }
 
     if (entry.name === '.DS_Store' || entry.name.endsWith('.sig')) {
+      continue;
+    }
+
+    if (!isPublishedReleaseAsset(relativePath)) {
       continue;
     }
 
@@ -259,29 +212,6 @@ async function main() {
 
   assets.sort((left, right) => left.assetName.localeCompare(right.assetName));
 
-  const checksumLines = assets.map(asset => `${asset.sha256}  ${asset.assetName}`);
-  await fs.writeFile(
-    path.join(assetsDir, 'SHA256SUMS.txt'),
-    `${checksumLines.join('\n')}\n`,
-    'utf8'
-  );
-
-  const releaseMetadata = {
-    ...metadata,
-    generatedAt: new Date().toISOString(),
-    signing: {
-      signed: false,
-      notarized: false,
-    },
-    assets,
-  };
-
-  await fs.writeFile(
-    path.join(assetsDir, 'release-metadata.json'),
-    `${JSON.stringify(releaseMetadata, null, 2)}\n`,
-    'utf8'
-  );
-
   const notesLines = [
     '# LunaTV Desktop Internal Release',
     '',
@@ -304,15 +234,8 @@ async function main() {
     '',
     '## Assets',
     '',
-    ...assets.map(
-      asset =>
-        `- \`${asset.assetName}\` (${asset.size} bytes, sha256 ${asset.sha256.slice(0, 12)}...)`
-    ),
-    '',
-    '## Checksums',
-    '',
-    '- `SHA256SUMS.txt` contains the full digests for every uploaded asset.',
-    '- `release-metadata.json` records the source run, commit, and generated asset map.',
+    '- This internal release only includes end-user install packages.',
+    ...assets.map(asset => `- \`${asset.assetName}\` (${asset.size} bytes)`),
     '',
   ];
 
