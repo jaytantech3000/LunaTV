@@ -7,6 +7,10 @@
   "profile_sync": {
     "api_base_url": ""
   },
+  "player_enhancements": {
+    "audio_spike_protection": false,
+    "visual_enhancement": false
+  },
   "api_site": {
     "wolong": {
       "api": "https://collect.wolongzyw.com/api.php/provide/vod",

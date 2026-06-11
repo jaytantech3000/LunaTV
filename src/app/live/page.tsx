@@ -16,6 +16,12 @@ import {
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
+import { PlayerEnhancementManager } from '@/lib/player-enhancement-runtime';
+import {
+  PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+  readPlayerEnhancementPreferences,
+} from '@/lib/player-enhancements';
+import { getRuntimeConfig } from '@/lib/runtime-config';
 import { parseCustomTimeFormat } from '@/lib/time';
 import {
   buildLiveLogoUrl as buildLiveLogoProxyUrl,
@@ -77,6 +83,24 @@ function LivePageClient() {
   const [videoUrl, setVideoUrl] = useState('');
   const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [unsupportedType, setUnsupportedType] = useState<string | null>(null);
+  const [audioSpikeProtectionEnabled, setAudioSpikeProtectionEnabled] =
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .audioSpikeProtectionEnabled;
+    });
+  const [visualEnhancementEnabled, setVisualEnhancementEnabled] =
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .visualEnhancementEnabled;
+    });
 
   // 切换直播源状态
   const [isSwitchingSource, setIsSwitchingSource] = useState(false);
@@ -227,6 +251,39 @@ function LivePageClient() {
   // 播放器引用
   const artPlayerRef = useRef<any>(null);
   const artRef = useRef<HTMLDivElement | null>(null);
+  const enhancementManagerRef = useRef<PlayerEnhancementManager | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const syncPlayerEnhancementPreferences = () => {
+      const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
+      setAudioSpikeProtectionEnabled(preferences.audioSpikeProtectionEnabled);
+      setVisualEnhancementEnabled(preferences.visualEnhancementEnabled);
+    };
+
+    window.addEventListener(
+      PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+      syncPlayerEnhancementPreferences
+    );
+    window.addEventListener(
+      DESKTOP_RUNTIME_UPDATED_EVENT,
+      syncPlayerEnhancementPreferences
+    );
+
+    return () => {
+      window.removeEventListener(
+        PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+        syncPlayerEnhancementPreferences
+      );
+      window.removeEventListener(
+        DESKTOP_RUNTIME_UPDATED_EVENT,
+        syncPlayerEnhancementPreferences
+      );
+    };
+  }, []);
 
   // 分组标签滚动相关
   const groupContainerRef = useRef<HTMLDivElement>(null);
@@ -555,6 +612,9 @@ function LivePageClient() {
 
   // 清理播放器资源的统一函数
   const cleanupPlayer = () => {
+    enhancementManagerRef.current?.dispose();
+    enhancementManagerRef.current = null;
+
     // 重置不支持的类型状态
     setUnsupportedType(null);
 
@@ -628,6 +688,27 @@ function LivePageClient() {
     if (video.hasAttribute('disableRemotePlayback')) {
       video.removeAttribute('disableRemotePlayback');
     }
+  };
+
+  const syncPlayerEnhancements = () => {
+    const video = artPlayerRef.current?.video as HTMLVideoElement | undefined;
+    const host = artRef.current;
+
+    if (!video || !host) {
+      enhancementManagerRef.current?.dispose();
+      enhancementManagerRef.current = null;
+      return;
+    }
+
+    if (!enhancementManagerRef.current) {
+      enhancementManagerRef.current = new PlayerEnhancementManager();
+    }
+
+    enhancementManagerRef.current.bind(video, host);
+    enhancementManagerRef.current.setPreferences({
+      audioSpikeProtectionEnabled,
+      visualEnhancementEnabled,
+    });
   };
 
   // 切换分组
@@ -965,9 +1046,11 @@ function LivePageClient() {
               '<img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MCIgaGVpZ2h0PSI1MCIgdmlld0JveD0iMCAwIDUwIDUwIj48cGF0aCBkPSJNMjUuMjUxIDYuNDYxYy0xMC4zMTggMC0xOC42ODMgOC4zNjUtMTguNjgzIDE4LjY4M2g0LjA2OGMwLTguMDcgNi41NDUtMTQuNjE1IDE0LjYxNS0xNC42MTVWNi40NjF6IiBmaWxsPSIjMDA5Njg4Ij48YW5pbWF0ZVRyYW5zZm9ybSBhdHRyaWJ1dGVOYW1lPSJ0cmFuc2Zvcm0iIGF0dHJpYnV0ZVR5cGU9IlhNTCIgZHVyPSIxcyIgZnJvbT0iMCAyNSAyNSIgcmVwZWF0Q291bnQ9ImluZGVmaW5pdGUiIHRvPSIzNjAgMjUgMjUiIHR5cGU9InJvdGF0ZSIvPjwvcGF0aD48L3N2Zz4=">',
           },
         });
+        syncPlayerEnhancements();
 
         // 监听播放器事件
         artPlayerRef.current.on('ready', () => {
+          syncPlayerEnhancements();
           setError(null);
           setIsVideoLoading(false);
         });
@@ -977,10 +1060,12 @@ function LivePageClient() {
         });
 
         artPlayerRef.current.on('loadeddata', () => {
+          syncPlayerEnhancements();
           setIsVideoLoading(false);
         });
 
         artPlayerRef.current.on('canplay', () => {
+          syncPlayerEnhancements();
           setIsVideoLoading(false);
         });
 
@@ -1005,6 +1090,10 @@ function LivePageClient() {
     };
     preload();
   }, [Artplayer, Hls, videoUrl, currentChannel, loading]);
+
+  useEffect(() => {
+    syncPlayerEnhancements();
+  }, [audioSpikeProtectionEnabled, visualEnhancementEnabled, videoUrl]);
 
   // 清理播放器资源
   useEffect(() => {
@@ -1289,7 +1378,7 @@ function LivePageClient() {
               <div className='relative w-full h-[300px] lg:h-full'>
                 <div
                   ref={artRef}
-                  className='bg-black w-full h-full rounded-xl overflow-hidden shadow-lg border border-white/0 dark:border-white/30'
+                  className='relative bg-black w-full h-full rounded-xl overflow-hidden shadow-lg border border-white/0 dark:border-white/30'
                 ></div>
 
                 {/* 不支持的直播类型提示 */}

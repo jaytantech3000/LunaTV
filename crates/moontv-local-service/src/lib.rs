@@ -546,6 +546,8 @@ struct RawServiceConfig {
     douban_image_proxy: Option<String>,
     enable_web_live: Option<bool>,
     #[serde(default)]
+    player_enhancements: RawPlayerEnhancementConfig,
+    #[serde(default)]
     profile_sync: RawProfileSyncConfig,
     #[serde(default)]
     api_site: BTreeMap<String, RawApiSite>,
@@ -596,6 +598,12 @@ struct RawProfileSyncConfig {
     api_base_url: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Clone, Default)]
+struct RawPlayerEnhancementConfig {
+    audio_spike_protection: Option<bool>,
+    visual_enhancement: Option<bool>,
+}
+
 #[derive(Debug, Clone)]
 struct ServiceConfig {
     cache_time: u64,
@@ -603,6 +611,8 @@ struct ServiceConfig {
     adult_content_filter_enabled: bool,
     vod_ad_filter_enabled: bool,
     fluid_search: bool,
+    player_audio_spike_protection: bool,
+    player_visual_enhancement: bool,
     site_name: Option<String>,
     announcement: Option<String>,
     douban_proxy_type: Option<String>,
@@ -810,6 +820,8 @@ struct RuntimePublicConfigResponse {
     douban_image_proxy: Option<String>,
     fluid_search: bool,
     enable_web_live: bool,
+    player_audio_spike_protection: bool,
+    player_visual_enhancement: bool,
     profile_sync_enabled: bool,
     custom_categories: Vec<RuntimeCustomCategory>,
 }
@@ -907,6 +919,8 @@ struct DesktopAdminConfig {
     live_config: Vec<DesktopLiveConfigItem>,
     #[serde(rename = "AdFilterConfig", default)]
     ad_filter_config: DesktopAdFilterConfig,
+    #[serde(rename = "PlayerEnhancementConfig", default)]
+    player_enhancement_config: DesktopPlayerEnhancementConfig,
 }
 
 impl Default for DesktopAdminConfig {
@@ -920,6 +934,7 @@ impl Default for DesktopAdminConfig {
             custom_categories: Vec::new(),
             live_config: Vec::new(),
             ad_filter_config: DesktopAdFilterConfig::default(),
+            player_enhancement_config: DesktopPlayerEnhancementConfig::default(),
         }
     }
 }
@@ -993,6 +1008,14 @@ impl Default for DesktopAdFilterConfig {
     fn default() -> Self {
         Self { enabled: true }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct DesktopPlayerEnhancementConfig {
+    #[serde(rename = "AudioSpikeProtection", default)]
+    audio_spike_protection: bool,
+    #[serde(rename = "VisualEnhancement", default)]
+    visual_enhancement: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -4057,6 +4080,7 @@ fn build_default_admin_config(
     let owner_username = normalize_optional_string(raw_config.auth.username.clone())
         .unwrap_or_else(|| "owner".to_string());
     let site_config = build_default_site_config_from_raw(raw_config);
+    let player_enhancement_config = build_default_player_enhancement_config_from_raw(raw_config);
 
     DesktopAdminConfig {
         config_subscribtion: DesktopConfigSubscribtion::default(),
@@ -4118,6 +4142,7 @@ fn build_default_admin_config(
             })
             .collect(),
         ad_filter_config: DesktopAdFilterConfig::default(),
+        player_enhancement_config,
     }
 }
 
@@ -4150,6 +4175,21 @@ fn build_default_site_config_from_raw(raw_config: &RawServiceConfig) -> DesktopS
                 .values()
                 .any(|live| !live.disabled.unwrap_or(false))
         }),
+    }
+}
+
+fn build_default_player_enhancement_config_from_raw(
+    raw_config: &RawServiceConfig,
+) -> DesktopPlayerEnhancementConfig {
+    DesktopPlayerEnhancementConfig {
+        audio_spike_protection: raw_config
+            .player_enhancements
+            .audio_spike_protection
+            .unwrap_or(false),
+        visual_enhancement: raw_config
+            .player_enhancements
+            .visual_enhancement
+            .unwrap_or(false),
     }
 }
 
@@ -4186,6 +4226,10 @@ fn merge_admin_persistence_with_raw(
         persistence.config.live_config = merge_live_config(
             std::mem::take(&mut persistence.config.live_config),
             &raw_config.lives,
+        );
+        persistence.config.player_enhancement_config = merge_player_enhancement_config(
+            std::mem::take(&mut persistence.config.player_enhancement_config),
+            &raw_config.player_enhancements,
         );
         persistence.config.user_config = normalize_user_config(
             std::mem::take(&mut persistence.config.user_config),
@@ -4292,6 +4336,20 @@ fn merge_category_config(
     merged
 }
 
+fn merge_player_enhancement_config(
+    existing: DesktopPlayerEnhancementConfig,
+    raw_config: &RawPlayerEnhancementConfig,
+) -> DesktopPlayerEnhancementConfig {
+    DesktopPlayerEnhancementConfig {
+        audio_spike_protection: raw_config
+            .audio_spike_protection
+            .unwrap_or(existing.audio_spike_protection),
+        visual_enhancement: raw_config
+            .visual_enhancement
+            .unwrap_or(existing.visual_enhancement),
+    }
+}
+
 fn merge_live_config(
     existing: Vec<DesktopLiveConfigItem>,
     raw_lives: &BTreeMap<String, RawLiveSource>,
@@ -4342,6 +4400,10 @@ fn build_service_config_from_admin(
         adult_content_filter_enabled: !admin_config.site_config.disable_yellow_filter,
         vod_ad_filter_enabled: admin_config.ad_filter_config.enabled,
         fluid_search: admin_config.site_config.fluid_search,
+        player_audio_spike_protection: admin_config
+            .player_enhancement_config
+            .audio_spike_protection,
+        player_visual_enhancement: admin_config.player_enhancement_config.visual_enhancement,
         site_name: normalize_owned_string(Some(admin_config.site_config.site_name.clone())),
         announcement: normalize_owned_string(Some(admin_config.site_config.announcement.clone())),
         douban_proxy_type: normalize_owned_string(Some(
@@ -6031,6 +6093,8 @@ fn build_runtime_public_config_response(config: &ServiceConfig) -> RuntimePublic
         enable_web_live: config
             .enable_web_live_override
             .unwrap_or_else(|| config.live_sources.iter().any(|source| !source.disabled)),
+        player_audio_spike_protection: config.player_audio_spike_protection,
+        player_visual_enhancement: config.player_visual_enhancement,
         profile_sync_enabled: config.profile_sync_api_base_url.is_some(),
         custom_categories: config.custom_categories.clone(),
     }
@@ -8033,6 +8097,10 @@ segment0.ts
               "douban_proxy": "https://proxy.example.com/fetch?url=",
               "douban_image_proxy_type": "custom",
               "douban_image_proxy": "https://img.example.com/fetch?url=",
+              "player_enhancements": {
+                "audio_spike_protection": true,
+                "visual_enhancement": true
+              },
               "custom_category": [
                 {
                   "name": "热门电影",
@@ -8093,6 +8161,18 @@ segment0.ts
         );
         assert_eq!(
             payload.get("enableWebLive").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .get("playerAudioSpikeProtection")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .get("playerVisualEnhancement")
+                .and_then(Value::as_bool),
             Some(true)
         );
         assert_eq!(

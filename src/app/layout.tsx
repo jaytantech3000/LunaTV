@@ -45,6 +45,10 @@ function buildDesktopRuntimeBootstrapScript() {
           DOUBAN_IMAGE_PROXY: payload.doubanImageProxy ?? current.DOUBAN_IMAGE_PROXY,
           FLUID_SEARCH: payload.fluidSearch ?? current.FLUID_SEARCH ?? true,
           ENABLE_WEB_LIVE: payload.enableWebLive ?? current.ENABLE_WEB_LIVE ?? false,
+          PLAYER_AUDIO_SPIKE_PROTECTION:
+            payload.playerAudioSpikeProtection ?? current.PLAYER_AUDIO_SPIKE_PROTECTION ?? false,
+          PLAYER_VISUAL_ENHANCEMENT:
+            payload.playerVisualEnhancement ?? current.PLAYER_VISUAL_ENHANCEMENT ?? false,
           PROFILE_SYNC_ENABLED: payload.profileSyncEnabled ?? current.PROFILE_SYNC_ENABLED ?? false,
           CUSTOM_CATEGORIES: Array.isArray(payload.customCategories)
             ? payload.customCategories

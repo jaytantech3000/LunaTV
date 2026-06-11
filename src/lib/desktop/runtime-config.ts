@@ -13,6 +13,8 @@ export interface DesktopRuntimePublicConfigPayload {
   doubanImageProxy?: string | null;
   fluidSearch?: boolean;
   enableWebLive?: boolean;
+  playerAudioSpikeProtection?: boolean;
+  playerVisualEnhancement?: boolean;
   profileSyncEnabled?: boolean;
   customCategories?: RuntimeCustomCategory[] | null;
 }
@@ -70,6 +72,14 @@ export function mergeDesktopRuntimePublicConfig(
     FLUID_SEARCH: payload.fluidSearch ?? currentConfig.FLUID_SEARCH ?? true,
     ENABLE_WEB_LIVE:
       payload.enableWebLive ?? currentConfig.ENABLE_WEB_LIVE ?? false,
+    PLAYER_AUDIO_SPIKE_PROTECTION:
+      payload.playerAudioSpikeProtection ??
+      currentConfig.PLAYER_AUDIO_SPIKE_PROTECTION ??
+      false,
+    PLAYER_VISUAL_ENHANCEMENT:
+      payload.playerVisualEnhancement ??
+      currentConfig.PLAYER_VISUAL_ENHANCEMENT ??
+      false,
     PROFILE_SYNC_ENABLED:
       payload.profileSyncEnabled ?? currentConfig.PROFILE_SYNC_ENABLED ?? false,
     CUSTOM_CATEGORIES:

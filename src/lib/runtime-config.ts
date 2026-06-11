@@ -19,6 +19,8 @@ export interface AppRuntimeConfig {
   API_BASE_URL?: string;
   MEDIA_PROXY_BASE_URL?: string;
   ENABLE_ADMIN_PANEL?: boolean;
+  PLAYER_AUDIO_SPIKE_PROTECTION?: boolean;
+  PLAYER_VISUAL_ENHANCEMENT?: boolean;
   PROFILE_SYNC_ENABLED?: boolean;
   PROFILE_SYNC_STORAGE_TYPE?: string;
   PROFILE_SYNC_PROFILE_MODE?: 'single-user-local' | 'shared-multi-user';

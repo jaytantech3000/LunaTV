@@ -1,12 +1,12 @@
 import { AdminConfig } from '@/lib/admin.types';
 import { getConfig } from '@/lib/config';
-import { AppRuntimeConfig } from '@/lib/runtime-config';
 import {
   AppStorageType,
   getConfiguredStorageType,
   getProfileMode,
   isSingleUserLocalMode,
 } from '@/lib/runtime/storage-mode';
+import { AppRuntimeConfig } from '@/lib/runtime-config';
 import { CURRENT_VERSION } from '@/lib/version';
 
 export interface SitePresentation {
@@ -80,8 +80,11 @@ export async function buildPublicRuntimeConfig(
       process.env.NEXT_PUBLIC_MEDIA_PROXY_BASE_URL ||
       process.env.NEXT_PUBLIC_API_BASE_URL ||
       '',
-    ENABLE_ADMIN_PANEL:
-      appTarget === 'desktop' ? false : isAdminPanelEnabled(),
+    ENABLE_ADMIN_PANEL: appTarget === 'desktop' ? false : isAdminPanelEnabled(),
+    PLAYER_AUDIO_SPIKE_PROTECTION:
+      process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION === 'true',
+    PLAYER_VISUAL_ENHANCEMENT:
+      process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT === 'true',
   };
 
   if (!shouldUseServerConfigProjection(storageType)) {
@@ -106,6 +109,10 @@ export async function buildPublicRuntimeConfig(
     })),
     FLUID_SEARCH: nextConfig.SiteConfig.FluidSearch,
     ENABLE_WEB_LIVE: nextConfig.SiteConfig.EnableWebLive ?? false,
+    PLAYER_AUDIO_SPIKE_PROTECTION:
+      nextConfig.PlayerEnhancementConfig?.AudioSpikeProtection ?? false,
+    PLAYER_VISUAL_ENHANCEMENT:
+      nextConfig.PlayerEnhancementConfig?.VisualEnhancement ?? false,
   };
 }
 

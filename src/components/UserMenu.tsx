@@ -27,6 +27,7 @@ import {
   getDesktopAuthRequirement,
   logoutDesktopSession,
 } from '@/lib/desktop/auth-session';
+import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 import { purgeOfflineDownloads } from '@/lib/download/session';
 import {
   getDefaultFluidSearchSetting,
@@ -34,6 +35,12 @@ import {
   isFluidSearchSupported,
   setPreferredFluidSearchSetting,
 } from '@/lib/fluid-search';
+import {
+  PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+  readPlayerEnhancementPreferences,
+  resetPlayerEnhancementPreferences,
+  updatePlayerEnhancementPreference,
+} from '@/lib/player-enhancements';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -92,6 +99,10 @@ export const UserMenu: React.FC = () => {
   const [enableOptimization, setEnableOptimization] = useState(true);
   const [fluidSearch, setFluidSearch] = useState(true);
   const [liveDirectConnect, setLiveDirectConnect] = useState(false);
+  const [audioSpikeProtectionEnabled, setAudioSpikeProtectionEnabled] =
+    useState(false);
+  const [visualEnhancementEnabled, setVisualEnhancementEnabled] =
+    useState(false);
   const [doubanDataSource, setDoubanDataSource] = useState(
     'cmliussss-cdn-tencent'
   );
@@ -327,6 +338,39 @@ export const UserMenu: React.FC = () => {
     }
   }, [supportsFluidSearch]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const syncPlayerEnhancementPreferences = () => {
+      const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
+      setAudioSpikeProtectionEnabled(preferences.audioSpikeProtectionEnabled);
+      setVisualEnhancementEnabled(preferences.visualEnhancementEnabled);
+    };
+
+    syncPlayerEnhancementPreferences();
+    window.addEventListener(
+      PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+      syncPlayerEnhancementPreferences
+    );
+    window.addEventListener(
+      DESKTOP_RUNTIME_UPDATED_EVENT,
+      syncPlayerEnhancementPreferences
+    );
+
+    return () => {
+      window.removeEventListener(
+        PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+        syncPlayerEnhancementPreferences
+      );
+      window.removeEventListener(
+        DESKTOP_RUNTIME_UPDATED_EVENT,
+        syncPlayerEnhancementPreferences
+      );
+    };
+  }, []);
+
   // 版本检查
   useEffect(() => {
     const checkUpdate = async () => {
@@ -544,6 +588,16 @@ export const UserMenu: React.FC = () => {
     }
   };
 
+  const handleAudioSpikeProtectionToggle = (value: boolean) => {
+    setAudioSpikeProtectionEnabled(value);
+    updatePlayerEnhancementPreference('audioSpikeProtectionEnabled', value);
+  };
+
+  const handleVisualEnhancementToggle = (value: boolean) => {
+    setVisualEnhancementEnabled(value);
+    updatePlayerEnhancementPreference('visualEnhancementEnabled', value);
+  };
+
   const handleDoubanDataSourceChange = (value: string) => {
     setDoubanDataSource(value);
     if (typeof window !== 'undefined') {
@@ -611,11 +665,19 @@ export const UserMenu: React.FC = () => {
     const runtimeConfig = getRuntimeConfig();
     const defaultFluidSearch =
       supportsFluidSearch && getDefaultFluidSearchSetting(runtimeConfig);
+    const defaultEnhancementPreferences =
+      resetPlayerEnhancementPreferences(runtimeConfig);
 
     setDefaultAggregateSearch(true);
     setEnableOptimization(true);
     setFluidSearch(defaultFluidSearch);
     setLiveDirectConnect(false);
+    setAudioSpikeProtectionEnabled(
+      defaultEnhancementPreferences.audioSpikeProtectionEnabled
+    );
+    setVisualEnhancementEnabled(
+      defaultEnhancementPreferences.visualEnhancementEnabled
+    );
     setDoubanProxyUrl(defaultDoubanProxy);
     setDoubanDataSource(normalizedDesktopDoubanProxyType);
     setDoubanImageProxyType(defaultDoubanImageProxyType);
@@ -756,7 +818,7 @@ export const UserMenu: React.FC = () => {
             </button>
           )}
 
-          {(showLoginAction || showLogoutAction || showChangePassword) ? (
+          {showLoginAction || showLogoutAction || showChangePassword ? (
             <div className='my-1 border-t border-gray-200 dark:border-gray-700'></div>
           ) : null}
 
@@ -887,11 +949,9 @@ export const UserMenu: React.FC = () => {
                   onClick={() => setIsDoubanDropdownOpen(!isDoubanDropdownOpen)}
                   className='w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left'
                 >
-                  {
-                    availableDoubanDataSourceOptions.find(
-                      (option) => option.value === doubanDataSource
-                    )?.label || availableDoubanDataSourceOptions[0]?.label
-                  }
+                  {availableDoubanDataSourceOptions.find(
+                    (option) => option.value === doubanDataSource
+                  )?.label || availableDoubanDataSourceOptions[0]?.label}
                 </button>
 
                 {/* 下拉箭头 */}
@@ -999,11 +1059,9 @@ export const UserMenu: React.FC = () => {
                   }
                   className='w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left'
                 >
-                  {
-                    availableDoubanImageProxyTypeOptions.find(
-                      (option) => option.value === doubanImageProxyType
-                    )?.label || availableDoubanImageProxyTypeOptions[0]?.label
-                  }
+                  {availableDoubanImageProxyTypeOptions.find(
+                    (option) => option.value === doubanImageProxyType
+                  )?.label || availableDoubanImageProxyTypeOptions[0]?.label}
                 </button>
 
                 {/* 下拉箭头 */}
@@ -1131,6 +1189,56 @@ export const UserMenu: React.FC = () => {
                     className='sr-only peer'
                     checked={enableOptimization}
                     onChange={(e) => handleOptimizationToggle(e.target.checked)}
+                  />
+                  <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                  <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                </div>
+              </label>
+            </div>
+
+            <div className='flex items-center justify-between'>
+              <div>
+                <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                  音量突增保护
+                </h4>
+                <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                  检测广告、激昂配乐和唱歌导致的突然增响，并自动压制峰值
+                </p>
+              </div>
+              <label className='flex items-center cursor-pointer'>
+                <div className='relative'>
+                  <input
+                    type='checkbox'
+                    className='sr-only peer'
+                    checked={audioSpikeProtectionEnabled}
+                    onChange={(e) =>
+                      handleAudioSpikeProtectionToggle(e.target.checked)
+                    }
+                  />
+                  <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                  <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                </div>
+              </label>
+            </div>
+
+            <div className='flex items-center justify-between'>
+              <div>
+                <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                  去磨皮修正
+                </h4>
+                <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                  通过本地实时画面修正压低过白高光，并恢复一些细节和层次
+                </p>
+              </div>
+              <label className='flex items-center cursor-pointer'>
+                <div className='relative'>
+                  <input
+                    type='checkbox'
+                    className='sr-only peer'
+                    checked={visualEnhancementEnabled}
+                    onChange={(e) =>
+                      handleVisualEnhancementToggle(e.target.checked)
+                    }
                   />
                   <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
                   <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
