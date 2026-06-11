@@ -8,12 +8,9 @@ on:
         required: false
         type: boolean
         default: false
-  push:
-    branches:
-      - desktop
-  pull_request:
-    branches:
-      - desktop
+  release:
+    types:
+      - published
 
 concurrency:
   group: desktop-build-${{ github.workflow }}-${{ github.ref }}
