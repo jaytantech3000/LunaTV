@@ -15,6 +15,7 @@ When all desktop matrix jobs pass, GitHub Actions will:
 
 - create an unsigned prerelease
 - attach end-user install packages for macOS Intel, macOS Apple Silicon, and Windows x64
+- attach a Windows `.zip` portable package
 - attach macOS `.app.tar.gz` archives for both macOS builds
 
 ## Naming
@@ -22,6 +23,7 @@ When all desktop matrix jobs pass, GitHub Actions will:
 - Tag: `desktop-v<tauri-version>-internal-run<run-number>-a<run-attempt>`
 - Title: `LunaTV Desktop <tauri-version> Internal #<run-number>.<run-attempt>`
 - Assets: prefixed with a platform label such as `macOS-Intel--...`, `macOS-Apple-Silicon--...`, or `Windows-x64--...`
+- Windows portable zip: named like `Windows-x64--LunaTV Desktop_<version>_x64_portable.zip`
 
 The release version comes from `src-tauri/tauri.conf.json`.
 

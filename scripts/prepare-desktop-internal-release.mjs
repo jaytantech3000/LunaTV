@@ -57,6 +57,7 @@ function isPublishedReleaseAsset(relativePath) {
   return (
     relativePath.endsWith('.dmg') ||
     relativePath.endsWith('.tar.gz') ||
+    relativePath.endsWith('.zip') ||
     relativePath.endsWith('.exe') ||
     relativePath.endsWith('.msi') ||
     relativePath.endsWith('.AppImage') ||
@@ -300,7 +301,7 @@ async function main() {
     '',
     '## Assets',
     '',
-    '- This internal release includes end-user install packages and macOS app archives.',
+    '- This internal release includes end-user install packages, a Windows portable zip, and macOS app archives.',
     ...assets.map(asset => `- \`${asset.assetName}\` (${asset.size} bytes)`),
     '',
   ];
