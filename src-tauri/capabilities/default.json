@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Default capability for the LunaTV desktop shell",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-is-fullscreen",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-set-simple-fullscreen"
+  ]
 }

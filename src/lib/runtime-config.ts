@@ -4,6 +4,12 @@ export interface RuntimeCustomCategory {
   query: string;
 }
 
+export type RuntimePlayerEnhancementLevel =
+  | 'off'
+  | 'light'
+  | 'standard'
+  | 'strong';
+
 export interface AppRuntimeConfig {
   APP_TARGET?: 'web' | 'desktop';
   STORAGE_TYPE?: string;
@@ -21,6 +27,8 @@ export interface AppRuntimeConfig {
   ENABLE_ADMIN_PANEL?: boolean;
   PLAYER_AUDIO_SPIKE_PROTECTION?: boolean;
   PLAYER_VISUAL_ENHANCEMENT?: boolean;
+  PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL?: RuntimePlayerEnhancementLevel;
+  PLAYER_VISUAL_ENHANCEMENT_LEVEL?: RuntimePlayerEnhancementLevel;
   PROFILE_SYNC_ENABLED?: boolean;
   PROFILE_SYNC_STORAGE_TYPE?: string;
   PROFILE_SYNC_PROFILE_MODE?: 'single-user-local' | 'shared-multi-user';

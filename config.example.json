@@ -8,8 +8,8 @@
     "api_base_url": ""
   },
   "player_enhancements": {
-    "audio_spike_protection": false,
-    "visual_enhancement": false
+    "audio_spike_protection_level": "standard",
+    "visual_enhancement_level": "off"
   },
   "api_site": {
     "wolong": {

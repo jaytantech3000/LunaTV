@@ -41,6 +41,12 @@ import {
   resetPlayerEnhancementPreferences,
   updatePlayerEnhancementPreference,
 } from '@/lib/player-enhancements';
+import {
+  AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS,
+  AudioSpikeProtectionLevel,
+  VISUAL_ENHANCEMENT_LEVEL_OPTIONS,
+  VisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -99,10 +105,10 @@ export const UserMenu: React.FC = () => {
   const [enableOptimization, setEnableOptimization] = useState(true);
   const [fluidSearch, setFluidSearch] = useState(true);
   const [liveDirectConnect, setLiveDirectConnect] = useState(false);
-  const [audioSpikeProtectionEnabled, setAudioSpikeProtectionEnabled] =
-    useState(false);
-  const [visualEnhancementEnabled, setVisualEnhancementEnabled] =
-    useState(false);
+  const [audioSpikeProtectionLevel, setAudioSpikeProtectionLevel] =
+    useState<AudioSpikeProtectionLevel>('off');
+  const [visualEnhancementLevel, setVisualEnhancementLevel] =
+    useState<VisualEnhancementLevel>('off');
   const [doubanDataSource, setDoubanDataSource] = useState(
     'cmliussss-cdn-tencent'
   );
@@ -345,8 +351,8 @@ export const UserMenu: React.FC = () => {
 
     const syncPlayerEnhancementPreferences = () => {
       const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
-      setAudioSpikeProtectionEnabled(preferences.audioSpikeProtectionEnabled);
-      setVisualEnhancementEnabled(preferences.visualEnhancementEnabled);
+      setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setVisualEnhancementLevel(preferences.visualEnhancementLevel);
     };
 
     syncPlayerEnhancementPreferences();
@@ -588,14 +594,18 @@ export const UserMenu: React.FC = () => {
     }
   };
 
-  const handleAudioSpikeProtectionToggle = (value: boolean) => {
-    setAudioSpikeProtectionEnabled(value);
-    updatePlayerEnhancementPreference('audioSpikeProtectionEnabled', value);
+  const handleAudioSpikeProtectionLevelChange = (
+    value: AudioSpikeProtectionLevel
+  ) => {
+    setAudioSpikeProtectionLevel(value);
+    updatePlayerEnhancementPreference('audioSpikeProtectionLevel', value);
   };
 
-  const handleVisualEnhancementToggle = (value: boolean) => {
-    setVisualEnhancementEnabled(value);
-    updatePlayerEnhancementPreference('visualEnhancementEnabled', value);
+  const handleVisualEnhancementLevelChange = (
+    value: VisualEnhancementLevel
+  ) => {
+    setVisualEnhancementLevel(value);
+    updatePlayerEnhancementPreference('visualEnhancementLevel', value);
   };
 
   const handleDoubanDataSourceChange = (value: string) => {
@@ -672,11 +682,11 @@ export const UserMenu: React.FC = () => {
     setEnableOptimization(true);
     setFluidSearch(defaultFluidSearch);
     setLiveDirectConnect(false);
-    setAudioSpikeProtectionEnabled(
-      defaultEnhancementPreferences.audioSpikeProtectionEnabled
+    setAudioSpikeProtectionLevel(
+      defaultEnhancementPreferences.audioSpikeProtectionLevel
     );
-    setVisualEnhancementEnabled(
-      defaultEnhancementPreferences.visualEnhancementEnabled
+    setVisualEnhancementLevel(
+      defaultEnhancementPreferences.visualEnhancementLevel
     );
     setDoubanProxyUrl(defaultDoubanProxy);
     setDoubanDataSource(normalizedDesktopDoubanProxyType);
@@ -1197,53 +1207,69 @@ export const UserMenu: React.FC = () => {
             </div>
 
             <div className='flex items-center justify-between'>
-              <div>
+              <div className='flex-1'>
                 <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
                   音量突增保护
                 </h4>
                 <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                  检测广告、激昂配乐和唱歌导致的突然增响，并自动压制峰值
+                  检测广告、激昂配乐和唱歌导致的突然增响，并用分级限制压住峰值
                 </p>
-              </div>
-              <label className='flex items-center cursor-pointer'>
-                <div className='relative'>
-                  <input
-                    type='checkbox'
-                    className='sr-only peer'
-                    checked={audioSpikeProtectionEnabled}
-                    onChange={(e) =>
-                      handleAudioSpikeProtectionToggle(e.target.checked)
-                    }
-                  />
-                  <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
-                  <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                <div className='mt-2 flex flex-wrap gap-2'>
+                  {AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => {
+                    const selected = audioSpikeProtectionLevel === option.value;
+
+                    return (
+                      <button
+                        key={option.value}
+                        type='button'
+                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                          selected
+                            ? 'border-green-500 bg-green-500 text-white'
+                            : 'border-gray-300 bg-white text-gray-600 hover:border-green-400 hover:text-green-600 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-green-500 dark:hover:text-green-300'
+                        }`}
+                        onClick={() =>
+                          handleAudioSpikeProtectionLevelChange(option.value)
+                        }
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
                 </div>
-              </label>
+              </div>
             </div>
 
             <div className='flex items-center justify-between'>
-              <div>
+              <div className='flex-1'>
                 <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
                   去磨皮修正
                 </h4>
                 <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
                   通过本地实时画面修正压低过白高光，并恢复一些细节和层次
                 </p>
-              </div>
-              <label className='flex items-center cursor-pointer'>
-                <div className='relative'>
-                  <input
-                    type='checkbox'
-                    className='sr-only peer'
-                    checked={visualEnhancementEnabled}
-                    onChange={(e) =>
-                      handleVisualEnhancementToggle(e.target.checked)
-                    }
-                  />
-                  <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
-                  <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                <div className='mt-2 flex flex-wrap gap-2'>
+                  {VISUAL_ENHANCEMENT_LEVEL_OPTIONS.map((option) => {
+                    const selected = visualEnhancementLevel === option.value;
+
+                    return (
+                      <button
+                        key={option.value}
+                        type='button'
+                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                          selected
+                            ? 'border-green-500 bg-green-500 text-white'
+                            : 'border-gray-300 bg-white text-gray-600 hover:border-green-400 hover:text-green-600 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-green-500 dark:hover:text-green-300'
+                        }`}
+                        onClick={() =>
+                          handleVisualEnhancementLevelChange(option.value)
+                        }
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
                 </div>
-              </label>
+              </div>
             </div>
 
             {/* 流式搜索 */}

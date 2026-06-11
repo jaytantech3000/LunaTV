@@ -1,3 +1,8 @@
+import type {
+  AudioSpikeProtectionLevel,
+  VisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
+
 export interface AdminConfig {
   ConfigSubscribtion: {
     URL: string;
@@ -65,6 +70,8 @@ export interface AdminConfig {
   PlayerEnhancementConfig?: {
     AudioSpikeProtection: boolean;
     VisualEnhancement: boolean;
+    AudioSpikeProtectionLevel?: AudioSpikeProtectionLevel;
+    VisualEnhancementLevel?: VisualEnhancementLevel;
   };
 }
 

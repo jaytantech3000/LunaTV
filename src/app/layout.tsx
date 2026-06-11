@@ -38,6 +38,26 @@ function buildDesktopRuntimeBootstrapScript() {
       if (request.status >= 200 && request.status < 300 && request.responseText) {
         var payload = JSON.parse(request.responseText);
         var current = window.RUNTIME_CONFIG || {};
+        var currentAudioLevel =
+          current.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL ??
+          (current.PLAYER_AUDIO_SPIKE_PROTECTION ? 'standard' : 'off');
+        var currentVisualLevel =
+          current.PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
+          (current.PLAYER_VISUAL_ENHANCEMENT ? 'standard' : 'off');
+        var nextAudioLevel =
+          payload.playerAudioSpikeProtectionLevel ??
+          (payload.playerAudioSpikeProtection === undefined
+            ? currentAudioLevel
+            : payload.playerAudioSpikeProtection
+            ? 'standard'
+            : 'off');
+        var nextVisualLevel =
+          payload.playerVisualEnhancementLevel ??
+          (payload.playerVisualEnhancement === undefined
+            ? currentVisualLevel
+            : payload.playerVisualEnhancement
+            ? 'standard'
+            : 'off');
         window.RUNTIME_CONFIG = Object.assign({}, current, {
           DOUBAN_PROXY_TYPE: payload.doubanProxyType ?? current.DOUBAN_PROXY_TYPE,
           DOUBAN_PROXY: payload.doubanProxy ?? current.DOUBAN_PROXY,
@@ -45,10 +65,10 @@ function buildDesktopRuntimeBootstrapScript() {
           DOUBAN_IMAGE_PROXY: payload.doubanImageProxy ?? current.DOUBAN_IMAGE_PROXY,
           FLUID_SEARCH: payload.fluidSearch ?? current.FLUID_SEARCH ?? true,
           ENABLE_WEB_LIVE: payload.enableWebLive ?? current.ENABLE_WEB_LIVE ?? false,
-          PLAYER_AUDIO_SPIKE_PROTECTION:
-            payload.playerAudioSpikeProtection ?? current.PLAYER_AUDIO_SPIKE_PROTECTION ?? false,
-          PLAYER_VISUAL_ENHANCEMENT:
-            payload.playerVisualEnhancement ?? current.PLAYER_VISUAL_ENHANCEMENT ?? false,
+          PLAYER_AUDIO_SPIKE_PROTECTION: nextAudioLevel !== 'off',
+          PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: nextAudioLevel,
+          PLAYER_VISUAL_ENHANCEMENT: nextVisualLevel !== 'off',
+          PLAYER_VISUAL_ENHANCEMENT_LEVEL: nextVisualLevel,
           PROFILE_SYNC_ENABLED: payload.profileSyncEnabled ?? current.PROFILE_SYNC_ENABLED ?? false,
           CUSTOM_CATEGORIES: Array.isArray(payload.customCategories)
             ? payload.customCategories

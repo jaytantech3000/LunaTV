@@ -598,10 +598,46 @@ struct RawProfileSyncConfig {
     api_base_url: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+enum PlayerEnhancementLevel {
+    #[default]
+    Off,
+    Light,
+    Standard,
+    Strong,
+}
+
+impl PlayerEnhancementLevel {
+    fn is_enabled(self) -> bool {
+        self != Self::Off
+    }
+
+    fn resolve(level: Option<Self>, enabled: Option<bool>, fallback: Self) -> Self {
+        if let Some(level) = level {
+            return level;
+        }
+
+        match enabled {
+            Some(true) => {
+                if fallback == Self::Off {
+                    Self::Standard
+                } else {
+                    fallback
+                }
+            }
+            Some(false) => Self::Off,
+            None => fallback,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone, Default)]
 struct RawPlayerEnhancementConfig {
     audio_spike_protection: Option<bool>,
+    audio_spike_protection_level: Option<PlayerEnhancementLevel>,
     visual_enhancement: Option<bool>,
+    visual_enhancement_level: Option<PlayerEnhancementLevel>,
 }
 
 #[derive(Debug, Clone)]
@@ -612,7 +648,9 @@ struct ServiceConfig {
     vod_ad_filter_enabled: bool,
     fluid_search: bool,
     player_audio_spike_protection: bool,
+    player_audio_spike_protection_level: PlayerEnhancementLevel,
     player_visual_enhancement: bool,
+    player_visual_enhancement_level: PlayerEnhancementLevel,
     site_name: Option<String>,
     announcement: Option<String>,
     douban_proxy_type: Option<String>,
@@ -821,7 +859,9 @@ struct RuntimePublicConfigResponse {
     fluid_search: bool,
     enable_web_live: bool,
     player_audio_spike_protection: bool,
+    player_audio_spike_protection_level: PlayerEnhancementLevel,
     player_visual_enhancement: bool,
+    player_visual_enhancement_level: PlayerEnhancementLevel,
     profile_sync_enabled: bool,
     custom_categories: Vec<RuntimeCustomCategory>,
 }
@@ -1014,8 +1054,20 @@ impl Default for DesktopAdFilterConfig {
 struct DesktopPlayerEnhancementConfig {
     #[serde(rename = "AudioSpikeProtection", default)]
     audio_spike_protection: bool,
+    #[serde(
+        rename = "AudioSpikeProtectionLevel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    audio_spike_protection_level: Option<PlayerEnhancementLevel>,
     #[serde(rename = "VisualEnhancement", default)]
     visual_enhancement: bool,
+    #[serde(
+        rename = "VisualEnhancementLevel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    visual_enhancement_level: Option<PlayerEnhancementLevel>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -4178,19 +4230,33 @@ fn build_default_site_config_from_raw(raw_config: &RawServiceConfig) -> DesktopS
     }
 }
 
+fn build_player_enhancement_config(
+    audio_level: PlayerEnhancementLevel,
+    visual_level: PlayerEnhancementLevel,
+) -> DesktopPlayerEnhancementConfig {
+    DesktopPlayerEnhancementConfig {
+        audio_spike_protection: audio_level.is_enabled(),
+        audio_spike_protection_level: Some(audio_level),
+        visual_enhancement: visual_level.is_enabled(),
+        visual_enhancement_level: Some(visual_level),
+    }
+}
+
 fn build_default_player_enhancement_config_from_raw(
     raw_config: &RawServiceConfig,
 ) -> DesktopPlayerEnhancementConfig {
-    DesktopPlayerEnhancementConfig {
-        audio_spike_protection: raw_config
-            .player_enhancements
-            .audio_spike_protection
-            .unwrap_or(false),
-        visual_enhancement: raw_config
-            .player_enhancements
-            .visual_enhancement
-            .unwrap_or(false),
-    }
+    let audio_level = PlayerEnhancementLevel::resolve(
+        raw_config.player_enhancements.audio_spike_protection_level,
+        raw_config.player_enhancements.audio_spike_protection,
+        PlayerEnhancementLevel::Off,
+    );
+    let visual_level = PlayerEnhancementLevel::resolve(
+        raw_config.player_enhancements.visual_enhancement_level,
+        raw_config.player_enhancements.visual_enhancement,
+        PlayerEnhancementLevel::Off,
+    );
+
+    build_player_enhancement_config(audio_level, visual_level)
 }
 
 fn merge_admin_persistence_with_raw(
@@ -4340,14 +4406,28 @@ fn merge_player_enhancement_config(
     existing: DesktopPlayerEnhancementConfig,
     raw_config: &RawPlayerEnhancementConfig,
 ) -> DesktopPlayerEnhancementConfig {
-    DesktopPlayerEnhancementConfig {
-        audio_spike_protection: raw_config
-            .audio_spike_protection
-            .unwrap_or(existing.audio_spike_protection),
-        visual_enhancement: raw_config
-            .visual_enhancement
-            .unwrap_or(existing.visual_enhancement),
-    }
+    let existing_audio_level = PlayerEnhancementLevel::resolve(
+        existing.audio_spike_protection_level,
+        Some(existing.audio_spike_protection),
+        PlayerEnhancementLevel::Off,
+    );
+    let existing_visual_level = PlayerEnhancementLevel::resolve(
+        existing.visual_enhancement_level,
+        Some(existing.visual_enhancement),
+        PlayerEnhancementLevel::Off,
+    );
+    let audio_level = PlayerEnhancementLevel::resolve(
+        raw_config.audio_spike_protection_level,
+        raw_config.audio_spike_protection,
+        existing_audio_level,
+    );
+    let visual_level = PlayerEnhancementLevel::resolve(
+        raw_config.visual_enhancement_level,
+        raw_config.visual_enhancement,
+        existing_visual_level,
+    );
+
+    build_player_enhancement_config(audio_level, visual_level)
 }
 
 fn merge_live_config(
@@ -4394,16 +4474,35 @@ fn build_service_config_from_admin(
     admin_config: &DesktopAdminConfig,
     profile_sync_api_base_url: &Option<String>,
 ) -> ServiceConfig {
+    let audio_level = PlayerEnhancementLevel::resolve(
+        admin_config
+            .player_enhancement_config
+            .audio_spike_protection_level,
+        Some(
+            admin_config
+                .player_enhancement_config
+                .audio_spike_protection,
+        ),
+        PlayerEnhancementLevel::Off,
+    );
+    let visual_level = PlayerEnhancementLevel::resolve(
+        admin_config
+            .player_enhancement_config
+            .visual_enhancement_level,
+        Some(admin_config.player_enhancement_config.visual_enhancement),
+        PlayerEnhancementLevel::Off,
+    );
+
     ServiceConfig {
         cache_time: admin_config.site_config.site_interface_cache_time.max(1),
         max_search_pages: admin_config.site_config.search_downstream_max_page.max(1),
         adult_content_filter_enabled: !admin_config.site_config.disable_yellow_filter,
         vod_ad_filter_enabled: admin_config.ad_filter_config.enabled,
         fluid_search: admin_config.site_config.fluid_search,
-        player_audio_spike_protection: admin_config
-            .player_enhancement_config
-            .audio_spike_protection,
-        player_visual_enhancement: admin_config.player_enhancement_config.visual_enhancement,
+        player_audio_spike_protection: audio_level.is_enabled(),
+        player_audio_spike_protection_level: audio_level,
+        player_visual_enhancement: visual_level.is_enabled(),
+        player_visual_enhancement_level: visual_level,
         site_name: normalize_owned_string(Some(admin_config.site_config.site_name.clone())),
         announcement: normalize_owned_string(Some(admin_config.site_config.announcement.clone())),
         douban_proxy_type: normalize_owned_string(Some(
@@ -6094,7 +6193,9 @@ fn build_runtime_public_config_response(config: &ServiceConfig) -> RuntimePublic
             .enable_web_live_override
             .unwrap_or_else(|| config.live_sources.iter().any(|source| !source.disabled)),
         player_audio_spike_protection: config.player_audio_spike_protection,
+        player_audio_spike_protection_level: config.player_audio_spike_protection_level,
         player_visual_enhancement: config.player_visual_enhancement,
+        player_visual_enhancement_level: config.player_visual_enhancement_level,
         profile_sync_enabled: config.profile_sync_api_base_url.is_some(),
         custom_categories: config.custom_categories.clone(),
     }
@@ -8098,8 +8199,8 @@ segment0.ts
               "douban_image_proxy_type": "custom",
               "douban_image_proxy": "https://img.example.com/fetch?url=",
               "player_enhancements": {
-                "audio_spike_protection": true,
-                "visual_enhancement": true
+                "audio_spike_protection_level": "strong",
+                "visual_enhancement_level": "light"
               },
               "custom_category": [
                 {
@@ -8171,9 +8272,21 @@ segment0.ts
         );
         assert_eq!(
             payload
+                .get("playerAudioSpikeProtectionLevel")
+                .and_then(Value::as_str),
+            Some("strong")
+        );
+        assert_eq!(
+            payload
                 .get("playerVisualEnhancement")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            payload
+                .get("playerVisualEnhancementLevel")
+                .and_then(Value::as_str),
+            Some("light")
         );
         assert_eq!(
             payload

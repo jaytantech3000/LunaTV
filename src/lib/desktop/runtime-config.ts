@@ -3,6 +3,12 @@ import {
   getRuntimeConfig,
   RuntimeCustomCategory,
 } from '@/lib/runtime-config';
+import {
+  AudioSpikeProtectionLevel,
+  VisualEnhancementLevel,
+  normalizeAudioSpikeProtectionLevel,
+  normalizeVisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
 
 export interface DesktopRuntimePublicConfigPayload {
   siteName?: string | null;
@@ -15,6 +21,8 @@ export interface DesktopRuntimePublicConfigPayload {
   enableWebLive?: boolean;
   playerAudioSpikeProtection?: boolean;
   playerVisualEnhancement?: boolean;
+  playerAudioSpikeProtectionLevel?: AudioSpikeProtectionLevel | null;
+  playerVisualEnhancementLevel?: VisualEnhancementLevel | null;
   profileSyncEnabled?: boolean;
   customCategories?: RuntimeCustomCategory[] | null;
 }
@@ -60,6 +68,21 @@ export function mergeDesktopRuntimePublicConfig(
   currentConfig: AppRuntimeConfig,
   payload: DesktopRuntimePublicConfigPayload
 ): AppRuntimeConfig {
+  const audioSpikeProtectionLevel = normalizeAudioSpikeProtectionLevel(
+    payload.playerAudioSpikeProtectionLevel ??
+      payload.playerAudioSpikeProtection ??
+      currentConfig.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL ??
+      currentConfig.PLAYER_AUDIO_SPIKE_PROTECTION,
+    'off'
+  );
+  const visualEnhancementLevel = normalizeVisualEnhancementLevel(
+    payload.playerVisualEnhancementLevel ??
+      payload.playerVisualEnhancement ??
+      currentConfig.PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
+      currentConfig.PLAYER_VISUAL_ENHANCEMENT,
+    'off'
+  );
+
   return {
     ...currentConfig,
     DOUBAN_PROXY_TYPE:
@@ -72,14 +95,10 @@ export function mergeDesktopRuntimePublicConfig(
     FLUID_SEARCH: payload.fluidSearch ?? currentConfig.FLUID_SEARCH ?? true,
     ENABLE_WEB_LIVE:
       payload.enableWebLive ?? currentConfig.ENABLE_WEB_LIVE ?? false,
-    PLAYER_AUDIO_SPIKE_PROTECTION:
-      payload.playerAudioSpikeProtection ??
-      currentConfig.PLAYER_AUDIO_SPIKE_PROTECTION ??
-      false,
-    PLAYER_VISUAL_ENHANCEMENT:
-      payload.playerVisualEnhancement ??
-      currentConfig.PLAYER_VISUAL_ENHANCEMENT ??
-      false,
+    PLAYER_AUDIO_SPIKE_PROTECTION: audioSpikeProtectionLevel !== 'off',
+    PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: audioSpikeProtectionLevel,
+    PLAYER_VISUAL_ENHANCEMENT: visualEnhancementLevel !== 'off',
+    PLAYER_VISUAL_ENHANCEMENT_LEVEL: visualEnhancementLevel,
     PROFILE_SYNC_ENABLED:
       payload.profileSyncEnabled ?? currentConfig.PROFILE_SYNC_ENABLED ?? false,
     CUSTOM_CATEGORIES:

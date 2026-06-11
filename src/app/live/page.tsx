@@ -6,7 +6,7 @@ import Artplayer from 'artplayer';
 import Hls from 'hls.js';
 import { Heart, Radio, Tv } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, startTransition, useEffect, useRef, useState } from 'react';
 
 import {
   deleteFavorite,
@@ -15,12 +15,20 @@ import {
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { toggleDesktopWindowFullscreenState } from '@/lib/desktop/fullscreen';
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
-import { PlayerEnhancementManager } from '@/lib/player-enhancement-runtime';
+import {
+  AudioSpikeProtectionStatus,
+  PlayerEnhancementManager,
+} from '@/lib/player-enhancement-runtime';
 import {
   PLAYER_ENHANCEMENTS_UPDATED_EVENT,
   readPlayerEnhancementPreferences,
 } from '@/lib/player-enhancements';
+import {
+  AudioSpikeProtectionLevel,
+  VisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { parseCustomTimeFormat } from '@/lib/time';
 import {
@@ -37,6 +45,7 @@ import {
 
 import EpgScrollableRow from '@/components/EpgScrollableRow';
 import PageLayout from '@/components/PageLayout';
+import PlayerEnhancementStatusOverlay from '@/components/PlayerEnhancementStatusOverlay';
 
 // 扩展 HTMLVideoElement 类型以支持 hls 属性
 declare global {
@@ -83,24 +92,26 @@ function LivePageClient() {
   const [videoUrl, setVideoUrl] = useState('');
   const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [unsupportedType, setUnsupportedType] = useState<string | null>(null);
-  const [audioSpikeProtectionEnabled, setAudioSpikeProtectionEnabled] =
-    useState<boolean>(() => {
+  const [audioSpikeProtectionLevel, setAudioSpikeProtectionLevel] =
+    useState<AudioSpikeProtectionLevel>(() => {
       if (typeof window === 'undefined') {
-        return false;
+        return 'off';
       }
 
       return readPlayerEnhancementPreferences(getRuntimeConfig())
-        .audioSpikeProtectionEnabled;
+        .audioSpikeProtectionLevel;
     });
-  const [visualEnhancementEnabled, setVisualEnhancementEnabled] =
-    useState<boolean>(() => {
+  const [visualEnhancementLevel, setVisualEnhancementLevel] =
+    useState<VisualEnhancementLevel>(() => {
       if (typeof window === 'undefined') {
-        return false;
+        return 'off';
       }
 
       return readPlayerEnhancementPreferences(getRuntimeConfig())
-        .visualEnhancementEnabled;
+        .visualEnhancementLevel;
     });
+  const [audioEnhancementStatus, setAudioEnhancementStatus] =
+    useState<AudioSpikeProtectionStatus | null>(null);
 
   // 切换直播源状态
   const [isSwitchingSource, setIsSwitchingSource] = useState(false);
@@ -260,8 +271,8 @@ function LivePageClient() {
 
     const syncPlayerEnhancementPreferences = () => {
       const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
-      setAudioSpikeProtectionEnabled(preferences.audioSpikeProtectionEnabled);
-      setVisualEnhancementEnabled(preferences.visualEnhancementEnabled);
+      setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setVisualEnhancementLevel(preferences.visualEnhancementLevel);
     };
 
     window.addEventListener(
@@ -700,16 +711,46 @@ function LivePageClient() {
       return;
     }
 
+    const handleAudioStatusChange = (status: AudioSpikeProtectionStatus) => {
+      startTransition(() => {
+        setAudioEnhancementStatus(status);
+      });
+    };
+
     if (!enhancementManagerRef.current) {
-      enhancementManagerRef.current = new PlayerEnhancementManager();
+      enhancementManagerRef.current = new PlayerEnhancementManager({
+        onAudioStatusChange: handleAudioStatusChange,
+      });
+    } else {
+      enhancementManagerRef.current.setAudioStatusListener(
+        handleAudioStatusChange
+      );
     }
 
     enhancementManagerRef.current.bind(video, host);
     enhancementManagerRef.current.setPreferences({
-      audioSpikeProtectionEnabled,
-      visualEnhancementEnabled,
+      audioSpikeProtectionLevel,
+      visualEnhancementLevel,
     });
   };
+
+  const buildDesktopFullscreenControl = (fullscreen = false) => ({
+    name: 'desktop-window-fullscreen',
+    position: 'right',
+    index: 70,
+    tooltip: fullscreen ? '退出窗口全屏' : '窗口全屏',
+    html: fullscreen
+      ? '<i class="art-icon flex"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 4H4v3M15 4h3v3M18 15v3h-3M4 15v3h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 8h6v6H8z" stroke="currentColor" stroke-width="1.8"/></svg></i>'
+      : '<i class="art-icon flex"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 4H4v4M14 4h4v4M18 14v4h-4M8 18H4v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></i>',
+    click: async function (control: any) {
+      const nextState = await toggleDesktopWindowFullscreenState();
+      if (nextState === null) {
+        return;
+      }
+
+      control.update(buildDesktopFullscreenControl(nextState));
+    },
+  });
 
   // 切换分组
   const handleGroupChange = (group: string) => {
@@ -999,6 +1040,7 @@ function LivePageClient() {
         videoUrl,
         currentSourceRef.current?.key || ''
       );
+      const isDesktopPlayer = getRuntimeConfig().APP_TARGET === 'desktop';
       try {
         // 创建新的播放器实例
         Artplayer.USE_RAF = false;
@@ -1021,7 +1063,7 @@ function LivePageClient() {
           flip: false,
           playbackRate: false,
           aspectRatio: false,
-          fullscreen: true,
+          fullscreen: !isDesktopPlayer,
           fullscreenWeb: true,
           subtitleOffset: false,
           miniProgressBar: false,
@@ -1041,6 +1083,7 @@ function LivePageClient() {
           },
           type: type,
           customType: customType,
+          controls: isDesktopPlayer ? [buildDesktopFullscreenControl()] : [],
           icons: {
             loading:
               '<img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MCIgaGVpZ2h0PSI1MCIgdmlld0JveD0iMCAwIDUwIDUwIj48cGF0aCBkPSJNMjUuMjUxIDYuNDYxYy0xMC4zMTggMC0xOC42ODMgOC4zNjUtMTguNjgzIDE4LjY4M2g0LjA2OGMwLTguMDcgNi41NDUtMTQuNjE1IDE0LjYxNS0xNC42MTVWNi40NjF6IiBmaWxsPSIjMDA5Njg4Ij48YW5pbWF0ZVRyYW5zZm9ybSBhdHRyaWJ1dGVOYW1lPSJ0cmFuc2Zvcm0iIGF0dHJpYnV0ZVR5cGU9IlhNTCIgZHVyPSIxcyIgZnJvbT0iMCAyNSAyNSIgcmVwZWF0Q291bnQ9ImluZGVmaW5pdGUiIHRvPSIzNjAgMjUgMjUiIHR5cGU9InJvdGF0ZSIvPjwvcGF0aD48L3N2Zz4=">',
@@ -1093,7 +1136,7 @@ function LivePageClient() {
 
   useEffect(() => {
     syncPlayerEnhancements();
-  }, [audioSpikeProtectionEnabled, visualEnhancementEnabled, videoUrl]);
+  }, [audioSpikeProtectionLevel, visualEnhancementLevel, videoUrl]);
 
   // 清理播放器资源
   useEffect(() => {
@@ -1161,7 +1204,11 @@ function LivePageClient() {
       // f 键 = 切换全屏
       if (e.key === 'f' || e.key === 'F') {
         if (artPlayerRef.current) {
-          artPlayerRef.current.fullscreen = !artPlayerRef.current.fullscreen;
+          if (getRuntimeConfig().APP_TARGET === 'desktop') {
+            void toggleDesktopWindowFullscreenState();
+          } else {
+            artPlayerRef.current.fullscreen = !artPlayerRef.current.fullscreen;
+          }
           e.preventDefault();
         }
       }
@@ -1380,6 +1427,9 @@ function LivePageClient() {
                   ref={artRef}
                   className='relative bg-black w-full h-full rounded-xl overflow-hidden shadow-lg border border-white/0 dark:border-white/30'
                 ></div>
+                <PlayerEnhancementStatusOverlay
+                  status={audioEnhancementStatus}
+                />
 
                 {/* 不支持的直播类型提示 */}
                 {unsupportedType && (

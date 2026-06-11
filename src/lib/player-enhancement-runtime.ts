@@ -1,4 +1,12 @@
-import { PlayerEnhancementPreferences } from '@/lib/player-enhancements';
+import {
+  PlayerEnhancementPreferences,
+  isAudioSpikeProtectionActive,
+  isVisualEnhancementActive,
+} from '@/lib/player-enhancements';
+import {
+  AudioSpikeProtectionLevel,
+  VisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
 
 type VideoFrameRequestHandle = number;
 
@@ -7,6 +15,106 @@ type VideoElementWithFrameCallback = HTMLVideoElement & {
     callback: (now: number, metadata: unknown) => void
   ) => VideoFrameRequestHandle;
   cancelVideoFrameCallback?: (handle: VideoFrameRequestHandle) => void;
+};
+
+interface AudioSpikeProtectionLevelConfig {
+  triggerMarginDb: number;
+  deltaRatio: number;
+  maxReductionDb: number;
+  ceilingDb: number;
+  baselineRise: number;
+  baselineFall: number;
+  attackTime: number;
+  releaseTime: number;
+  compressorThreshold: number;
+  compressorKnee: number;
+  compressorRatio: number;
+  compressorAttack: number;
+  compressorRelease: number;
+  monitorIntervalMs: number;
+}
+
+export interface AudioSpikeProtectionStatus {
+  level: AudioSpikeProtectionLevel;
+  currentDb: number | null;
+  baselineDb: number | null;
+  ceilingDb: number | null;
+  reductionDb: number;
+  limited: boolean;
+}
+
+export interface PlayerEnhancementManagerOptions {
+  onAudioStatusChange?: (status: AudioSpikeProtectionStatus) => void;
+}
+
+export interface AspectFitRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const AUDIO_SPIKE_PROTECTION_LEVEL_CONFIG: Record<
+  Exclude<AudioSpikeProtectionLevel, 'off'>,
+  AudioSpikeProtectionLevelConfig
+> = {
+  light: {
+    triggerMarginDb: 5.5,
+    deltaRatio: 1.25,
+    maxReductionDb: 12,
+    ceilingDb: -10,
+    baselineRise: 0.028,
+    baselineFall: 0.14,
+    attackTime: 0.035,
+    releaseTime: 0.28,
+    compressorThreshold: -22,
+    compressorKnee: 18,
+    compressorRatio: 5.8,
+    compressorAttack: 0.004,
+    compressorRelease: 0.24,
+    monitorIntervalMs: 120,
+  },
+  standard: {
+    triggerMarginDb: 4.2,
+    deltaRatio: 1.6,
+    maxReductionDb: 18,
+    ceilingDb: -12,
+    baselineRise: 0.022,
+    baselineFall: 0.12,
+    attackTime: 0.022,
+    releaseTime: 0.22,
+    compressorThreshold: -25,
+    compressorKnee: 14,
+    compressorRatio: 8.5,
+    compressorAttack: 0.003,
+    compressorRelease: 0.2,
+    monitorIntervalMs: 100,
+  },
+  strong: {
+    triggerMarginDb: 3.2,
+    deltaRatio: 1.95,
+    maxReductionDb: 24,
+    ceilingDb: -14,
+    baselineRise: 0.017,
+    baselineFall: 0.1,
+    attackTime: 0.014,
+    releaseTime: 0.18,
+    compressorThreshold: -28,
+    compressorKnee: 10,
+    compressorRatio: 12,
+    compressorAttack: 0.002,
+    compressorRelease: 0.16,
+    monitorIntervalMs: 80,
+  },
+};
+
+const VISUAL_ENHANCEMENT_LEVEL_INTENSITY: Record<
+  Exclude<VisualEnhancementLevel, 'off'>,
+  number
+> = {
+  light: 0.38,
+  standard: 0.68,
+  strong: 1,
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -37,6 +145,69 @@ function getAudioContextConstructor(): typeof AudioContext | undefined {
   );
 }
 
+function buildAudioSpikeProtectionStatus(
+  level: AudioSpikeProtectionLevel = 'off',
+  overrides: Partial<AudioSpikeProtectionStatus> = {}
+): AudioSpikeProtectionStatus {
+  return {
+    level,
+    currentDb: null,
+    baselineDb: null,
+    ceilingDb:
+      level === 'off'
+        ? null
+        : AUDIO_SPIKE_PROTECTION_LEVEL_CONFIG[level].ceilingDb,
+    reductionDb: 0,
+    limited: false,
+    ...overrides,
+  };
+}
+
+function getAudioSpikeProtectionLevelConfig(
+  level: AudioSpikeProtectionLevel
+): AudioSpikeProtectionLevelConfig | null {
+  return level === 'off' ? null : AUDIO_SPIKE_PROTECTION_LEVEL_CONFIG[level];
+}
+
+function getVisualEnhancementIntensity(level: VisualEnhancementLevel): number {
+  return level === 'off' ? 0 : VISUAL_ENHANCEMENT_LEVEL_INTENSITY[level];
+}
+
+export function calculateAspectFitRect(
+  containerWidth: number,
+  containerHeight: number,
+  sourceWidth: number,
+  sourceHeight: number
+): AspectFitRect {
+  if (
+    containerWidth <= 0 ||
+    containerHeight <= 0 ||
+    sourceWidth <= 0 ||
+    sourceHeight <= 0
+  ) {
+    return {
+      x: 0,
+      y: 0,
+      width: Math.max(0, containerWidth),
+      height: Math.max(0, containerHeight),
+    };
+  }
+
+  const scale = Math.min(
+    containerWidth / sourceWidth,
+    containerHeight / sourceHeight
+  );
+  const width = sourceWidth * scale;
+  const height = sourceHeight * scale;
+
+  return {
+    x: (containerWidth - width) / 2,
+    y: (containerHeight - height) / 2,
+    width,
+    height,
+  };
+}
+
 class AudioSpikeProtectionController {
   private audioContext: AudioContext | null = null;
   private sourceNode: MediaElementAudioSourceNode | null = null;
@@ -46,7 +217,10 @@ class AudioSpikeProtectionController {
   private analysisBuffer: Float32Array | null = null;
   private monitorTimerId: number | null = null;
   private baselineDb: number | null = null;
-  private enabled = false;
+  private level: AudioSpikeProtectionLevel = 'off';
+  private lastReductionDb = 0;
+  private lastStatus: AudioSpikeProtectionStatus =
+    buildAudioSpikeProtectionStatus();
   private documentListenersBound = false;
   private graphInitialized = false;
 
@@ -56,13 +230,13 @@ class AudioSpikeProtectionController {
       return;
     }
 
-    if (this.enabled) {
+    if (isAudioSpikeProtectionActive(this.level)) {
       void this.initializeEnabledGraph();
     }
   };
 
   private readonly handleFirstInteraction = () => {
-    if (!this.enabled || this.graphInitialized) {
+    if (!isAudioSpikeProtectionActive(this.level) || this.graphInitialized) {
       return;
     }
 
@@ -71,9 +245,31 @@ class AudioSpikeProtectionController {
 
   private readonly handleLoadedData = () => {
     this.baselineDb = null;
+    this.lastReductionDb = 0;
+    this.emitStatus({
+      baselineDb: null,
+      reductionDb: 0,
+      limited: false,
+    });
   };
 
-  constructor(private readonly video: HTMLVideoElement) {}
+  constructor(
+    private readonly video: HTMLVideoElement,
+    private onStatusChange?: (status: AudioSpikeProtectionStatus) => void
+  ) {
+    this.emitStatus({});
+  }
+
+  private emitStatus(overrides: Partial<AudioSpikeProtectionStatus>) {
+    const nextStatus = buildAudioSpikeProtectionStatus(this.level, overrides);
+    this.lastStatus = nextStatus;
+    this.onStatusChange?.(nextStatus);
+  }
+
+  setStatusListener(listener?: (status: AudioSpikeProtectionStatus) => void) {
+    this.onStatusChange = listener;
+    listener?.(this.lastStatus);
+  }
 
   private async ensureGraphReady(): Promise<boolean> {
     if (this.graphInitialized) {
@@ -102,17 +298,12 @@ class AudioSpikeProtectionController {
     if (!this.analyserNode) {
       this.analyserNode = this.audioContext.createAnalyser();
       this.analyserNode.fftSize = 2048;
-      this.analyserNode.smoothingTimeConstant = 0.82;
+      this.analyserNode.smoothingTimeConstant = 0.8;
       this.analysisBuffer = new Float32Array(this.analyserNode.fftSize);
     }
 
     if (!this.compressorNode) {
       this.compressorNode = this.audioContext.createDynamicsCompressor();
-      this.compressorNode.threshold.value = -20;
-      this.compressorNode.knee.value = 20;
-      this.compressorNode.ratio.value = 5.5;
-      this.compressorNode.attack.value = 0.004;
-      this.compressorNode.release.value = 0.28;
     }
 
     if (!this.outputGainNode) {
@@ -122,6 +313,19 @@ class AudioSpikeProtectionController {
 
     this.graphInitialized = true;
     return true;
+  }
+
+  private applyLevelConfig() {
+    const config = getAudioSpikeProtectionLevelConfig(this.level);
+    if (!config || !this.compressorNode) {
+      return;
+    }
+
+    this.compressorNode.threshold.value = config.compressorThreshold;
+    this.compressorNode.knee.value = config.compressorKnee;
+    this.compressorNode.ratio.value = config.compressorRatio;
+    this.compressorNode.attack.value = config.compressorAttack;
+    this.compressorNode.release.value = config.compressorRelease;
   }
 
   private bindDocumentListeners() {
@@ -183,14 +387,90 @@ class AudioSpikeProtectionController {
     }
 
     this.unbindDocumentListeners();
+    this.applyLevelConfig();
     this.reconnectGraph(true);
     this.startMonitoring();
   }
 
+  private runMonitorTick() {
+    const config = getAudioSpikeProtectionLevelConfig(this.level);
+    if (
+      !config ||
+      !this.analyserNode ||
+      !this.analysisBuffer ||
+      !this.audioContext ||
+      !this.outputGainNode
+    ) {
+      return;
+    }
+
+    this.analyserNode.getFloatTimeDomainData(this.analysisBuffer);
+
+    let sum = 0;
+    let peak = 0;
+    for (let index = 0; index < this.analysisBuffer.length; index += 1) {
+      const sample = this.analysisBuffer[index];
+      const absolute = Math.abs(sample);
+      sum += sample * sample;
+      if (absolute > peak) {
+        peak = absolute;
+      }
+    }
+
+    const rms = Math.sqrt(sum / this.analysisBuffer.length);
+    const rmsDb = 20 * Math.log10(Math.max(rms, 0.00001));
+    const peakDb = 20 * Math.log10(Math.max(peak, 0.00001));
+    const referenceDb = Math.max(rmsDb + 1.5, peakDb - 1.5);
+
+    if (this.baselineDb === null) {
+      this.baselineDb = referenceDb;
+    } else {
+      const riseFactor =
+        this.lastReductionDb > 0.8
+          ? config.baselineRise * 0.35
+          : config.baselineRise;
+      const smoothing =
+        referenceDb > this.baselineDb ? riseFactor : config.baselineFall;
+      this.baselineDb =
+        this.baselineDb + (referenceDb - this.baselineDb) * smoothing;
+    }
+
+    const deltaOvershootDb =
+      referenceDb - (this.baselineDb + config.triggerMarginDb);
+    const deltaReductionDb = Math.max(0, deltaOvershootDb) * config.deltaRatio;
+    const ceilingReductionDb = Math.max(0, peakDb - config.ceilingDb);
+    const targetReductionDb = clamp(
+      Math.max(deltaReductionDb, ceilingReductionDb),
+      0,
+      config.maxReductionDb
+    );
+    const targetGain = Math.pow(10, -targetReductionDb / 20);
+    const now = this.audioContext.currentTime;
+
+    this.outputGainNode.gain.cancelScheduledValues(now);
+    this.outputGainNode.gain.setTargetAtTime(
+      targetGain,
+      now,
+      targetReductionDb > this.lastReductionDb
+        ? config.attackTime
+        : config.releaseTime
+    );
+
+    this.lastReductionDb = targetReductionDb;
+    this.emitStatus({
+      currentDb: peakDb,
+      baselineDb: this.baselineDb,
+      ceilingDb: config.ceilingDb,
+      reductionDb: targetReductionDb,
+      limited: targetReductionDb > 0.35,
+    });
+  }
+
   private startMonitoring() {
+    const config = getAudioSpikeProtectionLevelConfig(this.level);
     if (
       this.monitorTimerId !== null ||
-      !this.enabled ||
+      !config ||
       !this.analyserNode ||
       !this.analysisBuffer ||
       !this.audioContext ||
@@ -200,53 +480,8 @@ class AudioSpikeProtectionController {
     }
 
     this.monitorTimerId = window.setInterval(() => {
-      if (
-        !this.analyserNode ||
-        !this.analysisBuffer ||
-        !this.audioContext ||
-        !this.outputGainNode
-      ) {
-        return;
-      }
-
-      this.analyserNode.getFloatTimeDomainData(this.analysisBuffer);
-
-      let sum = 0;
-      let peak = 0;
-      for (let index = 0; index < this.analysisBuffer.length; index += 1) {
-        const sample = this.analysisBuffer[index];
-        const absolute = Math.abs(sample);
-        sum += sample * sample;
-        if (absolute > peak) {
-          peak = absolute;
-        }
-      }
-
-      const rms = Math.sqrt(sum / this.analysisBuffer.length);
-      const rmsDb = 20 * Math.log10(Math.max(rms, 0.0001));
-      const peakDb = 20 * Math.log10(Math.max(peak, 0.0001));
-      const referenceDb = Math.max(rmsDb, peakDb - 3);
-
-      if (this.baselineDb === null) {
-        this.baselineDb = referenceDb;
-      } else {
-        const smoothing = referenceDb > this.baselineDb ? 0.04 : 0.16;
-        this.baselineDb =
-          this.baselineDb + (referenceDb - this.baselineDb) * smoothing;
-      }
-
-      const deltaDb = referenceDb - this.baselineDb;
-      const targetReductionDb = clamp((deltaDb - 6) * 0.9, 0, 12);
-      const targetGain = Math.pow(10, -targetReductionDb / 20);
-      const now = this.audioContext.currentTime;
-
-      this.outputGainNode.gain.cancelScheduledValues(now);
-      this.outputGainNode.gain.setTargetAtTime(
-        targetGain,
-        now,
-        targetReductionDb > 0 ? 0.05 : 0.28
-      );
-    }, 120);
+      this.runMonitorTick();
+    }, config.monitorIntervalMs);
   }
 
   private stopMonitoring() {
@@ -256,6 +491,7 @@ class AudioSpikeProtectionController {
     }
 
     this.baselineDb = null;
+    this.lastReductionDb = 0;
 
     if (this.audioContext && this.outputGainNode) {
       const now = this.audioContext.currentTime;
@@ -280,13 +516,17 @@ class AudioSpikeProtectionController {
     }
   }
 
-  setEnabled(enabled: boolean) {
-    this.enabled = enabled;
+  setLevel(level: AudioSpikeProtectionLevel) {
+    if (level === this.level) {
+      this.emitStatus({});
+      return;
+    }
 
+    this.level = level;
     this.video.removeEventListener('play', this.handlePlay);
     this.video.removeEventListener('loadeddata', this.handleLoadedData);
 
-    if (!enabled) {
+    if (!isAudioSpikeProtectionActive(level)) {
       this.unbindDocumentListeners();
       this.stopMonitoring();
 
@@ -294,22 +534,34 @@ class AudioSpikeProtectionController {
         this.reconnectGraph(false);
       }
 
+      this.emitStatus({});
       return;
     }
 
     this.video.addEventListener('play', this.handlePlay);
     this.video.addEventListener('loadeddata', this.handleLoadedData);
 
+    if (this.graphInitialized) {
+      this.applyLevelConfig();
+      this.reconnectGraph(true);
+      this.stopMonitoring();
+      this.startMonitoring();
+      this.emitStatus({});
+      return;
+    }
+
     if (!this.video.paused) {
       void this.initializeEnabledGraph();
+      this.emitStatus({});
       return;
     }
 
     this.bindDocumentListeners();
+    this.emitStatus({});
   }
 
   dispose() {
-    this.enabled = false;
+    this.level = 'off';
     this.stopMonitoring();
     this.unbindDocumentListeners();
     this.video.removeEventListener('play', this.handlePlay);
@@ -331,6 +583,7 @@ class AudioSpikeProtectionController {
     this.audioContext = null;
     this.analysisBuffer = null;
     this.graphInitialized = false;
+    this.emitStatus({});
   }
 }
 
@@ -343,6 +596,7 @@ interface VisualEnhancementGlContext {
   positionLocation: number;
   texCoordLocation: number;
   texelSizeLocation: WebGLUniformLocation;
+  intensityLocation: WebGLUniformLocation;
 }
 
 function buildVisualEnhancementVertexShader() {
@@ -365,6 +619,7 @@ function buildVisualEnhancementFragmentShader() {
     varying vec2 v_texCoord;
     uniform sampler2D u_texture;
     uniform vec2 u_texelSize;
+    uniform float u_intensity;
 
     void main() {
       vec3 center = texture2D(u_texture, v_texCoord).rgb;
@@ -373,8 +628,13 @@ function buildVisualEnhancementFragmentShader() {
       vec3 up = texture2D(u_texture, v_texCoord + vec2(0.0, -u_texelSize.y)).rgb;
       vec3 down = texture2D(u_texture, v_texCoord + vec2(0.0, u_texelSize.y)).rgb;
 
+      float sharpenStrength = mix(0.32, 0.92, u_intensity);
+      float highlightSuppression = mix(0.22, 0.7, u_intensity);
+      float skinSuppression = mix(0.18, 0.54, u_intensity);
+      float saturationMix = mix(1.0, 1.08, u_intensity);
+
       vec3 blur = (center + left + right + up + down) / 5.0;
-      vec3 sharpened = clamp(center + (center - blur) * 0.78, 0.0, 1.0);
+      vec3 sharpened = clamp(center + (center - blur) * sharpenStrength, 0.0, 1.0);
 
       float luma = dot(sharpened, vec3(0.299, 0.587, 0.114));
       float maxChannel = max(sharpened.r, max(sharpened.g, sharpened.b));
@@ -385,7 +645,7 @@ function buildVisualEnhancementFragmentShader() {
       vec3 toned = mix(
         sharpened,
         sharpened * vec3(0.98, 0.95, 0.92),
-        highlightMask * 0.6
+        highlightMask * highlightSuppression
       );
 
       float skinMask =
@@ -393,11 +653,11 @@ function buildVisualEnhancementFragmentShader() {
         smoothstep(0.52, 0.88, luma) *
         (1.0 - smoothstep(0.08, 0.28, saturation));
 
-      toned = mix(toned, toned * vec3(1.03, 0.99, 0.95), skinMask * 0.45);
+      toned = mix(toned, toned * vec3(1.03, 0.99, 0.95), skinMask * skinSuppression);
 
       float tonedLuma = dot(toned, vec3(0.299, 0.587, 0.114));
       vec3 lumaColor = vec3(tonedLuma);
-      vec3 corrected = clamp(mix(lumaColor, toned, 1.08), 0.0, 1.0);
+      vec3 corrected = clamp(mix(lumaColor, toned, saturationMix), 0.0, 1.0);
 
       gl_FragColor = vec4(corrected, 1.0);
     }
@@ -480,6 +740,7 @@ function createVisualEnhancementGlContext(
   const positionLocation = gl.getAttribLocation(program, 'a_position');
   const texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
   const texelSizeLocation = gl.getUniformLocation(program, 'u_texelSize');
+  const intensityLocation = gl.getUniformLocation(program, 'u_intensity');
 
   if (
     !texture ||
@@ -487,7 +748,8 @@ function createVisualEnhancementGlContext(
     !texCoordBuffer ||
     positionLocation < 0 ||
     texCoordLocation < 0 ||
-    !texelSizeLocation
+    !texelSizeLocation ||
+    !intensityLocation
   ) {
     if (texture) {
       gl.deleteTexture(texture);
@@ -504,6 +766,7 @@ function createVisualEnhancementGlContext(
 
   gl.useProgram(program);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+  gl.clearColor(0, 0, 0, 1);
 
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -538,20 +801,23 @@ function createVisualEnhancementGlContext(
     positionLocation,
     texCoordLocation,
     texelSizeLocation,
+    intensityLocation,
   };
 }
 
 class VisualEnhancementController {
   private canvas: HTMLCanvasElement | null = null;
+  private canvasHost: HTMLElement | null = null;
   private canvasContext: CanvasRenderingContext2D | null = null;
   private glContext: VisualEnhancementGlContext | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private animationFrameId: number | null = null;
   private videoFrameCallbackHandle: VideoFrameRequestHandle | null = null;
-  private enabled = false;
+  private viewportChangeTimerId: number | null = null;
+  private level: VisualEnhancementLevel = 'off';
   private lastWidth = 0;
   private lastHeight = 0;
-  private previousVideoOpacity = '';
+  private windowListenersBound = false;
 
   private readonly handlePlay = () => {
     this.startRendering();
@@ -570,20 +836,125 @@ class VisualEnhancementController {
     this.renderFrame();
   };
 
+  private readonly handleLoadedMetadata = () => {
+    this.renderFrame();
+  };
+
+  private readonly handleViewportChange = () => {
+    if (!isVisualEnhancementActive(this.level)) {
+      return;
+    }
+
+    this.syncCanvasHost();
+    this.resizeCanvas();
+    this.renderFrame();
+
+    if (this.viewportChangeTimerId !== null) {
+      window.clearTimeout(this.viewportChangeTimerId);
+    }
+
+    this.viewportChangeTimerId = window.setTimeout(() => {
+      this.viewportChangeTimerId = null;
+      if (!isVisualEnhancementActive(this.level)) {
+        return;
+      }
+
+      this.syncCanvasHost();
+      this.resizeCanvas();
+      this.renderFrame();
+    }, 80);
+  };
+
   constructor(
     private readonly video: HTMLVideoElement,
-    private readonly host: HTMLElement
+    private readonly fallbackHost: HTMLElement
   ) {}
+
+  private getRenderHost(): HTMLElement | null {
+    return (
+      (this.video.closest('.art-video-player') as HTMLElement | null) ||
+      this.fallbackHost ||
+      this.video.parentElement
+    );
+  }
+
+  private setCanvasVisible(visible: boolean) {
+    if (!this.canvas) {
+      return;
+    }
+
+    this.canvas.style.opacity = visible ? '1' : '0';
+  }
+
+  private bindWindowListeners() {
+    if (this.windowListenersBound || typeof document === 'undefined') {
+      return;
+    }
+
+    window.addEventListener('resize', this.handleViewportChange);
+    document.addEventListener('fullscreenchange', this.handleViewportChange);
+    document.addEventListener(
+      'webkitfullscreenchange' as keyof DocumentEventMap,
+      this.handleViewportChange as EventListener
+    );
+    this.windowListenersBound = true;
+  }
+
+  private unbindWindowListeners() {
+    if (!this.windowListenersBound || typeof document === 'undefined') {
+      return;
+    }
+
+    window.removeEventListener('resize', this.handleViewportChange);
+    document.removeEventListener('fullscreenchange', this.handleViewportChange);
+    document.removeEventListener(
+      'webkitfullscreenchange' as keyof DocumentEventMap,
+      this.handleViewportChange as EventListener
+    );
+    this.windowListenersBound = false;
+  }
+
+  private observeResize() {
+    if (typeof ResizeObserver === 'undefined' || !this.canvasHost) {
+      return;
+    }
+
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = new ResizeObserver(() => {
+      this.resizeCanvas();
+      this.renderFrame();
+    });
+    this.resizeObserver.observe(this.canvasHost);
+  }
+
+  private syncCanvasHost(): boolean {
+    const nextHost = this.getRenderHost();
+    if (!nextHost || !this.canvas) {
+      return false;
+    }
+
+    if (this.canvasHost !== nextHost) {
+      this.canvasHost = nextHost;
+      nextHost.appendChild(this.canvas);
+      this.observeResize();
+      this.lastWidth = 0;
+      this.lastHeight = 0;
+    }
+
+    return true;
+  }
 
   private ensureCanvas(): boolean {
     if (this.canvas) {
-      return true;
+      return this.syncCanvasHost();
     }
 
     const canvas = document.createElement('canvas');
     canvas.className = 'pointer-events-none absolute inset-0 h-full w-full';
-    canvas.style.zIndex = '1';
+    canvas.style.zIndex = '15';
     canvas.style.borderRadius = 'inherit';
+    canvas.style.opacity = '0';
+    canvas.style.transition = 'opacity 120ms ease';
 
     const glContext = createVisualEnhancementGlContext(canvas);
     const canvasContext = glContext
@@ -597,37 +968,28 @@ class VisualEnhancementController {
       return false;
     }
 
-    this.host.appendChild(canvas);
     this.canvas = canvas;
     this.glContext = glContext;
     this.canvasContext = canvasContext;
-    this.previousVideoOpacity = this.video.style.opacity;
-    this.video.style.opacity = '0';
-    this.video.style.willChange = 'opacity';
-    this.observeResize();
+    this.canvasHost = null;
+    this.bindWindowListeners();
 
+    if (!this.syncCanvasHost()) {
+      this.disableInternal();
+      return false;
+    }
+
+    this.observeResize();
     return true;
   }
 
-  private observeResize() {
-    if (typeof ResizeObserver === 'undefined' || this.resizeObserver) {
-      return;
-    }
-
-    this.resizeObserver = new ResizeObserver(() => {
-      this.resizeCanvas();
-      this.renderFrame();
-    });
-    this.resizeObserver.observe(this.host);
-  }
-
   private resizeCanvas() {
-    if (!this.canvas) {
+    if (!this.canvas || !this.canvasHost) {
       return;
     }
 
-    const width = this.host.clientWidth;
-    const height = this.host.clientHeight;
+    const width = this.canvasHost.clientWidth;
+    const height = this.canvasHost.clientHeight;
     if (width === 0 || height === 0) {
       return;
     }
@@ -647,19 +1009,43 @@ class VisualEnhancementController {
     this.lastHeight = nextHeight;
     this.canvas.width = nextWidth;
     this.canvas.height = nextHeight;
-
-    if (this.glContext) {
-      this.glContext.gl.viewport(0, 0, nextWidth, nextHeight);
-    }
   }
 
-  private renderWebGlFrame() {
+  private getDrawRect(): AspectFitRect | null {
+    if (!this.canvas) {
+      return null;
+    }
+
+    const sourceWidth = this.video.videoWidth;
+    const sourceHeight = this.video.videoHeight;
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+      return null;
+    }
+
+    return calculateAspectFitRect(
+      this.canvas.width,
+      this.canvas.height,
+      sourceWidth,
+      sourceHeight
+    );
+  }
+
+  private renderWebGlFrame(drawRect: AspectFitRect, intensity: number) {
     if (!this.canvas || !this.glContext) {
       return;
     }
 
-    const { gl, texture, texelSizeLocation } = this.glContext;
-    gl.useProgram(this.glContext.program);
+    const { gl, texture, texelSizeLocation, intensityLocation, program } =
+      this.glContext;
+    const viewportX = Math.round(drawRect.x);
+    const viewportY = Math.round(
+      this.canvas.height - drawRect.y - drawRect.height
+    );
+    const viewportWidth = Math.max(1, Math.round(drawRect.width));
+    const viewportHeight = Math.max(1, Math.round(drawRect.height));
+
+    gl.useProgram(program);
+    gl.clear(gl.COLOR_BUFFER_BIT);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texImage2D(
       gl.TEXTURE_2D,
@@ -671,13 +1057,16 @@ class VisualEnhancementController {
     );
     gl.uniform2f(
       texelSizeLocation,
-      1 / Math.max(this.canvas.width, 1),
-      1 / Math.max(this.canvas.height, 1)
+      1 / Math.max(this.video.videoWidth, 1),
+      1 / Math.max(this.video.videoHeight, 1)
     );
+    gl.uniform1f(intensityLocation, intensity);
+    gl.viewport(viewportX, viewportY, viewportWidth, viewportHeight);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  private render2dFrame() {
+  private render2dFrame(drawRect: AspectFitRect, intensity: number) {
     if (!this.canvas || !this.canvasContext) {
       return;
     }
@@ -687,49 +1076,95 @@ class VisualEnhancementController {
     const height = this.canvas.height;
 
     context.save();
-    context.clearRect(0, 0, width, height);
-    context.filter = 'contrast(1.1) saturate(0.92) brightness(0.96)';
+    context.fillStyle = '#000';
+    context.fillRect(0, 0, width, height);
+
+    context.filter = `contrast(${(1 + 0.1 * intensity).toFixed(2)}) saturate(${(
+      1 -
+      0.08 * intensity
+    ).toFixed(2)}) brightness(${(1 - 0.04 * intensity).toFixed(2)})`;
     context.globalCompositeOperation = 'source-over';
     context.globalAlpha = 1;
-    context.drawImage(this.video, 0, 0, width, height);
+    context.drawImage(
+      this.video,
+      drawRect.x,
+      drawRect.y,
+      drawRect.width,
+      drawRect.height
+    );
 
-    context.filter = 'contrast(1.35) saturate(0.88) brightness(0.98)';
+    context.filter = `contrast(${(1 + 0.35 * intensity).toFixed(
+      2
+    )}) saturate(${(0.98 - 0.12 * intensity).toFixed(2)}) brightness(${(
+      1 -
+      0.03 * intensity
+    ).toFixed(2)})`;
     context.globalCompositeOperation = 'overlay';
-    context.globalAlpha = 0.18;
-    context.drawImage(this.video, 0, 0, width, height);
+    context.globalAlpha = 0.12 + 0.14 * intensity;
+    context.drawImage(
+      this.video,
+      drawRect.x,
+      drawRect.y,
+      drawRect.width,
+      drawRect.height
+    );
 
-    context.filter = 'sepia(0.08) contrast(1.08)';
+    context.filter = `sepia(${(0.04 + 0.08 * intensity).toFixed(
+      2
+    )}) contrast(${(1 + 0.08 * intensity).toFixed(2)})`;
     context.globalCompositeOperation = 'source-over';
-    context.globalAlpha = 0.12;
-    context.drawImage(this.video, 0, 0, width, height);
+    context.globalAlpha = 0.08 + 0.1 * intensity;
+    context.drawImage(
+      this.video,
+      drawRect.x,
+      drawRect.y,
+      drawRect.width,
+      drawRect.height
+    );
 
     context.restore();
   }
 
   private renderFrame() {
+    if (!isVisualEnhancementActive(this.level)) {
+      return;
+    }
+
     if (
-      !this.enabled ||
       !this.canvas ||
+      !this.syncCanvasHost() ||
       this.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
     ) {
+      this.setCanvasVisible(false);
       return;
     }
 
     this.resizeCanvas();
 
+    const drawRect = this.getDrawRect();
+    const intensity = getVisualEnhancementIntensity(this.level);
+    if (!drawRect || intensity <= 0) {
+      this.setCanvasVisible(false);
+      return;
+    }
+
     try {
       if (this.glContext) {
-        this.renderWebGlFrame();
+        this.renderWebGlFrame(drawRect, intensity);
       } else {
-        this.render2dFrame();
+        this.render2dFrame(drawRect, intensity);
       }
+
+      this.setCanvasVisible(true);
     } catch (_) {
+      this.setCanvasVisible(false);
       this.disableInternal();
+      this.level = 'off';
     }
   }
 
   private scheduleNextFrame() {
-    if (!this.enabled) {
+    if (!isVisualEnhancementActive(this.level)) {
       return;
     }
 
@@ -741,7 +1176,11 @@ class VisualEnhancementController {
         videoWithFrameCallback.requestVideoFrameCallback(() => {
           this.videoFrameCallbackHandle = null;
           this.renderFrame();
-          if (this.enabled && !this.video.paused && !this.video.ended) {
+          if (
+            isVisualEnhancementActive(this.level) &&
+            !this.video.paused &&
+            !this.video.ended
+          ) {
             this.scheduleNextFrame();
           }
         });
@@ -751,7 +1190,11 @@ class VisualEnhancementController {
     this.animationFrameId = window.requestAnimationFrame(() => {
       this.animationFrameId = null;
       this.renderFrame();
-      if (this.enabled && !this.video.paused && !this.video.ended) {
+      if (
+        isVisualEnhancementActive(this.level) &&
+        !this.video.paused &&
+        !this.video.ended
+      ) {
         this.scheduleNextFrame();
       }
     });
@@ -759,7 +1202,7 @@ class VisualEnhancementController {
 
   private startRendering() {
     if (
-      !this.enabled ||
+      !isVisualEnhancementActive(this.level) ||
       this.animationFrameId !== null ||
       this.videoFrameCallbackHandle !== null
     ) {
@@ -796,8 +1239,15 @@ class VisualEnhancementController {
     this.video.removeEventListener('pause', this.handlePause);
     this.video.removeEventListener('seeked', this.handleSeeked);
     this.video.removeEventListener('loadeddata', this.handleLoadedData);
+    this.video.removeEventListener('loadedmetadata', this.handleLoadedMetadata);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.unbindWindowListeners();
+
+    if (this.viewportChangeTimerId !== null) {
+      window.clearTimeout(this.viewportChangeTimerId);
+      this.viewportChangeTimerId = null;
+    }
 
     if (this.canvas) {
       this.canvas.remove();
@@ -813,31 +1263,30 @@ class VisualEnhancementController {
     }
 
     this.canvas = null;
+    this.canvasHost = null;
     this.canvasContext = null;
     this.glContext = null;
-    this.video.style.opacity = this.previousVideoOpacity;
-    this.video.style.willChange = '';
     this.lastWidth = 0;
     this.lastHeight = 0;
   }
 
-  setEnabled(enabled: boolean) {
-    if (enabled === this.enabled) {
-      if (enabled) {
+  setLevel(level: VisualEnhancementLevel) {
+    if (level === this.level) {
+      if (isVisualEnhancementActive(level)) {
         this.renderFrame();
       }
       return;
     }
 
-    this.enabled = enabled;
+    this.level = level;
 
-    if (!enabled) {
+    if (!isVisualEnhancementActive(level)) {
       this.disableInternal();
       return;
     }
 
     if (!this.ensureCanvas()) {
-      this.enabled = false;
+      this.level = 'off';
       return;
     }
 
@@ -845,9 +1294,10 @@ class VisualEnhancementController {
     this.video.addEventListener('pause', this.handlePause);
     this.video.addEventListener('seeked', this.handleSeeked);
     this.video.addEventListener('loadeddata', this.handleLoadedData);
+    this.video.addEventListener('loadedmetadata', this.handleLoadedMetadata);
+    this.renderFrame();
 
     if (this.video.paused) {
-      this.renderFrame();
       return;
     }
 
@@ -855,7 +1305,7 @@ class VisualEnhancementController {
   }
 
   dispose() {
-    this.enabled = false;
+    this.level = 'off';
     this.disableInternal();
   }
 }
@@ -865,10 +1315,28 @@ export class PlayerEnhancementManager {
   private host: HTMLElement | null = null;
   private audioController: AudioSpikeProtectionController | null = null;
   private visualController: VisualEnhancementController | null = null;
+  private onAudioStatusChange?: (status: AudioSpikeProtectionStatus) => void;
   private preferences: PlayerEnhancementPreferences = {
-    audioSpikeProtectionEnabled: false,
-    visualEnhancementEnabled: false,
+    audioSpikeProtectionLevel: 'off',
+    visualEnhancementLevel: 'off',
   };
+
+  constructor(options: PlayerEnhancementManagerOptions = {}) {
+    this.onAudioStatusChange = options.onAudioStatusChange;
+    this.onAudioStatusChange?.(buildAudioSpikeProtectionStatus());
+  }
+
+  setAudioStatusListener(
+    listener?: (status: AudioSpikeProtectionStatus) => void
+  ) {
+    this.onAudioStatusChange = listener;
+    if (this.audioController) {
+      this.audioController.setStatusListener(listener);
+      return;
+    }
+
+    listener?.(buildAudioSpikeProtectionStatus());
+  }
 
   bind(video: HTMLVideoElement | null, host: HTMLElement | null) {
     if (!video || !host) {
@@ -885,7 +1353,10 @@ export class PlayerEnhancementManager {
 
     this.video = video;
     this.host = host;
-    this.audioController = new AudioSpikeProtectionController(video);
+    this.audioController = new AudioSpikeProtectionController(
+      video,
+      this.onAudioStatusChange
+    );
     this.visualController = new VisualEnhancementController(video, host);
     this.sync();
   }
@@ -896,12 +1367,8 @@ export class PlayerEnhancementManager {
   }
 
   private sync() {
-    this.audioController?.setEnabled(
-      this.preferences.audioSpikeProtectionEnabled
-    );
-    this.visualController?.setEnabled(
-      this.preferences.visualEnhancementEnabled
-    );
+    this.audioController?.setLevel(this.preferences.audioSpikeProtectionLevel);
+    this.visualController?.setLevel(this.preferences.visualEnhancementLevel);
   }
 
   dispose() {
@@ -911,5 +1378,6 @@ export class PlayerEnhancementManager {
     this.visualController = null;
     this.video = null;
     this.host = null;
+    this.onAudioStatusChange?.(buildAudioSpikeProtectionStatus());
   }
 }

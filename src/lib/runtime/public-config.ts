@@ -1,6 +1,10 @@
 import { AdminConfig } from '@/lib/admin.types';
 import { getConfig } from '@/lib/config';
 import {
+  normalizeAudioSpikeProtectionLevel,
+  normalizeVisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
+import {
   AppStorageType,
   getConfiguredStorageType,
   getProfileMode,
@@ -59,6 +63,16 @@ export async function buildPublicRuntimeConfig(
   const appTarget =
     (process.env.NEXT_PUBLIC_APP_TARGET as AppRuntimeConfig['APP_TARGET']) ||
     'web';
+  const baseAudioSpikeProtectionLevel = normalizeAudioSpikeProtectionLevel(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL ??
+      process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION,
+    'off'
+  );
+  const baseVisualEnhancementLevel = normalizeVisualEnhancementLevel(
+    process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
+      process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT,
+    'off'
+  );
   const baseRuntimeConfig: AppRuntimeConfig = {
     APP_TARGET: appTarget,
     STORAGE_TYPE: storageType,
@@ -81,10 +95,10 @@ export async function buildPublicRuntimeConfig(
       process.env.NEXT_PUBLIC_API_BASE_URL ||
       '',
     ENABLE_ADMIN_PANEL: appTarget === 'desktop' ? false : isAdminPanelEnabled(),
-    PLAYER_AUDIO_SPIKE_PROTECTION:
-      process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION === 'true',
-    PLAYER_VISUAL_ENHANCEMENT:
-      process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT === 'true',
+    PLAYER_AUDIO_SPIKE_PROTECTION: baseAudioSpikeProtectionLevel !== 'off',
+    PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: baseAudioSpikeProtectionLevel,
+    PLAYER_VISUAL_ENHANCEMENT: baseVisualEnhancementLevel !== 'off',
+    PLAYER_VISUAL_ENHANCEMENT_LEVEL: baseVisualEnhancementLevel,
   };
 
   if (!shouldUseServerConfigProjection(storageType)) {
@@ -92,6 +106,19 @@ export async function buildPublicRuntimeConfig(
   }
 
   const nextConfig = config || (await getConfig());
+  const playerEnhancementConfig = nextConfig.PlayerEnhancementConfig;
+  const audioSpikeProtectionLevel = normalizeAudioSpikeProtectionLevel(
+    playerEnhancementConfig?.AudioSpikeProtectionLevel ??
+      playerEnhancementConfig?.AudioSpikeProtection ??
+      false,
+    'off'
+  );
+  const visualEnhancementLevel = normalizeVisualEnhancementLevel(
+    playerEnhancementConfig?.VisualEnhancementLevel ??
+      playerEnhancementConfig?.VisualEnhancement ??
+      false,
+    'off'
+  );
 
   return {
     ...baseRuntimeConfig,
@@ -109,10 +136,10 @@ export async function buildPublicRuntimeConfig(
     })),
     FLUID_SEARCH: nextConfig.SiteConfig.FluidSearch,
     ENABLE_WEB_LIVE: nextConfig.SiteConfig.EnableWebLive ?? false,
-    PLAYER_AUDIO_SPIKE_PROTECTION:
-      nextConfig.PlayerEnhancementConfig?.AudioSpikeProtection ?? false,
-    PLAYER_VISUAL_ENHANCEMENT:
-      nextConfig.PlayerEnhancementConfig?.VisualEnhancement ?? false,
+    PLAYER_AUDIO_SPIKE_PROTECTION: audioSpikeProtectionLevel !== 'off',
+    PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: audioSpikeProtectionLevel,
+    PLAYER_VISUAL_ENHANCEMENT: visualEnhancementLevel !== 'off',
+    PLAYER_VISUAL_ENHANCEMENT_LEVEL: visualEnhancementLevel,
   };
 }
 

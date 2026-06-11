@@ -6,7 +6,7 @@ import Artplayer from 'artplayer';
 import Hls from 'hls.js';
 import { Heart } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, startTransition, useEffect, useRef, useState } from 'react';
 
 import {
   deleteFavorite,
@@ -41,12 +41,24 @@ import {
   preferBestPlaybackSource,
   searchPlaybackSources,
 } from '@/lib/playback-source-prefetch';
-import { PlayerEnhancementManager } from '@/lib/player-enhancement-runtime';
+import {
+  AudioSpikeProtectionStatus,
+  PlayerEnhancementManager,
+} from '@/lib/player-enhancement-runtime';
 import {
   PLAYER_ENHANCEMENTS_UPDATED_EVENT,
   readPlayerEnhancementPreferences,
   updatePlayerEnhancementPreference,
 } from '@/lib/player-enhancements';
+import { toggleDesktopWindowFullscreenState } from '@/lib/desktop/fullscreen';
+import {
+  AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS,
+  AudioSpikeProtectionLevel,
+  getAudioSpikeProtectionLevelLabel,
+  getVisualEnhancementLevelLabel,
+  VISUAL_ENHANCEMENT_LEVEL_OPTIONS,
+  VisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
@@ -55,6 +67,7 @@ import { processImageUrl } from '@/lib/utils';
 import CurrentEpisodeDownloadControl from '@/components/CurrentEpisodeDownloadControl';
 import EpisodeSelector from '@/components/EpisodeSelector';
 import PageLayout from '@/components/PageLayout';
+import PlayerEnhancementStatusOverlay from '@/components/PlayerEnhancementStatusOverlay';
 
 import { useDownloadStore } from '@/stores/downloadStore';
 
@@ -362,24 +375,26 @@ function PlayPageClient() {
     blockAdEnabledRef.current = blockAdEnabled;
   }, [blockAdEnabled]);
 
-  const [audioSpikeProtectionEnabled, setAudioSpikeProtectionEnabled] =
-    useState<boolean>(() => {
+  const [audioSpikeProtectionLevel, setAudioSpikeProtectionLevel] =
+    useState<AudioSpikeProtectionLevel>(() => {
       if (typeof window === 'undefined') {
-        return false;
+        return 'off';
       }
 
       return readPlayerEnhancementPreferences(getRuntimeConfig())
-        .audioSpikeProtectionEnabled;
+        .audioSpikeProtectionLevel;
     });
-  const [visualEnhancementEnabled, setVisualEnhancementEnabled] =
-    useState<boolean>(() => {
+  const [visualEnhancementLevel, setVisualEnhancementLevel] =
+    useState<VisualEnhancementLevel>(() => {
       if (typeof window === 'undefined') {
-        return false;
+        return 'off';
       }
 
       return readPlayerEnhancementPreferences(getRuntimeConfig())
-        .visualEnhancementEnabled;
+        .visualEnhancementLevel;
     });
+  const [audioEnhancementStatus, setAudioEnhancementStatus] =
+    useState<AudioSpikeProtectionStatus | null>(null);
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
@@ -387,8 +402,8 @@ function PlayPageClient() {
 
     const syncPlayerEnhancementPreferences = () => {
       const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
-      setAudioSpikeProtectionEnabled(preferences.audioSpikeProtectionEnabled);
-      setVisualEnhancementEnabled(preferences.visualEnhancementEnabled);
+      setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setVisualEnhancementLevel(preferences.visualEnhancementLevel);
     };
 
     window.addEventListener(
@@ -610,28 +625,66 @@ function PlayPageClient() {
       return;
     }
 
+    const handleAudioStatusChange = (status: AudioSpikeProtectionStatus) => {
+      startTransition(() => {
+        setAudioEnhancementStatus(status);
+      });
+    };
+
     if (!enhancementManagerRef.current) {
-      enhancementManagerRef.current = new PlayerEnhancementManager();
+      enhancementManagerRef.current = new PlayerEnhancementManager({
+        onAudioStatusChange: handleAudioStatusChange,
+      });
+    } else {
+      enhancementManagerRef.current.setAudioStatusListener(
+        handleAudioStatusChange
+      );
     }
 
     enhancementManagerRef.current.bind(video, host);
     enhancementManagerRef.current.setPreferences({
-      audioSpikeProtectionEnabled,
-      visualEnhancementEnabled,
+      audioSpikeProtectionLevel,
+      visualEnhancementLevel,
     });
   };
 
-  const handleAudioSpikeProtectionToggle = (value: boolean) => {
-    setAudioSpikeProtectionEnabled(value);
-    updatePlayerEnhancementPreference('audioSpikeProtectionEnabled', value);
-    return value ? '当前开启' : '当前关闭';
+  const handleAudioSpikeProtectionLevelChange = (
+    value: AudioSpikeProtectionLevel
+  ) => {
+    setAudioSpikeProtectionLevel(value);
+    updatePlayerEnhancementPreference('audioSpikeProtectionLevel', value);
+    return value === 'off'
+      ? '当前关闭'
+      : `当前${getAudioSpikeProtectionLevelLabel(value)}`;
   };
 
-  const handleVisualEnhancementToggle = (value: boolean) => {
-    setVisualEnhancementEnabled(value);
-    updatePlayerEnhancementPreference('visualEnhancementEnabled', value);
-    return value ? '当前开启' : '当前关闭';
+  const handleVisualEnhancementLevelChange = (
+    value: VisualEnhancementLevel
+  ) => {
+    setVisualEnhancementLevel(value);
+    updatePlayerEnhancementPreference('visualEnhancementLevel', value);
+    return value === 'off'
+      ? '当前关闭'
+      : `当前${getVisualEnhancementLevelLabel(value)}`;
   };
+
+  const buildDesktopFullscreenControl = (fullscreen = false) => ({
+    name: 'desktop-window-fullscreen',
+    position: 'right',
+    index: 70,
+    tooltip: fullscreen ? '退出窗口全屏' : '窗口全屏',
+    html: fullscreen
+      ? '<i class="art-icon flex"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 4H4v3M15 4h3v3M18 15v3h-3M4 15v3h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 8h6v6H8z" stroke="currentColor" stroke-width="1.8"/></svg></i>'
+      : '<i class="art-icon flex"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 4H4v4M14 4h4v4M18 14v4h-4M8 18H4v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></i>',
+    click: async function (control: any) {
+      const nextState = await toggleDesktopWindowFullscreenState();
+      if (nextState === null) {
+        return;
+      }
+
+      control.update(buildDesktopFullscreenControl(nextState));
+    },
+  });
 
   // Wake Lock 相关函数
   const requestWakeLock = async () => {
@@ -804,24 +857,32 @@ function PlayPageClient() {
     artPlayerRef.current.setting.update({
       name: '音量突增保护',
       html: '音量突增保护',
-      switch: audioSpikeProtectionEnabled,
-      onSwitch: function (item: any) {
-        const nextValue = !item.switch;
-        handleAudioSpikeProtectionToggle(nextValue);
-        return nextValue;
+      tooltip: getAudioSpikeProtectionLevelLabel(audioSpikeProtectionLevel),
+      selector: AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => ({
+        value: option.value,
+        name: `audio-spike-protection-${option.value}`,
+        default: option.value === audioSpikeProtectionLevel,
+        html: option.label,
+      })),
+      onSelect: function (item: any) {
+        return handleAudioSpikeProtectionLevelChange(item.value);
       },
     });
     artPlayerRef.current.setting.update({
       name: '去磨皮修正',
       html: '去磨皮修正',
-      switch: visualEnhancementEnabled,
-      onSwitch: function (item: any) {
-        const nextValue = !item.switch;
-        handleVisualEnhancementToggle(nextValue);
-        return nextValue;
+      tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
+      selector: VISUAL_ENHANCEMENT_LEVEL_OPTIONS.map((option) => ({
+        value: option.value,
+        name: `visual-enhancement-${option.value}`,
+        default: option.value === visualEnhancementLevel,
+        html: option.label,
+      })),
+      onSelect: function (item: any) {
+        return handleVisualEnhancementLevelChange(item.value);
       },
     });
-  }, [audioSpikeProtectionEnabled, visualEnhancementEnabled]);
+  }, [audioSpikeProtectionLevel, visualEnhancementLevel]);
 
   const formatTime = (seconds: number): string => {
     if (seconds === 0) return '00:00';
@@ -1796,7 +1857,11 @@ function PlayPageClient() {
     // f 键 = 切换全屏
     if (e.key === 'f' || e.key === 'F') {
       if (artPlayerRef.current) {
-        artPlayerRef.current.fullscreen = !artPlayerRef.current.fullscreen;
+        if (getRuntimeConfig().APP_TARGET === 'desktop') {
+          void toggleDesktopWindowFullscreenState();
+        } else {
+          artPlayerRef.current.fullscreen = !artPlayerRef.current.fullscreen;
+        }
         e.preventDefault();
       }
     }
@@ -2044,6 +2109,8 @@ function PlayPageClient() {
       cleanupPlayer();
     }
 
+    const isDesktopPlayer = getRuntimeConfig().APP_TARGET === 'desktop';
+
     try {
       // 创建新的播放器实例
       Artplayer.PLAYBACK_RATE = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
@@ -2067,7 +2134,7 @@ function PlayPageClient() {
         flip: false,
         playbackRate: true,
         aspectRatio: false,
-        fullscreen: true,
+        fullscreen: !isDesktopPlayer,
         fullscreenWeb: true,
         subtitleOffset: false,
         miniProgressBar: false,
@@ -2244,21 +2311,31 @@ function PlayPageClient() {
           {
             name: '音量突增保护',
             html: '音量突增保护',
-            switch: audioSpikeProtectionEnabled,
-            onSwitch: function (item) {
-              const nextValue = !item.switch;
-              handleAudioSpikeProtectionToggle(nextValue);
-              return nextValue;
+            tooltip: getAudioSpikeProtectionLevelLabel(
+              audioSpikeProtectionLevel
+            ),
+            selector: AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => ({
+              value: option.value,
+              name: `audio-spike-protection-${option.value}`,
+              default: option.value === audioSpikeProtectionLevel,
+              html: option.label,
+            })),
+            onSelect: function (item) {
+              return handleAudioSpikeProtectionLevelChange(item.value);
             },
           },
           {
             name: '去磨皮修正',
             html: '去磨皮修正',
-            switch: visualEnhancementEnabled,
-            onSwitch: function (item) {
-              const nextValue = !item.switch;
-              handleVisualEnhancementToggle(nextValue);
-              return nextValue;
+            tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
+            selector: VISUAL_ENHANCEMENT_LEVEL_OPTIONS.map((option) => ({
+              value: option.value,
+              name: `visual-enhancement-${option.value}`,
+              default: option.value === visualEnhancementLevel,
+              html: option.label,
+            })),
+            onSelect: function (item) {
+              return handleVisualEnhancementLevelChange(item.value);
             },
           },
           {
@@ -2341,6 +2418,7 @@ function PlayPageClient() {
               handleNextEpisode();
             },
           },
+          ...(isDesktopPlayer ? [buildDesktopFullscreenControl()] : []),
         ],
       });
       playerSessionRef.current = {
@@ -2567,7 +2645,7 @@ function PlayPageClient() {
 
   useEffect(() => {
     syncPlayerEnhancements();
-  }, [audioSpikeProtectionEnabled, visualEnhancementEnabled, videoUrl]);
+  }, [audioSpikeProtectionLevel, visualEnhancementLevel, videoUrl]);
 
   // 当组件卸载时清理定时器、Wake Lock 和播放器资源
   useEffect(() => {
@@ -2842,6 +2920,9 @@ function PlayPageClient() {
                   ref={artRef}
                   className='relative bg-black w-full h-full rounded-xl overflow-hidden shadow-lg'
                 ></div>
+                <PlayerEnhancementStatusOverlay
+                  status={audioEnhancementStatus}
+                />
 
                 {/* 换源加载蒙层 */}
                 {isVideoLoading && (
