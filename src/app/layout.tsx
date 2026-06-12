@@ -29,56 +29,122 @@ function buildDesktopRuntimeBootstrapScript() {
       return;
     }
 
-    try {
-      var request = new XMLHttpRequest();
-      request.open('GET', baseUrl + '/api/runtime/public-config', false);
-      request.setRequestHeader('Accept', 'application/json');
-      request.send(null);
+    if (typeof fetch !== 'function') {
+      return;
+    }
 
-      if (request.status >= 200 && request.status < 300 && request.responseText) {
-        var payload = JSON.parse(request.responseText);
-        var current = window.RUNTIME_CONFIG || {};
-        var currentAudioLevel =
-          current.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL ??
-          (current.PLAYER_AUDIO_SPIKE_PROTECTION ? 'standard' : 'off');
-        var currentVisualLevel =
-          current.PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
-          (current.PLAYER_VISUAL_ENHANCEMENT ? 'standard' : 'off');
-        var nextAudioLevel =
-          payload.playerAudioSpikeProtectionLevel ??
-          (payload.playerAudioSpikeProtection === undefined
-            ? currentAudioLevel
-            : payload.playerAudioSpikeProtection
-            ? 'standard'
-            : 'off');
-        var nextVisualLevel =
-          payload.playerVisualEnhancementLevel ??
-          (payload.playerVisualEnhancement === undefined
-            ? currentVisualLevel
-            : payload.playerVisualEnhancement
-            ? 'standard'
-            : 'off');
-        window.RUNTIME_CONFIG = Object.assign({}, current, {
-          DOUBAN_PROXY_TYPE: payload.doubanProxyType ?? current.DOUBAN_PROXY_TYPE,
-          DOUBAN_PROXY: payload.doubanProxy ?? current.DOUBAN_PROXY,
-          DOUBAN_IMAGE_PROXY_TYPE: payload.doubanImageProxyType ?? current.DOUBAN_IMAGE_PROXY_TYPE,
-          DOUBAN_IMAGE_PROXY: payload.doubanImageProxy ?? current.DOUBAN_IMAGE_PROXY,
-          FLUID_SEARCH: payload.fluidSearch ?? current.FLUID_SEARCH ?? true,
-          ENABLE_WEB_LIVE: payload.enableWebLive ?? current.ENABLE_WEB_LIVE ?? false,
-          PLAYER_AUDIO_SPIKE_PROTECTION: nextAudioLevel !== 'off',
-          PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: nextAudioLevel,
-          PLAYER_VISUAL_ENHANCEMENT: nextVisualLevel !== 'off',
-          PLAYER_VISUAL_ENHANCEMENT_LEVEL: nextVisualLevel,
-          PROFILE_SYNC_ENABLED: payload.profileSyncEnabled ?? current.PROFILE_SYNC_ENABLED ?? false,
-          CUSTOM_CATEGORIES: Array.isArray(payload.customCategories)
-            ? payload.customCategories
-            : current.CUSTOM_CATEGORIES || [],
-        });
-        window.__SITE_PRESENTATION__ = {
-          siteName: payload.siteName,
-          announcement: payload.announcement,
-        };
+    var attempts = 0;
+    var maxAttempts = 10;
+    var retryDelayMs = 1500;
+
+    function coalesce(value, fallback) {
+      return value === undefined || value === null ? fallback : value;
+    }
+
+    function applyPayload(payload) {
+      var current = window.RUNTIME_CONFIG || {};
+      var currentAudioLevel =
+        current.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL !== undefined &&
+        current.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL !== null
+          ? current.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL
+          : current.PLAYER_AUDIO_SPIKE_PROTECTION
+          ? 'standard'
+          : 'off';
+      var currentVisualLevel =
+        current.PLAYER_VISUAL_ENHANCEMENT_LEVEL !== undefined &&
+        current.PLAYER_VISUAL_ENHANCEMENT_LEVEL !== null
+          ? current.PLAYER_VISUAL_ENHANCEMENT_LEVEL
+          : current.PLAYER_VISUAL_ENHANCEMENT
+          ? 'standard'
+          : 'off';
+      var nextAudioLevel =
+        payload.playerAudioSpikeProtectionLevel !== undefined &&
+        payload.playerAudioSpikeProtectionLevel !== null
+          ? payload.playerAudioSpikeProtectionLevel
+          : payload.playerAudioSpikeProtection === undefined
+          ? currentAudioLevel
+          : payload.playerAudioSpikeProtection
+          ? 'standard'
+          : 'off';
+      var nextVisualLevel =
+        payload.playerVisualEnhancementLevel !== undefined &&
+        payload.playerVisualEnhancementLevel !== null
+          ? payload.playerVisualEnhancementLevel
+          : payload.playerVisualEnhancement === undefined
+          ? currentVisualLevel
+          : payload.playerVisualEnhancement
+          ? 'standard'
+          : 'off';
+
+      window.RUNTIME_CONFIG = Object.assign({}, current, {
+        DOUBAN_PROXY_TYPE: coalesce(
+          payload.doubanProxyType,
+          current.DOUBAN_PROXY_TYPE
+        ),
+        DOUBAN_PROXY: coalesce(payload.doubanProxy, current.DOUBAN_PROXY),
+        DOUBAN_IMAGE_PROXY_TYPE: coalesce(
+          payload.doubanImageProxyType,
+          current.DOUBAN_IMAGE_PROXY_TYPE
+        ),
+        DOUBAN_IMAGE_PROXY: coalesce(
+          payload.doubanImageProxy,
+          current.DOUBAN_IMAGE_PROXY
+        ),
+        FLUID_SEARCH: coalesce(payload.fluidSearch, coalesce(current.FLUID_SEARCH, true)),
+        ENABLE_WEB_LIVE: coalesce(
+          payload.enableWebLive,
+          coalesce(current.ENABLE_WEB_LIVE, false)
+        ),
+        PLAYER_AUDIO_SPIKE_PROTECTION: nextAudioLevel !== 'off',
+        PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: nextAudioLevel,
+        PLAYER_VISUAL_ENHANCEMENT: nextVisualLevel !== 'off',
+        PLAYER_VISUAL_ENHANCEMENT_LEVEL: nextVisualLevel,
+        PROFILE_SYNC_ENABLED: coalesce(
+          payload.profileSyncEnabled,
+          coalesce(current.PROFILE_SYNC_ENABLED, false)
+        ),
+        CUSTOM_CATEGORIES: Array.isArray(payload.customCategories)
+          ? payload.customCategories
+          : current.CUSTOM_CATEGORIES || [],
+      });
+      window.__SITE_PRESENTATION__ = {
+        siteName: payload.siteName,
+        announcement: payload.announcement,
+      };
+
+      if (typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new Event('lunatv:runtime-config-updated'));
       }
+    }
+
+    function fetchRuntimeConfig() {
+      attempts += 1;
+
+      fetch(baseUrl + '/api/runtime/public-config', {
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+        },
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error('desktop runtime bootstrap request failed');
+          }
+
+          return response.json();
+        })
+        .then(function (payload) {
+          applyPayload(payload);
+        })
+        .catch(function () {
+          if (attempts < maxAttempts) {
+            window.setTimeout(fetchRuntimeConfig, retryDelayMs);
+          }
+        });
+    }
+
+    try {
+      window.setTimeout(fetchRuntimeConfig, 0);
     } catch (_) {
       // Ignore bootstrap refresh failures and fall back to build-time config.
     }

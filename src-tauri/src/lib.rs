@@ -1,17 +1,18 @@
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
-    time::Duration,
+    time::{Duration, Instant},
 };
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, RunEvent, State};
+use tokio::sync::Mutex as AsyncMutex;
 
 const LOCAL_SERVICE_PORT: u16 = 8787;
 const LOCAL_SERVICE_HEALTH_PATH: &str = "/health";
@@ -19,6 +20,8 @@ const LOCAL_SERVICE_BINARY_NAME: &str = "moontv-local-service";
 const LOCAL_SERVICE_CONFIG_FILE_NAME: &str = "desktop.config.json";
 const LOCAL_SERVICE_DB_FILE_NAME: &str = "moontv-desktop.sqlite3";
 const ADMIN_PERSISTENCE_FILE_NAME: &str = "desktop-admin-state.json";
+const LOCAL_SERVICE_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const LOCAL_SERVICE_STARTUP_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -27,6 +30,7 @@ const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
 #[derive(Default)]
 struct DesktopRuntimeState {
     service_process: Mutex<Option<ServiceProcess>>,
+    service_start_lock: AsyncMutex<()>,
 }
 
 struct ServiceProcess {
@@ -134,11 +138,13 @@ fn stop_local_service(state: State<'_, DesktopRuntimeState>) -> Result<LocalServ
 }
 
 #[tauri::command]
-fn get_local_service_status(
+async fn get_local_service_status(
     app: AppHandle,
     state: State<'_, DesktopRuntimeState>,
 ) -> Result<LocalServiceStatus, String> {
-    get_local_service_status_impl(&app, &state).map_err(|error| error.to_string())
+    get_local_service_status_impl(&app, &state)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -235,12 +241,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(DesktopRuntimeState::default())
         .setup(|app| {
-            let state = app.state::<DesktopRuntimeState>();
-            tauri::async_runtime::block_on(start_local_service_impl(app.handle(), &state))
-                .map(|_| ())
-                .map_err(|error| -> Box<dyn std::error::Error> {
-                    Box::new(std::io::Error::other(error.to_string()))
-                })
+            spawn_local_service_start(app.handle().clone());
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             start_local_service,
@@ -264,10 +266,21 @@ pub fn run() {
     });
 }
 
+fn spawn_local_service_start(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<DesktopRuntimeState>();
+
+        if let Err(error) = start_local_service_impl(&app, &state).await {
+            tracing::error!("failed to start local service in background: {error}");
+        }
+    });
+}
+
 async fn start_local_service_impl(
     app: &AppHandle,
     state: &DesktopRuntimeState,
 ) -> Result<LocalServiceStatus> {
+    let _start_guard = state.service_start_lock.lock().await;
     let paths = resolve_runtime_paths(app)?;
     ensure_desktop_config_file(&paths.config_path)?;
     fs::create_dir_all(&paths.data_dir)
@@ -304,6 +317,20 @@ async fn start_local_service_impl(
             terminate_child_process(&mut existing_process.child)?;
             *guard = None;
         }
+    }
+
+    if local_service_is_healthy(&base_url).await {
+        tracing::warn!(
+            "detected a healthy local service on {base_url} without a tracked child process"
+        );
+
+        return Ok(build_status(
+            true,
+            &base_url,
+            &paths.config_path,
+            &paths.data_dir,
+            &paths.sqlite_path,
+        ));
     }
 
     let sidecar_path = resolve_sidecar_binary_path(app)?;
@@ -343,7 +370,16 @@ async fn start_local_service_impl(
         )
     })?;
 
-    wait_for_local_service(&base_url).await?;
+    let mut child = child;
+    if let Err(error) = wait_for_local_service(&base_url, &mut child).await {
+        if let Err(termination_error) = terminate_child_process(&mut child) {
+            tracing::warn!(
+                "failed to terminate local service after startup error: {termination_error}"
+            );
+        }
+
+        return Err(error);
+    }
 
     let mut guard = state
         .service_process
@@ -393,29 +429,38 @@ fn stop_local_service_impl(state: &DesktopRuntimeState) -> Result<LocalServiceSt
     })
 }
 
-fn get_local_service_status_impl(
+async fn get_local_service_status_impl(
     app: &AppHandle,
     state: &DesktopRuntimeState,
 ) -> Result<LocalServiceStatus> {
     let paths = resolve_runtime_paths(app)?;
-    let guard = state
-        .service_process
-        .lock()
-        .map_err(|_| anyhow::anyhow!("failed to lock desktop runtime state"))?;
+    let tracked_status = {
+        let guard = state
+            .service_process
+            .lock()
+            .map_err(|_| anyhow::anyhow!("failed to lock desktop runtime state"))?;
 
-    if let Some(process) = guard.as_ref() {
-        return Ok(build_status(
-            true,
-            &process.base_url,
-            &process.config_path,
-            &process.data_dir,
-            &process.sqlite_path,
-        ));
+        guard.as_ref().map(|process| {
+            build_status(
+                true,
+                &process.base_url,
+                &process.config_path,
+                &process.data_dir,
+                &process.sqlite_path,
+            )
+        })
+    };
+
+    if let Some(status) = tracked_status {
+        return Ok(status);
     }
 
+    let base_url = format!("http://127.0.0.1:{LOCAL_SERVICE_PORT}");
+    let running = local_service_is_healthy(&base_url).await;
+
     Ok(build_status(
-        false,
-        &format!("http://127.0.0.1:{LOCAL_SERVICE_PORT}"),
+        running,
+        &base_url,
         &paths.config_path,
         &paths.data_dir,
         &paths.sqlite_path,
@@ -455,13 +500,24 @@ fn terminate_child_process(child: &mut Child) -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_local_service(base_url: &str) -> Result<()> {
-    for _ in 0..40 {
+async fn wait_for_local_service(base_url: &str, child: &mut Child) -> Result<()> {
+    let deadline = Instant::now() + LOCAL_SERVICE_STARTUP_TIMEOUT;
+
+    while Instant::now() < deadline {
         if local_service_is_healthy(base_url).await {
             return Ok(());
         }
 
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        if let Some(status) = child
+            .try_wait()
+            .context("failed to poll local service child process")?
+        {
+            return Err(anyhow::anyhow!(
+                "local service exited before becoming healthy with status {status}"
+            ));
+        }
+
+        tokio::time::sleep(LOCAL_SERVICE_STARTUP_RETRY_INTERVAL).await;
     }
 
     Err(anyhow::anyhow!(
@@ -540,7 +596,9 @@ fn resolve_desktop_auth_config(app: &AppHandle) -> Result<ResolvedDesktopAuthCon
     })
 }
 
-fn read_desktop_admin_persistence_document(app: &AppHandle) -> Result<DesktopAdminPersistenceDocument> {
+fn read_desktop_admin_persistence_document(
+    app: &AppHandle,
+) -> Result<DesktopAdminPersistenceDocument> {
     let paths = resolve_runtime_paths(app)?;
     let path = paths.data_dir.join(ADMIN_PERSISTENCE_FILE_NAME);
 

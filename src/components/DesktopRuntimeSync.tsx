@@ -16,6 +16,9 @@ import {
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 
+const INITIAL_REFRESH_MAX_ATTEMPTS = 10;
+const INITIAL_REFRESH_RETRY_DELAY_MS = 1500;
+
 async function refreshDesktopRuntimeConfig() {
   const response = await apiFetch('/runtime/public-config', {
     cache: 'no-store',
@@ -49,15 +52,41 @@ export default function DesktopRuntimeSync() {
       return;
     }
 
+    let cancelled = false;
+    let retryTimer: number | null = null;
+
+    const clearRetryTimer = () => {
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+
+    const refreshWithRetry = (attempt = 0) => {
+      clearRetryTimer();
+
+      void refreshDesktopRuntimeConfig().catch(() => {
+        if (cancelled || attempt + 1 >= INITIAL_REFRESH_MAX_ATTEMPTS) {
+          return;
+        }
+
+        retryTimer = window.setTimeout(() => {
+          refreshWithRetry(attempt + 1);
+        }, INITIAL_REFRESH_RETRY_DELAY_MS);
+      });
+    };
+
     const handleRefresh = () => {
-      void refreshDesktopRuntimeConfig().catch(() => undefined);
+      refreshWithRetry();
     };
 
     window.addEventListener(DESKTOP_RUNTIME_REFRESH_EVENT, handleRefresh);
 
-    void refreshDesktopRuntimeConfig().catch(() => undefined);
+    refreshWithRetry();
 
     return () => {
+      cancelled = true;
+      clearRetryTimer();
       window.removeEventListener(DESKTOP_RUNTIME_REFRESH_EVENT, handleRefresh);
     };
   }, []);

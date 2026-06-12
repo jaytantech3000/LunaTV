@@ -9,7 +9,7 @@ on:
         default: 'latest'
         type: string
   release:
-    types: [ published ]
+    types: [published]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -152,3 +152,4 @@ jobs:
           repository: ${{ github.repository }}
           retain_days: 0
           keep_minimum_runs: 2
+          delete_workflow_pattern: ${{ github.workflow }}
