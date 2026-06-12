@@ -34,6 +34,7 @@ use futures::{
     future::join_all,
     stream::{self, FuturesUnordered},
 };
+use moontv_storage::sqlite::{DesktopSqlite, SqliteDatabaseInfo};
 use regex::Regex;
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -251,6 +252,7 @@ pub struct AppState {
     config_path: PathBuf,
     data_dir: PathBuf,
     sqlite_path: PathBuf,
+    sqlite: DesktopSqlite,
     client: reqwest::Client,
     profile_sync_client: reqwest::Client,
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
@@ -280,13 +282,13 @@ impl AppState {
         fs::create_dir_all(&data_dir)
             .with_context(|| format!("failed to create {}", data_dir.display()))?;
 
-        Ok(Self::new(
+        Self::try_new(
             cli.host.clone(),
             cli.port,
             config_path,
             data_dir,
             sqlite_path,
-        ))
+        )
     }
 
     pub fn new(
@@ -296,15 +298,33 @@ impl AppState {
         data_dir: PathBuf,
         sqlite_path: PathBuf,
     ) -> Self {
-        let public_base_url = format!("http://{host}:{port}");
+        Self::try_new(host, port, config_path, data_dir, sqlite_path)
+            .expect("failed to initialize local service app state")
+    }
 
-        Self {
+    pub fn try_new(
+        host: String,
+        port: u16,
+        config_path: PathBuf,
+        data_dir: PathBuf,
+        sqlite_path: PathBuf,
+    ) -> Result<Self> {
+        let public_base_url = format!("http://{host}:{port}");
+        let sqlite = DesktopSqlite::initialize(&sqlite_path).with_context(|| {
+            format!(
+                "failed to initialize desktop sqlite foundation at {}",
+                sqlite_path.display()
+            )
+        })?;
+
+        Ok(Self {
             host,
             port,
             public_base_url,
             config_path,
             data_dir,
             sqlite_path,
+            sqlite,
             client: reqwest::Client::new(),
             profile_sync_client: reqwest::Client::builder()
                 .cookie_store(true)
@@ -316,7 +336,7 @@ impl AppState {
             douban_movie_api_base_url: DEFAULT_DOUBAN_MOVIE_API_BASE_URL.to_string(),
             douban_search_api_base_url: DEFAULT_DOUBAN_SEARCH_API_BASE_URL.to_string(),
             live_channels_cache: Arc::new(RwLock::new(BTreeMap::new())),
-        }
+        })
     }
 
     fn bind_addr(&self) -> String {
@@ -333,6 +353,10 @@ impl AppState {
 
     fn admin_persistence_path(&self) -> PathBuf {
         self.data_dir.join(ADMIN_PERSISTENCE_FILE_NAME)
+    }
+
+    fn sqlite_info(&self) -> &SqliteDatabaseInfo {
+        self.sqlite.info()
     }
 
     fn download_runtime_dir(&self) -> PathBuf {
@@ -499,22 +523,46 @@ impl AppState {
     }
 
     fn write_download_store_snapshot(&self, snapshot: &Value) -> Result<()> {
-        self.ensure_download_runtime_dirs()?;
-        write_json_file(&self.download_runtime_store_path(), snapshot)
+        self.sqlite.write_download_store_snapshot(snapshot)?;
+        let legacy_path = self.download_runtime_store_path();
+        if delete_if_exists(&legacy_path)? {
+            info!(
+                "removed legacy desktop download store snapshot file after sqlite write: {}",
+                legacy_path.display()
+            );
+        }
+        Ok(())
     }
 
     fn read_download_store_snapshot(&self) -> Result<Option<Value>> {
-        let path = self.download_runtime_store_path();
-        if !path.exists() {
-            return Ok(None);
+        if let Some(snapshot) = self.sqlite.read_download_store_snapshot()? {
+            return Ok(Some(snapshot));
         }
 
-        let snapshot: Value = read_json_file(&path)?;
-        Ok(Some(snapshot))
+        self.migrate_legacy_download_store_snapshot()
     }
 
     fn clear_download_store_snapshot(&self) -> Result<bool> {
-        delete_if_exists(&self.download_runtime_store_path())
+        let sqlite_deleted = self.sqlite.clear_download_store_snapshot()?;
+        let legacy_deleted = delete_if_exists(&self.download_runtime_store_path())?;
+        Ok(sqlite_deleted || legacy_deleted)
+    }
+
+    fn migrate_legacy_download_store_snapshot(&self) -> Result<Option<Value>> {
+        let legacy_path = self.download_runtime_store_path();
+        if !legacy_path.exists() {
+            return Ok(None);
+        }
+
+        let snapshot: Value = read_json_file(&legacy_path)?;
+        self.sqlite.write_download_store_snapshot(&snapshot)?;
+        delete_if_exists(&legacy_path)?;
+        info!(
+            "migrated legacy desktop download store snapshot from {} into {}",
+            legacy_path.display(),
+            self.sqlite.path().display()
+        );
+        Ok(Some(snapshot))
     }
 
     fn load_admin_persistence(&self) -> Result<DesktopAdminPersistence> {
@@ -1208,6 +1256,8 @@ struct HealthResponse {
     config_path: String,
     data_dir: String,
     sqlite_path: String,
+    sqlite_schema_version: i64,
+    sqlite_migration_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1565,6 +1615,7 @@ fn apply_cors_headers(headers: &mut HeaderMap) {
 }
 
 async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
+    let sqlite_info = state.sqlite_info();
     Json(HealthResponse {
         status: "ok",
         port: state.port,
@@ -1572,6 +1623,8 @@ async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
         config_path: state.config_path.display().to_string(),
         data_dir: state.data_dir.display().to_string(),
         sqlite_path: state.sqlite_path.display().to_string(),
+        sqlite_schema_version: sqlite_info.schema_version,
+        sqlite_migration_count: sqlite_info.applied_migration_count,
     })
 }
 
@@ -7779,6 +7832,71 @@ mod tests {
         assert_eq!(
             payload.get("port"),
             Some(&Value::Number(DEFAULT_PORT.into()))
+        );
+        assert_eq!(
+            payload.get("sqlite_schema_version"),
+            Some(&Value::Number(1.into()))
+        );
+        assert_eq!(
+            payload.get("sqlite_migration_count"),
+            Some(&Value::Number(1.into()))
+        );
+    }
+
+    #[test]
+    fn legacy_download_store_snapshot_is_migrated_into_sqlite() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let data_dir = temp_dir.path.join("data");
+        let legacy_snapshot_path = data_dir
+            .join(DOWNLOAD_RUNTIME_DIR_NAME)
+            .join(DOWNLOAD_RUNTIME_STORE_FILE_NAME);
+        let legacy_snapshot = json!({
+            "maxConcurrentTasks": 3,
+            "ownerUsername": "desktop-owner",
+            "tasks": {
+                "task-1": {
+                    "id": "task-1",
+                    "status": "paused"
+                }
+            },
+            "library": {}
+        });
+
+        write_json_file(&legacy_snapshot_path, &legacy_snapshot)
+            .expect("write legacy download store snapshot");
+
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            data_dir,
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+
+        let snapshot = state
+            .read_download_store_snapshot()
+            .expect("read migrated snapshot")
+            .expect("snapshot should exist");
+
+        assert_eq!(snapshot, legacy_snapshot);
+        assert!(
+            !legacy_snapshot_path.exists(),
+            "legacy snapshot file should be removed after migration"
+        );
+        assert_eq!(
+            state
+                .sqlite
+                .read_download_store_snapshot()
+                .expect("read sqlite snapshot")
+                .expect("sqlite snapshot should exist"),
+            legacy_snapshot
         );
     }
 

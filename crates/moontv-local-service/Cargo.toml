@@ -11,6 +11,7 @@ bs58.workspace = true
 clap.workspace = true
 futures.workspace = true
 html-escape.workspace = true
+moontv-storage = { path = "../moontv-storage" }
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true
