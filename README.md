@@ -42,6 +42,7 @@
 ## 🗺 目录
 
 - [技术栈](#技术栈)
+- [分支约束](#分支约束)
 - [部署](#部署)
   - [一键部署](#zeabur-一键部署)
   - [Docker 部署](#Kvrocks-存储推荐)
@@ -66,6 +67,13 @@
 | 播放器    | [ArtPlayer](https://github.com/zhw2590582/ArtPlayer) · [HLS.js](https://github.com/video-dev/hls.js/) |
 | 代码质量  | ESLint · Prettier · Jest                                                                              |
 | 部署      | Docker                                                                    |
+
+## 分支约束
+
+- `main` 分支仅用于同步上游 fork 仓库，必须与上游对应分支保持一致。
+- 不要直接向 `main` 提交、合并、cherry-pick 或带入任何本仓库的功能/修复改动。
+- 如需更新 `main`，只允许做上游同步，确保 `main` 不承载本地分支定制内容。
+- 日常开发、修复、发布相关工作请放在 `desktop`、`luna`、`nova` 或其他非 `main` 分支进行。
 
 ## 部署
 
