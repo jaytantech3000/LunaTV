@@ -73,7 +73,7 @@ jobs:
         with:
           images: ghcr.io/${{ steps.lowercase.outputs.owner }}/lunatv
           tags: |
-            type=raw,value=${{ github.event.inputs.tag || 'latest' }},enable={{is_default_branch}}
+            type=raw,value=${{ github.event.inputs.tag || 'latest' }},enable=${{ github.event_name != 'release' }}
             type=semver,pattern={{version}},enable=${{ github.event_name == 'release' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'release' }}
 
