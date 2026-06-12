@@ -163,6 +163,18 @@ export function isDesktopPlayerPresentationFullscreen(
   return Boolean(getDesktopPlayerVideo(player)?.webkitDisplayingFullscreen);
 }
 
+function setPlayerWebPresentationFullscreenState(
+  player: DesktopPlayerPresentationHandle | null | undefined,
+  fullscreen: boolean
+): boolean {
+  if (!player || typeof player.fullscreenWeb !== 'boolean') {
+    return false;
+  }
+
+  player.fullscreenWeb = fullscreen;
+  return player.fullscreenWeb === fullscreen;
+}
+
 async function requestElementPresentationFullscreen(
   target: FullscreenElement | null
 ): Promise<boolean> {
@@ -272,8 +284,7 @@ export async function setDesktopPlayerPresentationFullscreenState(
   if (!fullscreen) {
     let handled = false;
 
-    if (player.fullscreenWeb) {
-      player.fullscreenWeb = false;
+    if (await exitElementPresentationFullscreen()) {
       handled = true;
     }
 
@@ -281,11 +292,35 @@ export async function setDesktopPlayerPresentationFullscreenState(
       handled = true;
     }
 
-    if (await exitElementPresentationFullscreen()) {
+    if (setPlayerWebPresentationFullscreenState(player, false)) {
       handled = true;
     }
 
+    const windowFullscreenState = await getDesktopWindowFullscreenState();
+    if (windowFullscreenState) {
+      handled = (await setDesktopWindowFullscreenState(false)) || handled;
+    }
+
     return handled;
+  }
+
+  if (isMacPlatform()) {
+    const windowApplied = await setDesktopWindowFullscreenState(true);
+    if (windowApplied) {
+      return setPlayerWebPresentationFullscreenState(player, true);
+    }
+
+    if (requestVideoPresentationFullscreen(video)) {
+      return true;
+    }
+
+    if (
+      await requestElementPresentationFullscreen(getDesktopPlayerRoot(player))
+    ) {
+      return true;
+    }
+
+    return setPlayerWebPresentationFullscreenState(player, true);
   }
 
   if (
@@ -298,12 +333,7 @@ export async function setDesktopPlayerPresentationFullscreenState(
     return true;
   }
 
-  if (typeof player.fullscreenWeb === 'boolean') {
-    player.fullscreenWeb = true;
-    return Boolean(player.fullscreenWeb);
-  }
-
-  return false;
+  return setPlayerWebPresentationFullscreenState(player, true);
 }
 
 export async function toggleDesktopPlayerPresentationFullscreenState(
@@ -330,16 +360,38 @@ export function bindDesktopPlayerPresentationFullscreenState(
     return () => undefined;
   }
 
-  const handleStateChange = () => {
+  let disposed = false;
+  let removeWindowResizeListener: (() => void) | null = null;
+
+  const syncMacWindowManagedFullscreen = async () => {
+    if (!isMacPlatform()) {
+      return;
+    }
+
+    const windowFullscreenState = await getDesktopWindowFullscreenState();
+    if (windowFullscreenState === false && player.fullscreenWeb) {
+      player.fullscreenWeb = false;
+    }
+  };
+
+  const handleStateChange = async () => {
+    await syncMacWindowManagedFullscreen();
+    if (disposed) {
+      return;
+    }
+
     listener(isDesktopPlayerPresentationFullscreen(player));
   };
   const video = getDesktopPlayerVideo(player);
   const fullscreenWebListener = () => {
-    handleStateChange();
+    void handleStateChange();
   };
 
   if (typeof document !== 'undefined') {
-    document.addEventListener('fullscreenchange', handleStateChange);
+    document.addEventListener(
+      'fullscreenchange',
+      handleStateChange as EventListener
+    );
     document.addEventListener(
       'webkitfullscreenchange' as keyof DocumentEventMap,
       handleStateChange as EventListener
@@ -349,12 +401,38 @@ export function bindDesktopPlayerPresentationFullscreenState(
   video?.addEventListener('webkitbeginfullscreen', handleStateChange);
   video?.addEventListener('webkitendfullscreen', handleStateChange);
   player.on?.('fullscreenWeb', fullscreenWebListener);
+  void (async () => {
+    const windowHandle = await getDesktopWindowHandle();
+    if (!windowHandle || disposed) {
+      return;
+    }
 
-  handleStateChange();
+    try {
+      const unlisten = await windowHandle.onResized(() => {
+        void handleStateChange();
+      });
+      if (disposed) {
+        unlisten();
+        return;
+      }
+
+      removeWindowResizeListener = unlisten;
+    } catch (_) {
+      // Ignore platforms without resize listener support.
+    }
+  })();
+
+  void handleStateChange();
 
   return () => {
+    disposed = true;
+    removeWindowResizeListener?.();
+
     if (typeof document !== 'undefined') {
-      document.removeEventListener('fullscreenchange', handleStateChange);
+      document.removeEventListener(
+        'fullscreenchange',
+        handleStateChange as EventListener
+      );
       document.removeEventListener(
         'webkitfullscreenchange' as keyof DocumentEventMap,
         handleStateChange as EventListener
