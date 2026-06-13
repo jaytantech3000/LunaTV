@@ -3,8 +3,8 @@ import { getRuntimeConfig } from '@/lib/runtime-config';
 import {
   clearDesktopDownloadCache,
   deleteDesktopDownloadCacheEntry,
-  getDesktopDownloadCacheMeta,
   getDesktopDownloadCachedResponse,
+  getDesktopDownloadCacheMeta,
   isDesktopLocalDownloadRuntimeEnabled,
   putDesktopDownloadCacheEntry,
 } from './desktop-runtime';
@@ -13,7 +13,15 @@ import { DOWNLOAD_CACHE_NAME } from './types';
 const CACHE_DELETE_BATCH_SIZE = 50;
 
 function assertCacheStorageAvailable(): void {
-  if (typeof window === 'undefined' || typeof caches === 'undefined') {
+  if (typeof window === 'undefined') {
+    throw new Error('当前环境不支持 Cache Storage');
+  }
+
+  if (!window.isSecureContext) {
+    throw new Error('当前页面不是安全上下文，请使用 HTTPS 或 localhost');
+  }
+
+  if (typeof caches === 'undefined') {
     throw new Error('当前环境不支持 Cache Storage');
   }
 }
@@ -82,6 +90,13 @@ export function getOfflineDownloadSupportState(): {
     return {
       supported: false,
       reason: '当前桌面运行时尚未接入可用的离线下载能力',
+    };
+  }
+
+  if (!window.isSecureContext) {
+    return {
+      supported: false,
+      reason: '当前页面不是安全上下文，请使用 HTTPS 或 localhost',
     };
   }
 

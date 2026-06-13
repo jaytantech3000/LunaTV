@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any,react-hooks/exhaustive-deps,@typescript-eslint/no-empty-function */
 
 import {
+  Download,
   ExternalLink,
   Heart,
   Link,
@@ -19,6 +20,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 
 import {
   deleteFavorite,
@@ -28,10 +30,14 @@ import {
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { getOfflineDownloadSupportState } from '@/lib/download/cache';
+import { resolveDownloadablePlaybackSources } from '@/lib/download/downloadable';
+import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 import { isAdultContentResult, isAdultSourceCandidate } from '@/lib/yellow';
 import { useLongPress } from '@/hooks/useLongPress';
 
+import BatchEpisodeDownloadDialog from '@/components/BatchEpisodeDownloadDialog';
 import { ImagePlaceholder } from '@/components/ImagePlaceholder';
 import MobileActionSheet from '@/components/MobileActionSheet';
 
@@ -95,6 +101,19 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
     const [searchFavorited, setSearchFavorited] = useState<boolean | null>(
       null
     ); // 搜索结果的收藏状态
+    const [downloadDialogDetail, setDownloadDialogDetail] =
+      useState<SearchResult | null>(null);
+    const [downloadDialogAvailableSources, setDownloadDialogAvailableSources] =
+      useState<SearchResult[]>([]);
+    const [downloadDialogError, setDownloadDialogError] = useState<
+      string | null
+    >(null);
+    const [downloadDialogFeedback, setDownloadDialogFeedback] = useState<
+      string | null
+    >(null);
+    const [isDownloadDialogLoading, setIsDownloadDialogLoading] =
+      useState(false);
+    const [isDownloadDialogOpen, setIsDownloadDialogOpen] = useState(false);
 
     // 可外部修改的可控字段
     const [dynamicEpisodes, setDynamicEpisodes] = useState<number | undefined>(
@@ -118,6 +137,20 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
     useEffect(() => {
       setDynamicDoubanId(douban_id);
     }, [douban_id]);
+
+    useEffect(() => {
+      if (!downloadDialogFeedback) {
+        return;
+      }
+
+      const timeoutId = window.setTimeout(() => {
+        setDownloadDialogFeedback(null);
+      }, 2800);
+
+      return () => {
+        window.clearTimeout(timeoutId);
+      };
+    }, [downloadDialogFeedback]);
 
     useImperativeHandle(ref, () => ({
       setEpisodes: (eps?: number) => setDynamicEpisodes(eps),
@@ -166,6 +199,25 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       dynamicSourceNames,
       origin,
       source_name,
+    ]);
+
+    useEffect(() => {
+      setDownloadDialogDetail(null);
+      setDownloadDialogAvailableSources([]);
+      setDownloadDialogError(null);
+      setDownloadDialogFeedback(null);
+      setIsDownloadDialogLoading(false);
+      setIsDownloadDialogOpen(false);
+    }, [
+      douban_id,
+      episodes,
+      id,
+      query,
+      shouldAllowAdultPlayback,
+      source,
+      title,
+      type,
+      year,
     ]);
 
     // 获取收藏状态（搜索结果页面不检查）
@@ -390,6 +442,66 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       }
     }, [from, isAggregate, actualSource, actualId, searchFavorited]);
 
+    const handleOpenDownloadDialog = useCallback(async () => {
+      if (origin !== 'vod') {
+        return;
+      }
+
+      const supportState = getOfflineDownloadSupportState();
+      if (!supportState.supported) {
+        setDownloadDialogError(
+          supportState.reason || '当前环境不支持离线下载'
+        );
+        return;
+      }
+
+      if (downloadDialogDetail) {
+        setDownloadDialogError(null);
+        setDownloadDialogFeedback(null);
+        setIsDownloadDialogOpen(true);
+        return;
+      }
+
+      try {
+        setDownloadDialogError(null);
+        setDownloadDialogFeedback(null);
+        setIsDownloadDialogLoading(true);
+
+        const { detail, availableSources } =
+          await resolveDownloadablePlaybackSources({
+            source: actualSource,
+            id: actualId,
+            title: actualTitle.trim(),
+            year: actualYear || undefined,
+            searchType: actualSearchType || undefined,
+            query: actualQuery || undefined,
+            doubanId: actualDoubanId,
+            allowAdultCandidates: shouldAllowAdultPlayback,
+          });
+
+        setDownloadDialogDetail(detail);
+        setDownloadDialogAvailableSources(availableSources);
+        setIsDownloadDialogOpen(true);
+      } catch (error) {
+        setDownloadDialogError(
+          error instanceof Error ? error.message : '获取可下载剧集失败'
+        );
+      } finally {
+        setIsDownloadDialogLoading(false);
+      }
+    }, [
+      actualDoubanId,
+      actualId,
+      actualQuery,
+      actualSearchType,
+      actualSource,
+      actualTitle,
+      actualYear,
+      downloadDialogDetail,
+      origin,
+      shouldAllowAdultPlayback,
+    ]);
+
     // 长按操作
     const handleLongPress = useCallback(() => {
       if (!showMobileActions) {
@@ -494,6 +606,16 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           label: origin === 'live' ? '新标签页观看' : '新标签页播放',
           icon: <ExternalLink size={20} />,
           onClick: handlePlayInNewTab,
+          color: 'default' as const,
+        });
+      }
+
+      if (origin === 'vod' && actualTitle.trim()) {
+        actions.push({
+          id: 'download',
+          label: '下载',
+          icon: <Download size={20} />,
+          onClick: handleOpenDownloadDialog,
           color: 'default' as const,
         });
       }
@@ -613,9 +735,19 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       isAggregate,
       dynamicSourceNames,
       handleClick,
+      handleOpenDownloadDialog,
       handleToggleFavorite,
       handleDeleteRecord,
+      origin,
     ]);
+
+    const initialDownloadEpisodeIndex = Math.max(
+      0,
+      Math.min(
+        Math.max(0, (currentEpisode || 1) - 1),
+        Math.max(0, (downloadDialogDetail?.episodes.length || 1) - 1)
+      )
+    );
 
     return (
       <>
@@ -1270,6 +1402,85 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           totalEpisodes={actualEpisodes}
           origin={origin}
         />
+
+        {isDownloadDialogLoading &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div className='fixed inset-0 z-[10010] flex items-center justify-center p-4'>
+              <div className='absolute inset-0 bg-black/70 backdrop-blur-sm' />
+              <div className='relative z-[10011] w-full max-w-md rounded-3xl border border-white/10 bg-[#04110d] p-6 text-white shadow-2xl shadow-black/40'>
+                <div className='text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/80'>
+                  准备下载
+                </div>
+                <div className='mt-3 break-words text-2xl font-semibold text-white'>
+                  {actualTitle}
+                </div>
+                <div className='mt-3 text-sm text-gray-300'>
+                  正在加载可下载剧集和可用片源，请稍候。
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
+
+        {downloadDialogError &&
+          !isDownloadDialogLoading &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div className='fixed inset-0 z-[10010] flex items-center justify-center p-4'>
+              <button
+                type='button'
+                aria-label='关闭下载提示'
+                className='absolute inset-0 bg-black/70 backdrop-blur-sm'
+                onClick={() => setDownloadDialogError(null)}
+              />
+              <div className='relative z-[10011] w-full max-w-md rounded-3xl border border-white/10 bg-[#04110d] p-6 text-white shadow-2xl shadow-black/40'>
+                <div className='text-xs font-medium uppercase tracking-[0.24em] text-red-300/80'>
+                  下载不可用
+                </div>
+                <div className='mt-3 break-words text-2xl font-semibold text-white'>
+                  {actualTitle}
+                </div>
+                <div className='mt-3 text-sm text-gray-300'>
+                  {downloadDialogError}
+                </div>
+                <div className='mt-5 flex justify-end'>
+                  <button
+                    type='button'
+                    onClick={() => setDownloadDialogError(null)}
+                    className='inline-flex h-10 min-w-[72px] items-center justify-center rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
+
+        {downloadDialogFeedback &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div className='fixed bottom-6 left-1/2 z-[10012] w-[min(92vw,560px)] -translate-x-1/2 rounded-2xl border border-emerald-500/20 bg-[#04110d]/95 px-4 py-3 text-sm text-emerald-100 shadow-2xl shadow-black/40 backdrop-blur-sm'>
+              {downloadDialogFeedback}
+            </div>,
+            document.body
+          )}
+
+        {downloadDialogDetail && (
+          <BatchEpisodeDownloadDialog
+            detail={downloadDialogDetail}
+            availableSources={downloadDialogAvailableSources}
+            episodeIndex={initialDownloadEpisodeIndex}
+            isOpen={isDownloadDialogOpen}
+            searchTitle={actualQuery || actualTitle}
+            onClose={() => setIsDownloadDialogOpen(false)}
+            onComplete={(message) => {
+              setDownloadDialogError(null);
+              setDownloadDialogFeedback(message);
+            }}
+          />
+        )}
       </>
     );
   }
