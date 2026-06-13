@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getOfflineDownloadSupportState } from '@/lib/download/cache';
@@ -29,6 +29,7 @@ interface CurrentEpisodeDownloadControlProps {
   availableSources?: SearchResult[];
   episodeIndex: number;
   isOfflineMode?: boolean;
+  searchTitle?: string;
 }
 
 interface BatchEpisodeOption {
@@ -148,6 +149,7 @@ export default function CurrentEpisodeDownloadControl({
   availableSources = [],
   episodeIndex,
   isOfflineMode = false,
+  searchTitle,
 }: CurrentEpisodeDownloadControlProps) {
   const contentId = buildDownloadContentId(detail.source, detail.id);
   const taskId = buildDownloadTaskId(contentId, episodeIndex);
@@ -337,6 +339,7 @@ export default function CurrentEpisodeDownloadControl({
         detail,
         episodeIndex,
         availableSources,
+        searchTitle,
       });
     } catch (error) {
       setActionError(
@@ -449,6 +452,7 @@ export default function CurrentEpisodeDownloadControl({
         detail,
         episodeIndexes: selectedEpisodeIndexes,
         availableSources,
+        searchTitle,
       });
 
       setBatchFeedback(
@@ -479,11 +483,11 @@ export default function CurrentEpisodeDownloadControl({
       <div className='relative z-[10001] flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-[#04110d] text-white shadow-2xl shadow-black/40'>
         <div className='border-b border-white/10 px-5 py-5 lg:px-6'>
           <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
-            <div className='space-y-2'>
+            <div className='min-w-0 flex-1 space-y-2'>
               <div className='text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/80'>
                 批量下载
               </div>
-              <div className='text-2xl font-semibold text-white'>
+              <div className='break-words text-2xl font-semibold text-white'>
                 {detail.title}
               </div>
               <div className='text-sm text-gray-300'>
@@ -496,7 +500,7 @@ export default function CurrentEpisodeDownloadControl({
               <button
                 type='button'
                 onClick={handleCloseBatchDialog}
-                className='rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+                className='inline-flex h-10 min-w-[72px] shrink-0 items-center justify-center rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
               >
                 关闭
               </button>
@@ -524,9 +528,7 @@ export default function CurrentEpisodeDownloadControl({
             <div className='flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/5 p-4'>
               <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
                 <div className='space-y-1'>
-                  <div className='text-sm font-medium text-white'>
-                    快速选择
-                  </div>
+                  <div className='text-sm font-medium text-white'>快速选择</div>
                   <div className='text-xs text-gray-400'>
                     支持全选、反选、从当前集起选择，也可以直接逐集点选。
                   </div>
@@ -579,9 +581,7 @@ export default function CurrentEpisodeDownloadControl({
                           <button
                             key={label}
                             type='button'
-                            onClick={() =>
-                              handleChangeBatchPage(displayIndex)
-                            }
+                            onClick={() => handleChangeBatchPage(displayIndex)}
                             className={`relative rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                               isActive
                                 ? 'bg-emerald-500/15 text-emerald-200'
@@ -688,8 +688,7 @@ export default function CurrentEpisodeDownloadControl({
             <div className='space-y-2'>
               <div className='text-sm text-gray-300'>
                 已选 {selectedCount} 集。
-                {selectedCount > 0 &&
-                  ' 点击“开始下载”后会按队列顺序依次下载。'}
+                {selectedCount > 0 && ' 点击“开始下载”后会按队列顺序依次下载。'}
               </div>
               {actionError && (
                 <div className='text-sm text-red-300'>{actionError}</div>
@@ -744,7 +743,9 @@ export default function CurrentEpisodeDownloadControl({
                 <div>
                   {formatTaskSizeProgress(task)}
                   {task.status === 'downloading' &&
-                    ` · ${formatTransferRate(task.downloadSpeedBytesPerSecond)}`}
+                    ` · ${formatTransferRate(
+                      task.downloadSpeedBytesPerSecond
+                    )}`}
                 </div>
               </div>
             )}

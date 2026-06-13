@@ -20,6 +20,7 @@ export interface DownloadTask {
   vodId: string;
   episodeIndex: number;
   title: string;
+  searchTitle?: string;
   poster: string;
   year: string;
   desc?: string;
@@ -61,6 +62,7 @@ export interface DownloadedContentMeta {
   vodId: string;
   sourceName: string;
   title: string;
+  searchTitle?: string;
   poster: string;
   year: string;
   desc?: string;

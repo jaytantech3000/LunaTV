@@ -2899,6 +2899,7 @@ function PlayPageClient() {
                   : currentEpisodeIndex
               }
               isOfflineMode={isOfflineMode}
+              searchTitle={searchTitle}
             />
           )}
 

@@ -13,6 +13,12 @@ import {
 import { parseManifestForDownloadWithFallback } from './manifest';
 import { normalizeVodEpisodeUrlForDownload } from './normalize';
 import {
+  createTimeoutAbortSignal,
+  DownloadRequestError,
+  isRetryableDownloadError,
+  waitForRetry,
+} from './request';
+import {
   deleteResourceIndex,
   getResourceIndex,
   putResourceIndex,
@@ -31,12 +37,14 @@ interface StartEpisodeDownloadParams {
   detail: SearchResult;
   episodeIndex: number;
   availableSources?: SearchResult[];
+  searchTitle?: string;
 }
 
 interface StartBatchEpisodeDownloadParams {
   detail: SearchResult;
   episodeIndexes: number[];
   availableSources?: SearchResult[];
+  searchTitle?: string;
 }
 
 interface TaskRunnerState {
@@ -69,6 +77,7 @@ interface BatchDownloadResult {
 
 const RESOURCE_DOWNLOAD_WORKER_COUNT = 3;
 const MAX_RESOURCE_DOWNLOAD_RETRIES = 2;
+const RESOURCE_DOWNLOAD_TIMEOUT_MS = 45_000;
 const PROGRESS_FLUSH_INTERVAL_MS = 250;
 const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
@@ -206,7 +215,8 @@ function pickPreferredDoubanId(
 function buildInitialTask(
   detail: SearchResult,
   episodeIndex: number,
-  availableSources: SearchResult[] = []
+  availableSources: SearchResult[] = [],
+  searchTitle?: string
 ): DownloadTask {
   const contentId = buildDownloadContentId(detail.source, detail.id);
   const taskId = buildDownloadTaskId(contentId, episodeIndex);
@@ -231,6 +241,7 @@ function buildInitialTask(
     vodId: detail.id,
     episodeIndex,
     title: detail.title,
+    searchTitle: searchTitle?.trim() || undefined,
     poster: detail.poster,
     year: detail.year,
     desc: detail.desc,
@@ -264,8 +275,15 @@ export function applyLibraryMetadataFallback(
 
   return {
     ...task,
-    sourceName: pickPreferredTextValue(task.sourceName, previousItem.sourceName),
+    sourceName: pickPreferredTextValue(
+      task.sourceName,
+      previousItem.sourceName
+    ),
     title: pickPreferredTextValue(task.title, previousItem.title),
+    searchTitle: pickPreferredOptionalTextValue(
+      task.searchTitle,
+      previousItem.searchTitle
+    ),
     poster: pickPreferredTextValue(task.poster, previousItem.poster),
     year: pickPreferredTextValue(task.year, previousItem.year),
     desc: pickPreferredOptionalTextValue(task.desc, previousItem.desc),
@@ -282,107 +300,153 @@ async function downloadAndCacheUrl(
   controller: AbortController,
   onProgress?: (progress: DownloadResourceTransferProgress) => void
 ): Promise<DownloadResourceTransferResult> {
-  const response = await fetch(url, {
-    cache: 'no-store',
-    credentials: 'same-origin',
-    headers: {
-      [DOWNLOAD_REQUEST_INTENT_HEADER]: BACKGROUND_DOWNLOAD_REQUEST_INTENT,
-    },
-    signal: controller.signal,
-  });
-
-  if (!response.ok) {
-    throw new Error(`下载资源失败: ${response.status}`);
-  }
-
-  const contentLengthHeader = Number(response.headers.get('content-length') || 0);
-  const totalBytes =
-    Number.isFinite(contentLengthHeader) && contentLengthHeader > 0
-      ? contentLengthHeader
-      : 0;
-
-  if (!response.body) {
-    await putDownloadResponse(url, response.clone());
-    onProgress?.({
-      loadedBytes: totalBytes,
-      totalBytes,
-    });
-    return {
-      sizeBytes: totalBytes,
-      totalBytes,
-    };
-  }
-
-  const [cacheStream, measureStream] = response.body.tee();
-  const cachePromise = putDownloadResponse(
-    url,
-    new Response(cacheStream, {
-      headers: new Headers(response.headers),
-      status: response.status,
-      statusText: response.statusText,
-    })
-  );
-  const reader = measureStream.getReader();
-  let loadedBytes = 0;
-
-  onProgress?.({
-    loadedBytes,
-    totalBytes,
+  const timeoutSignal = createTimeoutAbortSignal({
+    sourceSignal: controller.signal,
+    timeoutMs: RESOURCE_DOWNLOAD_TIMEOUT_MS,
   });
 
   try {
-    let isDone = false;
+    const response = await fetch(url, {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: {
+        [DOWNLOAD_REQUEST_INTENT_HEADER]: BACKGROUND_DOWNLOAD_REQUEST_INTENT,
+      },
+      signal: timeoutSignal.signal,
+    });
 
-    while (!isDone) {
-      const { done, value } = await reader.read();
-
-      if (done) {
-        isDone = true;
-        continue;
-      }
-
-      loadedBytes += value?.byteLength || 0;
-      onProgress?.({
-        loadedBytes,
-        totalBytes,
+    if (!response.ok) {
+      throw new DownloadRequestError({
+        message: `下载资源失败: ${response.status}`,
+        kind: 'http',
+        status: response.status,
+        url,
       });
     }
+
+    const contentLengthHeader = Number(
+      response.headers.get('content-length') || 0
+    );
+    const totalBytes =
+      Number.isFinite(contentLengthHeader) && contentLengthHeader > 0
+        ? contentLengthHeader
+        : 0;
+
+    if (!response.body) {
+      await putDownloadResponse(url, response.clone());
+      onProgress?.({
+        loadedBytes: totalBytes,
+        totalBytes,
+      });
+      return {
+        sizeBytes: totalBytes,
+        totalBytes,
+      };
+    }
+
+    const [cacheStream, measureStream] = response.body.tee();
+    const cachePromise = putDownloadResponse(
+      url,
+      new Response(cacheStream, {
+        headers: new Headers(response.headers),
+        status: response.status,
+        statusText: response.statusText,
+      })
+    );
+    const reader = measureStream.getReader();
+    let loadedBytes = 0;
+
+    onProgress?.({
+      loadedBytes,
+      totalBytes,
+    });
+
+    try {
+      let isDone = false;
+
+      while (!isDone) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          isDone = true;
+          continue;
+        }
+
+        loadedBytes += value?.byteLength || 0;
+        onProgress?.({
+          loadedBytes,
+          totalBytes,
+        });
+      }
+    } catch (error) {
+      if (timeoutSignal.didTimeout()) {
+        throw new DownloadRequestError({
+          message: `下载资源超时: ${url}`,
+          kind: 'timeout',
+          url,
+          cause: error,
+        });
+      }
+
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const cacheTimeoutId = setTimeout(() => {
+        reject(
+          new DownloadRequestError({
+            message: `写入离线缓存超时: ${url}`,
+            kind: 'timeout',
+            url,
+          })
+        );
+      }, RESOURCE_DOWNLOAD_TIMEOUT_MS);
+
+      cachePromise.then(
+        () => {
+          clearTimeout(cacheTimeoutId);
+          resolve();
+        },
+        (error) => {
+          clearTimeout(cacheTimeoutId);
+          reject(error);
+        }
+      );
+    });
+
+    return {
+      sizeBytes: loadedBytes,
+      totalBytes: Math.max(totalBytes, loadedBytes),
+    };
+  } catch (error) {
+    if (timeoutSignal.didTimeout()) {
+      throw new DownloadRequestError({
+        message: `下载资源超时: ${url}`,
+        kind: 'timeout',
+        url,
+        cause: error,
+      });
+    }
+
+    if (error instanceof DownloadRequestError || controller.signal.aborted) {
+      throw error;
+    }
+
+    if (error instanceof TypeError) {
+      throw new DownloadRequestError({
+        message: `下载资源失败: ${url} (${error.message})`,
+        kind: 'network',
+        url,
+        cause: error,
+      });
+    }
+
+    throw error;
   } finally {
-    reader.releaseLock();
+    timeoutSignal.cleanup();
   }
-
-  await cachePromise;
-
-  return {
-    sizeBytes: loadedBytes,
-    totalBytes: Math.max(totalBytes, loadedBytes),
-  };
-}
-
-function isRetryableDownloadError(error: unknown): boolean {
-  if (error instanceof TypeError) {
-    return true;
-  }
-
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  if (error.name === 'AbortError') {
-    return true;
-  }
-
-  const normalizedMessage = error.message.trim().toLowerCase();
-  return (
-    normalizedMessage.includes('networkerror') ||
-    normalizedMessage.includes('failed to fetch')
-  );
-}
-
-function waitForRetry(attempt: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 200 * attempt);
-  });
 }
 
 export function mergeLibraryItem(
@@ -424,8 +488,15 @@ export function mergeLibraryItem(
     contentId: task.contentId,
     source: task.source,
     vodId: task.vodId,
-    sourceName: pickPreferredTextValue(task.sourceName, previousItem?.sourceName),
+    sourceName: pickPreferredTextValue(
+      task.sourceName,
+      previousItem?.sourceName
+    ),
     title: pickPreferredTextValue(task.title, previousItem?.title),
+    searchTitle: pickPreferredOptionalTextValue(
+      task.searchTitle,
+      previousItem?.searchTitle
+    ),
     poster: pickPreferredTextValue(task.poster, previousItem?.poster),
     year: pickPreferredTextValue(task.year, previousItem?.year),
     desc: pickPreferredOptionalTextValue(task.desc, previousItem?.desc),
@@ -605,10 +676,7 @@ class DownloadManager {
 
       return mergeManifestCandidateUrls(
         currentCandidates,
-        collectDownloadManifestCandidateUrls(
-          fallbackSources,
-          task.episodeIndex
-        )
+        collectDownloadManifestCandidateUrls(fallbackSources, task.episodeIndex)
       );
     } catch (error) {
       return currentCandidates;
@@ -705,7 +773,8 @@ class DownloadManager {
     const task = buildInitialTask(
       params.detail,
       params.episodeIndex,
-      params.availableSources
+      params.availableSources,
+      params.searchTitle
     );
     const existingLibraryItem =
       useDownloadStore.getState().library[task.contentId];
@@ -740,11 +809,19 @@ class DownloadManager {
 
       if (
         mergedManifestCandidateUrls.length !==
-        (existingTask.manifestCandidateUrls?.length || 0)
+          (existingTask.manifestCandidateUrls?.length || 0) ||
+        pickPreferredOptionalTextValue(
+          existingTask.searchTitle,
+          task.searchTitle
+        ) !== existingTask.searchTitle
       ) {
         patchTask(existingTask.id, (currentTask) => ({
           ...currentTask,
           manifestCandidateUrls: mergedManifestCandidateUrls,
+          searchTitle: pickPreferredOptionalTextValue(
+            currentTask.searchTitle,
+            task.searchTitle
+          ),
           updatedAt: now(),
         }));
       }
@@ -764,12 +841,20 @@ class DownloadManager {
           existingTask.manifestCandidateUrls || [existingTask.entryManifestUrl],
           task.manifestCandidateUrls || [task.entryManifestUrl]
         ),
+        searchTitle: pickPreferredOptionalTextValue(
+          existingTask.searchTitle,
+          task.searchTitle
+        ),
       });
       return {
         task: this.getTask(existingTask.id) || {
           ...existingTask,
           status: 'queued',
           errorMessage: undefined,
+          searchTitle: pickPreferredOptionalTextValue(
+            existingTask.searchTitle,
+            task.searchTitle
+          ),
         },
         queued: true,
       };
@@ -848,7 +933,8 @@ class DownloadManager {
       if (
         manifestCandidateUrls.length !==
           (task.manifestCandidateUrls?.length || 0) ||
-        (manifestCandidateUrls[0] && manifestCandidateUrls[0] !== task.entryManifestUrl)
+        (manifestCandidateUrls[0] &&
+          manifestCandidateUrls[0] !== task.entryManifestUrl)
       ) {
         patchTask(taskId, (currentTask) => ({
           ...currentTask,
@@ -903,7 +989,10 @@ class DownloadManager {
       let lastFlushedSpeedBytesPerSecond = -1;
       let lastSpeedSampleAt = now();
       let lastSpeedSampleBytes = completedSizeBytes;
-      const activeTransfers = new Map<string, DownloadResourceTransferProgress>();
+      const activeTransfers = new Map<
+        string,
+        DownloadResourceTransferProgress
+      >();
 
       const getCurrentSizeBytes = (): number => {
         let currentSizeBytes = completedSizeBytes;
@@ -991,11 +1080,12 @@ class DownloadManager {
                 : instantSpeedBytesPerSecond;
             lastSpeedSampleAt = currentTimestamp;
             lastSpeedSampleBytes = currentSizeBytes;
-          } else if (force || speedSampleElapsed >= PROGRESS_FLUSH_INTERVAL_MS) {
+          } else if (
+            force ||
+            speedSampleElapsed >= PROGRESS_FLUSH_INTERVAL_MS
+          ) {
             smoothedSpeedBytesPerSecond =
-              activeTransfers.size > 0
-                ? smoothedSpeedBytesPerSecond * 0.75
-                : 0;
+              activeTransfers.size > 0 ? smoothedSpeedBytesPerSecond * 0.75 : 0;
             lastSpeedSampleAt = currentTimestamp;
             lastSpeedSampleBytes = currentSizeBytes;
           }
@@ -1277,6 +1367,7 @@ class DownloadManager {
           detail: params.detail,
           episodeIndex,
           availableSources: params.availableSources,
+          searchTitle: params.searchTitle,
         });
         tasks.push(result.task);
         if (result.queued) {

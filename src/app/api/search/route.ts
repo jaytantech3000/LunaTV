@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
+  const allowAdultResults = searchParams.get('adult') === '1';
 
   if (!query) {
     const cacheTime = await getCacheTime();
@@ -56,7 +57,7 @@ export async function GET(request: NextRequest) {
       .filter((result) => result.status === 'fulfilled')
       .map((result) => (result as PromiseFulfilledResult<any>).value);
     let flattenedResults = successResults.flat();
-    if (!config.SiteConfig.DisableYellowFilter) {
+    if (!allowAdultResults && !config.SiteConfig.DisableYellowFilter) {
       flattenedResults = filterAdultContentResults(flattenedResults);
     }
     const cacheTime = await getCacheTime();

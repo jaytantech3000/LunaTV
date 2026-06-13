@@ -3,15 +3,14 @@
 import { Settings2 } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
-import {
-  type ChangeEvent,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import {
+  buildAdultContentMatchKey,
+  buildAdultDownloadGroupingQuery,
+  filterAdultGroupingSearchResults,
+} from '@/lib/download/adult';
 import {
   formatBytes,
   formatTaskSizeProgress,
@@ -21,9 +20,15 @@ import {
   getTaskEstimatedTotalSizeBytes,
 } from '@/lib/download/format';
 import { downloadManager } from '@/lib/download/manager';
-import { normalizeVodDetailForPlayback } from '@/lib/download/normalize';
+import {
+  normalizeVodDetailForPlayback,
+  normalizeVodSearchResultsForPlayback,
+} from '@/lib/download/normalize';
 import { buildOfflinePlayHref } from '@/lib/download/offline';
-import { sortActiveDownloadTasks } from '@/lib/download/sort';
+import {
+  sortActiveDownloadTaskGroups,
+  sortActiveDownloadTasks,
+} from '@/lib/download/sort';
 import {
   buildDownloadTaskId,
   DOWNLOAD_CACHE_NAME,
@@ -35,8 +40,10 @@ import {
   MIN_CONCURRENT_DOWNLOAD_TASKS,
 } from '@/lib/download/types';
 import { searchPlaybackSources } from '@/lib/playback-source-prefetch';
+import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
+import { isAdultContentResult } from '@/lib/yellow';
 
 import { useDownloadStore } from '@/stores/downloadStore';
 
@@ -119,6 +126,7 @@ interface MoreDownloadEpisodeOption {
 
 interface ActiveTaskGroup {
   contentId: string;
+  createdAt: number;
   title: string;
   poster: string;
   sourceName: string;
@@ -137,7 +145,20 @@ interface ActiveTaskGroup {
   errorCount: number;
 }
 
-function getMoreDownloadEpisodeStatus(option: MoreDownloadEpisodeOption): string {
+interface AdultRelatedDownloadOption {
+  contentId: string;
+  detail: SearchResult;
+  totalEpisodes: number;
+  actionableEpisodeIndexes: number[];
+  downloadedEpisodeCount: number;
+  activeEpisodeCount: number;
+  pausedOrErrorEpisodeCount: number;
+  isActionable: boolean;
+}
+
+function getMoreDownloadEpisodeStatus(
+  option: MoreDownloadEpisodeOption
+): string {
   if (!option.hasSource) {
     return '当前源缺少可下载地址';
   }
@@ -198,6 +219,86 @@ function getMoreDownloadEpisodeActionBadgeClassName(
   }
 }
 
+function getAdultRelatedDownloadStatus(
+  option: AdultRelatedDownloadOption
+): string {
+  if (option.totalEpisodes <= 0) {
+    return '当前资源没有可下载剧集';
+  }
+
+  if (option.downloadedEpisodeCount >= option.totalEpisodes) {
+    return option.totalEpisodes > 1 ? '已全部缓存' : '已缓存';
+  }
+
+  if (option.activeEpisodeCount > 0) {
+    return option.totalEpisodes > 1
+      ? `${option.activeEpisodeCount} 集在队列中`
+      : '已在下载队列中';
+  }
+
+  if (option.isActionable) {
+    return option.totalEpisodes > 1
+      ? `可加入 ${option.actionableEpisodeIndexes.length} 集`
+      : '可加入下载队列';
+  }
+
+  if (option.pausedOrErrorEpisodeCount > 0) {
+    return option.totalEpisodes > 1
+      ? `${option.pausedOrErrorEpisodeCount} 集可恢复`
+      : '当前资源可恢复下载';
+  }
+
+  return '当前没有可加入的剧集';
+}
+
+function getAdultRelatedDownloadActionLabel(
+  option: AdultRelatedDownloadOption
+): string {
+  if (option.totalEpisodes <= 0) {
+    return '不可下载';
+  }
+
+  if (option.downloadedEpisodeCount >= option.totalEpisodes) {
+    return '已缓存';
+  }
+
+  if (option.activeEpisodeCount > 0 && !option.isActionable) {
+    return '队列中';
+  }
+
+  if (!option.isActionable) {
+    return '不可下载';
+  }
+
+  if (option.totalEpisodes > 1) {
+    return `下载 ${option.actionableEpisodeIndexes.length} 集`;
+  }
+
+  return '下载';
+}
+
+function getAdultRelatedDownloadActionBadgeClassName(
+  option: AdultRelatedDownloadOption
+): string {
+  if (option.totalEpisodes <= 0) {
+    return 'border-white/10 bg-white/5 text-gray-500';
+  }
+
+  if (option.downloadedEpisodeCount >= option.totalEpisodes) {
+    return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+  }
+
+  if (option.activeEpisodeCount > 0 && !option.isActionable) {
+    return 'border-sky-500/20 bg-sky-500/10 text-sky-200';
+  }
+
+  if (!option.isActionable) {
+    return 'border-white/10 bg-white/5 text-gray-500';
+  }
+
+  return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+}
+
 interface ActiveTasksSectionProps {
   activeTaskGroups: ActiveTaskGroup[];
   activeContentId?: string | null;
@@ -242,89 +343,82 @@ function buildActiveTaskGroups(
     taskGroups.set(task.contentId, currentTasks);
   });
 
-  return Array.from(taskGroups.values())
-    .map((groupTasks) => {
-      const sortedTasks = sortActiveDownloadTasks(groupTasks);
-      const leadTask = sortedTasks[0];
-      const totalResources = sortedTasks.reduce(
-        (sum, task) => sum + Math.max(0, task.totalResources),
-        0
-      );
-      const downloadedResources = sortedTasks.reduce(
-        (sum, task) =>
-          sum +
-          Math.max(
-            0,
-            Math.min(
-              task.downloadedResources,
-              task.totalResources > 0
-                ? task.totalResources
-                : task.downloadedResources
-            )
-          ),
-        0
-      );
-      const currentSizeBytes = sortedTasks.reduce(
-        (sum, task) => sum + getTaskCurrentSizeBytes(task),
-        0
-      );
-      const estimatedTotalSizeBytes = sortedTasks.reduce(
-        (sum, task) => sum + getTaskEstimatedTotalSizeBytes(task),
-        0
-      );
-      const downloadSpeedBytesPerSecond = sortedTasks.reduce(
-        (sum, task) =>
-          sum + Math.max(0, task.downloadSpeedBytesPerSecond || 0),
-        0
-      );
-      const progress =
-        totalResources > 0
-          ? Math.min(
-              100,
-              Math.round((downloadedResources / totalResources) * 100)
-            )
-          : Math.round(
-              sortedTasks.reduce(
-                (sum, task) => sum + Math.max(0, Math.min(100, task.progress)),
-                0
-              ) / sortedTasks.length
-            );
-
-      return {
-        contentId: leadTask.contentId,
-        title: leadTask.title,
-        poster: leadTask.poster,
-        sourceName: leadTask.sourceName,
-        year: leadTask.year,
-        tasks: sortedTasks,
-        totalResources,
-        downloadedResources,
-        currentSizeBytes,
-        estimatedTotalSizeBytes,
-        downloadSpeedBytesPerSecond,
-        progress,
-        updatedAt: sortedTasks.reduce(
-          (latestUpdatedAt, task) => Math.max(latestUpdatedAt, task.updatedAt),
-          0
+  const groups = Array.from(taskGroups.values()).map((groupTasks) => {
+    const sortedTasks = sortActiveDownloadTasks(groupTasks);
+    const leadTask = sortedTasks[0];
+    const totalResources = sortedTasks.reduce(
+      (sum, task) => sum + Math.max(0, task.totalResources),
+      0
+    );
+    const downloadedResources = sortedTasks.reduce(
+      (sum, task) =>
+        sum +
+        Math.max(
+          0,
+          Math.min(
+            task.downloadedResources,
+            task.totalResources > 0
+              ? task.totalResources
+              : task.downloadedResources
+          )
         ),
-        downloadingCount: sortedTasks.filter(
-          (task) => task.status === 'downloading'
-        ).length,
-        queuedCount: sortedTasks.filter((task) => task.status === 'queued')
-          .length,
-        pausedCount: sortedTasks.filter((task) => task.status === 'paused')
-          .length,
-        errorCount: sortedTasks.filter((task) => task.status === 'error')
-          .length,
-      };
-    })
-    .sort((left, right) => {
-      if (left.updatedAt !== right.updatedAt) {
-        return right.updatedAt - left.updatedAt;
-      }
+      0
+    );
+    const currentSizeBytes = sortedTasks.reduce(
+      (sum, task) => sum + getTaskCurrentSizeBytes(task),
+      0
+    );
+    const estimatedTotalSizeBytes = sortedTasks.reduce(
+      (sum, task) => sum + getTaskEstimatedTotalSizeBytes(task),
+      0
+    );
+    const downloadSpeedBytesPerSecond = sortedTasks.reduce(
+      (sum, task) => sum + Math.max(0, task.downloadSpeedBytesPerSecond || 0),
+      0
+    );
+    const progress =
+      totalResources > 0
+        ? Math.min(
+            100,
+            Math.round((downloadedResources / totalResources) * 100)
+          )
+        : Math.round(
+            sortedTasks.reduce(
+              (sum, task) => sum + Math.max(0, Math.min(100, task.progress)),
+              0
+            ) / sortedTasks.length
+          );
 
-      return left.title.localeCompare(right.title, 'zh-CN');
-    });
+    return {
+      contentId: leadTask.contentId,
+      createdAt: leadTask.createdAt,
+      title: leadTask.title,
+      poster: leadTask.poster,
+      sourceName: leadTask.sourceName,
+      year: leadTask.year,
+      tasks: sortedTasks,
+      totalResources,
+      downloadedResources,
+      currentSizeBytes,
+      estimatedTotalSizeBytes,
+      downloadSpeedBytesPerSecond,
+      progress,
+      updatedAt: sortedTasks.reduce(
+        (latestUpdatedAt, task) => Math.max(latestUpdatedAt, task.updatedAt),
+        0
+      ),
+      downloadingCount: sortedTasks.filter(
+        (task) => task.status === 'downloading'
+      ).length,
+      queuedCount: sortedTasks.filter((task) => task.status === 'queued')
+        .length,
+      pausedCount: sortedTasks.filter((task) => task.status === 'paused')
+        .length,
+      errorCount: sortedTasks.filter((task) => task.status === 'error').length,
+    };
+  });
+
+  return sortActiveDownloadTaskGroups(groups);
 }
 
 function getActiveTaskGroupStatusBadgeLabel(group: ActiveTaskGroup): string {
@@ -362,7 +456,9 @@ function getActiveTaskGroupStatusBadgeLabel(group: ActiveTaskGroup): string {
   return `${group.tasks.length} 集任务`;
 }
 
-function getActiveTaskGroupStatusBadgeClassName(group: ActiveTaskGroup): string {
+function getActiveTaskGroupStatusBadgeClassName(
+  group: ActiveTaskGroup
+): string {
   if (group.downloadingCount > 0) {
     return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
   }
@@ -387,7 +483,9 @@ function getActiveTaskGroupResourceSummary(group: ActiveTaskGroup): string {
     return `${group.downloadedResources}/${group.totalResources} 个资源`;
   }
 
-  return group.tasks.length > 1 ? `${group.tasks.length} 个任务` : '等待资源清单';
+  return group.tasks.length > 1
+    ? `${group.tasks.length} 个任务`
+    : '等待资源清单';
 }
 
 function getActiveTaskStatusClassName(task: DownloadTask): string {
@@ -411,8 +509,7 @@ function ActiveTasksSection({
   onOpenContent,
 }: ActiveTasksSectionProps) {
   const totalTaskCount = useMemo(
-    () =>
-      activeTaskGroups.reduce((sum, group) => sum + group.tasks.length, 0),
+    () => activeTaskGroups.reduce((sum, group) => sum + group.tasks.length, 0),
     [activeTaskGroups]
   );
   const totalDownloadSpeedBytesPerSecond = useMemo(
@@ -538,9 +635,10 @@ function ActiveTasksSection({
 }
 
 function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
-  const activeTasks = useMemo(() => sortActiveDownloadTasks(group.tasks), [
-    group.tasks,
-  ]);
+  const activeTasks = useMemo(
+    () => sortActiveDownloadTasks(group.tasks),
+    [group.tasks]
+  );
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
 
@@ -599,11 +697,11 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
       <div className='relative z-[10001] flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#040b15]/95 text-white shadow-2xl shadow-black/50'>
         <div className='border-b border-white/10 px-5 py-5 lg:px-6'>
           <div className='flex items-start justify-between gap-4'>
-            <div className='space-y-3'>
+            <div className='min-w-0 flex-1 space-y-3'>
               <div className='text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/80'>
                 进行中的任务
               </div>
-              <div className='text-2xl font-semibold text-white'>
+              <div className='break-words text-2xl font-semibold text-white'>
                 {group.title}
               </div>
               <div className='flex flex-wrap items-center gap-2 text-sm text-gray-300'>
@@ -619,7 +717,7 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
             <button
               type='button'
               onClick={onClose}
-              className='rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+              className='inline-flex h-10 min-w-[72px] shrink-0 items-center justify-center rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
             >
               关闭
             </button>
@@ -718,7 +816,9 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
                 </div>
                 <div className='flex items-center justify-between gap-3'>
                   <span className='text-gray-400'>总下载速度</span>
-                  <span>{formatTransferRate(group.downloadSpeedBytesPerSecond)}</span>
+                  <span>
+                    {formatTransferRate(group.downloadSpeedBytesPerSecond)}
+                  </span>
                 </div>
                 <div className='flex items-center justify-between gap-3'>
                   <span className='text-gray-400'>最近更新</span>
@@ -772,7 +872,8 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
                       <div className='mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300'>
                         {task.totalResources > 0 ? (
                           <span>
-                            {task.downloadedResources}/{task.totalResources} 个资源
+                            {task.downloadedResources}/{task.totalResources}{' '}
+                            个资源
                           </span>
                         ) : (
                           <span>等待资源清单</span>
@@ -782,7 +883,9 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
 
                       <div className='mt-2 flex items-center justify-between gap-3 text-[11px] text-gray-300'>
                         <span>{formatTaskSizeProgress(task)}</span>
-                        <span>{formatTransferRate(task.downloadSpeedBytesPerSecond)}</span>
+                        <span>
+                          {formatTransferRate(task.downloadSpeedBytesPerSecond)}
+                        </span>
                       </div>
 
                       <div className='mt-3 h-1.5 overflow-hidden rounded-full bg-white/10'>
@@ -833,7 +936,9 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
 
                         <button
                           type='button'
-                          onClick={() => void handleTaskAction(task.id, 'cancel')}
+                          onClick={() =>
+                            void handleTaskAction(task.id, 'cancel')
+                          }
                           disabled={isPending}
                           className={`${compactActionButtonClassName} border border-white/15 text-gray-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50`}
                         >
@@ -965,6 +1070,7 @@ function DownloadedContentDialog({
 }: DownloadedContentDialogProps) {
   const router = useRouter();
   const tasks = useDownloadStore((state) => state.tasks);
+  const library = useDownloadStore((state) => state.library);
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [selectedEpisodeIndexes, setSelectedEpisodeIndexes] = useState<
@@ -978,6 +1084,13 @@ function DownloadedContentDialog({
     useState<SearchResult[]>([]);
   const [isLoadingDownloadableDetail, setIsLoadingDownloadableDetail] =
     useState(false);
+  const [adultGroupedContents, setAdultGroupedContents] = useState<
+    SearchResult[]
+  >([]);
+  const [isLoadingAdultGroupedContents, setIsLoadingAdultGroupedContents] =
+    useState(false);
+  const [hasLoadedAdultGroupedContents, setHasLoadedAdultGroupedContents] =
+    useState(false);
   const [moreDownloadsError, setMoreDownloadsError] = useState<string | null>(
     null
   );
@@ -986,6 +1099,33 @@ function DownloadedContentDialog({
   >(null);
   const detailRequestKeyRef = useRef(`${content.source}:${content.vodId}`);
   const shouldCollapseDescription = (content.desc?.length || 0) > 140;
+  const isAdultContent = useMemo(
+    () =>
+      isAdultContentResult({
+        title: content.title,
+        type_name: content.typeName,
+        source_name: content.sourceName,
+        desc: content.desc,
+      }),
+    [content.desc, content.sourceName, content.title, content.typeName]
+  );
+  const adultGroupingQuery = useMemo(
+    () =>
+      buildAdultDownloadGroupingQuery({
+        title: content.title,
+        searchTitle: content.searchTitle,
+        sourceName: content.sourceName,
+        desc: content.desc,
+        typeName: content.typeName,
+      }),
+    [
+      content.desc,
+      content.searchTitle,
+      content.sourceName,
+      content.title,
+      content.typeName,
+    ]
+  );
   const downloadedEpisodeIndexSet = useMemo(
     () => new Set(content.episodes.map((episode) => episode.episodeIndex)),
     [content.episodes]
@@ -1013,7 +1153,9 @@ function DownloadedContentDialog({
         : [],
     [downloadableAvailableSources, downloadableDetail]
   );
-  const moreDownloadEpisodeOptions = useMemo<MoreDownloadEpisodeOption[]>(() => {
+  const moreDownloadEpisodeOptions = useMemo<
+    MoreDownloadEpisodeOption[]
+  >(() => {
     if (!downloadableSources.length) {
       return [];
     }
@@ -1054,6 +1196,81 @@ function DownloadedContentDialog({
     downloadedEpisodeIndexSet,
     tasks,
   ]);
+  const adultRelatedDownloadOptions = useMemo<AdultRelatedDownloadOption[]>(
+    () =>
+      adultGroupedContents
+        .map((detail) => {
+          const contentId = buildAdultContentMatchKey(detail);
+          const libraryItem = library[contentId];
+          const downloadedEpisodeIndexSet = new Set(
+            libraryItem?.episodes.map((episode) => episode.episodeIndex) || []
+          );
+          const availableEpisodeIndexes = detail.episodes
+            .map((episodeUrl, episodeIndex) =>
+              episodeUrl ? episodeIndex : null
+            )
+            .filter(
+              (episodeIndex): episodeIndex is number => episodeIndex !== null
+            );
+          const actionableEpisodeIndexes = availableEpisodeIndexes.filter(
+            (episodeIndex) => {
+              const task = tasks[buildDownloadTaskId(contentId, episodeIndex)];
+              const isDownloaded =
+                downloadedEpisodeIndexSet.has(episodeIndex) ||
+                task?.status === 'done';
+
+              return (
+                !isDownloaded &&
+                (!task || ['paused', 'error'].includes(task.status))
+              );
+            }
+          );
+          const downloadedEpisodeCount = availableEpisodeIndexes.filter(
+            (episodeIndex) => {
+              const task = tasks[buildDownloadTaskId(contentId, episodeIndex)];
+              return (
+                downloadedEpisodeIndexSet.has(episodeIndex) ||
+                task?.status === 'done'
+              );
+            }
+          ).length;
+          const activeEpisodeCount = availableEpisodeIndexes.filter(
+            (episodeIndex) => {
+              const task = tasks[buildDownloadTaskId(contentId, episodeIndex)];
+              return ['downloading', 'queued'].includes(task?.status || '');
+            }
+          ).length;
+          const pausedOrErrorEpisodeCount = availableEpisodeIndexes.filter(
+            (episodeIndex) => {
+              const task = tasks[buildDownloadTaskId(contentId, episodeIndex)];
+              return ['paused', 'error'].includes(task?.status || '');
+            }
+          ).length;
+
+          return {
+            contentId,
+            detail,
+            totalEpisodes: availableEpisodeIndexes.length,
+            actionableEpisodeIndexes,
+            downloadedEpisodeCount,
+            activeEpisodeCount,
+            pausedOrErrorEpisodeCount,
+            isActionable: actionableEpisodeIndexes.length > 0,
+          };
+        })
+        .sort((left, right) => {
+          if (left.isActionable !== right.isActionable) {
+            return left.isActionable ? -1 : 1;
+          }
+
+          if (right.totalEpisodes !== left.totalEpisodes) {
+            return right.totalEpisodes - left.totalEpisodes;
+          }
+
+          return left.detail.title.localeCompare(right.detail.title, 'zh-CN');
+        }),
+    [adultGroupedContents, library, tasks]
+  );
 
   useEffect(() => {
     detailRequestKeyRef.current = `${content.source}:${content.vodId}`;
@@ -1065,6 +1282,9 @@ function DownloadedContentDialog({
     setDownloadableDetail(null);
     setDownloadableAvailableSources([]);
     setIsLoadingDownloadableDetail(false);
+    setAdultGroupedContents([]);
+    setIsLoadingAdultGroupedContents(false);
+    setHasLoadedAdultGroupedContents(false);
     setMoreDownloadsError(null);
     setMoreDownloadsFeedback(null);
   }, [content.contentId, content.source, content.vodId]);
@@ -1092,9 +1312,7 @@ function DownloadedContentDialog({
   };
 
   const handleToggleSelectAll = () => {
-    setSelectedEpisodeIndexes(
-      allEpisodesSelected ? [] : allEpisodeIndexes
-    );
+    setSelectedEpisodeIndexes(allEpisodesSelected ? [] : allEpisodeIndexes);
   };
 
   const handleToggleEpisodeSelection = (episodeIndex: number) => {
@@ -1167,13 +1385,15 @@ function DownloadedContentDialog({
               ? content.year
               : undefined,
           doubanId: content.doubanId,
+          allowAdultCandidates: isAdultContent,
         }).catch(() => []),
       ]);
 
       const normalizedDetail = normalizeVodDetailForPlayback(detailResponse);
       const nextAvailableSources = matchedSources.filter(
         (source) =>
-          buildSearchResultKey(source) !== buildSearchResultKey(normalizedDetail)
+          buildSearchResultKey(source) !==
+          buildSearchResultKey(normalizedDetail)
       );
 
       if (detailRequestKeyRef.current !== requestKey) {
@@ -1197,12 +1417,97 @@ function DownloadedContentDialog({
     }
   };
 
+  const loadAdultGroupedContents = async (): Promise<SearchResult[]> => {
+    if (hasLoadedAdultGroupedContents) {
+      return adultGroupedContents;
+    }
+
+    if (isLoadingAdultGroupedContents) {
+      return [];
+    }
+
+    if (!adultGroupingQuery) {
+      setMoreDownloadsError(
+        '当前条目没有识别出可归集的人名，请用演员名搜索后再下载一次。'
+      );
+      return [];
+    }
+
+    const requestKey = `${content.source}:${content.vodId}`;
+
+    try {
+      setIsLoadingAdultGroupedContents(true);
+      setMoreDownloadsError(null);
+
+      const response = await apiFetch('/search', {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        searchParams: {
+          q: adultGroupingQuery,
+          adult: '1',
+        },
+      });
+      const payload = (await response.json()) as {
+        results?: SearchResult[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || '获取归集资源失败');
+      }
+
+      const normalizedResults = normalizeVodSearchResultsForPlayback(
+        Array.isArray(payload.results) ? payload.results : []
+      );
+      const filteredResults = filterAdultGroupingSearchResults(
+        normalizedResults,
+        adultGroupingQuery,
+        {
+          source: content.source,
+          id: content.vodId,
+          title: content.title,
+        }
+      );
+
+      if (detailRequestKeyRef.current !== requestKey) {
+        return [];
+      }
+
+      setAdultGroupedContents(filteredResults);
+      setHasLoadedAdultGroupedContents(true);
+      return filteredResults;
+    } catch (error) {
+      if (detailRequestKeyRef.current === requestKey) {
+        setMoreDownloadsError(
+          error instanceof Error ? error.message : '获取归集资源失败'
+        );
+      }
+      return [];
+    } finally {
+      if (detailRequestKeyRef.current === requestKey) {
+        setIsLoadingAdultGroupedContents(false);
+      }
+    }
+  };
+
   const handleToggleMoreDownloads = () => {
     const nextOpenState = !isMoreDownloadsOpen;
     setIsMoreDownloadsOpen(nextOpenState);
+    setMoreDownloadsError(null);
     setMoreDownloadsFeedback(null);
 
-    if (nextOpenState && !downloadableDetail && !isLoadingDownloadableDetail) {
+    if (!nextOpenState) {
+      return;
+    }
+
+    if (isAdultContent) {
+      if (!hasLoadedAdultGroupedContents && !isLoadingAdultGroupedContents) {
+        void loadAdultGroupedContents();
+      }
+      return;
+    }
+
+    if (!downloadableDetail && !isLoadingDownloadableDetail) {
       void loadDownloadableDetail();
     }
   };
@@ -1236,11 +1541,13 @@ function DownloadedContentDialog({
         detail,
         episodeIndex,
         availableSources,
+        searchTitle: content.searchTitle,
       });
       setMoreDownloadsFeedback(
-        `已将 ${
-          getEpisodeTitleFromSources(candidateSources, episodeIndex)
-        } 加入下载队列。`
+        `已将 ${getEpisodeTitleFromSources(
+          candidateSources,
+          episodeIndex
+        )} 加入下载队列。`
       );
     } catch (error) {
       setMoreDownloadsError(
@@ -1248,6 +1555,37 @@ function DownloadedContentDialog({
       );
     }
   };
+
+  const handleStartAdultRelatedDownload = async (
+    option: AdultRelatedDownloadOption
+  ) => {
+    if (!option.isActionable) {
+      return;
+    }
+
+    try {
+      setMoreDownloadsError(null);
+      setMoreDownloadsFeedback(null);
+      await downloadManager.startBatchEpisodeDownloads({
+        detail: option.detail,
+        episodeIndexes: option.actionableEpisodeIndexes,
+        searchTitle: adultGroupingQuery || content.searchTitle,
+      });
+      setMoreDownloadsFeedback(
+        option.actionableEpisodeIndexes.length > 1
+          ? `已将 ${option.detail.title} 的 ${option.actionableEpisodeIndexes.length} 集加入下载队列。`
+          : `已将 ${option.detail.title} 加入下载队列。`
+      );
+    } catch (error) {
+      setMoreDownloadsError(
+        error instanceof Error ? error.message : '加入归集下载队列失败'
+      );
+    }
+  };
+
+  const isLoadingMoreDownloads = isAdultContent
+    ? isLoadingAdultGroupedContents
+    : isLoadingDownloadableDetail;
 
   if (typeof document === 'undefined') {
     return null;
@@ -1265,11 +1603,11 @@ function DownloadedContentDialog({
       <div className='relative z-[10001] flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#040b15]/95 text-white shadow-2xl shadow-black/50'>
         <div className='border-b border-white/10 px-5 py-5 lg:px-6'>
           <div className='flex items-start justify-between gap-4'>
-            <div className='space-y-3'>
+            <div className='min-w-0 flex-1 space-y-3'>
               <div className='text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/80'>
                 已下载资源
               </div>
-              <div className='text-2xl font-semibold text-white'>
+              <div className='break-words text-2xl font-semibold text-white'>
                 {content.title}
               </div>
               <div className='flex flex-wrap items-center gap-2 text-sm text-gray-300'>
@@ -1281,16 +1619,18 @@ function DownloadedContentDialog({
                   onClick={handleToggleMoreDownloads}
                   className='inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20'
                 >
-                  {isLoadingDownloadableDetail
+                  {isLoadingMoreDownloads
                     ? '加载中...'
                     : isMoreDownloadsOpen
                     ? '收起更多'
+                    : isAdultContent
+                    ? '按人名归集'
                     : '下载更多'}
                 </button>
               </div>
             </div>
 
-            <div className='flex items-center gap-2'>
+            <div className='flex shrink-0 flex-wrap items-center justify-end gap-2'>
               {isEditing ? (
                 <>
                   {selectedEpisodeIndexes.length > 0 && (
@@ -1331,7 +1671,7 @@ function DownloadedContentDialog({
               <button
                 type='button'
                 onClick={onClose}
-                className='rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+                className='inline-flex h-10 min-w-[72px] shrink-0 items-center justify-center rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
               >
                 关闭
               </button>
@@ -1400,9 +1740,7 @@ function DownloadedContentDialog({
                 <button
                   type='button'
                   onClick={() =>
-                    setIsDescriptionExpanded(
-                      (currentState) => !currentState
-                    )
+                    setIsDescriptionExpanded((currentState) => !currentState)
                   }
                   className='w-full rounded-2xl border border-white/10 bg-white/5 p-4 text-left text-sm leading-6 text-gray-300 transition-colors hover:bg-white/10'
                 >
@@ -1427,7 +1765,9 @@ function DownloadedContentDialog({
                   </div>
                   {shouldCollapseDescription ? (
                     <div className='mt-3 text-xs text-emerald-200'>
-                      {isDescriptionExpanded ? '点击收起简介' : '点击查看完整简介'}
+                      {isDescriptionExpanded
+                        ? '点击收起简介'
+                        : '点击查看完整简介'}
                     </div>
                   ) : null}
                 </button>
@@ -1442,33 +1782,63 @@ function DownloadedContentDialog({
                   <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
                     <div className='space-y-1'>
                       <div className='text-sm font-semibold text-white'>
-                        未下载资源集
+                        {isAdultContent ? '同人名归集资源' : '未下载资源集'}
                       </div>
                       <div className='text-xs text-gray-400'>
-                        点击剧集卡片可继续加入离线下载；已在队列中的剧集会显示当前状态。
+                        {isAdultContent
+                          ? adultGroupingQuery
+                            ? `已按“${adultGroupingQuery}”归集相关成人资源，点击资源卡片即可把可下载内容加入队列。`
+                            : '当前条目没有可用的人名归集词，建议从演员名搜索进入后再使用这个功能。'
+                          : '点击剧集卡片可继续加入离线下载；已在队列中的剧集会显示当前状态。'}
                       </div>
                     </div>
-                    {downloadableDetail ? (
+                    {(
+                      isAdultContent ? adultGroupingQuery : downloadableDetail
+                    ) ? (
                       <span className='inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-200'>
-                        {moreDownloadEpisodeOptions.length} 集待处理
+                        {isAdultContent
+                          ? `${adultRelatedDownloadOptions.length} 部相关资源`
+                          : `${moreDownloadEpisodeOptions.length} 集待处理`}
                       </span>
                     ) : null}
                   </div>
 
-                  {isLoadingDownloadableDetail ? (
+                  {isLoadingMoreDownloads ? (
                     <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
-                      正在加载可下载剧集...
+                      {isAdultContent
+                        ? '正在按人名归集更多资源...'
+                        : '正在加载可下载剧集...'}
                     </div>
                   ) : null}
 
-                  {!isLoadingDownloadableDetail && moreDownloadsError ? (
+                  {!isLoadingMoreDownloads && moreDownloadsError ? (
                     <div className='mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200'>
                       {moreDownloadsError}
                     </div>
                   ) : null}
 
-                  {!isLoadingDownloadableDetail &&
+                  {!isLoadingMoreDownloads &&
                   !moreDownloadsError &&
+                  isAdultContent &&
+                  !adultGroupingQuery ? (
+                    <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
+                      当前条目未识别出可归集的人名。若你是通过演员名搜索进入播放页，重新下载后这里会优先使用那个搜索词来归集资源。
+                    </div>
+                  ) : null}
+
+                  {!isLoadingMoreDownloads &&
+                  !moreDownloadsError &&
+                  isAdultContent &&
+                  adultGroupingQuery &&
+                  adultRelatedDownloadOptions.length === 0 ? (
+                    <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
+                      没有找到更多与“{adultGroupingQuery}”相关的成人资源。
+                    </div>
+                  ) : null}
+
+                  {!isLoadingMoreDownloads &&
+                  !moreDownloadsError &&
+                  !isAdultContent &&
                   downloadableDetail &&
                   moreDownloadEpisodeOptions.length === 0 ? (
                     <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
@@ -1476,8 +1846,66 @@ function DownloadedContentDialog({
                     </div>
                   ) : null}
 
-                  {!isLoadingDownloadableDetail &&
+                  {!isLoadingMoreDownloads &&
                   !moreDownloadsError &&
+                  isAdultContent &&
+                  adultRelatedDownloadOptions.length > 0 ? (
+                    <div className='mt-4 max-h-[320px] overflow-y-auto pr-1'>
+                      <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+                        {adultRelatedDownloadOptions.map((option) => (
+                          <button
+                            type='button'
+                            key={`${option.contentId}-adult-group`}
+                            disabled={!option.isActionable}
+                            onClick={() =>
+                              void handleStartAdultRelatedDownload(option)
+                            }
+                            className={`rounded-xl border p-3 text-left transition-colors ${
+                              option.isActionable
+                                ? 'border-emerald-500/20 bg-black/20 hover:border-emerald-400/40 hover:bg-white/5'
+                                : 'border-white/10 bg-black/20 text-gray-400'
+                            }`}
+                          >
+                            <div className='flex items-start justify-between gap-3'>
+                              <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
+                                {option.totalEpisodes > 1
+                                  ? `${option.totalEpisodes} 集`
+                                  : '单集'}
+                              </span>
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${getAdultRelatedDownloadActionBadgeClassName(
+                                  option
+                                )}`}
+                              >
+                                {getAdultRelatedDownloadActionLabel(option)}
+                              </span>
+                            </div>
+
+                            <div
+                              className='mt-4 line-clamp-2 text-sm font-semibold text-white'
+                              title={option.detail.title}
+                            >
+                              {option.detail.title}
+                            </div>
+                            <div className='mt-2 text-xs text-gray-300'>
+                              {option.detail.source_name}
+                              {option.detail.year &&
+                              option.detail.year !== 'unknown'
+                                ? ` · ${option.detail.year}`
+                                : ''}
+                            </div>
+                            <div className='mt-2 text-xs text-gray-400'>
+                              {getAdultRelatedDownloadStatus(option)}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {!isLoadingMoreDownloads &&
+                  !moreDownloadsError &&
+                  !isAdultContent &&
                   moreDownloadEpisodeOptions.length > 0 ? (
                     <div className='mt-4 max-h-[320px] overflow-y-auto pr-1'>
                       <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
@@ -1556,7 +1984,9 @@ function DownloadedContentDialog({
                       aria-pressed={isEditing ? isSelected : undefined}
                       aria-label={
                         isEditing
-                          ? `${isSelected ? '取消选择' : '选择'} ${episode.episodeTitle}`
+                          ? `${isSelected ? '取消选择' : '选择'} ${
+                              episode.episodeTitle
+                            }`
                           : `离线播放 ${episode.episodeTitle}`
                       }
                       className={`rounded-xl border p-3 text-left transition-colors ${
@@ -1594,7 +2024,9 @@ function DownloadedContentDialog({
 
                         <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300'>
                           <span>{formatBytes(episode.sizeBytes)}</span>
-                          <span>下载于 {formatDateTime(episode.downloadedAt)}</span>
+                          <span>
+                            下载于 {formatDateTime(episode.downloadedAt)}
+                          </span>
                         </div>
                       </div>
                     </button>
@@ -1633,7 +2065,7 @@ function DownloadSettingsDialog({
       <div className='relative z-[10001] flex max-h-[82vh] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#040b15]/95 text-white shadow-2xl shadow-black/50'>
         <div className='border-b border-white/10 px-5 py-5 lg:px-6'>
           <div className='flex items-start justify-between gap-4'>
-            <div className='space-y-2'>
+            <div className='min-w-0 flex-1 space-y-2'>
               <div className='text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/80'>
                 下载设置
               </div>
@@ -1646,7 +2078,7 @@ function DownloadSettingsDialog({
             <button
               type='button'
               onClick={onClose}
-              className='rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+              className='inline-flex h-10 min-w-[72px] shrink-0 items-center justify-center rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
             >
               关闭
             </button>
@@ -1716,7 +2148,8 @@ function DownloadSettingsDialog({
                 </div>
               </div>
               <p className='mt-4 text-xs leading-5 text-gray-400'>
-                实际磁盘位置由浏览器站点沙箱托管，Web 版暂不支持直接显示系统路径、打开系统文件夹或自定义磁盘目录。
+                实际磁盘位置由浏览器站点沙箱托管，Web
+                版暂不支持直接显示系统路径、打开系统文件夹或自定义磁盘目录。
               </p>
               {isDevelopment && (
                 <p className='mt-2 text-xs leading-5 text-amber-300'>
@@ -1751,10 +2184,7 @@ export default function DownloadsClient() {
   const setMaxConcurrentTasks = useDownloadStore(
     (state) => state.setMaxConcurrentTasks
   );
-  const activeTaskGroups = useMemo(
-    () => buildActiveTaskGroups(tasks),
-    [tasks]
-  );
+  const activeTaskGroups = useMemo(() => buildActiveTaskGroups(tasks), [tasks]);
   const selectedActiveTaskGroup = useMemo(
     () =>
       selectedActiveTaskContentId
@@ -1789,11 +2219,7 @@ export default function DownloadsClient() {
   }, [selectedActiveTaskContentId, selectedActiveTaskGroup]);
 
   useEffect(() => {
-    if (
-      !isSettingsOpen &&
-      !selectedContentId &&
-      !selectedActiveTaskContentId
-    ) {
+    if (!isSettingsOpen && !selectedContentId && !selectedActiveTaskContentId) {
       return;
     }
     if (typeof document === 'undefined') {
