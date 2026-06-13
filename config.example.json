@@ -1,5 +1,9 @@
 {
   "cache_time": 7200,
+  "player_enhancements": {
+    "audio_spike_protection_level": "standard",
+    "visual_enhancement_level": "off"
+  },
   "api_site": {
     "wolong": {
       "api": "https://collect.wolongzyw.com/api.php/provide/vod",

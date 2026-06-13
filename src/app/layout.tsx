@@ -6,6 +6,10 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 
 import { getConfig } from '@/lib/config';
+import {
+  normalizeAudioSpikeProtectionLevel,
+  normalizeVisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
 
 import { GlobalErrorIndicator } from '../components/GlobalErrorIndicator';
 import { SiteProvider } from '../components/SiteProvider';
@@ -46,7 +50,8 @@ export default async function RootLayout({
     process.env.ANNOUNCEMENT ||
     '本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。';
 
-  let doubanProxyType = process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent';
+  let doubanProxyType =
+    process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent';
   let doubanProxy = process.env.NEXT_PUBLIC_DOUBAN_PROXY || '';
   let doubanImageProxyType =
     process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'cmliussss-cdn-tencent';
@@ -55,6 +60,16 @@ export default async function RootLayout({
     process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true';
   let fluidSearch = process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false';
   let enableWebLive = false;
+  let playerAudioSpikeProtectionLevel = normalizeAudioSpikeProtectionLevel(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL ??
+      process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION,
+    'off'
+  );
+  let playerVisualEnhancementLevel = normalizeVisualEnhancementLevel(
+    process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
+      process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT,
+    'off'
+  );
   let customCategories = [] as {
     name: string;
     type: 'movie' | 'tv';
@@ -79,6 +94,18 @@ export default async function RootLayout({
     }));
     fluidSearch = config.SiteConfig.FluidSearch;
     enableWebLive = config.SiteConfig.EnableWebLive ?? false;
+    playerAudioSpikeProtectionLevel = normalizeAudioSpikeProtectionLevel(
+      config.PlayerEnhancementConfig?.AudioSpikeProtectionLevel ??
+        config.PlayerEnhancementConfig?.AudioSpikeProtection ??
+        playerAudioSpikeProtectionLevel,
+      playerAudioSpikeProtectionLevel
+    );
+    playerVisualEnhancementLevel = normalizeVisualEnhancementLevel(
+      config.PlayerEnhancementConfig?.VisualEnhancementLevel ??
+        config.PlayerEnhancementConfig?.VisualEnhancement ??
+        playerVisualEnhancementLevel,
+      playerVisualEnhancementLevel
+    );
   }
 
   // 将运行时配置注入到全局 window 对象，供客户端在运行时读取
@@ -92,6 +119,10 @@ export default async function RootLayout({
     CUSTOM_CATEGORIES: customCategories,
     FLUID_SEARCH: fluidSearch,
     ENABLE_WEB_LIVE: enableWebLive,
+    PLAYER_AUDIO_SPIKE_PROTECTION: playerAudioSpikeProtectionLevel !== 'off',
+    PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: playerAudioSpikeProtectionLevel,
+    PLAYER_VISUAL_ENHANCEMENT: playerVisualEnhancementLevel !== 'off',
+    PLAYER_VISUAL_ENHANCEMENT_LEVEL: playerVisualEnhancementLevel,
   };
 
   return (

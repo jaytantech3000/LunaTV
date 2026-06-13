@@ -40,6 +40,24 @@ import {
   preferBestPlaybackSource,
   searchPlaybackSources,
 } from '@/lib/playback-source-prefetch';
+import {
+  AudioSpikeProtectionStatus,
+  PlayerEnhancementManager,
+} from '@/lib/player-enhancement-runtime';
+import {
+  AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS,
+  AudioSpikeProtectionLevel,
+  getAudioSpikeProtectionLevelLabel,
+  getVisualEnhancementLevelLabel,
+  VISUAL_ENHANCEMENT_LEVEL_OPTIONS,
+  VisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
+import {
+  PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+  readPlayerEnhancementPreferences,
+  updatePlayerEnhancementPreference,
+} from '@/lib/player-enhancements';
+import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
@@ -47,6 +65,7 @@ import { processImageUrl } from '@/lib/utils';
 import CurrentEpisodeDownloadControl from '@/components/CurrentEpisodeDownloadControl';
 import EpisodeSelector from '@/components/EpisodeSelector';
 import PageLayout from '@/components/PageLayout';
+import PlayerEnhancementStatusOverlay from '@/components/PlayerEnhancementStatusOverlay';
 
 import { useDownloadStore } from '@/stores/downloadStore';
 
@@ -353,6 +372,49 @@ function PlayPageClient() {
   useEffect(() => {
     blockAdEnabledRef.current = blockAdEnabled;
   }, [blockAdEnabled]);
+  const [audioSpikeProtectionLevel, setAudioSpikeProtectionLevel] =
+    useState<AudioSpikeProtectionLevel>(() => {
+      if (typeof window === 'undefined') {
+        return 'off';
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .audioSpikeProtectionLevel;
+    });
+  const [visualEnhancementLevel, setVisualEnhancementLevel] =
+    useState<VisualEnhancementLevel>(() => {
+      if (typeof window === 'undefined') {
+        return 'off';
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .visualEnhancementLevel;
+    });
+  const [audioEnhancementStatus, setAudioEnhancementStatus] =
+    useState<AudioSpikeProtectionStatus | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const syncPlayerEnhancementPreferences = () => {
+      const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
+      setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setVisualEnhancementLevel(preferences.visualEnhancementLevel);
+    };
+
+    window.addEventListener(
+      PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+      syncPlayerEnhancementPreferences
+    );
+
+    return () => {
+      window.removeEventListener(
+        PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+        syncPlayerEnhancementPreferences
+      );
+    };
+  }, []);
 
   // 视频基本信息
   const [videoTitle, setVideoTitle] = useState(searchParams.get('title') || '');
@@ -478,6 +540,7 @@ function PlayPageClient() {
     playbackType: string;
   } | null>(null);
   const artRef = useRef<HTMLDivElement | null>(null);
+  const enhancementManagerRef = useRef<PlayerEnhancementManager | null>(null);
   const initStartedRef = useRef(false);
 
   // Wake Lock 相关
@@ -541,6 +604,34 @@ function PlayPageClient() {
     }
   };
 
+  const syncPlayerEnhancements = () => {
+    const video = artPlayerRef.current?.video as HTMLVideoElement | undefined;
+    const host = artRef.current;
+
+    if (!video || !host) {
+      enhancementManagerRef.current?.dispose();
+      enhancementManagerRef.current = null;
+      setAudioEnhancementStatus(null);
+      return;
+    }
+
+    if (!enhancementManagerRef.current) {
+      enhancementManagerRef.current = new PlayerEnhancementManager({
+        onAudioStatusChange: setAudioEnhancementStatus,
+      });
+    } else {
+      enhancementManagerRef.current.setAudioStatusListener(
+        setAudioEnhancementStatus
+      );
+    }
+
+    enhancementManagerRef.current.bind(video, host);
+    enhancementManagerRef.current.setPreferences({
+      audioSpikeProtectionLevel,
+      visualEnhancementLevel,
+    });
+  };
+
   // Wake Lock 相关函数
   const requestWakeLock = async () => {
     try {
@@ -569,6 +660,10 @@ function PlayPageClient() {
 
   // 清理播放器资源的统一函数
   const cleanupPlayer = () => {
+    enhancementManagerRef.current?.dispose();
+    enhancementManagerRef.current = null;
+    setAudioEnhancementStatus(null);
+
     if (artPlayerRef.current) {
       try {
         // 销毁 HLS 实例
@@ -720,6 +815,61 @@ function PlayPageClient() {
         .padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
     }
   };
+
+  const handleAudioSpikeProtectionLevelChange = (
+    value: AudioSpikeProtectionLevel
+  ) => {
+    setAudioSpikeProtectionLevel(value);
+    updatePlayerEnhancementPreference('audioSpikeProtectionLevel', value);
+    return value === 'off'
+      ? '当前关闭'
+      : `当前${getAudioSpikeProtectionLevelLabel(value)}`;
+  };
+
+  const handleVisualEnhancementLevelChange = (
+    value: VisualEnhancementLevel
+  ) => {
+    setVisualEnhancementLevel(value);
+    updatePlayerEnhancementPreference('visualEnhancementLevel', value);
+    return value === 'off'
+      ? '当前关闭'
+      : `当前${getVisualEnhancementLevelLabel(value)}`;
+  };
+
+  useEffect(() => {
+    if (!artPlayerRef.current?.setting?.update) {
+      return;
+    }
+
+    artPlayerRef.current.setting.update({
+      name: '音量突增保护',
+      html: '音量突增保护',
+      tooltip: getAudioSpikeProtectionLevelLabel(audioSpikeProtectionLevel),
+      selector: AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => ({
+        value: option.value,
+        name: `audio-spike-protection-${option.value}`,
+        default: option.value === audioSpikeProtectionLevel,
+        html: option.label,
+      })),
+      onSelect: function (item: any) {
+        return handleAudioSpikeProtectionLevelChange(item.value);
+      },
+    });
+    artPlayerRef.current.setting.update({
+      name: '去磨皮修正',
+      html: '去磨皮修正',
+      tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
+      selector: VISUAL_ENHANCEMENT_LEVEL_OPTIONS.map((option) => ({
+        value: option.value,
+        name: `visual-enhancement-${option.value}`,
+        default: option.value === visualEnhancementLevel,
+        html: option.label,
+      })),
+      onSelect: function (item: any) {
+        return handleVisualEnhancementLevelChange(item.value);
+      },
+    });
+  }, [audioSpikeProtectionLevel, visualEnhancementLevel]);
 
   class CustomHlsJsLoader extends Hls.DefaultConfig.loader {
     private cacheAbortController: AbortController | null = null;
@@ -1098,7 +1248,8 @@ function PlayPageClient() {
           currentSource &&
           currentId &&
           !sourcesInfo.some(
-            (source) => source.source === currentSource && source.id === currentId
+            (source) =>
+              source.source === currentSource && source.id === currentId
           )
         ) {
           sourcesInfo = await fetchSourceDetail(currentSource, currentId);
@@ -1912,6 +2063,7 @@ function PlayPageClient() {
           videoUrl
         );
       }
+      syncPlayerEnhancements();
       return;
     }
 
@@ -2118,6 +2270,36 @@ function PlayPageClient() {
             },
           },
           {
+            name: '音量突增保护',
+            html: '音量突增保护',
+            tooltip: getAudioSpikeProtectionLevelLabel(
+              audioSpikeProtectionLevel
+            ),
+            selector: AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => ({
+              value: option.value,
+              name: `audio-spike-protection-${option.value}`,
+              default: option.value === audioSpikeProtectionLevel,
+              html: option.label,
+            })),
+            onSelect: function (item) {
+              return handleAudioSpikeProtectionLevelChange(item.value);
+            },
+          },
+          {
+            name: '去磨皮修正',
+            html: '去磨皮修正',
+            tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
+            selector: VISUAL_ENHANCEMENT_LEVEL_OPTIONS.map((option) => ({
+              value: option.value,
+              name: `visual-enhancement-${option.value}`,
+              default: option.value === visualEnhancementLevel,
+              html: option.label,
+            })),
+            onSelect: function (item) {
+              return handleVisualEnhancementLevelChange(item.value);
+            },
+          },
+          {
             name: '跳过片头片尾',
             html: '跳过片头片尾',
             switch: skipConfigRef.current.enable,
@@ -2203,6 +2385,7 @@ function PlayPageClient() {
         isOfflineMode,
         playbackType,
       };
+      syncPlayerEnhancements();
 
       removeVideoEventListeners = attachNativeVideoListeners(
         artPlayerRef.current?.video as HTMLVideoElement | null
@@ -2210,6 +2393,7 @@ function PlayPageClient() {
 
       // 监听播放器事件
       artPlayerRef.current.on('ready', () => {
+        syncPlayerEnhancements();
         const video = artPlayerRef.current?.video as
           | HTMLVideoElement
           | undefined;
@@ -2254,6 +2438,7 @@ function PlayPageClient() {
       });
 
       artPlayerRef.current.on('video:loadedmetadata', () => {
+        syncPlayerEnhancements();
         if (!isOfflineMode) {
           markVideoReady();
         }
@@ -2261,6 +2446,7 @@ function PlayPageClient() {
 
       // 监听视频可播放事件，这时恢复播放进度更可靠
       artPlayerRef.current.on('video:canplay', () => {
+        syncPlayerEnhancements();
         // 若存在需要恢复的播放进度，则跳转
         if (resumeTimeRef.current && resumeTimeRef.current > 0) {
           try {
@@ -2416,6 +2602,10 @@ function PlayPageClient() {
       removeVideoEventListeners?.();
     };
   }, [Artplayer, Hls, videoUrl, loading, blockAdEnabled, isOfflineMode]);
+
+  useEffect(() => {
+    syncPlayerEnhancements();
+  }, [audioSpikeProtectionLevel, visualEnhancementLevel, videoUrl]);
 
   // 当组件卸载时清理定时器、Wake Lock 和播放器资源
   useEffect(() => {
@@ -2688,8 +2878,11 @@ function PlayPageClient() {
               <div className='relative w-full h-[300px] lg:h-full'>
                 <div
                   ref={artRef}
-                  className='bg-black w-full h-full rounded-xl overflow-hidden shadow-lg'
+                  className='relative bg-black w-full h-full rounded-xl overflow-hidden shadow-lg'
                 ></div>
+                <PlayerEnhancementStatusOverlay
+                  status={audioEnhancementStatus}
+                />
 
                 {/* 换源加载蒙层 */}
                 {isVideoLoading && (
