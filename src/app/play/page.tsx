@@ -381,6 +381,24 @@ function PlayPageClient() {
       return readPlayerEnhancementPreferences(getRuntimeConfig())
         .audioSpikeProtectionLevel;
     });
+  const [audioDynamicProtectionEnabled, setAudioDynamicProtectionEnabled] =
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .audioDynamicProtectionEnabled;
+    });
+  const [audioFixedCeilingEnabled, setAudioFixedCeilingEnabled] =
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .audioFixedCeilingEnabled;
+    });
   const [visualEnhancementLevel, setVisualEnhancementLevel] =
     useState<VisualEnhancementLevel>(() => {
       if (typeof window === 'undefined') {
@@ -400,6 +418,10 @@ function PlayPageClient() {
     const syncPlayerEnhancementPreferences = () => {
       const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
       setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setAudioDynamicProtectionEnabled(
+        preferences.audioDynamicProtectionEnabled
+      );
+      setAudioFixedCeilingEnabled(preferences.audioFixedCeilingEnabled);
       setVisualEnhancementLevel(preferences.visualEnhancementLevel);
     };
 
@@ -628,6 +650,8 @@ function PlayPageClient() {
     enhancementManagerRef.current.bind(video, host);
     enhancementManagerRef.current.setPreferences({
       audioSpikeProtectionLevel,
+      audioDynamicProtectionEnabled,
+      audioFixedCeilingEnabled,
       visualEnhancementLevel,
     });
   };
@@ -826,6 +850,18 @@ function PlayPageClient() {
       : `当前${getAudioSpikeProtectionLevelLabel(value)}`;
   };
 
+  const handleAudioDynamicProtectionToggle = (value: boolean) => {
+    setAudioDynamicProtectionEnabled(value);
+    updatePlayerEnhancementPreference('audioDynamicProtectionEnabled', value);
+    return value;
+  };
+
+  const handleAudioFixedCeilingToggle = (value: boolean) => {
+    setAudioFixedCeilingEnabled(value);
+    updatePlayerEnhancementPreference('audioFixedCeilingEnabled', value);
+    return value;
+  };
+
   const handleVisualEnhancementLevelChange = (
     value: VisualEnhancementLevel
   ) => {
@@ -856,6 +892,24 @@ function PlayPageClient() {
       },
     });
     artPlayerRef.current.setting.update({
+      name: '动态保护',
+      html: '动态保护',
+      tooltip: audioDynamicProtectionEnabled ? '当前开启' : '当前关闭',
+      switch: audioDynamicProtectionEnabled,
+      onSwitch: function (item: any) {
+        return handleAudioDynamicProtectionToggle(!item.switch);
+      },
+    });
+    artPlayerRef.current.setting.update({
+      name: '固定峰值上限',
+      html: '固定峰值上限',
+      tooltip: audioFixedCeilingEnabled ? '当前开启' : '当前关闭',
+      switch: audioFixedCeilingEnabled,
+      onSwitch: function (item: any) {
+        return handleAudioFixedCeilingToggle(!item.switch);
+      },
+    });
+    artPlayerRef.current.setting.update({
       name: '去磨皮修正',
       html: '去磨皮修正',
       tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
@@ -869,7 +923,12 @@ function PlayPageClient() {
         return handleVisualEnhancementLevelChange(item.value);
       },
     });
-  }, [audioSpikeProtectionLevel, visualEnhancementLevel]);
+  }, [
+    audioDynamicProtectionEnabled,
+    audioFixedCeilingEnabled,
+    audioSpikeProtectionLevel,
+    visualEnhancementLevel,
+  ]);
 
   class CustomHlsJsLoader extends Hls.DefaultConfig.loader {
     private cacheAbortController: AbortController | null = null;
@@ -2286,6 +2345,24 @@ function PlayPageClient() {
             },
           },
           {
+            name: '动态保护',
+            html: '动态保护',
+            tooltip: audioDynamicProtectionEnabled ? '当前开启' : '当前关闭',
+            switch: audioDynamicProtectionEnabled,
+            onSwitch: function (item) {
+              return handleAudioDynamicProtectionToggle(!item.switch);
+            },
+          },
+          {
+            name: '固定峰值上限',
+            html: '固定峰值上限',
+            tooltip: audioFixedCeilingEnabled ? '当前开启' : '当前关闭',
+            switch: audioFixedCeilingEnabled,
+            onSwitch: function (item) {
+              return handleAudioFixedCeilingToggle(!item.switch);
+            },
+          },
+          {
             name: '去磨皮修正',
             html: '去磨皮修正',
             tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
@@ -2605,7 +2682,13 @@ function PlayPageClient() {
 
   useEffect(() => {
     syncPlayerEnhancements();
-  }, [audioSpikeProtectionLevel, visualEnhancementLevel, videoUrl]);
+  }, [
+    audioDynamicProtectionEnabled,
+    audioFixedCeilingEnabled,
+    audioSpikeProtectionLevel,
+    visualEnhancementLevel,
+    videoUrl,
+  ]);
 
   // 当组件卸载时清理定时器、Wake Lock 和播放器资源
   useEffect(() => {

@@ -26,6 +26,8 @@ export interface AppRuntimeConfig {
   MEDIA_PROXY_BASE_URL?: string;
   ENABLE_ADMIN_PANEL?: boolean;
   PLAYER_AUDIO_SPIKE_PROTECTION?: boolean;
+  PLAYER_AUDIO_DYNAMIC_PROTECTION?: boolean;
+  PLAYER_AUDIO_FIXED_CEILING?: boolean;
   PLAYER_VISUAL_ENHANCEMENT?: boolean;
   PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL?: RuntimePlayerEnhancementLevel;
   PLAYER_VISUAL_ENHANCEMENT_LEVEL?: RuntimePlayerEnhancementLevel;

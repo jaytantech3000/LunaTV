@@ -6,6 +6,7 @@ import path from 'path';
 import { db } from '@/lib/db';
 import {
   normalizeAudioSpikeProtectionLevel,
+  normalizeBooleanSetting,
   normalizeVisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
 
@@ -43,6 +44,8 @@ interface ConfigFileStruct {
   };
   player_enhancements?: {
     audio_spike_protection_level?: unknown;
+    audio_dynamic_protection?: unknown;
+    audio_fixed_ceiling?: unknown;
     visual_enhancement_level?: unknown;
     audio_spike_protection?: unknown;
     visual_enhancement?: unknown;
@@ -102,6 +105,14 @@ function getDefaultPlayerEnhancementConfig(): NonNullable<
       process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION,
     'off'
   );
+  const audioDynamicProtection = normalizeBooleanSetting(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_DYNAMIC_PROTECTION,
+    audioSpikeProtectionLevel !== 'off'
+  );
+  const audioFixedCeiling = normalizeBooleanSetting(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_FIXED_CEILING,
+    audioSpikeProtectionLevel !== 'off'
+  );
   const visualEnhancementLevel = normalizeVisualEnhancementLevel(
     process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
       process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT,
@@ -111,6 +122,8 @@ function getDefaultPlayerEnhancementConfig(): NonNullable<
   return {
     AudioSpikeProtection: audioSpikeProtectionLevel !== 'off',
     AudioSpikeProtectionLevel: audioSpikeProtectionLevel,
+    AudioDynamicProtection: audioDynamicProtection,
+    AudioFixedCeiling: audioFixedCeiling,
     VisualEnhancement: visualEnhancementLevel !== 'off',
     VisualEnhancementLevel: visualEnhancementLevel,
   };
@@ -127,6 +140,14 @@ function resolvePlayerEnhancementConfig(
       defaultConfig.AudioSpikeProtectionLevel,
     defaultConfig.AudioSpikeProtectionLevel
   );
+  const fallbackAudioDynamicProtection = normalizeBooleanSetting(
+    fallbackConfig?.AudioDynamicProtection,
+    fallbackAudioLevel !== 'off'
+  );
+  const fallbackAudioFixedCeiling = normalizeBooleanSetting(
+    fallbackConfig?.AudioFixedCeiling,
+    fallbackAudioLevel !== 'off'
+  );
   const fallbackVisualLevel = normalizeVisualEnhancementLevel(
     fallbackConfig?.VisualEnhancementLevel ??
       fallbackConfig?.VisualEnhancement ??
@@ -139,6 +160,22 @@ function resolvePlayerEnhancementConfig(
       fallbackAudioLevel,
     fallbackAudioLevel
   );
+  const hasExplicitAudioLevel =
+    fileConfig.player_enhancements?.audio_spike_protection_level !==
+      undefined ||
+    fileConfig.player_enhancements?.audio_spike_protection !== undefined;
+  const audioDynamicProtection = normalizeBooleanSetting(
+    fileConfig.player_enhancements?.audio_dynamic_protection,
+    hasExplicitAudioLevel
+      ? audioSpikeProtectionLevel !== 'off'
+      : fallbackAudioDynamicProtection
+  );
+  const audioFixedCeiling = normalizeBooleanSetting(
+    fileConfig.player_enhancements?.audio_fixed_ceiling,
+    hasExplicitAudioLevel
+      ? audioSpikeProtectionLevel !== 'off'
+      : fallbackAudioFixedCeiling
+  );
   const visualEnhancementLevel = normalizeVisualEnhancementLevel(
     fileConfig.player_enhancements?.visual_enhancement_level ??
       fileConfig.player_enhancements?.visual_enhancement ??
@@ -149,6 +186,8 @@ function resolvePlayerEnhancementConfig(
   return {
     AudioSpikeProtection: audioSpikeProtectionLevel !== 'off',
     AudioSpikeProtectionLevel: audioSpikeProtectionLevel,
+    AudioDynamicProtection: audioDynamicProtection,
+    AudioFixedCeiling: audioFixedCeiling,
     VisualEnhancement: visualEnhancementLevel !== 'off',
     VisualEnhancementLevel: visualEnhancementLevel,
   };

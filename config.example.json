@@ -2,6 +2,8 @@
   "cache_time": 7200,
   "player_enhancements": {
     "audio_spike_protection_level": "standard",
+    "audio_dynamic_protection": true,
+    "audio_fixed_ceiling": true,
     "visual_enhancement_level": "off"
   },
   "api_site": {
