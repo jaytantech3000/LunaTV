@@ -19,6 +19,19 @@ import { createPortal } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { purgeOfflineDownloads } from '@/lib/download/session';
+import {
+  AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS,
+  AudioSpikeProtectionLevel,
+  VISUAL_ENHANCEMENT_LEVEL_OPTIONS,
+  VisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
+import {
+  PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+  readPlayerEnhancementPreferences,
+  resetPlayerEnhancementPreferences,
+  updatePlayerEnhancementPreference,
+} from '@/lib/player-enhancements';
+import { getRuntimeConfig } from '@/lib/runtime-config';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
@@ -54,7 +67,6 @@ export const UserMenu: React.FC = () => {
       html.style.overflow = 'hidden';
 
       return () => {
-
         // 恢复所有原始样式
         body.style.overflow = originalBodyOverflow;
         html.style.overflow = originalHtmlOverflow;
@@ -68,8 +80,16 @@ export const UserMenu: React.FC = () => {
   const [enableOptimization, setEnableOptimization] = useState(true);
   const [fluidSearch, setFluidSearch] = useState(true);
   const [liveDirectConnect, setLiveDirectConnect] = useState(false);
-  const [doubanDataSource, setDoubanDataSource] = useState('cmliussss-cdn-tencent');
-  const [doubanImageProxyType, setDoubanImageProxyType] = useState('cmliussss-cdn-tencent');
+  const [audioSpikeProtectionLevel, setAudioSpikeProtectionLevel] =
+    useState<AudioSpikeProtectionLevel>('off');
+  const [visualEnhancementLevel, setVisualEnhancementLevel] =
+    useState<VisualEnhancementLevel>('off');
+  const [doubanDataSource, setDoubanDataSource] = useState(
+    'cmliussss-cdn-tencent'
+  );
+  const [doubanImageProxyType, setDoubanImageProxyType] = useState(
+    'cmliussss-cdn-tencent'
+  );
   const [doubanImageProxyUrl, setDoubanImageProxyUrl] = useState('');
   const [isDoubanDropdownOpen, setIsDoubanDropdownOpen] = useState(false);
   const [isDoubanImageProxyDropdownOpen, setIsDoubanImageProxyDropdownOpen] =
@@ -137,7 +157,8 @@ export const UserMenu: React.FC = () => {
 
       const savedDoubanDataSource = localStorage.getItem('doubanDataSource');
       const defaultDoubanProxyType =
-        (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent';
+        (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE ||
+        'cmliussss-cdn-tencent';
       if (savedDoubanDataSource !== null) {
         setDoubanDataSource(savedDoubanDataSource);
       } else if (defaultDoubanProxyType) {
@@ -157,14 +178,19 @@ export const UserMenu: React.FC = () => {
         'doubanImageProxyType'
       );
       const defaultDoubanImageProxyType =
-        (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY_TYPE || 'cmliussss-cdn-tencent';
+        (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY_TYPE ||
+        'cmliussss-cdn-tencent';
       // 兼容历史数据：直连和豆瓣官方精品 CDN 统一使用服务器代理
       const normalizeImageProxyType = (type: string) =>
         type === 'direct' || type === 'img3' ? 'server' : type;
       if (savedDoubanImageProxyType !== null) {
-        setDoubanImageProxyType(normalizeImageProxyType(savedDoubanImageProxyType));
+        setDoubanImageProxyType(
+          normalizeImageProxyType(savedDoubanImageProxyType)
+        );
       } else if (defaultDoubanImageProxyType) {
-        setDoubanImageProxyType(normalizeImageProxyType(defaultDoubanImageProxyType));
+        setDoubanImageProxyType(
+          normalizeImageProxyType(defaultDoubanImageProxyType)
+        );
       }
 
       const savedDoubanImageProxyUrl = localStorage.getItem(
@@ -197,7 +223,36 @@ export const UserMenu: React.FC = () => {
       if (savedLiveDirectConnect !== null) {
         setLiveDirectConnect(JSON.parse(savedLiveDirectConnect));
       }
+
+      const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
+      setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setVisualEnhancementLevel(preferences.visualEnhancementLevel);
     }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const syncPlayerEnhancementPreferences = () => {
+      const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
+      setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setVisualEnhancementLevel(preferences.visualEnhancementLevel);
+    };
+
+    syncPlayerEnhancementPreferences();
+    window.addEventListener(
+      PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+      syncPlayerEnhancementPreferences
+    );
+
+    return () => {
+      window.removeEventListener(
+        PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+        syncPlayerEnhancementPreferences
+      );
+    };
   }, []);
 
   // 版本检查
@@ -385,6 +440,20 @@ export const UserMenu: React.FC = () => {
     }
   };
 
+  const handleAudioSpikeProtectionLevelChange = (
+    value: AudioSpikeProtectionLevel
+  ) => {
+    setAudioSpikeProtectionLevel(value);
+    updatePlayerEnhancementPreference('audioSpikeProtectionLevel', value);
+  };
+
+  const handleVisualEnhancementLevelChange = (
+    value: VisualEnhancementLevel
+  ) => {
+    setVisualEnhancementLevel(value);
+    updatePlayerEnhancementPreference('visualEnhancementLevel', value);
+  };
+
   const handleDoubanDataSourceChange = (value: string) => {
     setDoubanDataSource(value);
     if (typeof window !== 'undefined') {
@@ -427,23 +496,37 @@ export const UserMenu: React.FC = () => {
 
   const handleResetSettings = () => {
     const defaultDoubanProxyType =
-      (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent';
+      (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE ||
+      'cmliussss-cdn-tencent';
     const defaultDoubanProxy =
       (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY || '';
     let defaultDoubanImageProxyType =
-      (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY_TYPE || 'cmliussss-cdn-tencent';
-    if (defaultDoubanImageProxyType === 'direct' || defaultDoubanImageProxyType === 'img3') {
+      (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY_TYPE ||
+      'cmliussss-cdn-tencent';
+    if (
+      defaultDoubanImageProxyType === 'direct' ||
+      defaultDoubanImageProxyType === 'img3'
+    ) {
       defaultDoubanImageProxyType = 'server';
     }
     const defaultDoubanImageProxyUrl =
       (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY || '';
     const defaultFluidSearch =
       (window as any).RUNTIME_CONFIG?.FLUID_SEARCH !== false;
+    const defaultEnhancementPreferences = resetPlayerEnhancementPreferences(
+      getRuntimeConfig()
+    );
 
     setDefaultAggregateSearch(true);
     setEnableOptimization(true);
     setFluidSearch(defaultFluidSearch);
     setLiveDirectConnect(false);
+    setAudioSpikeProtectionLevel(
+      defaultEnhancementPreferences.audioSpikeProtectionLevel
+    );
+    setVisualEnhancementLevel(
+      defaultEnhancementPreferences.visualEnhancementLevel
+    );
     setDoubanProxyUrl(defaultDoubanProxy);
     setDoubanDataSource(defaultDoubanProxyType);
     setDoubanImageProxyType(defaultDoubanImageProxyType);
@@ -502,12 +585,13 @@ export const UserMenu: React.FC = () => {
                 当前用户
               </span>
               <span
-                className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${(authInfo?.role || 'user') === 'owner'
-                  ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
-                  : (authInfo?.role || 'user') === 'admin'
+                className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                  (authInfo?.role || 'user') === 'owner'
+                    ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
+                    : (authInfo?.role || 'user') === 'admin'
                     ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
                     : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
-                  }`}
+                }`}
               >
                 {getRoleText(authInfo?.role || 'user')}
               </span>
@@ -586,12 +670,13 @@ export const UserMenu: React.FC = () => {
                 updateStatus &&
                 updateStatus !== UpdateStatus.FETCH_FAILED && (
                   <div
-                    className={`w-2 h-2 rounded-full -translate-y-2 ${updateStatus === UpdateStatus.HAS_UPDATE
-                      ? 'bg-yellow-500'
-                      : updateStatus === UpdateStatus.NO_UPDATE
+                    className={`w-2 h-2 rounded-full -translate-y-2 ${
+                      updateStatus === UpdateStatus.HAS_UPDATE
+                        ? 'bg-yellow-500'
+                        : updateStatus === UpdateStatus.NO_UPDATE
                         ? 'bg-green-400'
                         : ''
-                      }`}
+                    }`}
                   ></div>
                 )}
             </div>
@@ -622,9 +707,7 @@ export const UserMenu: React.FC = () => {
       />
 
       {/* 设置面板 */}
-      <div
-        className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-xl max-h-[90vh] bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] flex flex-col'
-      >
+      <div className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-xl max-h-[90vh] bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] flex flex-col'>
         {/* 内容容器 - 独立的滚动区域 */}
         <div
           className='flex-1 p-6 overflow-y-auto'
@@ -686,8 +769,9 @@ export const UserMenu: React.FC = () => {
                 {/* 下拉箭头 */}
                 <div className='absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none'>
                   <ChevronDown
-                    className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${isDoubanDropdownOpen ? 'rotate-180' : ''
-                      }`}
+                    className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${
+                      isDoubanDropdownOpen ? 'rotate-180' : ''
+                    }`}
                   />
                 </div>
 
@@ -702,10 +786,11 @@ export const UserMenu: React.FC = () => {
                           handleDoubanDataSourceChange(option.value);
                           setIsDoubanDropdownOpen(false);
                         }}
-                        className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${doubanDataSource === option.value
-                          ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
-                          : 'text-gray-900 dark:text-gray-100'
-                          }`}
+                        className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                          doubanDataSource === option.value
+                            ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                            : 'text-gray-900 dark:text-gray-100'
+                        }`}
                       >
                         <span className='truncate'>{option.label}</span>
                         {doubanDataSource === option.value && (
@@ -723,7 +808,10 @@ export const UserMenu: React.FC = () => {
                   <button
                     type='button'
                     onClick={() =>
-                      window.open(getThanksInfo(doubanDataSource)!.url, '_blank')
+                      window.open(
+                        getThanksInfo(doubanDataSource)!.url,
+                        '_blank'
+                      )
                     }
                     className='flex items-center justify-center gap-1.5 w-full px-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer'
                   >
@@ -791,8 +879,9 @@ export const UserMenu: React.FC = () => {
                 {/* 下拉箭头 */}
                 <div className='absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none'>
                   <ChevronDown
-                    className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${isDoubanDropdownOpen ? 'rotate-180' : ''
-                      }`}
+                    className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${
+                      isDoubanDropdownOpen ? 'rotate-180' : ''
+                    }`}
                   />
                 </div>
 
@@ -807,10 +896,11 @@ export const UserMenu: React.FC = () => {
                           handleDoubanImageProxyTypeChange(option.value);
                           setIsDoubanImageProxyDropdownOpen(false);
                         }}
-                        className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${doubanImageProxyType === option.value
-                          ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
-                          : 'text-gray-900 dark:text-gray-100'
-                          }`}
+                        className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                          doubanImageProxyType === option.value
+                            ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                            : 'text-gray-900 dark:text-gray-100'
+                        }`}
                       >
                         <span className='truncate'>{option.label}</span>
                         {doubanImageProxyType === option.value && (
@@ -918,6 +1008,72 @@ export const UserMenu: React.FC = () => {
               </label>
             </div>
 
+            <div className='flex items-center justify-between'>
+              <div className='flex-1'>
+                <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                  音量突增保护
+                </h4>
+                <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                  检测广告、激昂配乐和唱歌导致的突然增响，并用分级限制压住峰值
+                </p>
+                <div className='mt-2 flex flex-wrap gap-2'>
+                  {AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => {
+                    const selected = audioSpikeProtectionLevel === option.value;
+
+                    return (
+                      <button
+                        key={option.value}
+                        type='button'
+                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                          selected
+                            ? 'border-green-500 bg-green-500 text-white'
+                            : 'border-gray-300 bg-white text-gray-600 hover:border-green-400 hover:text-green-600 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-green-500 dark:hover:text-green-300'
+                        }`}
+                        onClick={() =>
+                          handleAudioSpikeProtectionLevelChange(option.value)
+                        }
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className='flex items-center justify-between'>
+              <div className='flex-1'>
+                <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                  去磨皮修正
+                </h4>
+                <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                  通过本地实时画面修正压低过白高光，并恢复一些细节和层次
+                </p>
+                <div className='mt-2 flex flex-wrap gap-2'>
+                  {VISUAL_ENHANCEMENT_LEVEL_OPTIONS.map((option) => {
+                    const selected = visualEnhancementLevel === option.value;
+
+                    return (
+                      <button
+                        key={option.value}
+                        type='button'
+                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                          selected
+                            ? 'border-green-500 bg-green-500 text-white'
+                            : 'border-gray-300 bg-white text-gray-600 hover:border-green-400 hover:text-green-600 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-green-500 dark:hover:text-green-300'
+                        }`}
+                        onClick={() =>
+                          handleVisualEnhancementLevelChange(option.value)
+                        }
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
             {/* 流式搜索 */}
             <div className='flex items-center justify-between'>
               <div>
@@ -958,7 +1114,9 @@ export const UserMenu: React.FC = () => {
                     type='checkbox'
                     className='sr-only peer'
                     checked={liveDirectConnect}
-                    onChange={(e) => handleLiveDirectConnectToggle(e.target.checked)}
+                    onChange={(e) =>
+                      handleLiveDirectConnectToggle(e.target.checked)
+                    }
                   />
                   <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
                   <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
@@ -999,9 +1157,7 @@ export const UserMenu: React.FC = () => {
       />
 
       {/* 修改密码面板 */}
-      <div
-        className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] overflow-hidden'
-      >
+      <div className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] overflow-hidden'>
         {/* 内容容器 - 独立的滚动区域 */}
         <div
           className='h-full p-6'
