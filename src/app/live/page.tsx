@@ -110,6 +110,24 @@ function LivePageClient() {
       return readPlayerEnhancementPreferences(getRuntimeConfig())
         .audioSpikeProtectionLevel;
     });
+  const [audioDynamicProtectionEnabled, setAudioDynamicProtectionEnabled] =
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .audioDynamicProtectionEnabled;
+    });
+  const [audioFixedCeilingEnabled, setAudioFixedCeilingEnabled] =
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .audioFixedCeilingEnabled;
+    });
   const [visualEnhancementLevel, setVisualEnhancementLevel] =
     useState<VisualEnhancementLevel>(() => {
       if (typeof window === 'undefined') {
@@ -295,6 +313,10 @@ function LivePageClient() {
     const syncPlayerEnhancementPreferences = () => {
       const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
       setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setAudioDynamicProtectionEnabled(
+        preferences.audioDynamicProtectionEnabled
+      );
+      setAudioFixedCeilingEnabled(preferences.audioFixedCeilingEnabled);
       setVisualEnhancementLevel(preferences.visualEnhancementLevel);
     };
 
@@ -755,6 +777,8 @@ function LivePageClient() {
     enhancementManagerRef.current.bind(video, host);
     enhancementManagerRef.current.setPreferences({
       audioSpikeProtectionLevel,
+      audioDynamicProtectionEnabled,
+      audioFixedCeilingEnabled,
       visualEnhancementLevel,
     });
   };
@@ -1148,7 +1172,13 @@ function LivePageClient() {
 
   useEffect(() => {
     syncPlayerEnhancements();
-  }, [audioSpikeProtectionLevel, visualEnhancementLevel, videoUrl]);
+  }, [
+    audioDynamicProtectionEnabled,
+    audioFixedCeilingEnabled,
+    audioSpikeProtectionLevel,
+    visualEnhancementLevel,
+    videoUrl,
+  ]);
 
   // 清理播放器资源
   useEffect(() => {

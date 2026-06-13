@@ -109,6 +109,30 @@ function normalizeEnhancementLevel<T extends string>(
   return fallbackValue;
 }
 
+export function normalizeBooleanSetting(
+  value: unknown,
+  fallbackValue: boolean
+): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalizedValue = normalizeStringValue(value);
+  if (!normalizedValue) {
+    return fallbackValue;
+  }
+
+  if (TRUE_VALUES.has(normalizedValue)) {
+    return true;
+  }
+
+  if (FALSE_VALUES.has(normalizedValue)) {
+    return false;
+  }
+
+  return fallbackValue;
+}
+
 export function isAudioSpikeProtectionLevel(
   value: unknown
 ): value is AudioSpikeProtectionLevel {

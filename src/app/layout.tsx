@@ -8,6 +8,7 @@ import './globals.css';
 import { getConfig } from '@/lib/config';
 import {
   normalizeAudioSpikeProtectionLevel,
+  normalizeBooleanSetting,
   normalizeVisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
 
@@ -65,6 +66,14 @@ export default async function RootLayout({
       process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION,
     'off'
   );
+  let playerAudioDynamicProtection = normalizeBooleanSetting(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_DYNAMIC_PROTECTION,
+    playerAudioSpikeProtectionLevel !== 'off'
+  );
+  let playerAudioFixedCeiling = normalizeBooleanSetting(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_FIXED_CEILING,
+    playerAudioSpikeProtectionLevel !== 'off'
+  );
   let playerVisualEnhancementLevel = normalizeVisualEnhancementLevel(
     process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
       process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT,
@@ -100,6 +109,14 @@ export default async function RootLayout({
         playerAudioSpikeProtectionLevel,
       playerAudioSpikeProtectionLevel
     );
+    playerAudioDynamicProtection = normalizeBooleanSetting(
+      config.PlayerEnhancementConfig?.AudioDynamicProtection,
+      playerAudioDynamicProtection
+    );
+    playerAudioFixedCeiling = normalizeBooleanSetting(
+      config.PlayerEnhancementConfig?.AudioFixedCeiling,
+      playerAudioFixedCeiling
+    );
     playerVisualEnhancementLevel = normalizeVisualEnhancementLevel(
       config.PlayerEnhancementConfig?.VisualEnhancementLevel ??
         config.PlayerEnhancementConfig?.VisualEnhancement ??
@@ -121,6 +138,8 @@ export default async function RootLayout({
     ENABLE_WEB_LIVE: enableWebLive,
     PLAYER_AUDIO_SPIKE_PROTECTION: playerAudioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: playerAudioSpikeProtectionLevel,
+    PLAYER_AUDIO_DYNAMIC_PROTECTION: playerAudioDynamicProtection,
+    PLAYER_AUDIO_FIXED_CEILING: playerAudioFixedCeiling,
     PLAYER_VISUAL_ENHANCEMENT: playerVisualEnhancementLevel !== 'off',
     PLAYER_VISUAL_ENHANCEMENT_LEVEL: playerVisualEnhancementLevel,
   };

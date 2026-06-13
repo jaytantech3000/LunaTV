@@ -82,6 +82,10 @@ export const UserMenu: React.FC = () => {
   const [liveDirectConnect, setLiveDirectConnect] = useState(false);
   const [audioSpikeProtectionLevel, setAudioSpikeProtectionLevel] =
     useState<AudioSpikeProtectionLevel>('off');
+  const [audioDynamicProtectionEnabled, setAudioDynamicProtectionEnabled] =
+    useState(false);
+  const [audioFixedCeilingEnabled, setAudioFixedCeilingEnabled] =
+    useState(false);
   const [visualEnhancementLevel, setVisualEnhancementLevel] =
     useState<VisualEnhancementLevel>('off');
   const [doubanDataSource, setDoubanDataSource] = useState(
@@ -226,6 +230,10 @@ export const UserMenu: React.FC = () => {
 
       const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
       setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setAudioDynamicProtectionEnabled(
+        preferences.audioDynamicProtectionEnabled
+      );
+      setAudioFixedCeilingEnabled(preferences.audioFixedCeilingEnabled);
       setVisualEnhancementLevel(preferences.visualEnhancementLevel);
     }
   }, []);
@@ -238,6 +246,10 @@ export const UserMenu: React.FC = () => {
     const syncPlayerEnhancementPreferences = () => {
       const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
       setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setAudioDynamicProtectionEnabled(
+        preferences.audioDynamicProtectionEnabled
+      );
+      setAudioFixedCeilingEnabled(preferences.audioFixedCeilingEnabled);
       setVisualEnhancementLevel(preferences.visualEnhancementLevel);
     };
 
@@ -447,6 +459,16 @@ export const UserMenu: React.FC = () => {
     updatePlayerEnhancementPreference('audioSpikeProtectionLevel', value);
   };
 
+  const handleAudioDynamicProtectionToggle = (value: boolean) => {
+    setAudioDynamicProtectionEnabled(value);
+    updatePlayerEnhancementPreference('audioDynamicProtectionEnabled', value);
+  };
+
+  const handleAudioFixedCeilingToggle = (value: boolean) => {
+    setAudioFixedCeilingEnabled(value);
+    updatePlayerEnhancementPreference('audioFixedCeilingEnabled', value);
+  };
+
   const handleVisualEnhancementLevelChange = (
     value: VisualEnhancementLevel
   ) => {
@@ -523,6 +545,12 @@ export const UserMenu: React.FC = () => {
     setLiveDirectConnect(false);
     setAudioSpikeProtectionLevel(
       defaultEnhancementPreferences.audioSpikeProtectionLevel
+    );
+    setAudioDynamicProtectionEnabled(
+      defaultEnhancementPreferences.audioDynamicProtectionEnabled
+    );
+    setAudioFixedCeilingEnabled(
+      defaultEnhancementPreferences.audioFixedCeilingEnabled
     );
     setVisualEnhancementLevel(
       defaultEnhancementPreferences.visualEnhancementLevel
@@ -1014,7 +1042,7 @@ export const UserMenu: React.FC = () => {
                   音量突增保护
                 </h4>
                 <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                  检测广告、激昂配乐和唱歌导致的突然增响，并用分级限制压住峰值
+                  动态保护只按疑似对白学习基线，固定峰值上限单独兜底爆响
                 </p>
                 <div className='mt-2 flex flex-wrap gap-2'>
                   {AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => {
@@ -1037,6 +1065,72 @@ export const UserMenu: React.FC = () => {
                       </button>
                     );
                   })}
+                </div>
+                <div className='mt-3 space-y-3'>
+                  <div
+                    className={`flex items-center justify-between rounded-xl border px-3 py-2 transition-colors ${
+                      audioSpikeProtectionLevel === 'off'
+                        ? 'border-gray-200 bg-gray-50/80 dark:border-gray-700 dark:bg-gray-900/40 opacity-60'
+                        : 'border-gray-200 bg-white/80 dark:border-gray-700 dark:bg-gray-900/40'
+                    }`}
+                  >
+                    <div className='pr-4'>
+                      <p className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                        动态保护
+                      </p>
+                      <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                        只在疑似对白片段里学习基线，宏大 BGM 和场景音高过对白时再压
+                      </p>
+                    </div>
+                    <label className='flex items-center cursor-pointer'>
+                      <div className='relative'>
+                        <input
+                          type='checkbox'
+                          className='sr-only peer'
+                          checked={audioDynamicProtectionEnabled}
+                          disabled={audioSpikeProtectionLevel === 'off'}
+                          onChange={(e) =>
+                            handleAudioDynamicProtectionToggle(
+                              e.target.checked
+                            )
+                          }
+                        />
+                        <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 peer-disabled:bg-gray-200 transition-colors dark:bg-gray-600 dark:peer-disabled:bg-gray-700'></div>
+                        <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                      </div>
+                    </label>
+                  </div>
+                  <div
+                    className={`flex items-center justify-between rounded-xl border px-3 py-2 transition-colors ${
+                      audioSpikeProtectionLevel === 'off'
+                        ? 'border-gray-200 bg-gray-50/80 dark:border-gray-700 dark:bg-gray-900/40 opacity-60'
+                        : 'border-gray-200 bg-white/80 dark:border-gray-700 dark:bg-gray-900/40'
+                    }`}
+                  >
+                    <div className='pr-4'>
+                      <p className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                        固定峰值上限
+                      </p>
+                      <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                        按当前档位限制输出峰值，兜住爆响、拟声和极端瞬态
+                      </p>
+                    </div>
+                    <label className='flex items-center cursor-pointer'>
+                      <div className='relative'>
+                        <input
+                          type='checkbox'
+                          className='sr-only peer'
+                          checked={audioFixedCeilingEnabled}
+                          disabled={audioSpikeProtectionLevel === 'off'}
+                          onChange={(e) =>
+                            handleAudioFixedCeilingToggle(e.target.checked)
+                          }
+                        />
+                        <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 peer-disabled:bg-gray-200 transition-colors dark:bg-gray-600 dark:peer-disabled:bg-gray-700'></div>
+                        <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                      </div>
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>
