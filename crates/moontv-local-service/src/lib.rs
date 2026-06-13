@@ -636,6 +636,8 @@ impl PlayerEnhancementLevel {
 struct RawPlayerEnhancementConfig {
     audio_spike_protection: Option<bool>,
     audio_spike_protection_level: Option<PlayerEnhancementLevel>,
+    audio_dynamic_protection: Option<bool>,
+    audio_fixed_ceiling: Option<bool>,
     visual_enhancement: Option<bool>,
     visual_enhancement_level: Option<PlayerEnhancementLevel>,
 }
@@ -649,6 +651,8 @@ struct ServiceConfig {
     fluid_search: bool,
     player_audio_spike_protection: bool,
     player_audio_spike_protection_level: PlayerEnhancementLevel,
+    player_audio_dynamic_protection: bool,
+    player_audio_fixed_ceiling: bool,
     player_visual_enhancement: bool,
     player_visual_enhancement_level: PlayerEnhancementLevel,
     site_name: Option<String>,
@@ -860,6 +864,8 @@ struct RuntimePublicConfigResponse {
     enable_web_live: bool,
     player_audio_spike_protection: bool,
     player_audio_spike_protection_level: PlayerEnhancementLevel,
+    player_audio_dynamic_protection: bool,
+    player_audio_fixed_ceiling: bool,
     player_visual_enhancement: bool,
     player_visual_enhancement_level: PlayerEnhancementLevel,
     profile_sync_enabled: bool,
@@ -1060,6 +1066,18 @@ struct DesktopPlayerEnhancementConfig {
         skip_serializing_if = "Option::is_none"
     )]
     audio_spike_protection_level: Option<PlayerEnhancementLevel>,
+    #[serde(
+        rename = "AudioDynamicProtection",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    audio_dynamic_protection: Option<bool>,
+    #[serde(
+        rename = "AudioFixedCeiling",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    audio_fixed_ceiling: Option<bool>,
     #[serde(rename = "VisualEnhancement", default)]
     visual_enhancement: bool,
     #[serde(
@@ -4232,11 +4250,15 @@ fn build_default_site_config_from_raw(raw_config: &RawServiceConfig) -> DesktopS
 
 fn build_player_enhancement_config(
     audio_level: PlayerEnhancementLevel,
+    audio_dynamic_protection: bool,
+    audio_fixed_ceiling: bool,
     visual_level: PlayerEnhancementLevel,
 ) -> DesktopPlayerEnhancementConfig {
     DesktopPlayerEnhancementConfig {
         audio_spike_protection: audio_level.is_enabled(),
         audio_spike_protection_level: Some(audio_level),
+        audio_dynamic_protection: Some(audio_dynamic_protection),
+        audio_fixed_ceiling: Some(audio_fixed_ceiling),
         visual_enhancement: visual_level.is_enabled(),
         visual_enhancement_level: Some(visual_level),
     }
@@ -4255,8 +4277,21 @@ fn build_default_player_enhancement_config_from_raw(
         raw_config.player_enhancements.visual_enhancement,
         PlayerEnhancementLevel::Off,
     );
+    let audio_dynamic_protection = raw_config
+        .player_enhancements
+        .audio_dynamic_protection
+        .unwrap_or(audio_level.is_enabled());
+    let audio_fixed_ceiling = raw_config
+        .player_enhancements
+        .audio_fixed_ceiling
+        .unwrap_or(audio_level.is_enabled());
 
-    build_player_enhancement_config(audio_level, visual_level)
+    build_player_enhancement_config(
+        audio_level,
+        audio_dynamic_protection,
+        audio_fixed_ceiling,
+        visual_level,
+    )
 }
 
 fn merge_admin_persistence_with_raw(
@@ -4426,8 +4461,33 @@ fn merge_player_enhancement_config(
         raw_config.visual_enhancement,
         existing_visual_level,
     );
+    let has_explicit_audio_level = raw_config.audio_spike_protection_level.is_some()
+        || raw_config.audio_spike_protection.is_some();
+    let audio_dynamic_protection = raw_config.audio_dynamic_protection.unwrap_or_else(|| {
+        if has_explicit_audio_level {
+            audio_level.is_enabled()
+        } else {
+            existing
+                .audio_dynamic_protection
+                .unwrap_or(existing_audio_level.is_enabled())
+        }
+    });
+    let audio_fixed_ceiling = raw_config.audio_fixed_ceiling.unwrap_or_else(|| {
+        if has_explicit_audio_level {
+            audio_level.is_enabled()
+        } else {
+            existing
+                .audio_fixed_ceiling
+                .unwrap_or(existing_audio_level.is_enabled())
+        }
+    });
 
-    build_player_enhancement_config(audio_level, visual_level)
+    build_player_enhancement_config(
+        audio_level,
+        audio_dynamic_protection,
+        audio_fixed_ceiling,
+        visual_level,
+    )
 }
 
 fn merge_live_config(
@@ -4492,6 +4552,14 @@ fn build_service_config_from_admin(
         Some(admin_config.player_enhancement_config.visual_enhancement),
         PlayerEnhancementLevel::Off,
     );
+    let audio_dynamic_protection = admin_config
+        .player_enhancement_config
+        .audio_dynamic_protection
+        .unwrap_or(audio_level.is_enabled());
+    let audio_fixed_ceiling = admin_config
+        .player_enhancement_config
+        .audio_fixed_ceiling
+        .unwrap_or(audio_level.is_enabled());
 
     ServiceConfig {
         cache_time: admin_config.site_config.site_interface_cache_time.max(1),
@@ -4501,6 +4569,8 @@ fn build_service_config_from_admin(
         fluid_search: admin_config.site_config.fluid_search,
         player_audio_spike_protection: audio_level.is_enabled(),
         player_audio_spike_protection_level: audio_level,
+        player_audio_dynamic_protection: audio_dynamic_protection,
+        player_audio_fixed_ceiling: audio_fixed_ceiling,
         player_visual_enhancement: visual_level.is_enabled(),
         player_visual_enhancement_level: visual_level,
         site_name: normalize_owned_string(Some(admin_config.site_config.site_name.clone())),
@@ -6194,6 +6264,8 @@ fn build_runtime_public_config_response(config: &ServiceConfig) -> RuntimePublic
             .unwrap_or_else(|| config.live_sources.iter().any(|source| !source.disabled)),
         player_audio_spike_protection: config.player_audio_spike_protection,
         player_audio_spike_protection_level: config.player_audio_spike_protection_level,
+        player_audio_dynamic_protection: config.player_audio_dynamic_protection,
+        player_audio_fixed_ceiling: config.player_audio_fixed_ceiling,
         player_visual_enhancement: config.player_visual_enhancement,
         player_visual_enhancement_level: config.player_visual_enhancement_level,
         profile_sync_enabled: config.profile_sync_api_base_url.is_some(),
@@ -8200,6 +8272,8 @@ segment0.ts
               "douban_image_proxy": "https://img.example.com/fetch?url=",
               "player_enhancements": {
                 "audio_spike_protection_level": "strong",
+                "audio_dynamic_protection": false,
+                "audio_fixed_ceiling": true,
                 "visual_enhancement_level": "light"
               },
               "custom_category": [
@@ -8275,6 +8349,18 @@ segment0.ts
                 .get("playerAudioSpikeProtectionLevel")
                 .and_then(Value::as_str),
             Some("strong")
+        );
+        assert_eq!(
+            payload
+                .get("playerAudioDynamicProtection")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .get("playerAudioFixedCeiling")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             payload
