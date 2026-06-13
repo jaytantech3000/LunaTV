@@ -71,6 +71,8 @@ export interface AdminConfig {
     AudioSpikeProtection: boolean;
     VisualEnhancement: boolean;
     AudioSpikeProtectionLevel?: AudioSpikeProtectionLevel;
+    AudioDynamicProtection?: boolean;
+    AudioFixedCeiling?: boolean;
     VisualEnhancementLevel?: VisualEnhancementLevel;
   };
 }

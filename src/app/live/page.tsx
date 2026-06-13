@@ -6,7 +6,7 @@ import Artplayer from 'artplayer';
 import Hls from 'hls.js';
 import { Heart, Radio, Tv } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, startTransition, useEffect, useRef, useState } from 'react';
+import { startTransition, Suspense, useEffect, useRef, useState } from 'react';
 
 import {
   deleteFavorite,
@@ -25,13 +25,13 @@ import {
   PlayerEnhancementManager,
 } from '@/lib/player-enhancement-runtime';
 import {
-  PLAYER_ENHANCEMENTS_UPDATED_EVENT,
-  readPlayerEnhancementPreferences,
-} from '@/lib/player-enhancements';
-import {
   AudioSpikeProtectionLevel,
   VisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
+import {
+  PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+  readPlayerEnhancementPreferences,
+} from '@/lib/player-enhancements';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { parseCustomTimeFormat } from '@/lib/time';
 import {
@@ -103,6 +103,24 @@ function LivePageClient() {
 
       return readPlayerEnhancementPreferences(getRuntimeConfig())
         .audioSpikeProtectionLevel;
+    });
+  const [audioDynamicProtectionEnabled, setAudioDynamicProtectionEnabled] =
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .audioDynamicProtectionEnabled;
+    });
+  const [audioFixedCeilingEnabled, setAudioFixedCeilingEnabled] =
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .audioFixedCeilingEnabled;
     });
   const [visualEnhancementLevel, setVisualEnhancementLevel] =
     useState<VisualEnhancementLevel>(() => {
@@ -276,6 +294,10 @@ function LivePageClient() {
     const syncPlayerEnhancementPreferences = () => {
       const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
       setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setAudioDynamicProtectionEnabled(
+        preferences.audioDynamicProtectionEnabled
+      );
+      setAudioFixedCeilingEnabled(preferences.audioFixedCeilingEnabled);
       setVisualEnhancementLevel(preferences.visualEnhancementLevel);
     };
 
@@ -629,6 +651,7 @@ function LivePageClient() {
   const cleanupPlayer = () => {
     enhancementManagerRef.current?.dispose();
     enhancementManagerRef.current = null;
+    setAudioEnhancementStatus(null);
     removeDesktopFullscreenListenerRef.current?.();
     removeDesktopFullscreenListenerRef.current = null;
 
@@ -714,6 +737,7 @@ function LivePageClient() {
     if (!video || !host) {
       enhancementManagerRef.current?.dispose();
       enhancementManagerRef.current = null;
+      setAudioEnhancementStatus(null);
       return;
     }
 
@@ -736,6 +760,8 @@ function LivePageClient() {
     enhancementManagerRef.current.bind(video, host);
     enhancementManagerRef.current.setPreferences({
       audioSpikeProtectionLevel,
+      audioDynamicProtectionEnabled,
+      audioFixedCeilingEnabled,
       visualEnhancementLevel,
     });
   };
@@ -1181,7 +1207,13 @@ function LivePageClient() {
 
   useEffect(() => {
     syncPlayerEnhancements();
-  }, [audioSpikeProtectionLevel, visualEnhancementLevel, videoUrl]);
+  }, [
+    audioDynamicProtectionEnabled,
+    audioFixedCeilingEnabled,
+    audioSpikeProtectionLevel,
+    visualEnhancementLevel,
+    videoUrl,
+  ]);
 
   // 清理播放器资源
   useEffect(() => {

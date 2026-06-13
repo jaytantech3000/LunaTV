@@ -2,6 +2,11 @@
 
 import { AdminConfig } from './admin.types';
 import {
+  normalizeAudioSpikeProtectionLevel,
+  normalizeBooleanSetting,
+  normalizeVisualEnhancementLevel,
+} from './player-enhancement-types';
+import {
   loadStoredAdminConfig,
   loadStoredUsernames,
   readBundledDefaultConfigFile,
@@ -39,6 +44,14 @@ interface ConfigFileStruct {
   lives?: {
     [key: string]: LiveCfg;
   };
+  player_enhancements?: {
+    audio_spike_protection_level?: unknown;
+    audio_dynamic_protection?: unknown;
+    audio_fixed_ceiling?: unknown;
+    visual_enhancement_level?: unknown;
+    audio_spike_protection?: unknown;
+    visual_enhancement?: unknown;
+  };
 }
 
 export const API_CONFIG = {
@@ -63,6 +76,102 @@ export const API_CONFIG = {
 
 // 在模块加载时根据环境决定配置来源
 let cachedConfig: AdminConfig;
+
+function getDefaultPlayerEnhancementConfig(): NonNullable<
+  AdminConfig['PlayerEnhancementConfig']
+> {
+  const audioSpikeProtectionLevel = normalizeAudioSpikeProtectionLevel(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL ??
+      process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION,
+    'off'
+  );
+  const audioDynamicProtection = normalizeBooleanSetting(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_DYNAMIC_PROTECTION,
+    audioSpikeProtectionLevel !== 'off'
+  );
+  const audioFixedCeiling = normalizeBooleanSetting(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_FIXED_CEILING,
+    audioSpikeProtectionLevel !== 'off'
+  );
+  const visualEnhancementLevel = normalizeVisualEnhancementLevel(
+    process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
+      process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT,
+    'off'
+  );
+
+  return {
+    AudioSpikeProtection: audioSpikeProtectionLevel !== 'off',
+    AudioSpikeProtectionLevel: audioSpikeProtectionLevel,
+    AudioDynamicProtection: audioDynamicProtection,
+    AudioFixedCeiling: audioFixedCeiling,
+    VisualEnhancement: visualEnhancementLevel !== 'off',
+    VisualEnhancementLevel: visualEnhancementLevel,
+  };
+}
+
+function resolvePlayerEnhancementConfig(
+  fileConfig: ConfigFileStruct,
+  fallbackConfig?: AdminConfig['PlayerEnhancementConfig']
+): NonNullable<AdminConfig['PlayerEnhancementConfig']> {
+  const defaultConfig = getDefaultPlayerEnhancementConfig();
+  const fallbackAudioLevel = normalizeAudioSpikeProtectionLevel(
+    fallbackConfig?.AudioSpikeProtectionLevel ??
+      fallbackConfig?.AudioSpikeProtection ??
+      defaultConfig.AudioSpikeProtectionLevel,
+    defaultConfig.AudioSpikeProtectionLevel
+  );
+  const fallbackAudioDynamicProtection = normalizeBooleanSetting(
+    fallbackConfig?.AudioDynamicProtection,
+    fallbackAudioLevel !== 'off'
+  );
+  const fallbackAudioFixedCeiling = normalizeBooleanSetting(
+    fallbackConfig?.AudioFixedCeiling,
+    fallbackAudioLevel !== 'off'
+  );
+  const fallbackVisualLevel = normalizeVisualEnhancementLevel(
+    fallbackConfig?.VisualEnhancementLevel ??
+      fallbackConfig?.VisualEnhancement ??
+      defaultConfig.VisualEnhancementLevel,
+    defaultConfig.VisualEnhancementLevel
+  );
+  const audioSpikeProtectionLevel = normalizeAudioSpikeProtectionLevel(
+    fileConfig.player_enhancements?.audio_spike_protection_level ??
+      fileConfig.player_enhancements?.audio_spike_protection ??
+      fallbackAudioLevel,
+    fallbackAudioLevel
+  );
+  const hasExplicitAudioLevel =
+    fileConfig.player_enhancements?.audio_spike_protection_level !==
+      undefined ||
+    fileConfig.player_enhancements?.audio_spike_protection !== undefined;
+  const audioDynamicProtection = normalizeBooleanSetting(
+    fileConfig.player_enhancements?.audio_dynamic_protection,
+    hasExplicitAudioLevel
+      ? audioSpikeProtectionLevel !== 'off'
+      : fallbackAudioDynamicProtection
+  );
+  const audioFixedCeiling = normalizeBooleanSetting(
+    fileConfig.player_enhancements?.audio_fixed_ceiling,
+    hasExplicitAudioLevel
+      ? audioSpikeProtectionLevel !== 'off'
+      : fallbackAudioFixedCeiling
+  );
+  const visualEnhancementLevel = normalizeVisualEnhancementLevel(
+    fileConfig.player_enhancements?.visual_enhancement_level ??
+      fileConfig.player_enhancements?.visual_enhancement ??
+      fallbackVisualLevel,
+    fallbackVisualLevel
+  );
+
+  return {
+    AudioSpikeProtection: audioSpikeProtectionLevel !== 'off',
+    AudioSpikeProtectionLevel: audioSpikeProtectionLevel,
+    AudioDynamicProtection: audioDynamicProtection,
+    AudioFixedCeiling: audioFixedCeiling,
+    VisualEnhancement: visualEnhancementLevel !== 'off',
+    VisualEnhancementLevel: visualEnhancementLevel,
+  };
+}
 
 // 从配置文件补充管理员配置
 export function refineConfig(adminConfig: AdminConfig): AdminConfig {
@@ -192,6 +301,10 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
 
   // 将 Map 转换回数组
   adminConfig.LiveConfig = Array.from(currentLives.values());
+  adminConfig.PlayerEnhancementConfig = resolvePlayerEnhancementConfig(
+    fileConfig,
+    adminConfig.PlayerEnhancementConfig
+  );
 
   return adminConfig;
 }
@@ -246,6 +359,7 @@ async function getInitConfig(
     AdFilterConfig: {
       enabled: true,
     },
+    PlayerEnhancementConfig: resolvePlayerEnhancementConfig(cfgFile),
   };
 
   // 补充用户信息
@@ -339,6 +453,13 @@ export async function getConfig(): Promise<AdminConfig> {
 }
 
 export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
+  let fileConfig: ConfigFileStruct;
+  try {
+    fileConfig = JSON.parse(adminConfig.ConfigFile || '{}') as ConfigFileStruct;
+  } catch (e) {
+    fileConfig = {} as ConfigFileStruct;
+  }
+
   // 确保必要的属性存在和初始化
   if (!adminConfig.UserConfig) {
     adminConfig.UserConfig = { Users: [] };
@@ -371,6 +492,10 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   ) {
     adminConfig.AdFilterConfig = { enabled: true };
   }
+  adminConfig.PlayerEnhancementConfig = resolvePlayerEnhancementConfig(
+    fileConfig,
+    adminConfig.PlayerEnhancementConfig
+  );
 
   // 站长变更自检
   const ownerUser = process.env.USERNAME;

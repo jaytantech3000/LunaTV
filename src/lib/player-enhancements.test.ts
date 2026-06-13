@@ -15,20 +15,28 @@ describe('player enhancement preferences', () => {
     expect(
       getDefaultPlayerEnhancementPreferences({
         PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: 'strong',
+        PLAYER_AUDIO_DYNAMIC_PROTECTION: false,
+        PLAYER_AUDIO_FIXED_CEILING: true,
         PLAYER_VISUAL_ENHANCEMENT_LEVEL: 'light',
       })
     ).toEqual({
       audioSpikeProtectionLevel: 'strong',
+      audioDynamicProtectionEnabled: false,
+      audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'light',
     });
 
     expect(
       readPlayerEnhancementPreferences({
         PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: 'strong',
+        PLAYER_AUDIO_DYNAMIC_PROTECTION: false,
+        PLAYER_AUDIO_FIXED_CEILING: true,
         PLAYER_VISUAL_ENHANCEMENT_LEVEL: 'light',
       })
     ).toEqual({
       audioSpikeProtectionLevel: 'strong',
+      audioDynamicProtectionEnabled: false,
+      audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'light',
     });
   });
@@ -41,12 +49,16 @@ describe('player enhancement preferences', () => {
       })
     ).toEqual({
       audioSpikeProtectionLevel: 'standard',
+      audioDynamicProtectionEnabled: true,
+      audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'off',
     });
   });
 
   it('prefers local storage level values over runtime defaults', () => {
     window.localStorage.setItem('playerAudioSpikeProtectionLevel', 'light');
+    window.localStorage.setItem('playerAudioDynamicProtectionEnabled', 'false');
+    window.localStorage.setItem('playerAudioFixedCeilingEnabled', 'true');
     window.localStorage.setItem('playerVisualEnhancementLevel', 'strong');
 
     expect(
@@ -56,6 +68,8 @@ describe('player enhancement preferences', () => {
       })
     ).toEqual({
       audioSpikeProtectionLevel: 'light',
+      audioDynamicProtectionEnabled: false,
+      audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'strong',
     });
   });
@@ -71,6 +85,26 @@ describe('player enhancement preferences', () => {
       })
     ).toEqual({
       audioSpikeProtectionLevel: 'standard',
+      audioDynamicProtectionEnabled: true,
+      audioFixedCeilingEnabled: true,
+      visualEnhancementLevel: 'off',
+    });
+  });
+
+  it('backfills the new audio mode toggles from an existing stored level', () => {
+    window.localStorage.setItem('playerAudioSpikeProtectionLevel', 'light');
+
+    expect(
+      readPlayerEnhancementPreferences({
+        PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: 'off',
+        PLAYER_AUDIO_DYNAMIC_PROTECTION: false,
+        PLAYER_AUDIO_FIXED_CEILING: false,
+        PLAYER_VISUAL_ENHANCEMENT_LEVEL: 'off',
+      })
+    ).toEqual({
+      audioSpikeProtectionLevel: 'light',
+      audioDynamicProtectionEnabled: true,
+      audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'off',
     });
   });
@@ -90,6 +124,8 @@ describe('player enhancement preferences', () => {
 
     expect(preferences).toEqual({
       audioSpikeProtectionLevel: 'strong',
+      audioDynamicProtectionEnabled: false,
+      audioFixedCeilingEnabled: false,
       visualEnhancementLevel: 'light',
     });
     expect(window.localStorage.getItem('playerAudioSpikeProtectionLevel')).toBe(
@@ -100,22 +136,57 @@ describe('player enhancement preferences', () => {
     window.removeEventListener(PLAYER_ENHANCEMENTS_UPDATED_EVENT, listener);
   });
 
+  it('updates audio mode toggles independently', () => {
+    const preferences = updatePlayerEnhancementPreference(
+      'audioDynamicProtectionEnabled',
+      true,
+      {
+        PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: 'standard',
+        PLAYER_AUDIO_DYNAMIC_PROTECTION: false,
+        PLAYER_AUDIO_FIXED_CEILING: false,
+        PLAYER_VISUAL_ENHANCEMENT_LEVEL: 'off',
+      }
+    );
+
+    expect(preferences).toEqual({
+      audioSpikeProtectionLevel: 'standard',
+      audioDynamicProtectionEnabled: true,
+      audioFixedCeilingEnabled: false,
+      visualEnhancementLevel: 'off',
+    });
+    expect(
+      window.localStorage.getItem('playerAudioDynamicProtectionEnabled')
+    ).toBe('true');
+  });
+
   it('resets both preferences back to runtime defaults', () => {
     window.localStorage.setItem('playerAudioSpikeProtectionLevel', 'light');
+    window.localStorage.setItem('playerAudioDynamicProtectionEnabled', 'false');
+    window.localStorage.setItem('playerAudioFixedCeilingEnabled', 'false');
     window.localStorage.setItem('playerVisualEnhancementLevel', 'strong');
 
     const preferences = resetPlayerEnhancementPreferences({
       PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: 'off',
+      PLAYER_AUDIO_DYNAMIC_PROTECTION: true,
+      PLAYER_AUDIO_FIXED_CEILING: false,
       PLAYER_VISUAL_ENHANCEMENT_LEVEL: 'standard',
     });
 
     expect(preferences).toEqual({
       audioSpikeProtectionLevel: 'off',
+      audioDynamicProtectionEnabled: true,
+      audioFixedCeilingEnabled: false,
       visualEnhancementLevel: 'standard',
     });
     expect(window.localStorage.getItem('playerAudioSpikeProtectionLevel')).toBe(
       'off'
     );
+    expect(
+      window.localStorage.getItem('playerAudioDynamicProtectionEnabled')
+    ).toBe('true');
+    expect(
+      window.localStorage.getItem('playerAudioFixedCeilingEnabled')
+    ).toBe('false');
     expect(window.localStorage.getItem('playerVisualEnhancementLevel')).toBe(
       'standard'
     );

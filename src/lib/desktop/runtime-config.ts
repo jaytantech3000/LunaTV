@@ -1,14 +1,15 @@
 import {
+  AudioSpikeProtectionLevel,
+  normalizeAudioSpikeProtectionLevel,
+  normalizeBooleanSetting,
+  normalizeVisualEnhancementLevel,
+  VisualEnhancementLevel,
+} from '@/lib/player-enhancement-types';
+import {
   AppRuntimeConfig,
   getRuntimeConfig,
   RuntimeCustomCategory,
 } from '@/lib/runtime-config';
-import {
-  AudioSpikeProtectionLevel,
-  VisualEnhancementLevel,
-  normalizeAudioSpikeProtectionLevel,
-  normalizeVisualEnhancementLevel,
-} from '@/lib/player-enhancement-types';
 
 export interface DesktopRuntimePublicConfigPayload {
   siteName?: string | null;
@@ -20,6 +21,8 @@ export interface DesktopRuntimePublicConfigPayload {
   fluidSearch?: boolean;
   enableWebLive?: boolean;
   playerAudioSpikeProtection?: boolean;
+  playerAudioDynamicProtection?: boolean;
+  playerAudioFixedCeiling?: boolean;
   playerVisualEnhancement?: boolean;
   playerAudioSpikeProtectionLevel?: AudioSpikeProtectionLevel | null;
   playerVisualEnhancementLevel?: VisualEnhancementLevel | null;
@@ -82,6 +85,16 @@ export function mergeDesktopRuntimePublicConfig(
       currentConfig.PLAYER_VISUAL_ENHANCEMENT,
     'off'
   );
+  const audioDynamicProtection = normalizeBooleanSetting(
+    payload.playerAudioDynamicProtection ??
+      currentConfig.PLAYER_AUDIO_DYNAMIC_PROTECTION,
+    audioSpikeProtectionLevel !== 'off'
+  );
+  const audioFixedCeiling = normalizeBooleanSetting(
+    payload.playerAudioFixedCeiling ??
+      currentConfig.PLAYER_AUDIO_FIXED_CEILING,
+    audioSpikeProtectionLevel !== 'off'
+  );
 
   return {
     ...currentConfig,
@@ -97,6 +110,8 @@ export function mergeDesktopRuntimePublicConfig(
       payload.enableWebLive ?? currentConfig.ENABLE_WEB_LIVE ?? false,
     PLAYER_AUDIO_SPIKE_PROTECTION: audioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: audioSpikeProtectionLevel,
+    PLAYER_AUDIO_DYNAMIC_PROTECTION: audioDynamicProtection,
+    PLAYER_AUDIO_FIXED_CEILING: audioFixedCeiling,
     PLAYER_VISUAL_ENHANCEMENT: visualEnhancementLevel !== 'off',
     PLAYER_VISUAL_ENHANCEMENT_LEVEL: visualEnhancementLevel,
     PROFILE_SYNC_ENABLED:

@@ -57,6 +57,14 @@ function buildDesktopRuntimeBootstrapScript() {
           : current.PLAYER_VISUAL_ENHANCEMENT
           ? 'standard'
           : 'off';
+      var currentAudioDynamicProtection = coalesce(
+        current.PLAYER_AUDIO_DYNAMIC_PROTECTION,
+        currentAudioLevel !== 'off'
+      );
+      var currentAudioFixedCeiling = coalesce(
+        current.PLAYER_AUDIO_FIXED_CEILING,
+        currentAudioLevel !== 'off'
+      );
       var nextAudioLevel =
         payload.playerAudioSpikeProtectionLevel !== undefined &&
         payload.playerAudioSpikeProtectionLevel !== null
@@ -97,6 +105,14 @@ function buildDesktopRuntimeBootstrapScript() {
         ),
         PLAYER_AUDIO_SPIKE_PROTECTION: nextAudioLevel !== 'off',
         PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: nextAudioLevel,
+        PLAYER_AUDIO_DYNAMIC_PROTECTION: coalesce(
+          payload.playerAudioDynamicProtection,
+          currentAudioDynamicProtection
+        ),
+        PLAYER_AUDIO_FIXED_CEILING: coalesce(
+          payload.playerAudioFixedCeiling,
+          currentAudioFixedCeiling
+        ),
         PLAYER_VISUAL_ENHANCEMENT: nextVisualLevel !== 'off',
         PLAYER_VISUAL_ENHANCEMENT_LEVEL: nextVisualLevel,
         PROFILE_SYNC_ENABLED: coalesce(

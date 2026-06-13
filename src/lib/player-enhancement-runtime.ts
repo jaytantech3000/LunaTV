@@ -1,12 +1,11 @@
 import {
-  PlayerEnhancementPreferences,
-  isAudioSpikeProtectionActive,
-  isVisualEnhancementActive,
-} from '@/lib/player-enhancements';
-import {
   AudioSpikeProtectionLevel,
   VisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
+import {
+  isVisualEnhancementActive,
+  PlayerEnhancementPreferences,
+} from '@/lib/player-enhancements';
 
 type VideoFrameRequestHandle = number;
 
@@ -18,29 +17,35 @@ type VideoElementWithFrameCallback = HTMLVideoElement & {
 };
 
 interface AudioSpikeProtectionLevelConfig {
-  triggerMarginDb: number;
-  deltaRatio: number;
+  baselineGateDb: number;
+  baselineHistoryFrames: number;
+  baselineMinFrames: number;
+  baselinePercentile: number;
+  dynamicTriggerMarginDb: number;
+  transientTriggerMarginDb: number;
+  dialogueDynamicTriggerMarginDb: number;
+  dialogueTransientTriggerMarginDb: number;
+  dynamicRatio: number;
+  transientRatio: number;
   maxReductionDb: number;
   ceilingDb: number;
-  baselineRise: number;
-  baselineFall: number;
   attackTime: number;
   releaseTime: number;
-  compressorThreshold: number;
-  compressorKnee: number;
-  compressorRatio: number;
-  compressorAttack: number;
-  compressorRelease: number;
   monitorIntervalMs: number;
 }
 
 export interface AudioSpikeProtectionStatus {
   level: AudioSpikeProtectionLevel;
+  enabled: boolean;
+  dynamicProtectionEnabled: boolean;
+  fixedCeilingEnabled: boolean;
   inputDb: number | null;
   currentDb: number | null;
   baselineDb: number | null;
   ceilingDb: number | null;
   reductionDb: number;
+  dynamicReductionDb: number;
+  fixedCeilingReductionDb: number;
   limited: boolean;
 }
 
@@ -60,51 +65,54 @@ const AUDIO_SPIKE_PROTECTION_LEVEL_CONFIG: Record<
   AudioSpikeProtectionLevelConfig
 > = {
   light: {
-    triggerMarginDb: 4.8,
-    deltaRatio: 1.6,
-    maxReductionDb: 18,
-    ceilingDb: -6.5,
-    baselineRise: 0.022,
-    baselineFall: 0.12,
+    baselineGateDb: -33,
+    baselineHistoryFrames: 24,
+    baselineMinFrames: 8,
+    baselinePercentile: 65,
+    dynamicTriggerMarginDb: 1.6,
+    transientTriggerMarginDb: 12,
+    dialogueDynamicTriggerMarginDb: 8.6,
+    dialogueTransientTriggerMarginDb: 18,
+    dynamicRatio: 1.1,
+    transientRatio: 0.6,
+    maxReductionDb: 14,
+    ceilingDb: -2.5,
     attackTime: 0.012,
     releaseTime: 0.22,
-    compressorThreshold: -24,
-    compressorKnee: 12,
-    compressorRatio: 10,
-    compressorAttack: 0.0028,
-    compressorRelease: 0.18,
     monitorIntervalMs: 72,
   },
   standard: {
-    triggerMarginDb: 3.6,
-    deltaRatio: 2.05,
-    maxReductionDb: 24,
-    ceilingDb: -8.5,
-    baselineRise: 0.018,
-    baselineFall: 0.1,
+    baselineGateDb: -34,
+    baselineHistoryFrames: 36,
+    baselineMinFrames: 12,
+    baselinePercentile: 65,
+    dynamicTriggerMarginDb: 1.2,
+    transientTriggerMarginDb: 10,
+    dialogueDynamicTriggerMarginDb: 7.5,
+    dialogueTransientTriggerMarginDb: 16,
+    dynamicRatio: 1.35,
+    transientRatio: 0.75,
+    maxReductionDb: 20,
+    ceilingDb: -4.5,
     attackTime: 0.008,
     releaseTime: 0.16,
-    compressorThreshold: -28,
-    compressorKnee: 8,
-    compressorRatio: 16,
-    compressorAttack: 0.0016,
-    compressorRelease: 0.14,
     monitorIntervalMs: 48,
   },
   strong: {
-    triggerMarginDb: 2.9,
-    deltaRatio: 2.55,
-    maxReductionDb: 30,
-    ceilingDb: -10.5,
-    baselineRise: 0.014,
-    baselineFall: 0.085,
+    baselineGateDb: -35,
+    baselineHistoryFrames: 54,
+    baselineMinFrames: 18,
+    baselinePercentile: 65,
+    dynamicTriggerMarginDb: 0.8,
+    transientTriggerMarginDb: 8.5,
+    dialogueDynamicTriggerMarginDb: 6.5,
+    dialogueTransientTriggerMarginDb: 14,
+    dynamicRatio: 1.6,
+    transientRatio: 0.9,
+    maxReductionDb: 26,
+    ceilingDb: -6,
     attackTime: 0.004,
     releaseTime: 0.12,
-    compressorThreshold: -32,
-    compressorKnee: 6,
-    compressorRatio: 22,
-    compressorAttack: 0.001,
-    compressorRelease: 0.1,
     monitorIntervalMs: 32,
   },
 };
@@ -190,20 +198,82 @@ function getAudioContextConstructor(): typeof AudioContext | undefined {
   );
 }
 
+interface AudioSpikeProtectionStatusSeed {
+  level?: AudioSpikeProtectionLevel;
+  dynamicProtectionEnabled?: boolean;
+  fixedCeilingEnabled?: boolean;
+}
+
+export interface AudioDialoguePresenceInput {
+  speechRatio: number;
+  voiceCoreRatio: number;
+  bassRatio: number;
+  airRatio: number;
+  crestDb: number;
+}
+
+export interface AudioDialoguePresenceResult {
+  score: number;
+  isDialogueCandidate: boolean;
+}
+
+export interface AudioSpikeProtectionAnalysisInput {
+  level: Exclude<AudioSpikeProtectionLevel, 'off'>;
+  rmsDb: number;
+  peakDb: number;
+  baselineDb: number | null;
+  baselineHistory: readonly number[];
+  dialogueCandidate: boolean;
+  dynamicProtectionEnabled: boolean;
+  fixedCeilingEnabled: boolean;
+}
+
+export interface AudioSpikeProtectionAnalysisResult {
+  baselineDb: number | null;
+  baselineHistory: number[];
+  dynamicReductionDb: number;
+  fixedCeilingReductionDb: number;
+  targetReductionDb: number;
+  ceilingDb: number | null;
+}
+
+function isAudioSpikeProtectionProcessingEnabled(
+  level: AudioSpikeProtectionLevel,
+  dynamicProtectionEnabled: boolean,
+  fixedCeilingEnabled: boolean
+): boolean {
+  return level !== 'off' && (dynamicProtectionEnabled || fixedCeilingEnabled);
+}
+
 function buildAudioSpikeProtectionStatus(
-  level: AudioSpikeProtectionLevel = 'off',
+  {
+    level = 'off',
+    dynamicProtectionEnabled = false,
+    fixedCeilingEnabled = false,
+  }: AudioSpikeProtectionStatusSeed = {},
   overrides: Partial<AudioSpikeProtectionStatus> = {}
 ): AudioSpikeProtectionStatus {
+  const enabled = isAudioSpikeProtectionProcessingEnabled(
+    level,
+    dynamicProtectionEnabled,
+    fixedCeilingEnabled
+  );
+
   return {
     level,
+    enabled,
+    dynamicProtectionEnabled,
+    fixedCeilingEnabled,
     inputDb: null,
     currentDb: null,
     baselineDb: null,
     ceilingDb:
-      level === 'off'
+      level === 'off' || !fixedCeilingEnabled
         ? null
         : AUDIO_SPIKE_PROTECTION_LEVEL_CONFIG[level].ceilingDb,
     reductionDb: 0,
+    dynamicReductionDb: 0,
+    fixedCeilingReductionDb: 0,
     limited: false,
     ...overrides,
   };
@@ -213,6 +283,233 @@ function getAudioSpikeProtectionLevelConfig(
   level: AudioSpikeProtectionLevel
 ): AudioSpikeProtectionLevelConfig | null {
   return level === 'off' ? null : AUDIO_SPIKE_PROTECTION_LEVEL_CONFIG[level];
+}
+
+function normalizeRange(value: number, min: number, max: number): number {
+  if (max <= min) {
+    return value >= max ? 1 : 0;
+  }
+
+  return clamp((value - min) / (max - min), 0, 1);
+}
+
+function sumFrequencyBandEnergy(
+  buffer: Float32Array,
+  sampleRate: number,
+  minFrequency: number,
+  maxFrequency: number
+): number {
+  if (sampleRate <= 0 || buffer.length === 0 || maxFrequency <= minFrequency) {
+    return 0;
+  }
+
+  const binWidth = (sampleRate / 2) / buffer.length;
+  let energy = 0;
+
+  for (let index = 1; index < buffer.length; index += 1) {
+    const frequency = index * binWidth;
+    if (frequency < minFrequency || frequency >= maxFrequency) {
+      continue;
+    }
+
+    const db = buffer[index];
+    if (!Number.isFinite(db)) {
+      continue;
+    }
+
+    energy += Math.pow(10, db / 10);
+  }
+
+  return energy;
+}
+
+function appendBaselineSample(
+  history: readonly number[],
+  sample: number,
+  maxFrames: number
+): number[] {
+  if (maxFrames <= 1) {
+    return [sample];
+  }
+
+  const retainedHistory =
+    history.length >= maxFrames
+      ? history.slice(history.length - maxFrames + 1)
+      : history.slice();
+  retainedHistory.push(sample);
+  return retainedHistory;
+}
+
+function calculatePercentile(
+  values: readonly number[],
+  percentile: number
+): number | null {
+  if (values.length === 0) {
+    return null;
+  }
+
+  const sortedValues = [...values].sort((left, right) => left - right);
+  const safePercentile = clamp(percentile, 0, 100);
+  const position =
+    (safePercentile / 100) * Math.max(0, sortedValues.length - 1);
+  const lowerIndex = Math.floor(position);
+  const upperIndex = Math.ceil(position);
+
+  if (lowerIndex === upperIndex) {
+    return sortedValues[lowerIndex];
+  }
+
+  const mix = position - lowerIndex;
+  return (
+    sortedValues[lowerIndex] * (1 - mix) + sortedValues[upperIndex] * mix
+  );
+}
+
+export function evaluateDialoguePresence({
+  speechRatio,
+  voiceCoreRatio,
+  bassRatio,
+  airRatio,
+  crestDb,
+}: AudioDialoguePresenceInput): AudioDialoguePresenceResult {
+  const speechFocus = normalizeRange(speechRatio, 0.46, 0.74);
+  const voiceCoreFocus = normalizeRange(voiceCoreRatio, 0.42, 0.72);
+  const bassControl = 1 - normalizeRange(bassRatio, 0.26, 0.52);
+  const airControl = 1 - normalizeRange(airRatio, 0.28, 0.56);
+  const crestRise = normalizeRange(crestDb, 4, 9);
+  const crestFall = 1 - normalizeRange(crestDb, 18, 26);
+  const crestControl = clamp(Math.min(crestRise, crestFall), 0, 1);
+
+  const score = clamp(
+    speechFocus * 0.38 +
+      voiceCoreFocus * 0.25 +
+      bassControl * 0.18 +
+      airControl * 0.11 +
+      crestControl * 0.08,
+    0,
+    1
+  );
+
+  return {
+    score,
+    isDialogueCandidate:
+      score >= 0.58 &&
+      speechRatio >= 0.48 &&
+      voiceCoreRatio >= 0.44 &&
+      bassRatio <= 0.48 &&
+      airRatio <= 0.52 &&
+      crestDb >= 4 &&
+      crestDb <= 24,
+  };
+}
+
+function detectDialoguePresence(
+  frequencyBuffer: Float32Array,
+  sampleRate: number,
+  rmsDb: number,
+  peakDb: number
+): AudioDialoguePresenceResult {
+  const bassEnergy = sumFrequencyBandEnergy(frequencyBuffer, sampleRate, 30, 220);
+  const speechEnergy = sumFrequencyBandEnergy(
+    frequencyBuffer,
+    sampleRate,
+    180,
+    4200
+  );
+  const voiceCoreEnergy = sumFrequencyBandEnergy(
+    frequencyBuffer,
+    sampleRate,
+    250,
+    1800
+  );
+  const airEnergy = sumFrequencyBandEnergy(
+    frequencyBuffer,
+    sampleRate,
+    4200,
+    12000
+  );
+  const totalEnergy = bassEnergy + speechEnergy + airEnergy;
+
+  if (totalEnergy <= 0) {
+    return {
+      score: 0,
+      isDialogueCandidate: false,
+    };
+  }
+
+  return evaluateDialoguePresence({
+    speechRatio: speechEnergy / totalEnergy,
+    voiceCoreRatio: voiceCoreEnergy / Math.max(speechEnergy, 1e-8),
+    bassRatio: bassEnergy / totalEnergy,
+    airRatio: airEnergy / totalEnergy,
+    crestDb: peakDb - rmsDb,
+  });
+}
+
+export function analyzeAudioSpikeProtectionFrame({
+  level,
+  rmsDb,
+  peakDb,
+  baselineDb,
+  baselineHistory,
+  dialogueCandidate,
+  dynamicProtectionEnabled,
+  fixedCeilingEnabled,
+}: AudioSpikeProtectionAnalysisInput): AudioSpikeProtectionAnalysisResult {
+  const config = AUDIO_SPIKE_PROTECTION_LEVEL_CONFIG[level];
+  const qualifiesForBaseline =
+    dialogueCandidate && rmsDb >= config.baselineGateDb;
+  const nextBaselineHistory = qualifiesForBaseline
+    ? appendBaselineSample(
+        baselineHistory,
+        rmsDb,
+        config.baselineHistoryFrames
+      )
+    : [...baselineHistory];
+  const nextBaselineDb =
+    nextBaselineHistory.length >= config.baselineMinFrames
+      ? calculatePercentile(
+          nextBaselineHistory,
+          config.baselinePercentile
+        )
+      : baselineDb;
+  const referenceBaselineDb = nextBaselineDb;
+  const dynamicTriggerMarginDb = dialogueCandidate
+    ? config.dialogueDynamicTriggerMarginDb
+    : config.dynamicTriggerMarginDb;
+  const transientTriggerMarginDb = dialogueCandidate
+    ? config.dialogueTransientTriggerMarginDb
+    : config.transientTriggerMarginDb;
+
+  const dynamicReductionDb =
+    dynamicProtectionEnabled && referenceBaselineDb !== null
+      ? clamp(
+          Math.max(
+            Math.max(
+              0,
+              rmsDb - (referenceBaselineDb + dynamicTriggerMarginDb)
+            ) * config.dynamicRatio,
+            Math.max(
+              0,
+              peakDb - (referenceBaselineDb + transientTriggerMarginDb)
+            ) * config.transientRatio
+          ),
+          0,
+          config.maxReductionDb
+        )
+      : 0;
+  const fixedCeilingReductionDb = fixedCeilingEnabled
+    ? clamp(Math.max(0, peakDb - config.ceilingDb), 0, config.maxReductionDb)
+    : 0;
+
+  return {
+    baselineDb: nextBaselineDb,
+    baselineHistory: nextBaselineHistory,
+    dynamicReductionDb,
+    fixedCeilingReductionDb,
+    targetReductionDb: Math.max(dynamicReductionDb, fixedCeilingReductionDb),
+    ceilingDb: fixedCeilingEnabled ? config.ceilingDb : null,
+  };
 }
 
 function getVisualEnhancementIntensity(level: VisualEnhancementLevel): number {
@@ -259,14 +556,17 @@ class AudioSpikeProtectionController {
   private sourceNode: MediaElementAudioSourceNode | null = null;
   private inputAnalyserNode: AnalyserNode | null = null;
   private outputAnalyserNode: AnalyserNode | null = null;
-  private compressorNode: DynamicsCompressorNode | null = null;
   private limiterNode: WaveShaperNode | null = null;
   private outputGainNode: GainNode | null = null;
   private inputAnalysisBuffer: Float32Array | null = null;
+  private inputFrequencyAnalysisBuffer: Float32Array | null = null;
   private outputAnalysisBuffer: Float32Array | null = null;
   private monitorTimerId: number | null = null;
   private baselineDb: number | null = null;
+  private baselineHistory: number[] = [];
   private level: AudioSpikeProtectionLevel = 'off';
+  private dynamicProtectionEnabled = false;
+  private fixedCeilingEnabled = false;
   private lastReductionDb = 0;
   private lastStatus: AudioSpikeProtectionStatus =
     buildAudioSpikeProtectionStatus();
@@ -279,13 +579,13 @@ class AudioSpikeProtectionController {
       return;
     }
 
-    if (isAudioSpikeProtectionActive(this.level)) {
+    if (this.isProcessingEnabled()) {
       void this.initializeEnabledGraph();
     }
   };
 
   private readonly handleFirstInteraction = () => {
-    if (!isAudioSpikeProtectionActive(this.level) || this.graphInitialized) {
+    if (!this.isProcessingEnabled() || this.graphInitialized) {
       return;
     }
 
@@ -294,6 +594,7 @@ class AudioSpikeProtectionController {
 
   private readonly handleLoadedData = () => {
     this.baselineDb = null;
+    this.baselineHistory = [];
     this.lastReductionDb = 0;
     this.emitStatus({
       inputDb: null,
@@ -310,8 +611,23 @@ class AudioSpikeProtectionController {
     this.emitStatus({});
   }
 
+  private isProcessingEnabled(): boolean {
+    return isAudioSpikeProtectionProcessingEnabled(
+      this.level,
+      this.dynamicProtectionEnabled,
+      this.fixedCeilingEnabled
+    );
+  }
+
   private emitStatus(overrides: Partial<AudioSpikeProtectionStatus>) {
-    const nextStatus = buildAudioSpikeProtectionStatus(this.level, overrides);
+    const nextStatus = buildAudioSpikeProtectionStatus(
+      {
+        level: this.level,
+        dynamicProtectionEnabled: this.dynamicProtectionEnabled,
+        fixedCeilingEnabled: this.fixedCeilingEnabled,
+      },
+      overrides
+    );
     this.lastStatus = nextStatus;
     this.onStatusChange?.(nextStatus);
   }
@@ -352,6 +668,9 @@ class AudioSpikeProtectionController {
       this.inputAnalysisBuffer = new Float32Array(
         this.inputAnalyserNode.fftSize
       );
+      this.inputFrequencyAnalysisBuffer = new Float32Array(
+        this.inputAnalyserNode.frequencyBinCount
+      );
     }
 
     if (!this.outputAnalyserNode) {
@@ -361,10 +680,6 @@ class AudioSpikeProtectionController {
       this.outputAnalysisBuffer = new Float32Array(
         this.outputAnalyserNode.fftSize
       );
-    }
-
-    if (!this.compressorNode) {
-      this.compressorNode = this.audioContext.createDynamicsCompressor();
     }
 
     if (!this.limiterNode) {
@@ -383,15 +698,10 @@ class AudioSpikeProtectionController {
 
   private applyLevelConfig() {
     const config = getAudioSpikeProtectionLevelConfig(this.level);
-    if (!config || !this.compressorNode || !this.limiterNode) {
+    if (!config || !this.limiterNode) {
       return;
     }
 
-    this.compressorNode.threshold.value = config.compressorThreshold;
-    this.compressorNode.knee.value = config.compressorKnee;
-    this.compressorNode.ratio.value = config.compressorRatio;
-    this.compressorNode.attack.value = config.compressorAttack;
-    this.compressorNode.release.value = config.compressorRelease;
     this.limiterNode.curve = buildHardLimiterCurve(config.ceilingDb);
   }
 
@@ -425,7 +735,6 @@ class AudioSpikeProtectionController {
       !this.sourceNode ||
       !this.inputAnalyserNode ||
       !this.outputAnalyserNode ||
-      !this.compressorNode ||
       !this.limiterNode ||
       !this.outputGainNode
     ) {
@@ -435,16 +744,18 @@ class AudioSpikeProtectionController {
     safeDisconnect(this.sourceNode);
     safeDisconnect(this.inputAnalyserNode);
     safeDisconnect(this.outputAnalyserNode);
-    safeDisconnect(this.compressorNode);
     safeDisconnect(this.limiterNode);
     safeDisconnect(this.outputGainNode);
 
     if (enabled) {
       this.sourceNode.connect(this.inputAnalyserNode);
-      this.inputAnalyserNode.connect(this.compressorNode);
-      this.compressorNode.connect(this.outputGainNode);
-      this.outputGainNode.connect(this.limiterNode);
-      this.limiterNode.connect(this.outputAnalyserNode);
+      this.inputAnalyserNode.connect(this.outputGainNode);
+      if (this.fixedCeilingEnabled) {
+        this.outputGainNode.connect(this.limiterNode);
+        this.limiterNode.connect(this.outputAnalyserNode);
+      } else {
+        this.outputGainNode.connect(this.outputAnalyserNode);
+      }
       this.outputAnalyserNode.connect(this.audioContext.destination);
     } else {
       this.sourceNode.connect(this.audioContext.destination);
@@ -452,6 +763,10 @@ class AudioSpikeProtectionController {
   }
 
   private async initializeEnabledGraph() {
+    if (!this.isProcessingEnabled()) {
+      return;
+    }
+
     const ready = await this.ensureGraphReady();
     if (!ready) {
       this.bindDocumentListeners();
@@ -461,6 +776,7 @@ class AudioSpikeProtectionController {
     this.unbindDocumentListeners();
     this.applyLevelConfig();
     this.reconnectGraph(true);
+    this.stopMonitoring();
     this.startMonitoring();
   }
 
@@ -470,43 +786,39 @@ class AudioSpikeProtectionController {
       !config ||
       !this.inputAnalyserNode ||
       !this.inputAnalysisBuffer ||
+      !this.inputFrequencyAnalysisBuffer ||
       !this.outputAnalyserNode ||
       !this.outputAnalysisBuffer ||
       !this.audioContext ||
-      !this.outputGainNode ||
-      !this.compressorNode
+      !this.outputGainNode
     ) {
       return;
     }
 
     this.inputAnalyserNode.getFloatTimeDomainData(this.inputAnalysisBuffer);
+    this.inputAnalyserNode.getFloatFrequencyData(
+      this.inputFrequencyAnalysisBuffer
+    );
     const { rmsDb, peakDb: inputPeakDb } = measureAudioBufferLevels(
       this.inputAnalysisBuffer
     );
-    const referenceDb = Math.max(rmsDb + 1.5, inputPeakDb - 1.5);
-
-    if (this.baselineDb === null) {
-      this.baselineDb = referenceDb;
-    } else {
-      const riseFactor =
-        this.lastReductionDb > 0.8
-          ? config.baselineRise * 0.35
-          : config.baselineRise;
-      const smoothing =
-        referenceDb > this.baselineDb ? riseFactor : config.baselineFall;
-      this.baselineDb =
-        this.baselineDb + (referenceDb - this.baselineDb) * smoothing;
-    }
-
-    const deltaOvershootDb =
-      referenceDb - (this.baselineDb + config.triggerMarginDb);
-    const deltaReductionDb = Math.max(0, deltaOvershootDb) * config.deltaRatio;
-    const ceilingReductionDb = Math.max(0, inputPeakDb - config.ceilingDb);
-    const targetReductionDb = clamp(
-      Math.max(deltaReductionDb, ceilingReductionDb),
-      0,
-      config.maxReductionDb
+    const dialoguePresence = detectDialoguePresence(
+      this.inputFrequencyAnalysisBuffer,
+      this.audioContext.sampleRate,
+      rmsDb,
+      inputPeakDb
     );
+    const analysis = analyzeAudioSpikeProtectionFrame({
+      level: this.level as Exclude<AudioSpikeProtectionLevel, 'off'>,
+      rmsDb,
+      peakDb: inputPeakDb,
+      baselineDb: this.baselineDb,
+      baselineHistory: this.baselineHistory,
+      dialogueCandidate: dialoguePresence.isDialogueCandidate,
+      dynamicProtectionEnabled: this.dynamicProtectionEnabled,
+      fixedCeilingEnabled: this.fixedCeilingEnabled,
+    });
+    const targetReductionDb = analysis.targetReductionDb;
     const targetGain = dbToLinear(-targetReductionDb);
     const now = this.audioContext.currentTime;
 
@@ -523,26 +835,22 @@ class AudioSpikeProtectionController {
     const { peakDb: outputPeakDb } = measureAudioBufferLevels(
       this.outputAnalysisBuffer
     );
-    const compressorReductionDb = Math.max(
-      0,
-      Math.abs(this.compressorNode.reduction)
-    );
-    const effectiveReductionDb = Math.max(
-      targetReductionDb,
-      compressorReductionDb
-    );
-
-    this.lastReductionDb = effectiveReductionDb;
+    this.baselineDb = analysis.baselineDb;
+    this.baselineHistory = analysis.baselineHistory;
+    this.lastReductionDb = targetReductionDb;
     this.emitStatus({
       inputDb: inputPeakDb,
       currentDb: outputPeakDb,
       baselineDb: this.baselineDb,
-      ceilingDb: config.ceilingDb,
-      reductionDb: effectiveReductionDb,
+      ceilingDb: analysis.ceilingDb,
+      reductionDb: targetReductionDb,
+      dynamicReductionDb: analysis.dynamicReductionDb,
+      fixedCeilingReductionDb: analysis.fixedCeilingReductionDb,
       limited:
-        effectiveReductionDb > 0.35 ||
-        inputPeakDb >= config.ceilingDb + 0.25 ||
-        outputPeakDb >= config.ceilingDb - 0.4,
+        targetReductionDb > 0.35 ||
+        (analysis.ceilingDb !== null &&
+          (inputPeakDb >= analysis.ceilingDb + 0.25 ||
+            outputPeakDb >= analysis.ceilingDb - 0.4)),
     });
   }
 
@@ -553,10 +861,12 @@ class AudioSpikeProtectionController {
       !config ||
       !this.inputAnalyserNode ||
       !this.inputAnalysisBuffer ||
+      !this.inputFrequencyAnalysisBuffer ||
       !this.outputAnalyserNode ||
       !this.outputAnalysisBuffer ||
       !this.audioContext ||
-      !this.outputGainNode
+      !this.outputGainNode ||
+      !this.isProcessingEnabled()
     ) {
       return;
     }
@@ -573,6 +883,7 @@ class AudioSpikeProtectionController {
     }
 
     this.baselineDb = null;
+    this.baselineHistory = [];
     this.lastReductionDb = 0;
 
     if (this.audioContext && this.outputGainNode) {
@@ -598,17 +909,32 @@ class AudioSpikeProtectionController {
     }
   }
 
-  setLevel(level: AudioSpikeProtectionLevel) {
-    if (level === this.level) {
+  setPreferences(
+    preferences: Pick<
+      PlayerEnhancementPreferences,
+      | 'audioSpikeProtectionLevel'
+      | 'audioDynamicProtectionEnabled'
+      | 'audioFixedCeilingEnabled'
+    >
+  ) {
+    if (
+      preferences.audioSpikeProtectionLevel === this.level &&
+      preferences.audioDynamicProtectionEnabled ===
+        this.dynamicProtectionEnabled &&
+      preferences.audioFixedCeilingEnabled === this.fixedCeilingEnabled
+    ) {
       this.emitStatus({});
       return;
     }
 
-    this.level = level;
+    this.level = preferences.audioSpikeProtectionLevel;
+    this.dynamicProtectionEnabled =
+      preferences.audioDynamicProtectionEnabled;
+    this.fixedCeilingEnabled = preferences.audioFixedCeilingEnabled;
     this.video.removeEventListener('play', this.handlePlay);
     this.video.removeEventListener('loadeddata', this.handleLoadedData);
 
-    if (!isAudioSpikeProtectionActive(level)) {
+    if (!this.isProcessingEnabled()) {
       this.unbindDocumentListeners();
       this.stopMonitoring();
 
@@ -644,6 +970,8 @@ class AudioSpikeProtectionController {
 
   dispose() {
     this.level = 'off';
+    this.dynamicProtectionEnabled = false;
+    this.fixedCeilingEnabled = false;
     this.stopMonitoring();
     this.unbindDocumentListeners();
     this.video.removeEventListener('play', this.handlePlay);
@@ -652,7 +980,6 @@ class AudioSpikeProtectionController {
     safeDisconnect(this.sourceNode);
     safeDisconnect(this.inputAnalyserNode);
     safeDisconnect(this.outputAnalyserNode);
-    safeDisconnect(this.compressorNode);
     safeDisconnect(this.limiterNode);
     safeDisconnect(this.outputGainNode);
 
@@ -663,11 +990,11 @@ class AudioSpikeProtectionController {
     this.sourceNode = null;
     this.inputAnalyserNode = null;
     this.outputAnalyserNode = null;
-    this.compressorNode = null;
     this.limiterNode = null;
     this.outputGainNode = null;
     this.audioContext = null;
     this.inputAnalysisBuffer = null;
+    this.inputFrequencyAnalysisBuffer = null;
     this.outputAnalysisBuffer = null;
     this.graphInitialized = false;
     this.emitStatus({});
@@ -1405,6 +1732,8 @@ export class PlayerEnhancementManager {
   private onAudioStatusChange?: (status: AudioSpikeProtectionStatus) => void;
   private preferences: PlayerEnhancementPreferences = {
     audioSpikeProtectionLevel: 'off',
+    audioDynamicProtectionEnabled: false,
+    audioFixedCeilingEnabled: false,
     visualEnhancementLevel: 'off',
   };
 
@@ -1454,7 +1783,12 @@ export class PlayerEnhancementManager {
   }
 
   private sync() {
-    this.audioController?.setLevel(this.preferences.audioSpikeProtectionLevel);
+    this.audioController?.setPreferences({
+      audioSpikeProtectionLevel: this.preferences.audioSpikeProtectionLevel,
+      audioDynamicProtectionEnabled:
+        this.preferences.audioDynamicProtectionEnabled,
+      audioFixedCeilingEnabled: this.preferences.audioFixedCeilingEnabled,
+    });
     this.visualController?.setLevel(this.preferences.visualEnhancementLevel);
   }
 

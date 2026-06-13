@@ -1,25 +1,37 @@
 import {
   AudioSpikeProtectionLevel,
-  VisualEnhancementLevel,
   normalizeAudioSpikeProtectionLevel,
+  normalizeBooleanSetting,
   normalizeVisualEnhancementLevel,
+  VisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
 import { AppRuntimeConfig, getRuntimeConfig } from '@/lib/runtime-config';
 
 export interface PlayerEnhancementPreferences {
   audioSpikeProtectionLevel: AudioSpikeProtectionLevel;
+  audioDynamicProtectionEnabled: boolean;
+  audioFixedCeilingEnabled: boolean;
   visualEnhancementLevel: VisualEnhancementLevel;
 }
 
 export type PlayerEnhancementPreferenceKey =
   | 'audioSpikeProtectionLevel'
+  | 'audioDynamicProtectionEnabled'
+  | 'audioFixedCeilingEnabled'
   | 'visualEnhancementLevel';
+
+export type PlayerEnhancementPreferenceValue =
+  PlayerEnhancementPreferences[PlayerEnhancementPreferenceKey];
 
 export const PLAYER_ENHANCEMENTS_UPDATED_EVENT =
   'lunatv:player-enhancements-updated';
 
 const PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY =
   'playerAudioSpikeProtectionLevel';
+const PLAYER_AUDIO_DYNAMIC_PROTECTION_STORAGE_KEY =
+  'playerAudioDynamicProtectionEnabled';
+const PLAYER_AUDIO_FIXED_CEILING_STORAGE_KEY =
+  'playerAudioFixedCeilingEnabled';
 const PLAYER_VISUAL_ENHANCEMENT_STORAGE_KEY = 'playerVisualEnhancementLevel';
 
 const LEGACY_PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY =
@@ -47,6 +59,26 @@ function getDefaultVisualEnhancementLevel(
   );
 }
 
+function getDefaultAudioDynamicProtectionEnabled(
+  runtimeConfig: AppRuntimeConfig,
+  audioSpikeProtectionLevel = getDefaultAudioSpikeProtectionLevel(runtimeConfig)
+): boolean {
+  return normalizeBooleanSetting(
+    runtimeConfig.PLAYER_AUDIO_DYNAMIC_PROTECTION,
+    audioSpikeProtectionLevel !== 'off'
+  );
+}
+
+function getDefaultAudioFixedCeilingEnabled(
+  runtimeConfig: AppRuntimeConfig,
+  audioSpikeProtectionLevel = getDefaultAudioSpikeProtectionLevel(runtimeConfig)
+): boolean {
+  return normalizeBooleanSetting(
+    runtimeConfig.PLAYER_AUDIO_FIXED_CEILING,
+    audioSpikeProtectionLevel !== 'off'
+  );
+}
+
 export function isAudioSpikeProtectionActive(
   level: AudioSpikeProtectionLevel
 ): boolean {
@@ -62,9 +94,19 @@ export function isVisualEnhancementActive(
 export function getDefaultPlayerEnhancementPreferences(
   runtimeConfig: AppRuntimeConfig = getRuntimeConfig()
 ): PlayerEnhancementPreferences {
+  const audioSpikeProtectionLevel =
+    getDefaultAudioSpikeProtectionLevel(runtimeConfig);
+
   return {
-    audioSpikeProtectionLevel:
-      getDefaultAudioSpikeProtectionLevel(runtimeConfig),
+    audioSpikeProtectionLevel,
+    audioDynamicProtectionEnabled: getDefaultAudioDynamicProtectionEnabled(
+      runtimeConfig,
+      audioSpikeProtectionLevel
+    ),
+    audioFixedCeilingEnabled: getDefaultAudioFixedCeilingEnabled(
+      runtimeConfig,
+      audioSpikeProtectionLevel
+    ),
     visualEnhancementLevel: getDefaultVisualEnhancementLevel(runtimeConfig),
   };
 }
@@ -73,6 +115,10 @@ function getStorageKey(key: PlayerEnhancementPreferenceKey): string {
   switch (key) {
     case 'audioSpikeProtectionLevel':
       return PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY;
+    case 'audioDynamicProtectionEnabled':
+      return PLAYER_AUDIO_DYNAMIC_PROTECTION_STORAGE_KEY;
+    case 'audioFixedCeilingEnabled':
+      return PLAYER_AUDIO_FIXED_CEILING_STORAGE_KEY;
     case 'visualEnhancementLevel':
       return PLAYER_VISUAL_ENHANCEMENT_STORAGE_KEY;
     default:
@@ -82,9 +128,15 @@ function getStorageKey(key: PlayerEnhancementPreferenceKey): string {
 
 function readStoredAudioSpikeProtectionLevel(
   fallbackValue: AudioSpikeProtectionLevel
-): AudioSpikeProtectionLevel {
+): {
+  level: AudioSpikeProtectionLevel;
+  hasStoredValue: boolean;
+} {
   if (typeof window === 'undefined') {
-    return fallbackValue;
+    return {
+      level: fallbackValue,
+      hasStoredValue: false,
+    };
   }
 
   const value =
@@ -93,7 +145,10 @@ function readStoredAudioSpikeProtectionLevel(
       LEGACY_PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY
     );
 
-  return normalizeAudioSpikeProtectionLevel(value, fallbackValue);
+  return {
+    level: normalizeAudioSpikeProtectionLevel(value, fallbackValue),
+    hasStoredValue: value !== null,
+  };
 }
 
 function readStoredVisualEnhancementLevel(
@@ -110,18 +165,48 @@ function readStoredVisualEnhancementLevel(
   return normalizeVisualEnhancementLevel(value, fallbackValue);
 }
 
+function readStoredBooleanPreference(
+  storageKey: string,
+  fallbackValue: boolean
+): boolean {
+  if (typeof window === 'undefined') {
+    return fallbackValue;
+  }
+
+  return normalizeBooleanSetting(
+    window.localStorage.getItem(storageKey),
+    fallbackValue
+  );
+}
+
 export function readPlayerEnhancementPreferences(
   runtimeConfig: AppRuntimeConfig = getRuntimeConfig()
 ): PlayerEnhancementPreferences {
   const defaults = getDefaultPlayerEnhancementPreferences(runtimeConfig);
+  const storedAudioPreference = readStoredAudioSpikeProtectionLevel(
+    defaults.audioSpikeProtectionLevel
+  );
 
   if (typeof window === 'undefined') {
     return defaults;
   }
 
+  const derivedAudioModeFallback = storedAudioPreference.hasStoredValue
+    ? storedAudioPreference.level !== 'off'
+    : defaults.audioDynamicProtectionEnabled;
+  const derivedFixedCeilingFallback = storedAudioPreference.hasStoredValue
+    ? storedAudioPreference.level !== 'off'
+    : defaults.audioFixedCeilingEnabled;
+
   return {
-    audioSpikeProtectionLevel: readStoredAudioSpikeProtectionLevel(
-      defaults.audioSpikeProtectionLevel
+    audioSpikeProtectionLevel: storedAudioPreference.level,
+    audioDynamicProtectionEnabled: readStoredBooleanPreference(
+      PLAYER_AUDIO_DYNAMIC_PROTECTION_STORAGE_KEY,
+      derivedAudioModeFallback
+    ),
+    audioFixedCeilingEnabled: readStoredBooleanPreference(
+      PLAYER_AUDIO_FIXED_CEILING_STORAGE_KEY,
+      derivedFixedCeilingFallback
     ),
     visualEnhancementLevel: readStoredVisualEnhancementLevel(
       defaults.visualEnhancementLevel
@@ -146,9 +231,11 @@ export function dispatchPlayerEnhancementPreferencesUpdate(
   );
 }
 
-export function updatePlayerEnhancementPreference(
-  key: PlayerEnhancementPreferenceKey,
-  value: AudioSpikeProtectionLevel | VisualEnhancementLevel,
+export function updatePlayerEnhancementPreference<
+  K extends PlayerEnhancementPreferenceKey,
+>(
+  key: K,
+  value: PlayerEnhancementPreferences[K],
   runtimeConfig: AppRuntimeConfig = getRuntimeConfig()
 ): PlayerEnhancementPreferences {
   const currentPreferences = readPlayerEnhancementPreferences(runtimeConfig);
@@ -158,7 +245,7 @@ export function updatePlayerEnhancementPreference(
   } as PlayerEnhancementPreferences;
 
   if (typeof window !== 'undefined') {
-    window.localStorage.setItem(getStorageKey(key), value);
+    window.localStorage.setItem(getStorageKey(key), String(value));
   }
 
   dispatchPlayerEnhancementPreferencesUpdate(nextPreferences);
@@ -174,6 +261,14 @@ export function resetPlayerEnhancementPreferences(
     window.localStorage.setItem(
       PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY,
       defaults.audioSpikeProtectionLevel
+    );
+    window.localStorage.setItem(
+      PLAYER_AUDIO_DYNAMIC_PROTECTION_STORAGE_KEY,
+      String(defaults.audioDynamicProtectionEnabled)
+    );
+    window.localStorage.setItem(
+      PLAYER_AUDIO_FIXED_CEILING_STORAGE_KEY,
+      String(defaults.audioFixedCeilingEnabled)
     );
     window.localStorage.setItem(
       PLAYER_VISUAL_ENHANCEMENT_STORAGE_KEY,

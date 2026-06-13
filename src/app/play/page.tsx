@@ -6,7 +6,7 @@ import Artplayer from 'artplayer';
 import Hls from 'hls.js';
 import { Heart } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, startTransition, useEffect, useRef, useState } from 'react';
+import { startTransition, Suspense, useEffect, useRef, useState } from 'react';
 
 import {
   deleteFavorite,
@@ -21,6 +21,10 @@ import {
   saveSkipConfig,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import {
+  bindDesktopPlayerPresentationFullscreenState,
+  toggleDesktopPlayerPresentationFullscreenState,
+} from '@/lib/desktop/fullscreen';
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 import {
   matchDownloadResponse,
@@ -46,15 +50,6 @@ import {
   PlayerEnhancementManager,
 } from '@/lib/player-enhancement-runtime';
 import {
-  bindDesktopPlayerPresentationFullscreenState,
-  toggleDesktopPlayerPresentationFullscreenState,
-} from '@/lib/desktop/fullscreen';
-import {
-  PLAYER_ENHANCEMENTS_UPDATED_EVENT,
-  readPlayerEnhancementPreferences,
-  updatePlayerEnhancementPreference,
-} from '@/lib/player-enhancements';
-import {
   AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS,
   AudioSpikeProtectionLevel,
   getAudioSpikeProtectionLevelLabel,
@@ -62,6 +57,11 @@ import {
   VISUAL_ENHANCEMENT_LEVEL_OPTIONS,
   VisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
+import {
+  PLAYER_ENHANCEMENTS_UPDATED_EVENT,
+  readPlayerEnhancementPreferences,
+  updatePlayerEnhancementPreference,
+} from '@/lib/player-enhancements';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
@@ -387,6 +387,24 @@ function PlayPageClient() {
       return readPlayerEnhancementPreferences(getRuntimeConfig())
         .audioSpikeProtectionLevel;
     });
+  const [audioDynamicProtectionEnabled, setAudioDynamicProtectionEnabled] =
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .audioDynamicProtectionEnabled;
+    });
+  const [audioFixedCeilingEnabled, setAudioFixedCeilingEnabled] =
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .audioFixedCeilingEnabled;
+    });
   const [visualEnhancementLevel, setVisualEnhancementLevel] =
     useState<VisualEnhancementLevel>(() => {
       if (typeof window === 'undefined') {
@@ -406,6 +424,10 @@ function PlayPageClient() {
     const syncPlayerEnhancementPreferences = () => {
       const preferences = readPlayerEnhancementPreferences(getRuntimeConfig());
       setAudioSpikeProtectionLevel(preferences.audioSpikeProtectionLevel);
+      setAudioDynamicProtectionEnabled(
+        preferences.audioDynamicProtectionEnabled
+      );
+      setAudioFixedCeilingEnabled(preferences.audioFixedCeilingEnabled);
       setVisualEnhancementLevel(preferences.visualEnhancementLevel);
     };
 
@@ -626,6 +648,7 @@ function PlayPageClient() {
     if (!video || !host) {
       enhancementManagerRef.current?.dispose();
       enhancementManagerRef.current = null;
+      setAudioEnhancementStatus(null);
       return;
     }
 
@@ -648,6 +671,8 @@ function PlayPageClient() {
     enhancementManagerRef.current.bind(video, host);
     enhancementManagerRef.current.setPreferences({
       audioSpikeProtectionLevel,
+      audioDynamicProtectionEnabled,
+      audioFixedCeilingEnabled,
       visualEnhancementLevel,
     });
   };
@@ -660,6 +685,18 @@ function PlayPageClient() {
     return value === 'off'
       ? '当前关闭'
       : `当前${getAudioSpikeProtectionLevelLabel(value)}`;
+  };
+
+  const handleAudioDynamicProtectionToggle = (value: boolean) => {
+    setAudioDynamicProtectionEnabled(value);
+    updatePlayerEnhancementPreference('audioDynamicProtectionEnabled', value);
+    return value ? '当前开启' : '当前关闭';
+  };
+
+  const handleAudioFixedCeilingToggle = (value: boolean) => {
+    setAudioFixedCeilingEnabled(value);
+    updatePlayerEnhancementPreference('audioFixedCeilingEnabled', value);
+    return value ? '当前开启' : '当前关闭';
   };
 
   const handleVisualEnhancementLevelChange = (
@@ -758,6 +795,7 @@ function PlayPageClient() {
   const cleanupPlayer = () => {
     enhancementManagerRef.current?.dispose();
     enhancementManagerRef.current = null;
+    setAudioEnhancementStatus(null);
     removeDesktopFullscreenListenerRef.current?.();
     removeDesktopFullscreenListenerRef.current = null;
 
@@ -913,6 +951,24 @@ function PlayPageClient() {
       },
     });
     artPlayerRef.current.setting.update({
+      name: '动态保护',
+      html: '动态保护',
+      tooltip: audioDynamicProtectionEnabled ? '当前开启' : '当前关闭',
+      switch: audioDynamicProtectionEnabled,
+      onSwitch: function (item: any) {
+        return handleAudioDynamicProtectionToggle(!item.switch);
+      },
+    });
+    artPlayerRef.current.setting.update({
+      name: '固定峰值上限',
+      html: '固定峰值上限',
+      tooltip: audioFixedCeilingEnabled ? '当前开启' : '当前关闭',
+      switch: audioFixedCeilingEnabled,
+      onSwitch: function (item: any) {
+        return handleAudioFixedCeilingToggle(!item.switch);
+      },
+    });
+    artPlayerRef.current.setting.update({
       name: '去磨皮修正',
       html: '去磨皮修正',
       tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
@@ -926,7 +982,12 @@ function PlayPageClient() {
         return handleVisualEnhancementLevelChange(item.value);
       },
     });
-  }, [audioSpikeProtectionLevel, visualEnhancementLevel]);
+  }, [
+    audioDynamicProtectionEnabled,
+    audioFixedCeilingEnabled,
+    audioSpikeProtectionLevel,
+    visualEnhancementLevel,
+  ]);
 
   const formatTime = (seconds: number): string => {
     if (seconds === 0) return '00:00';
@@ -2369,6 +2430,24 @@ function PlayPageClient() {
             },
           },
           {
+            name: '动态保护',
+            html: '动态保护',
+            tooltip: audioDynamicProtectionEnabled ? '当前开启' : '当前关闭',
+            switch: audioDynamicProtectionEnabled,
+            onSwitch: function (item) {
+              return handleAudioDynamicProtectionToggle(!item.switch);
+            },
+          },
+          {
+            name: '固定峰值上限',
+            html: '固定峰值上限',
+            tooltip: audioFixedCeilingEnabled ? '当前开启' : '当前关闭',
+            switch: audioFixedCeilingEnabled,
+            onSwitch: function (item) {
+              return handleAudioFixedCeilingToggle(!item.switch);
+            },
+          },
+          {
             name: '去磨皮修正',
             html: '去磨皮修正',
             tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
@@ -2690,7 +2769,13 @@ function PlayPageClient() {
 
   useEffect(() => {
     syncPlayerEnhancements();
-  }, [audioSpikeProtectionLevel, visualEnhancementLevel, videoUrl]);
+  }, [
+    audioDynamicProtectionEnabled,
+    audioFixedCeilingEnabled,
+    audioSpikeProtectionLevel,
+    visualEnhancementLevel,
+    videoUrl,
+  ]);
 
   // 当组件卸载时清理定时器、Wake Lock 和播放器资源
   useEffect(() => {

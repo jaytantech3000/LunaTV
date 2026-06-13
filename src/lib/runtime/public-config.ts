@@ -2,6 +2,7 @@ import { AdminConfig } from '@/lib/admin.types';
 import { getConfig } from '@/lib/config';
 import {
   normalizeAudioSpikeProtectionLevel,
+  normalizeBooleanSetting,
   normalizeVisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
 import {
@@ -68,6 +69,14 @@ export async function buildPublicRuntimeConfig(
       process.env.NEXT_PUBLIC_PLAYER_AUDIO_SPIKE_PROTECTION,
     'off'
   );
+  const baseAudioDynamicProtection = normalizeBooleanSetting(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_DYNAMIC_PROTECTION,
+    baseAudioSpikeProtectionLevel !== 'off'
+  );
+  const baseAudioFixedCeiling = normalizeBooleanSetting(
+    process.env.NEXT_PUBLIC_PLAYER_AUDIO_FIXED_CEILING,
+    baseAudioSpikeProtectionLevel !== 'off'
+  );
   const baseVisualEnhancementLevel = normalizeVisualEnhancementLevel(
     process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
       process.env.NEXT_PUBLIC_PLAYER_VISUAL_ENHANCEMENT,
@@ -97,6 +106,8 @@ export async function buildPublicRuntimeConfig(
     ENABLE_ADMIN_PANEL: appTarget === 'desktop' ? false : isAdminPanelEnabled(),
     PLAYER_AUDIO_SPIKE_PROTECTION: baseAudioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: baseAudioSpikeProtectionLevel,
+    PLAYER_AUDIO_DYNAMIC_PROTECTION: baseAudioDynamicProtection,
+    PLAYER_AUDIO_FIXED_CEILING: baseAudioFixedCeiling,
     PLAYER_VISUAL_ENHANCEMENT: baseVisualEnhancementLevel !== 'off',
     PLAYER_VISUAL_ENHANCEMENT_LEVEL: baseVisualEnhancementLevel,
   };
@@ -112,6 +123,14 @@ export async function buildPublicRuntimeConfig(
       playerEnhancementConfig?.AudioSpikeProtection ??
       false,
     'off'
+  );
+  const audioDynamicProtection = normalizeBooleanSetting(
+    playerEnhancementConfig?.AudioDynamicProtection,
+    baseAudioDynamicProtection
+  );
+  const audioFixedCeiling = normalizeBooleanSetting(
+    playerEnhancementConfig?.AudioFixedCeiling,
+    baseAudioFixedCeiling
   );
   const visualEnhancementLevel = normalizeVisualEnhancementLevel(
     playerEnhancementConfig?.VisualEnhancementLevel ??
@@ -138,6 +157,8 @@ export async function buildPublicRuntimeConfig(
     ENABLE_WEB_LIVE: nextConfig.SiteConfig.EnableWebLive ?? false,
     PLAYER_AUDIO_SPIKE_PROTECTION: audioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: audioSpikeProtectionLevel,
+    PLAYER_AUDIO_DYNAMIC_PROTECTION: audioDynamicProtection,
+    PLAYER_AUDIO_FIXED_CEILING: audioFixedCeiling,
     PLAYER_VISUAL_ENHANCEMENT: visualEnhancementLevel !== 'off',
     PLAYER_VISUAL_ENHANCEMENT_LEVEL: visualEnhancementLevel,
   };
