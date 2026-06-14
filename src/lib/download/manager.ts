@@ -71,6 +71,7 @@ interface QueueEpisodeDownloadResult {
 
 interface BatchDownloadResult {
   queuedCount: number;
+  restartedCount: number;
   skippedCount: number;
   tasks: DownloadTask[];
 }
@@ -1331,6 +1332,25 @@ class DownloadManager {
   async startBatchEpisodeDownloads(
     params: StartBatchEpisodeDownloadParams
   ): Promise<BatchDownloadResult> {
+    return this.queueBatchEpisodeDownloads(params, {
+      restartDownloadedEpisodes: false,
+    });
+  }
+
+  async restartBatchEpisodeDownloads(
+    params: StartBatchEpisodeDownloadParams
+  ): Promise<BatchDownloadResult> {
+    return this.queueBatchEpisodeDownloads(params, {
+      restartDownloadedEpisodes: true,
+    });
+  }
+
+  private async queueBatchEpisodeDownloads(
+    params: StartBatchEpisodeDownloadParams,
+    options: {
+      restartDownloadedEpisodes: boolean;
+    }
+  ): Promise<BatchDownloadResult> {
     const uniqueEpisodeIndexes = Array.from(
       new Set(
         params.episodeIndexes.filter(
@@ -1344,6 +1364,7 @@ class DownloadManager {
 
     const tasks: DownloadTask[] = [];
     let queuedCount = 0;
+    let restartedCount = 0;
     let skippedCount = 0;
     const contentId = buildDownloadContentId(
       params.detail.source,
@@ -1356,13 +1377,30 @@ class DownloadManager {
       )
     );
 
-    uniqueEpisodeIndexes.forEach((episodeIndex) => {
+    for (const episodeIndex of uniqueEpisodeIndexes) {
       if (!params.detail.episodes[episodeIndex]) {
         skippedCount += 1;
-        return;
+        continue;
       }
 
       try {
+        const libraryItem = useDownloadStore.getState().library[contentId];
+        const existingTask = this.getTask(
+          buildDownloadTaskId(contentId, episodeIndex)
+        );
+        const isDownloaded =
+          existingTask?.status === 'done' ||
+          libraryItem?.episodes.some(
+            (episode) => episode.episodeIndex === episodeIndex
+          );
+
+        if (options.restartDownloadedEpisodes && isDownloaded) {
+          await this.removeDownloadedEpisodeForRestart(contentId, episodeIndex);
+          await this.waitForTaskCleanup(
+            buildDownloadTaskId(contentId, episodeIndex)
+          );
+        }
+
         const result = this.queueEpisodeDownload({
           detail: params.detail,
           episodeIndex,
@@ -1371,7 +1409,11 @@ class DownloadManager {
         });
         tasks.push(result.task);
         if (result.queued) {
-          queuedCount += 1;
+          if (options.restartDownloadedEpisodes && isDownloaded) {
+            restartedCount += 1;
+          } else {
+            queuedCount += 1;
+          }
         } else {
           skippedCount += 1;
         }
@@ -1381,20 +1423,72 @@ class DownloadManager {
           error.message === '当前剧集缺少可下载的播放地址'
         ) {
           skippedCount += 1;
-          return;
+          continue;
         }
 
         throw error;
       }
-    });
+    }
 
     this.schedulePendingTasks();
 
     return {
       queuedCount,
+      restartedCount,
       skippedCount,
       tasks,
     };
+  }
+
+  private async removeDownloadedEpisodeForRestart(
+    contentId: string,
+    episodeIndex: number
+  ): Promise<void> {
+    const taskId = buildDownloadTaskId(contentId, episodeIndex);
+    const task = this.getTask(taskId);
+
+    if (task && task.status !== 'done') {
+      await this.cancelTask(taskId);
+      await this.waitForTaskCleanup(taskId);
+      return;
+    }
+
+    const { library, removeLibraryItem, removeTask, upsertLibraryItem } =
+      useDownloadStore.getState();
+    const content = library[contentId];
+
+    if (!content) {
+      removeTask(taskId);
+      return;
+    }
+
+    const targetEpisode = content.episodes.find(
+      (episode) => episode.episodeIndex === episodeIndex
+    );
+    const nextEpisodes = content.episodes.filter(
+      (episode) => episode.episodeIndex !== episodeIndex
+    );
+
+    removeTask(taskId);
+
+    if (targetEpisode) {
+      await this.removeTaskResources(targetEpisode);
+    }
+
+    if (nextEpisodes.length === 0) {
+      removeLibraryItem(contentId);
+      return;
+    }
+
+    upsertLibraryItem({
+      ...content,
+      episodes: nextEpisodes,
+      totalSizeBytes: nextEpisodes.reduce(
+        (sum, episode) => sum + episode.sizeBytes,
+        0
+      ),
+      updatedAt: now(),
+    });
   }
 
   async pauseTask(taskId: string): Promise<void> {
@@ -1435,6 +1529,24 @@ class DownloadManager {
     this.schedulePendingTasks();
   }
 
+  async pauseAllTasks(): Promise<void> {
+    const candidateTaskIds = Object.values(useDownloadStore.getState().tasks)
+      .filter((task) => ['queued', 'downloading'].includes(task.status))
+      .map((task) => task.id);
+
+    await Promise.all(candidateTaskIds.map((taskId) => this.pauseTask(taskId)));
+  }
+
+  async resumeAllTasks(): Promise<void> {
+    const candidateTaskIds = Object.values(useDownloadStore.getState().tasks)
+      .filter((task) => ['paused', 'error'].includes(task.status))
+      .map((task) => task.id);
+
+    await Promise.all(
+      candidateTaskIds.map((taskId) => this.resumeTask(taskId))
+    );
+  }
+
   async cancelTask(taskId: string): Promise<void> {
     const task = this.getTask(taskId);
     if (!task) {
@@ -1453,6 +1565,16 @@ class DownloadManager {
     useDownloadStore.getState().removeTask(taskId);
     this.removeTaskResourcesInBackground(task);
     this.schedulePendingTasks();
+  }
+
+  async cancelAllTasks(): Promise<void> {
+    const candidateTaskIds = Object.values(useDownloadStore.getState().tasks)
+      .filter((task) => task.status !== 'done')
+      .map((task) => task.id);
+
+    for (const taskId of candidateTaskIds) {
+      await this.cancelTask(taskId);
+    }
   }
 
   async deleteEpisode(contentId: string, episodeIndex: number): Promise<void> {

@@ -18,6 +18,10 @@ import {
   getDoubanTitleSearch,
 } from '@/lib/douban.client';
 import { filterItemsByMinimumRating } from '@/lib/rating-filter';
+import {
+  type SearchHistoryEntry,
+  type SearchHistoryMode,
+} from '@/lib/search-history';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
 import {
@@ -1122,7 +1126,7 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
   const activeRequestRef = useRef(0);
   const activeLoadCacheKeyRef = useRef<string | null>(null);
 
-  const [searchHistory, setSearchHistory] = useState<string[]>([]);
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
   const [searchInput, setSearchInput] = useState('');
   const [customTags, setCustomTags] = useState<SearchCustomTag[]>([]);
   const [showBackToTop, setShowBackToTop] = useState(false);
@@ -1315,9 +1319,14 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
   const buildSearchUrl = (
     overrides: Partial<
       Record<'q' | 'ctype' | 'region' | 'genre' | 'custom', string>
-    >
+    >,
+    modeOverride?: SearchHistoryMode
   ) => {
     const nextParams = new URLSearchParams(searchParams.toString());
+
+    if (modeOverride) {
+      nextParams.set('mode', modeOverride);
+    }
 
     Object.entries(overrides).forEach(([key, value]) => {
       const trimmedValue = normalizeQueryValue(value || '');
@@ -1336,9 +1345,10 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
     overrides: Partial<
       Record<'q' | 'ctype' | 'region' | 'genre' | 'custom', string>
     >,
-    mode: 'push' | 'replace' = 'replace'
+    mode: 'push' | 'replace' = 'replace',
+    searchMode?: SearchHistoryMode
   ) => {
-    const nextUrl = buildSearchUrl(overrides);
+    const nextUrl = buildSearchUrl(overrides, searchMode);
     if (mode === 'push') {
       router.push(nextUrl);
       return;
@@ -1375,7 +1385,7 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
 
     const unsubscribe = subscribeToDataUpdates(
       'searchHistoryUpdated',
-      (nextHistory: string[]) => {
+      (nextHistory: SearchHistoryEntry[]) => {
         setSearchHistory(nextHistory);
       }
     );
@@ -1391,7 +1401,7 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
       return;
     }
 
-    void addSearchHistory(submittedQuery);
+    void addSearchHistory(submittedQuery, 'new');
   }, [active, submittedQuery]);
 
   useEffect(() => {
@@ -1654,10 +1664,10 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
     });
   };
 
-  const handleSearchHistoryClick = (keyword: string) => {
-    const normalizedKeyword = normalizeQueryValue(keyword);
+  const handleSearchHistoryClick = (entry: SearchHistoryEntry) => {
+    const normalizedKeyword = normalizeQueryValue(entry.keyword);
     setSearchInput(normalizedKeyword);
-    navigateWithParams({ q: normalizedKeyword }, 'push');
+    navigateWithParams({ q: normalizedKeyword }, 'push', entry.mode);
   };
 
   const handleClearSearchInput = () => {
@@ -1691,7 +1701,7 @@ function NewSearchPageClient({ active = true }: NewSearchPageClientProps) {
         visible: !submittedQuery && searchHistory.length > 0,
         onSelect: handleSearchHistoryClick,
         onClear: () => clearSearchHistory(),
-        onDelete: (keyword) => deleteSearchHistory(keyword),
+        onDelete: (entry) => deleteSearchHistory(entry),
       }}
       topModule={
         <SearchQuickSelector

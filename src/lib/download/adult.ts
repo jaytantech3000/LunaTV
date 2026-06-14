@@ -39,6 +39,14 @@ function normalizeAdultGroupingText(value: string): string {
   return value.trim().toLowerCase().normalize('NFKC').replace(/\s+/g, ' ');
 }
 
+function sanitizeAdultGroupingCandidate(value: string): string {
+  return value
+    .replace(/^[\s"'“”‘’《》【】[\]()（）]+/, '')
+    .replace(/[\s"'“”‘’《》【】[\]()（）]+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function hasAdultGroupingStopword(value: string): boolean {
   const normalizedValue = normalizeAdultGroupingText(value);
   return ADULT_GROUPING_STOPWORDS.some((word) =>
@@ -111,11 +119,82 @@ function scoreAdultGroupingToken(token: string): number {
 
 function extractAdultGroupingTokens(title: string): string[] {
   return title
-    .replace(/[【[][^】\]]*[】\]]/g, ' ')
-    .replace(/[（(][^）)]*[）)]/g, ' ')
+    .replace(/[【】[\]（）()]/g, ' ')
     .split(/[\s._·•|｜/\\:：,，!！?？;；]+/)
     .map((token) => token.trim())
     .filter(Boolean);
+}
+
+function isEnglishNameToken(token: string): boolean {
+  return /^[A-Za-z][A-Za-z.'-]{1,15}$/.test(token);
+}
+
+function extractFirstEnglishNamePhrase(value: string): string | null {
+  const tokens = extractAdultGroupingTokens(value);
+
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    const left = tokens[index];
+    const right = tokens[index + 1];
+
+    if (!isEnglishNameToken(left) || !isEnglishNameToken(right)) {
+      continue;
+    }
+
+    const candidate = `${left} ${right}`;
+    if (candidate.length <= 24 && !hasAdultGroupingStopword(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function extractBracketedAdultGroupingCandidates(title: string): string[] {
+  const candidates: string[] = [];
+  const pattern = /[【[(（]([^】\]）)]{2,40})[】\]）)]/g;
+  let currentMatch = pattern.exec(title);
+
+  while (currentMatch) {
+    const rawCandidate = sanitizeAdultGroupingCandidate(currentMatch[1] || '');
+    if (!rawCandidate) {
+      currentMatch = pattern.exec(title);
+      continue;
+    }
+
+    const englishNameCandidate = extractFirstEnglishNamePhrase(rawCandidate);
+    if (englishNameCandidate) {
+      candidates.push(englishNameCandidate);
+    }
+
+    candidates.push(rawCandidate);
+
+    currentMatch = pattern.exec(title);
+  }
+
+  return candidates;
+}
+
+function extractDelimitedAdultGroupingCandidates(title: string): string[] {
+  const candidates: string[] = [];
+  const segments = title.split(/\s[-—–|｜:：]\s/);
+
+  segments.slice(1).forEach((segment) => {
+    const rawCandidate = sanitizeAdultGroupingCandidate(segment);
+    if (!rawCandidate) {
+      return;
+    }
+
+    const englishNameCandidate = extractFirstEnglishNamePhrase(rawCandidate);
+    if (englishNameCandidate) {
+      candidates.push(englishNameCandidate);
+    }
+
+    if (rawCandidate.length <= 24) {
+      candidates.push(rawCandidate);
+    }
+  });
+
+  return candidates;
 }
 
 export function buildAdultDownloadGroupingQuery(
@@ -148,6 +227,17 @@ export function buildAdultDownloadGroupingQuery(
     return preferredQuery;
   }
 
+  const explicitCandidates = [
+    ...extractBracketedAdultGroupingCandidates(title),
+    ...extractDelimitedAdultGroupingCandidates(title),
+  ];
+
+  for (const candidate of explicitCandidates) {
+    if (isReasonableAdultGroupingQuery(candidate, title)) {
+      return candidate;
+    }
+  }
+
   const tokens = extractAdultGroupingTokens(title);
   let bestToken: string | null = null;
   let bestScore = Number.NEGATIVE_INFINITY;
@@ -171,6 +261,19 @@ export function buildAdultDownloadGroupingQuery(
   });
 
   return bestToken && Number.isFinite(bestScore) ? bestToken : null;
+}
+
+export function buildAdultDownloadGroupingKey(
+  content: Partial<{
+    title: string;
+    searchTitle: string;
+    sourceName: string;
+    desc: string;
+    typeName: string;
+  }>
+): string | null {
+  const query = buildAdultDownloadGroupingQuery(content);
+  return query ? normalizeAdultGroupingText(query) : null;
 }
 
 function normalizeAdultResultTitle(title: string): string {

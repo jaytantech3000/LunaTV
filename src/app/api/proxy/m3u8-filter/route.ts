@@ -437,7 +437,11 @@ export async function GET(request: NextRequest): Promise<Response> {
         cache: 'no-store',
         headers: upstreamHeaders,
       },
-      { timeoutMs: FETCH_TIMEOUT_MS, maxRedirects: MAX_REDIRECTS }
+      {
+        timeoutMs: FETCH_TIMEOUT_MS,
+        maxRedirects: MAX_REDIRECTS,
+        initialUrlValidated: true,
+      }
     );
   } catch (error: any) {
     return jsonError(

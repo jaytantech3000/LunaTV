@@ -58,6 +58,7 @@ function buildEpisodePageRanges(
 
 function getBatchFeedbackMessage(
   queuedCount: number,
+  restartedCount: number,
   skippedCount: number
 ): string {
   const parts: string[] = [];
@@ -66,12 +67,16 @@ function getBatchFeedbackMessage(
     parts.push(`已加入 ${queuedCount} 集`);
   }
 
+  if (restartedCount > 0) {
+    parts.push(`已重下 ${restartedCount} 集`);
+  }
+
   if (skippedCount > 0) {
     parts.push(`跳过 ${skippedCount} 集`);
   }
 
   if (parts.length === 0) {
-    return '没有可加入的剧集。';
+    return '没有可处理的剧集。';
   }
 
   const suffix =
@@ -86,7 +91,7 @@ function getEpisodeTaskStatusText(option: BatchEpisodeOption): string {
   }
 
   if (option.isDownloaded) {
-    return '已下载';
+    return '已下载，可重下';
   }
 
   switch (option.task?.status) {
@@ -113,10 +118,6 @@ function getEpisodeButtonClassName(params: {
     return 'cursor-not-allowed border-gray-200 bg-gray-100/80 text-gray-400 dark:border-gray-800 dark:bg-gray-900/40 dark:text-gray-600';
   }
 
-  if (option.isDownloaded) {
-    return 'cursor-not-allowed border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
-  }
-
   if (option.task?.status === 'downloading') {
     return 'cursor-not-allowed border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300';
   }
@@ -127,6 +128,10 @@ function getEpisodeButtonClassName(params: {
 
   if (isSelected) {
     return 'border-emerald-500 bg-emerald-500/20 text-emerald-900 shadow-lg shadow-emerald-500/10 dark:text-emerald-50';
+  }
+
+  if (option.isDownloaded) {
+    return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-500/15 dark:text-emerald-300';
   }
 
   if (option.task?.status === 'error') {
@@ -177,8 +182,9 @@ export default function BatchEpisodeDownloadDialog({
         episodeTask?.status === 'done';
       const isSelectable =
         Boolean(episodeUrl) &&
-        !isDownloaded &&
-        (!episodeTask || ['paused', 'error'].includes(episodeTask.status));
+        (isDownloaded ||
+          !episodeTask ||
+          ['paused', 'error'].includes(episodeTask.status));
 
       return {
         episodeIndex: targetEpisodeIndex,
@@ -372,7 +378,7 @@ export default function BatchEpisodeDownloadDialog({
 
   const handleStartBatchDownload = async () => {
     if (selectedCount === 0) {
-      setActionError('请先选择要下载的剧集');
+      setActionError('请先选择要处理的剧集');
       return;
     }
 
@@ -380,7 +386,7 @@ export default function BatchEpisodeDownloadDialog({
       setActionError(null);
       setIsStartingBatchDownload(true);
 
-      const result = await downloadManager.startBatchEpisodeDownloads({
+      const result = await downloadManager.restartBatchEpisodeDownloads({
         detail,
         episodeIndexes: selectedEpisodeIndexes,
         availableSources,
@@ -388,6 +394,7 @@ export default function BatchEpisodeDownloadDialog({
       });
       const feedbackMessage = `批量下载：${getBatchFeedbackMessage(
         result.queuedCount,
+        result.restartedCount,
         result.skippedCount
       )}`;
 
@@ -422,8 +429,8 @@ export default function BatchEpisodeDownloadDialog({
                 {detail.title}
               </div>
               <div className='text-sm text-gray-300'>
-                自由选择要加入离线下载的剧集。已选 {selectedCount} 集，可选{' '}
-                {selectableCount} 集。
+                自由选择要加入离线下载或重新下载的剧集。已选 {selectedCount}{' '}
+                集，可处理 {selectableCount} 集。
               </div>
             </div>
 
@@ -472,7 +479,7 @@ export default function BatchEpisodeDownloadDialog({
                     disabled={selectableCount === 0}
                     className='rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-gray-500'
                   >
-                    全选可下载
+                    全选可处理
                   </button>
                   <button
                     type='button'
@@ -619,7 +626,8 @@ export default function BatchEpisodeDownloadDialog({
             <div className='space-y-2'>
               <div className='text-sm text-gray-300'>
                 已选 {selectedCount} 集。
-                {selectedCount > 0 && ' 点击“开始下载”后会按队列顺序依次下载。'}
+                {selectedCount > 0 &&
+                  ' 点击“开始处理”后会按队列顺序依次下载或重新下载。'}
               </div>
               {actionError && (
                 <div className='text-sm text-red-300'>{actionError}</div>
@@ -643,7 +651,7 @@ export default function BatchEpisodeDownloadDialog({
               >
                 {isStartingBatchDownload
                   ? '正在加入队列...'
-                  : `开始下载 ${selectedCount > 0 ? selectedCount : ''}`.trim()}
+                  : `开始处理 ${selectedCount > 0 ? selectedCount : ''}`.trim()}
               </button>
             </div>
           </div>

@@ -21,6 +21,10 @@ import {
   filterItemsByMinimumRating,
   passesGlobalRatingFilter,
 } from '@/lib/rating-filter';
+import {
+  type SearchHistoryEntry,
+  type SearchHistoryMode,
+} from '@/lib/search-history';
 import { SearchResult } from '@/lib/types';
 
 import {
@@ -57,7 +61,7 @@ function LegacySearchPageClient({
   active = true,
 }: LegacySearchPageClientProps) {
   // 搜索历史
-  const [searchHistory, setSearchHistory] = useState<string[]>([]);
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
   // 返回顶部按钮显示状态
   const [showBackToTop, setShowBackToTop] = useState(false);
 
@@ -175,9 +179,13 @@ function LegacySearchPageClient({
     return { episodes, source_names, douban_id };
   };
 
-  const buildSearchUrl = (query: string) => {
+  const buildSearchUrl = (query: string, modeOverride?: SearchHistoryMode) => {
     const nextParams = new URLSearchParams(searchParams.toString());
     const normalizedQuery = query.trim().replace(/\s+/g, ' ');
+
+    if (modeOverride) {
+      nextParams.set('mode', modeOverride);
+    }
 
     if (normalizedQuery) {
       nextParams.set('q', normalizedQuery);
@@ -613,7 +621,7 @@ function LegacySearchPageClient({
     // 监听搜索历史更新事件
     const unsubscribe = subscribeToDataUpdates(
       'searchHistoryUpdated',
-      (newHistory: string[]) => {
+      (newHistory: SearchHistoryEntry[]) => {
         setSearchHistory(newHistory);
       }
     );
@@ -944,7 +952,7 @@ function LegacySearchPageClient({
       setShowSuggestions(false);
 
       // 保存到搜索历史 (事件监听会自动更新界面)
-      addSearchHistory(query);
+      addSearchHistory(query, 'legacy');
     } else {
       setShowResults(false);
       setShowSuggestions(false);
@@ -1027,9 +1035,9 @@ function LegacySearchPageClient({
     searchInputRef.current?.focus();
   };
 
-  const handleSearchHistoryClick = (keyword: string) => {
-    setSearchQuery(keyword);
-    router.push(buildSearchUrl(keyword.trim()));
+  const handleSearchHistoryClick = (entry: SearchHistoryEntry) => {
+    setSearchQuery(entry.keyword);
+    router.push(buildSearchUrl(entry.keyword.trim(), entry.mode));
   };
 
   // 返回顶部功能
@@ -1080,7 +1088,7 @@ function LegacySearchPageClient({
         visible: !showResults && searchHistory.length > 0,
         onSelect: handleSearchHistoryClick,
         onClear: () => clearSearchHistory(),
-        onDelete: (keyword) => deleteSearchHistory(keyword),
+        onDelete: (entry) => deleteSearchHistory(entry),
       }}
       showBackToTop={showBackToTop}
       onScrollToTop={scrollToTop}

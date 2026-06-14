@@ -3,6 +3,8 @@
 import { ChevronUp, Search, X } from 'lucide-react';
 import React from 'react';
 
+import { type SearchHistoryEntry } from '@/lib/search-history';
+
 import PageLayout from '@/components/PageLayout';
 import SearchHistorySection from '@/components/search/SearchHistorySection';
 import SearchModeToggle from '@/components/search/SearchModeToggle';
@@ -10,11 +12,11 @@ import SearchModeToggle from '@/components/search/SearchModeToggle';
 type SearchMode = 'new' | 'legacy';
 
 interface SearchHistoryConfig {
-  items: string[];
+  items: SearchHistoryEntry[];
   visible: boolean;
-  onSelect: (keyword: string) => void;
+  onSelect: (entry: SearchHistoryEntry) => void;
   onClear: () => void | Promise<void>;
-  onDelete: (keyword: string) => void | Promise<void>;
+  onDelete: (entry: SearchHistoryEntry) => void | Promise<void>;
 }
 
 interface SearchPageScaffoldProps {

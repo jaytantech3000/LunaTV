@@ -186,7 +186,11 @@ async function handleAssetRequest(
         headers: requestHeaders,
         method,
       },
-      { timeoutMs: FETCH_TIMEOUT_MS, maxRedirects: MAX_REDIRECTS }
+      {
+        timeoutMs: FETCH_TIMEOUT_MS,
+        maxRedirects: MAX_REDIRECTS,
+        initialUrlValidated: true,
+      }
     );
   } catch (error: any) {
     return jsonError(

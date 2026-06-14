@@ -1,8 +1,10 @@
+import { SearchResult } from '@/lib/types';
+
 import {
+  buildAdultDownloadGroupingKey,
   buildAdultDownloadGroupingQuery,
   filterAdultGroupingSearchResults,
 } from './adult';
-import { SearchResult } from '@/lib/types';
 
 function buildSearchResult(partial: Partial<SearchResult>): SearchResult {
   return {
@@ -51,6 +53,38 @@ describe('buildAdultDownloadGroupingQuery', () => {
         typeName: '伦理片',
       })
     ).toBeNull();
+  });
+
+  it('extracts performer names from bracketed western-name titles', () => {
+    expect(
+      buildAdultDownloadGroupingQuery({
+        title: 'P站 欧美高颜值金发白虎美女【Anny Walker】极品身材诱惑',
+        sourceName: '🔞P站资源',
+        typeName: '伦理片',
+      })
+    ).toBe('Anny Walker');
+  });
+
+  it('extracts performer names from title segments after separators', () => {
+    expect(
+      buildAdultDownloadGroupingQuery({
+        title: 'Stepsister Stuck In Washing Machine - Anny Walker',
+        sourceName: '🔞欧美资源',
+        typeName: '伦理片',
+      })
+    ).toBe('Anny Walker');
+  });
+});
+
+describe('buildAdultDownloadGroupingKey', () => {
+  it('normalizes casing and spacing for grouped adult downloads', () => {
+    expect(
+      buildAdultDownloadGroupingKey({
+        title: 'P站 欧美高颜值金发白虎美女【Anny Walker】极品身材诱惑',
+        sourceName: '🔞P站资源',
+        typeName: '伦理片',
+      })
+    ).toBe('anny walker');
   });
 });
 

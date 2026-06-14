@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
 import { getOfflineDownloadSupportState } from '@/lib/download/cache';
+import { resolveDownloadablePlaybackSources } from '@/lib/download/downloadable';
 import {
   formatTaskSizeProgress,
   formatTransferRate,
@@ -19,6 +20,7 @@ import {
   buildDownloadTaskId,
 } from '@/lib/download/types';
 import { SearchResult } from '@/lib/types';
+import { isAdultContentResult } from '@/lib/yellow';
 
 import BatchEpisodeDownloadDialog from '@/components/BatchEpisodeDownloadDialog';
 
@@ -28,6 +30,7 @@ interface CurrentEpisodeDownloadControlProps {
   detail: SearchResult;
   availableSources?: SearchResult[];
   episodeIndex: number;
+  downloadEpisodeIndex?: number;
   isOfflineMode?: boolean;
   searchTitle?: string;
 }
@@ -36,22 +39,35 @@ export default function CurrentEpisodeDownloadControl({
   detail,
   availableSources = [],
   episodeIndex,
+  downloadEpisodeIndex,
   isOfflineMode = false,
   searchTitle,
 }: CurrentEpisodeDownloadControlProps) {
+  const targetEpisodeIndex =
+    typeof downloadEpisodeIndex === 'number'
+      ? downloadEpisodeIndex
+      : episodeIndex;
   const contentId = buildDownloadContentId(detail.source, detail.id);
-  const taskId = buildDownloadTaskId(contentId, episodeIndex);
+  const taskId = buildDownloadTaskId(contentId, targetEpisodeIndex);
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [batchFeedback, setBatchFeedback] = useState<string | null>(null);
   const [isBatchDialogOpen, setIsBatchDialogOpen] = useState(false);
-  const [downloadSupport, setDownloadSupport] = useState<
-    ReturnType<typeof getOfflineDownloadSupportState> | null
-  >(null);
+  const [isPreparingBatchDialog, setIsPreparingBatchDialog] = useState(false);
+  const [downloadDialogDetail, setDownloadDialogDetail] =
+    useState<SearchResult | null>(null);
+  const [downloadDialogAvailableSources, setDownloadDialogAvailableSources] =
+    useState<SearchResult[]>([]);
+  const [downloadSupport, setDownloadSupport] = useState<ReturnType<
+    typeof getOfflineDownloadSupportState
+  > | null>(null);
 
   const task = useDownloadStore((state) => state.tasks[taskId]);
   const content = useDownloadStore((state) => state.library[contentId]);
-  const downloadedEpisode = getDownloadedEpisodeMeta(content, episodeIndex);
+  const downloadedEpisode = getDownloadedEpisodeMeta(
+    content,
+    targetEpisodeIndex
+  );
 
   useEffect(() => {
     setDownloadSupport(getOfflineDownloadSupportState());
@@ -61,7 +77,10 @@ export default function CurrentEpisodeDownloadControl({
     setActionError(null);
     setBatchFeedback(null);
     setIsBatchDialogOpen(false);
-  }, [detail.id, detail.source, episodeIndex]);
+    setIsPreparingBatchDialog(false);
+    setDownloadDialogDetail(null);
+    setDownloadDialogAvailableSources([]);
+  }, [detail.id, detail.source, episodeIndex, targetEpisodeIndex]);
 
   if (!detail.episodes[episodeIndex]) {
     return null;
@@ -79,13 +98,81 @@ export default function CurrentEpisodeDownloadControl({
     );
   }
 
-  const canOpenDownloadDialog = !isOfflineMode;
-  const downloadDialogLabel =
-    detail.episodes.length > 1 ? '下载剧集' : '下载选项';
+  const shouldAllowAdultPlayback = isAdultContentResult({
+    title: detail.title,
+    source_name: detail.source_name,
+    desc: detail.desc,
+    type_name: detail.type_name,
+  });
+  const batchDialogDetail = isOfflineMode
+    ? downloadDialogDetail || detail
+    : detail;
+  const batchDialogAvailableSources = isOfflineMode
+    ? downloadDialogAvailableSources
+    : availableSources;
+  const batchDialogEpisodeIndex = isOfflineMode
+    ? targetEpisodeIndex
+    : episodeIndex;
+  const downloadDialogLabel = isOfflineMode
+    ? '管理本剧集下载'
+    : detail.episodes.length > 1
+    ? '下载剧集'
+    : '下载选项';
 
-  const handleOpenBatchDialog = () => {
+  const ensureDownloadDialogSources = async (): Promise<{
+    detail: SearchResult;
+    availableSources: SearchResult[];
+  } | null> => {
+    if (!isOfflineMode) {
+      return {
+        detail,
+        availableSources,
+      };
+    }
+
+    if (downloadDialogDetail) {
+      return {
+        detail: downloadDialogDetail,
+        availableSources: downloadDialogAvailableSources,
+      };
+    }
+
+    try {
+      setActionError(null);
+      setIsPreparingBatchDialog(true);
+
+      const resolvedSources = await resolveDownloadablePlaybackSources({
+        source: detail.source,
+        id: detail.id,
+        title: detail.title.trim(),
+        year: detail.year || undefined,
+        query: searchTitle || detail.title,
+        doubanId: detail.douban_id,
+        allowAdultCandidates: shouldAllowAdultPlayback,
+      });
+
+      setDownloadDialogDetail(resolvedSources.detail);
+      setDownloadDialogAvailableSources(resolvedSources.availableSources);
+      return resolvedSources;
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : '获取可下载剧集失败'
+      );
+      return null;
+    } finally {
+      setIsPreparingBatchDialog(false);
+    }
+  };
+
+  const handleOpenBatchDialog = async () => {
     setActionError(null);
     setBatchFeedback(null);
+
+    const resolvedSources = await ensureDownloadDialogSources();
+    if (!resolvedSources) {
+      return;
+    }
+
     setIsBatchDialogOpen(true);
   };
 
@@ -93,10 +180,14 @@ export default function CurrentEpisodeDownloadControl({
     try {
       setActionError(null);
       setBatchFeedback(null);
+      const downloadSources = await ensureDownloadDialogSources();
+      if (!downloadSources) {
+        return;
+      }
       await downloadManager.startEpisodeDownload({
-        detail,
-        episodeIndex,
-        availableSources,
+        detail: downloadSources.detail,
+        episodeIndex: targetEpisodeIndex,
+        availableSources: downloadSources.availableSources,
         searchTitle,
       });
     } catch (error) {
@@ -136,7 +227,7 @@ export default function CurrentEpisodeDownloadControl({
   const handleDelete = async () => {
     try {
       setActionError(null);
-      await downloadManager.deleteEpisode(contentId, episodeIndex);
+      await downloadManager.deleteEpisode(contentId, targetEpisodeIndex);
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : '删除离线文件失败'
@@ -179,7 +270,7 @@ export default function CurrentEpisodeDownloadControl({
               <Link
                 href={buildOfflinePlayHref({
                   content,
-                  episodeIndex,
+                  episodeIndex: targetEpisodeIndex,
                 })}
                 className='inline-flex items-center rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700'
               >
@@ -233,15 +324,14 @@ export default function CurrentEpisodeDownloadControl({
               </button>
             )}
 
-            {canOpenDownloadDialog && (
-              <button
-                type='button'
-                onClick={handleOpenBatchDialog}
-                className='inline-flex items-center rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/20'
-              >
-                {downloadDialogLabel}
-              </button>
-            )}
+            <button
+              type='button'
+              onClick={() => void handleOpenBatchDialog()}
+              disabled={isPreparingBatchDialog}
+              className='inline-flex items-center rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/20'
+            >
+              {isPreparingBatchDialog ? '加载中...' : downloadDialogLabel}
+            </button>
 
             {task && task.status !== 'done' && (
               <button
@@ -294,9 +384,9 @@ export default function CurrentEpisodeDownloadControl({
       </div>
 
       <BatchEpisodeDownloadDialog
-        detail={detail}
-        availableSources={availableSources}
-        episodeIndex={episodeIndex}
+        detail={batchDialogDetail}
+        availableSources={batchDialogAvailableSources}
+        episodeIndex={batchDialogEpisodeIndex}
         isOpen={isBatchDialogOpen}
         searchTitle={searchTitle}
         onClose={() => setIsBatchDialogOpen(false)}

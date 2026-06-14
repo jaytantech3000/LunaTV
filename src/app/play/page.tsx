@@ -2884,8 +2884,7 @@ function PlayPageClient() {
           </h1>
         </div>
 
-        {!isOfflineMode &&
-          detail &&
+        {detail &&
           detail.episodes.length > 0 &&
           currentEpisodeIndex >= 0 &&
           currentEpisodeIndex < detail.episodes.length && (
@@ -2893,13 +2892,18 @@ function PlayPageClient() {
               detail={detail}
               availableSources={isOfflineMode ? [] : availableSources}
               episodeIndex={
+                isOfflineMode ? currentEpisodeIndex : currentEpisodeIndex
+              }
+              downloadEpisodeIndex={
                 isOfflineMode
                   ? offlineEpisodeOrder[currentEpisodeIndex] ??
                     currentEpisodeIndex
                   : currentEpisodeIndex
               }
               isOfflineMode={isOfflineMode}
-              searchTitle={searchTitle}
+              searchTitle={
+                isOfflineMode ? offlineContent?.searchTitle || searchTitle : searchTitle
+              }
             />
           )}
 
