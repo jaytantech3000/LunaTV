@@ -420,6 +420,11 @@ export function buildOfflinePlayHref(params: {
     year: content.year,
     episode: String(episodeIndex + 1),
   });
+  const searchType = content.searchType?.trim();
+
+  if (searchType) {
+    searchParams.set('stype', searchType);
+  }
 
   return `/play?${searchParams.toString()}`;
 }

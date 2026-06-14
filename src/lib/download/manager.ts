@@ -38,6 +38,7 @@ interface StartEpisodeDownloadParams {
   episodeIndex: number;
   availableSources?: SearchResult[];
   searchTitle?: string;
+  searchType?: string;
 }
 
 interface StartBatchEpisodeDownloadParams {
@@ -45,6 +46,7 @@ interface StartBatchEpisodeDownloadParams {
   episodeIndexes: number[];
   availableSources?: SearchResult[];
   searchTitle?: string;
+  searchType?: string;
 }
 
 interface TaskRunnerState {
@@ -259,7 +261,8 @@ function buildInitialTask(
   detail: SearchResult,
   episodeIndex: number,
   availableSources: SearchResult[] = [],
-  searchTitle?: string
+  searchTitle?: string,
+  searchType?: string
 ): DownloadTask {
   const contentId = buildDownloadContentId(detail.source, detail.id);
   const taskId = buildDownloadTaskId(contentId, episodeIndex);
@@ -285,6 +288,7 @@ function buildInitialTask(
     episodeIndex,
     title: detail.title,
     searchTitle: searchTitle?.trim() || undefined,
+    searchType: searchType?.trim() || undefined,
     poster: detail.poster,
     year: detail.year,
     desc: detail.desc,
@@ -326,6 +330,10 @@ export function applyLibraryMetadataFallback(
     searchTitle: pickPreferredOptionalTextValue(
       task.searchTitle,
       previousItem.searchTitle
+    ),
+    searchType: pickPreferredOptionalTextValue(
+      task.searchType,
+      previousItem.searchType
     ),
     poster: pickPreferredTextValue(task.poster, previousItem.poster),
     year: pickPreferredTextValue(task.year, previousItem.year),
@@ -539,6 +547,10 @@ export function mergeLibraryItem(
     searchTitle: pickPreferredOptionalTextValue(
       task.searchTitle,
       previousItem?.searchTitle
+    ),
+    searchType: pickPreferredOptionalTextValue(
+      task.searchType,
+      previousItem?.searchType
     ),
     poster: pickPreferredTextValue(task.poster, previousItem?.poster),
     year: pickPreferredTextValue(task.year, previousItem?.year),
@@ -817,7 +829,8 @@ class DownloadManager {
       params.detail,
       params.episodeIndex,
       params.availableSources,
-      params.searchTitle
+      params.searchTitle,
+      params.searchType
     );
     const existingLibraryItem =
       useDownloadStore.getState().library[task.contentId];
@@ -856,7 +869,11 @@ class DownloadManager {
         pickPreferredOptionalTextValue(
           existingTask.searchTitle,
           task.searchTitle
-        ) !== existingTask.searchTitle
+        ) !== existingTask.searchTitle ||
+        pickPreferredOptionalTextValue(
+          existingTask.searchType,
+          task.searchType
+        ) !== existingTask.searchType
       ) {
         patchTask(existingTask.id, (currentTask) => ({
           ...currentTask,
@@ -864,6 +881,10 @@ class DownloadManager {
           searchTitle: pickPreferredOptionalTextValue(
             currentTask.searchTitle,
             task.searchTitle
+          ),
+          searchType: pickPreferredOptionalTextValue(
+            currentTask.searchType,
+            task.searchType
           ),
           updatedAt: now(),
         }));
@@ -888,6 +909,10 @@ class DownloadManager {
           existingTask.searchTitle,
           task.searchTitle
         ),
+        searchType: pickPreferredOptionalTextValue(
+          existingTask.searchType,
+          task.searchType
+        ),
       });
       return {
         task: this.getTask(existingTask.id) || {
@@ -897,6 +922,10 @@ class DownloadManager {
           searchTitle: pickPreferredOptionalTextValue(
             existingTask.searchTitle,
             task.searchTitle
+          ),
+          searchType: pickPreferredOptionalTextValue(
+            existingTask.searchType,
+            task.searchType
           ),
         },
         queued: true,
@@ -1450,6 +1479,7 @@ class DownloadManager {
           episodeIndex,
           availableSources: params.availableSources,
           searchTitle: params.searchTitle,
+          searchType: params.searchType,
         });
         tasks.push(result.task);
         if (result.queued) {

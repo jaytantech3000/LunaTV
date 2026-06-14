@@ -2125,6 +2125,8 @@ export function DownloadedContentDialog({
           targetContent.year && targetContent.year !== 'unknown'
             ? targetContent.year
             : undefined,
+        searchType: targetContent.searchType,
+        query: targetContent.searchTitle || undefined,
         doubanId: targetContent.doubanId,
         allowAdultCandidates: isAdultContentResult({
           title: targetContent.title,
@@ -2245,6 +2247,7 @@ export function DownloadedContentDialog({
           episodeIndexes,
           availableSources: resolvedDownloadable.availableSources,
           searchTitle: targetContent.searchTitle,
+          searchType: targetContent.searchType,
         });
 
         aggregateResult.queuedCount += result.queuedCount;
@@ -2390,6 +2393,7 @@ export function DownloadedContentDialog({
         episodeIndex,
         availableSources: resolvedDownloadable.availableSources,
         searchTitle: content.searchTitle,
+        searchType: content.searchType,
       });
       setMoreDownloadsFeedback(
         `已将 ${getEpisodeTitleFromSources(
@@ -2418,6 +2422,7 @@ export function DownloadedContentDialog({
         detail: option.detail,
         episodeIndexes: option.actionableEpisodeIndexes,
         searchTitle: adultGroupingQuery || content.searchTitle,
+        searchType: content.searchType,
       });
       setMoreDownloadsFeedback(
         option.actionableEpisodeIndexes.length > 1

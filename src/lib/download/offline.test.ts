@@ -1,6 +1,7 @@
 import {
   applyOfflinePlaybackOwner,
   buildGroupedOfflinePlaybackDetail,
+  buildOfflinePlayHref,
   getAdultRelatedOfflineVideoEntries,
   getGroupedOfflineContents,
   getOfflinePlaybackContents,
@@ -19,6 +20,7 @@ function buildContent(
     sourceName: partial.sourceName || '线路A',
     title: partial.title || '银河列车',
     searchTitle: partial.searchTitle,
+    searchType: partial.searchType,
     poster: partial.poster || 'https://example.com/poster-a.jpg',
     year: partial.year || '2026',
     desc: partial.desc || '剧情简介',
@@ -216,6 +218,26 @@ describe('offline playback grouping helpers', () => {
         updatedAt: 2000,
       },
     ]);
+  });
+
+  it('preserves the stored search mode in offline playback links', () => {
+    const content = buildContent({
+      contentId: 'source-a:1',
+      source: 'source-a',
+      vodId: '1',
+      title: '银河列车',
+      year: '2026',
+      searchType: 'tv',
+    });
+
+    expect(
+      buildOfflinePlayHref({
+        content,
+        episodeIndex: 1,
+      })
+    ).toBe(
+      '/play?offline=1&contentId=source-a%3A1&source=source-a&id=1&title=%E9%93%B6%E6%B2%B3%E5%88%97%E8%BD%A6&year=2026&episode=2&stype=tv'
+    );
   });
 
   it('merges cross-source offline episodes into one ordered playback list', () => {

@@ -21,6 +21,7 @@ export interface DownloadTask {
   episodeIndex: number;
   title: string;
   searchTitle?: string;
+  searchType?: string;
   poster: string;
   year: string;
   desc?: string;
@@ -63,6 +64,7 @@ export interface DownloadedContentMeta {
   sourceName: string;
   title: string;
   searchTitle?: string;
+  searchType?: string;
   poster: string;
   year: string;
   desc?: string;
