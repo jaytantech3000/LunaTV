@@ -104,6 +104,7 @@ export interface SearchResult {
   poster: string;
   episodes: string[];
   episodes_titles: string[];
+  remarks?: string;
   source: string;
   source_name: string;
   class?: string;

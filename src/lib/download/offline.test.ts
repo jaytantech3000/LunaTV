@@ -1,14 +1,24 @@
+jest.mock('./cache', () => ({
+  hasCachedDownload: jest.fn(),
+  matchDownloadResponse: jest.fn(),
+  putDownloadResponse: jest.fn(),
+}));
+
+import { matchDownloadResponse } from './cache';
 import {
   applyOfflinePlaybackOwner,
   buildGroupedOfflinePlaybackDetail,
   buildOfflinePlayHref,
   getAdultRelatedOfflineVideoEntries,
+  getDownloadedEpisodeDurationSeconds,
   getGroupedOfflineContents,
   getOfflinePlaybackContents,
   getSameTitleOfflineVideoEntries,
   isAdultDownloadedContent,
 } from './offline';
 import { DownloadedContentMeta } from './types';
+
+const mockedMatchDownloadResponse = jest.mocked(matchDownloadResponse);
 
 function buildContent(
   partial: Partial<DownloadedContentMeta>
@@ -35,6 +45,28 @@ function buildContent(
 }
 
 describe('offline playback grouping helpers', () => {
+  beforeEach(() => {
+    mockedMatchDownloadResponse.mockReset();
+  });
+
+  it('reads episode duration from the cached playback manifest', async () => {
+    mockedMatchDownloadResponse.mockResolvedValue(
+      new Response(`#EXTM3U
+#EXTINF:10.0,
+segment-1.ts
+#EXTINF:20.5,
+segment-2.ts
+`)
+    );
+
+    await expect(
+      getDownloadedEpisodeDurationSeconds({
+        playbackManifestUrl: 'https://example.com/play.m3u8',
+        rootManifestUrl: 'https://example.com/root.m3u8',
+      })
+    ).resolves.toBe(30.5);
+  });
+
   it('groups same-title offline contents and keeps the active content first', () => {
     const activeContent = buildContent({
       contentId: 'source-a:1',

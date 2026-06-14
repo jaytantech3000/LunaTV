@@ -447,6 +447,21 @@ async function fetchAndCacheOfflineResource(url: string): Promise<boolean> {
   }
 }
 
+async function readCachedManifestTextFromCache(
+  url: string
+): Promise<string | null> {
+  try {
+    const cachedResponse = await matchDownloadResponse(url);
+    if (!cachedResponse) {
+      return null;
+    }
+
+    return await cachedResponse.text();
+  } catch (_) {
+    return null;
+  }
+}
+
 async function readCachedManifestText(url: string): Promise<string | null> {
   let cachedResponse = await matchDownloadResponse(url);
 
@@ -468,6 +483,84 @@ async function readCachedManifestText(url: string): Promise<string | null> {
   } catch (_) {
     return null;
   }
+}
+
+function parseManifestDurationSeconds(manifestText: string): number | null {
+  const lines = manifestText.split(/\r?\n/).map((line) => line.trim());
+  let extinfDurationSeconds = 0;
+  let hasExtinfDuration = false;
+  let partDurationSeconds = 0;
+  let hasPartDuration = false;
+
+  lines.forEach((line) => {
+    if (line.startsWith('#EXTINF:')) {
+      const matchedDuration = line.match(/^#EXTINF:([0-9.]+)/i)?.[1];
+      const durationSeconds = Number(matchedDuration || 0);
+      if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+        extinfDurationSeconds += durationSeconds;
+        hasExtinfDuration = true;
+      }
+      return;
+    }
+
+    if (!hasExtinfDuration && line.startsWith('#EXT-X-PART:')) {
+      const matchedDuration = line.match(/DURATION=([0-9.]+)/i)?.[1];
+      const durationSeconds = Number(matchedDuration || 0);
+      if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+        partDurationSeconds += durationSeconds;
+        hasPartDuration = true;
+      }
+    }
+  });
+
+  if (hasExtinfDuration) {
+    return extinfDurationSeconds;
+  }
+
+  if (hasPartDuration) {
+    return partDurationSeconds;
+  }
+
+  return null;
+}
+
+export async function getDownloadedEpisodeDurationSeconds(
+  episode: Pick<DownloadedEpisodeMeta, 'playbackManifestUrl' | 'rootManifestUrl'>
+): Promise<number | null> {
+  const playbackManifestText = await readCachedManifestTextFromCache(
+    episode.playbackManifestUrl
+  );
+  const playbackDurationSeconds = playbackManifestText
+    ? parseManifestDurationSeconds(playbackManifestText)
+    : null;
+
+  if (
+    typeof playbackDurationSeconds === 'number' &&
+    Number.isFinite(playbackDurationSeconds) &&
+    playbackDurationSeconds > 0
+  ) {
+    return playbackDurationSeconds;
+  }
+
+  if (
+    !episode.rootManifestUrl ||
+    episode.rootManifestUrl === episode.playbackManifestUrl
+  ) {
+    return null;
+  }
+
+  const rootManifestText = await readCachedManifestTextFromCache(
+    episode.rootManifestUrl
+  );
+  const rootDurationSeconds = rootManifestText
+    ? parseManifestDurationSeconds(rootManifestText)
+    : null;
+
+  return typeof rootDurationSeconds === 'number' &&
+    Number.isFinite(rootDurationSeconds) &&
+    rootDurationSeconds > 0
+    ? rootDurationSeconds
+    : null;
 }
 
 function resolveOfflineBootstrapResourceUrls(params: {

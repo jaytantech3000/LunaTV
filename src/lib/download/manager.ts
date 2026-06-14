@@ -198,6 +198,7 @@ export async function resolveDownloadResourceCachedState(
       () => new Error(`检查离线缓存超时: ${url}`)
     );
   } catch (error) {
+    // eslint-disable-next-line no-console
     console.warn('检查离线缓存失败，按未缓存处理:', error);
     return false;
   }
@@ -290,6 +291,7 @@ function buildInitialTask(
     searchTitle: searchTitle?.trim() || undefined,
     searchType: searchType?.trim() || undefined,
     poster: detail.poster,
+    remarks: detail.remarks?.trim() || undefined,
     year: detail.year,
     desc: detail.desc,
     typeName: detail.type_name,
@@ -336,6 +338,7 @@ export function applyLibraryMetadataFallback(
       previousItem.searchType
     ),
     poster: pickPreferredTextValue(task.poster, previousItem.poster),
+    remarks: pickPreferredOptionalTextValue(task.remarks, previousItem.remarks),
     year: pickPreferredTextValue(task.year, previousItem.year),
     desc: pickPreferredOptionalTextValue(task.desc, previousItem.desc),
     typeName: pickPreferredOptionalTextValue(
@@ -553,6 +556,8 @@ export function mergeLibraryItem(
       previousItem?.searchType
     ),
     poster: pickPreferredTextValue(task.poster, previousItem?.poster),
+    adultGroupPoster: previousItem?.adultGroupPoster?.trim() || undefined,
+    remarks: pickPreferredOptionalTextValue(task.remarks, previousItem?.remarks),
     year: pickPreferredTextValue(task.year, previousItem?.year),
     desc: pickPreferredOptionalTextValue(task.desc, previousItem?.desc),
     typeName: pickPreferredOptionalTextValue(
@@ -873,7 +878,11 @@ class DownloadManager {
         pickPreferredOptionalTextValue(
           existingTask.searchType,
           task.searchType
-        ) !== existingTask.searchType
+        ) !== existingTask.searchType ||
+        pickPreferredOptionalTextValue(
+          existingTask.remarks,
+          task.remarks
+        ) !== existingTask.remarks
       ) {
         patchTask(existingTask.id, (currentTask) => ({
           ...currentTask,
@@ -885,6 +894,10 @@ class DownloadManager {
           searchType: pickPreferredOptionalTextValue(
             currentTask.searchType,
             task.searchType
+          ),
+          remarks: pickPreferredOptionalTextValue(
+            currentTask.remarks,
+            task.remarks
           ),
           updatedAt: now(),
         }));
@@ -913,6 +926,10 @@ class DownloadManager {
           existingTask.searchType,
           task.searchType
         ),
+        remarks: pickPreferredOptionalTextValue(
+          existingTask.remarks,
+          task.remarks
+        ),
       });
       return {
         task: this.getTask(existingTask.id) || {
@@ -926,6 +943,10 @@ class DownloadManager {
           searchType: pickPreferredOptionalTextValue(
             existingTask.searchType,
             task.searchType
+          ),
+          remarks: pickPreferredOptionalTextValue(
+            existingTask.remarks,
+            task.remarks
           ),
         },
         queued: true,

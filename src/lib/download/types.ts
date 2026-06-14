@@ -23,6 +23,7 @@ export interface DownloadTask {
   searchTitle?: string;
   searchType?: string;
   poster: string;
+  remarks?: string;
   year: string;
   desc?: string;
   typeName?: string;
@@ -66,6 +67,8 @@ export interface DownloadedContentMeta {
   searchTitle?: string;
   searchType?: string;
   poster: string;
+  adultGroupPoster?: string;
+  remarks?: string;
   year: string;
   desc?: string;
   typeName?: string;
