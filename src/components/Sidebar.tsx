@@ -8,6 +8,7 @@ import {
   Download,
   Film,
   Home,
+  Loader2,
   Menu,
   Radio,
   Search,
@@ -17,6 +18,7 @@ import {
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
+  type MouseEvent,
   createContext,
   useCallback,
   useContext,
@@ -25,7 +27,12 @@ import {
   useMemo,
   useState,
 } from 'react';
+import { flushSync } from 'react-dom';
 
+import {
+  isModifiedNavigationEvent,
+  useNavigationFeedback,
+} from './NavigationFeedbackProvider';
 import { useSite } from './SiteProvider';
 
 interface SidebarContextType {
@@ -69,6 +76,7 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { beginNavigation, pendingNavigation } = useNavigationFeedback();
   // 若同一次 SPA 会话中已经读取过折叠状态，则直接复用，避免闪烁
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
     if (
@@ -208,9 +216,64 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
     };
   }, [menuItems, prefetchRoute]);
 
-  const handleNavPointerDown = useCallback((href: string) => {
-    setActive(href);
-  }, []);
+  const handleNavPointerDown = useCallback(
+    (href: string) => {
+      setActive(href);
+      prefetchRoute(href);
+    },
+    [prefetchRoute]
+  );
+
+  const pendingNavigationHref =
+    pendingNavigation?.kind === 'nav' ? pendingNavigation.href : null;
+
+  const pushRouteWithPaint = useCallback(
+    (href: string) => {
+      window.setTimeout(() => {
+        router.push(href);
+      }, 0);
+    },
+    [router]
+  );
+
+  const handleNavClick = useCallback(
+    (
+      event: MouseEvent<HTMLAnchorElement>,
+      href: string,
+      label: string
+    ) => {
+      if (event.defaultPrevented || isModifiedNavigationEvent(event)) {
+        return;
+      }
+
+      event.preventDefault();
+      if (
+        decodeURIComponent(currentFullPath) === decodeURIComponent(href) ||
+        pendingNavigationHref === href
+      ) {
+        setActive(href);
+        return;
+      }
+
+      flushSync(() => {
+        setActive(href);
+        beginNavigation({
+          href,
+          kind: 'nav',
+          label,
+        });
+      });
+      prefetchRoute(href);
+      pushRouteWithPaint(href);
+    },
+    [
+      beginNavigation,
+      currentFullPath,
+      pendingNavigationHref,
+      prefetchRoute,
+      pushRouteWithPaint,
+    ]
+  );
 
   const isPathActive = useCallback(
     (href: string) => {
@@ -278,6 +341,7 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
                 href='/'
                 prefetch
                 onPointerDown={() => handleNavPointerDown('/')}
+                onClick={(event) => handleNavClick(event, '/', '首页')}
                 onMouseEnter={() => prefetchRoute('/')}
                 onFocus={() => prefetchRoute('/')}
                 data-active={isPathActive('/')}
@@ -293,11 +357,17 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
                     首页
                   </span>
                 )}
+                {pendingNavigationHref === '/' && !isCollapsed ? (
+                  <Loader2 className='ml-auto h-3.5 w-3.5 animate-spin text-green-600 dark:text-green-400' />
+                ) : null}
               </Link>
               <Link
                 href='/search'
                 prefetch
                 onPointerDown={() => handleNavPointerDown('/search')}
+                onClick={(event) =>
+                  handleNavClick(event, '/search', '搜索')
+                }
                 onMouseEnter={() => prefetchRoute('/search')}
                 onFocus={() => prefetchRoute('/search')}
                 data-active={isPathActive('/search')}
@@ -313,11 +383,17 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
                     搜索
                   </span>
                 )}
+                {pendingNavigationHref === '/search' && !isCollapsed ? (
+                  <Loader2 className='ml-auto h-3.5 w-3.5 animate-spin text-green-600 dark:text-green-400' />
+                ) : null}
               </Link>
               <Link
                 href='/downloads'
                 prefetch
                 onPointerDown={() => handleNavPointerDown('/downloads')}
+                onClick={(event) =>
+                  handleNavClick(event, '/downloads', '下载')
+                }
                 onMouseEnter={() => prefetchRoute('/downloads')}
                 onFocus={() => prefetchRoute('/downloads')}
                 data-active={isPathActive('/downloads')}
@@ -333,6 +409,9 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
                     下载
                   </span>
                 )}
+                {pendingNavigationHref === '/downloads' && !isCollapsed ? (
+                  <Loader2 className='ml-auto h-3.5 w-3.5 animate-spin text-green-600 dark:text-green-400' />
+                ) : null}
               </Link>
             </nav>
 
@@ -347,6 +426,9 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
                       href={item.href}
                       prefetch
                       onPointerDown={() => handleNavPointerDown(item.href)}
+                      onClick={(event) =>
+                        handleNavClick(event, item.href, item.label)
+                      }
                       onMouseEnter={() => prefetchRoute(item.href)}
                       onFocus={() => prefetchRoute(item.href)}
                       data-active={isPathActive(item.href)}
@@ -362,6 +444,9 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
                           {item.label}
                         </span>
                       )}
+                      {pendingNavigationHref === item.href && !isCollapsed ? (
+                        <Loader2 className='ml-auto h-3.5 w-3.5 animate-spin text-green-600 dark:text-green-400' />
+                      ) : null}
                     </Link>
                   );
                 })}

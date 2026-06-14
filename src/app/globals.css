@@ -147,6 +147,29 @@ html:not(.dark)::view-transition-new(root) {
   animation-name: slide-from-bottom;
 }
 
+@keyframes navigation-feedback-progress {
+  0% {
+    opacity: 0.55;
+    transform: translateX(-120%) scaleX(0.85);
+  }
+
+  55% {
+    opacity: 1;
+    transform: translateX(120%) scaleX(1);
+  }
+
+  100% {
+    opacity: 0.65;
+    transform: translateX(280%) scaleX(0.9);
+  }
+}
+
+.navigation-feedback-progress {
+  animation: navigation-feedback-progress 1.1s ease-in-out infinite;
+  transform-origin: left center;
+  will-change: transform, opacity;
+}
+
 /* 强制播放器内部的 video 元素高度为 100%，并保持内容完整显示 */
 div[data-media-provider] video {
   height: 100%;
