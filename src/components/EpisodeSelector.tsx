@@ -9,6 +9,7 @@ import React, {
   useState,
 } from 'react';
 
+import { applyVerticalWheelToHorizontalScroll } from '@/lib/horizontal-wheel';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
 
@@ -253,56 +254,16 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
 
   const categoryContainerRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
-
-  // 添加鼠标悬停状态管理
-  const [isCategoryHovered, setIsCategoryHovered] = useState(false);
-
-  // 阻止页面竖向滚动
-  const preventPageScroll = useCallback(
-    (e: WheelEvent) => {
-      if (isCategoryHovered) {
-        e.preventDefault();
-      }
+  const handleCategoryWheel = useCallback(
+    (event: React.WheelEvent<HTMLDivElement>) => {
+      applyVerticalWheelToHorizontalScroll({
+        container: event.currentTarget,
+        event,
+        speedMultiplier: 2,
+      });
     },
-    [isCategoryHovered]
+    []
   );
-
-  // 处理滚轮事件，实现横向滚动
-  const handleWheel = useCallback(
-    (e: WheelEvent) => {
-      if (isCategoryHovered && categoryContainerRef.current) {
-        e.preventDefault(); // 阻止默认的竖向滚动
-
-        const container = categoryContainerRef.current;
-        const scrollAmount = e.deltaY * 2; // 调整滚动速度
-
-        // 根据滚轮方向进行横向滚动
-        container.scrollBy({
-          left: scrollAmount,
-          behavior: 'smooth',
-        });
-      }
-    },
-    [isCategoryHovered]
-  );
-
-  // 添加全局wheel事件监听器
-  useEffect(() => {
-    if (isCategoryHovered) {
-      // 鼠标悬停时阻止页面滚动
-      document.addEventListener('wheel', preventPageScroll, { passive: false });
-      document.addEventListener('wheel', handleWheel, { passive: false });
-    } else {
-      // 鼠标离开时恢复页面滚动
-      document.removeEventListener('wheel', preventPageScroll);
-      document.removeEventListener('wheel', handleWheel);
-    }
-
-    return () => {
-      document.removeEventListener('wheel', preventPageScroll);
-      document.removeEventListener('wheel', handleWheel);
-    };
-  }, [isCategoryHovered, preventPageScroll, handleWheel]);
 
   // 当分页切换时，将激活的分页标签滚动到视口中间
   useEffect(() => {
@@ -412,8 +373,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
             <div
               className='flex-1 overflow-x-auto'
               ref={categoryContainerRef}
-              onMouseEnter={() => setIsCategoryHovered(true)}
-              onMouseLeave={() => setIsCategoryHovered(false)}
+              onWheel={handleCategoryWheel}
             >
               <div className='flex gap-2 min-w-max'>
                 {categories.map((label, idx) => {
