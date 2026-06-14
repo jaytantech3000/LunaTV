@@ -1554,8 +1554,9 @@ function DownloadedContentDialog({
   >([]);
   const [isDeletingSelected, setIsDeletingSelected] = useState(false);
   const [isRestartingSelected, setIsRestartingSelected] = useState(false);
-  const [isLocalTitleGroupingEnabled, setIsLocalTitleGroupingEnabled] =
-    useState(false);
+  const [isTitleGroupingEnabled, setIsTitleGroupingEnabled] = useState(
+    contentGroup.groupingKind === 'title'
+  );
   const [selectionFeedback, setSelectionFeedback] = useState<string | null>(
     null
   );
@@ -1620,7 +1621,7 @@ function DownloadedContentDialog({
       titleGroupingIdentity
         ? Object.values(library)
             .filter((libraryItem) => {
-              if (
+              const isLibraryItemAdult = Boolean(
                 getAdultGroupingIdentity({
                   title: libraryItem.title,
                   searchTitle: libraryItem.searchTitle,
@@ -1628,7 +1629,9 @@ function DownloadedContentDialog({
                   desc: libraryItem.desc,
                   typeName: libraryItem.typeName,
                 })
-              ) {
+              );
+
+              if (isLibraryItemAdult !== isAdultContent) {
                 return false;
               }
 
@@ -1639,7 +1642,7 @@ function DownloadedContentDialog({
             })
             .sort((left, right) => right.updatedAt - left.updatedAt)
         : [],
-    [library, titleGroupingIdentity]
+    [isAdultContent, library, titleGroupingIdentity]
   );
   const localTitleContentGroup = useMemo(
     () =>
@@ -1654,19 +1657,16 @@ function DownloadedContentDialog({
     [localTitleGroupedContents, titleGroupingIdentity]
   );
   const canToggleLocalTitleGrouping = Boolean(
-    !contentGroup.groupingKind &&
-      !isAdultContent &&
-      localTitleContentGroup &&
-      localTitleGroupedContents.length > 1
+    localTitleContentGroup && localTitleGroupedContents.length > 1
   );
   const effectiveContentGroup = useMemo(
     () =>
-      contentGroup.groupingKind
-        ? contentGroup
-        : isLocalTitleGroupingEnabled
+      isTitleGroupingEnabled && localTitleContentGroup
         ? localTitleContentGroup
+        : contentGroup.groupingKind === 'adult'
+        ? contentGroup
         : null,
-    [contentGroup, isLocalTitleGroupingEnabled, localTitleContentGroup]
+    [contentGroup, isTitleGroupingEnabled, localTitleContentGroup]
   );
   const groupedLocalContents = useMemo(
     () => effectiveContentGroup?.contents || contentGroup.contents,
@@ -1690,6 +1690,26 @@ function DownloadedContentDialog({
   const groupedCollectionTotalSizeBytes =
     effectiveContentGroup?.totalSizeBytes || content.totalSizeBytes;
   const groupedCollectionKind = effectiveContentGroup?.groupingKind;
+  const isAdultGroupedCollection =
+    groupedCollectionKind === 'adult' && isGroupedCollection;
+  const usesAdultSingleEpisodeLayout =
+    isAdultGroupedCollection && content.episodes.length === 1;
+  const currentSingleEpisode = usesAdultSingleEpisodeLayout
+    ? content.episodes[0] || null
+    : null;
+  const currentSingleEpisodeOfflineHref = currentSingleEpisode
+    ? buildOfflinePlayHref({
+        content,
+        episodeIndex: currentSingleEpisode.episodeIndex,
+      })
+    : null;
+  const shouldShowEpisodeGrid = !usesAdultSingleEpisodeLayout || isEditing;
+  const groupedCollectionDescription =
+    groupedCollectionKind === 'adult'
+      ? usesAdultSingleEpisodeLayout && !isEditing
+        ? `当前按“${groupedCollectionIdentity}”归集，成人资源改用列表展示，单集可直接在这里播放。`
+        : `当前按“${groupedCollectionIdentity}”归集，成人资源改用列表展示，可在这里切换查看各条离线内容。`
+      : `当前按“${groupedCollectionIdentity}”聚合同名不同源资源，可在这里切换查看各来源的离线内容。`;
   const downloadedEpisodeIndexSet = useMemo(
     () => new Set(content.episodes.map((episode) => episode.episodeIndex)),
     [content.episodes]
@@ -1857,8 +1877,8 @@ function DownloadedContentDialog({
   }, [content.contentId, content.source, content.vodId]);
 
   useEffect(() => {
-    setIsLocalTitleGroupingEnabled(false);
-  }, [titleGroupingIdentity?.key]);
+    setIsTitleGroupingEnabled(contentGroup.groupingKind === 'title');
+  }, [contentGroup.groupingKind, titleGroupingIdentity?.key]);
 
   useEffect(() => {
     setSelectedEpisodeIndexes((currentState) => {
@@ -2257,19 +2277,15 @@ function DownloadedContentDialog({
                   <button
                     type='button'
                     onClick={() =>
-                      setIsLocalTitleGroupingEnabled(
-                        (currentState) => !currentState
-                      )
+                      setIsTitleGroupingEnabled((currentState) => !currentState)
                     }
                     className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                      isLocalTitleGroupingEnabled
+                      isTitleGroupingEnabled
                         ? 'border-sky-500/20 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
                         : 'border-white/10 bg-white/5 text-gray-200 hover:bg-white/10'
                     }`}
                   >
-                    {isLocalTitleGroupingEnabled
-                      ? '收起同名不同源'
-                      : '展开同名不同源'}
+                    {`同名聚合：${isTitleGroupingEnabled ? '开' : '关'}`}
                   </button>
                 ) : null}
                 <button
@@ -2477,9 +2493,7 @@ function DownloadedContentDialog({
                         {groupedCollectionTitle}
                       </div>
                       <div className='text-xs text-gray-400'>
-                        {groupedCollectionKind === 'adult'
-                          ? `当前按“${groupedCollectionIdentity}”归集，可在这里切换查看同名资源的离线内容。`
-                          : `当前按“${groupedCollectionIdentity}”聚合同名不同源资源，可在这里切换查看各来源的离线内容。`}
+                        {groupedCollectionDescription}
                       </div>
                     </div>
                     <span className='inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-200'>
@@ -2488,60 +2502,164 @@ function DownloadedContentDialog({
                     </span>
                   </div>
 
-                  <div className='mt-4 grid gap-3 md:grid-cols-2'>
-                    {groupedLocalContents.map((groupedContent) => {
-                      const isCurrentContent =
-                        groupedContent.contentId === content.contentId;
+                  {isAdultGroupedCollection ? (
+                    <div className='mt-4 space-y-3'>
+                      {groupedLocalContents.map((groupedContent) => {
+                        const isCurrentContent =
+                          groupedContent.contentId === content.contentId;
+                        const canPlayCurrentContent =
+                          isCurrentContent &&
+                          Boolean(currentSingleEpisodeOfflineHref) &&
+                          !isEditing;
 
-                      return (
-                        <button
-                          type='button'
-                          key={groupedContent.contentId}
-                          onClick={() => {
-                            if (!isCurrentContent) {
-                              onSelectContent(groupedContent.contentId);
-                            }
-                          }}
-                          className={`rounded-xl border p-3 text-left transition-colors ${
-                            isCurrentContent
-                              ? 'border-emerald-400/50 bg-emerald-500/10'
-                              : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
-                          }`}
-                        >
-                          <div className='flex items-start justify-between gap-3'>
-                            <div
-                              className='line-clamp-2 text-sm font-semibold text-white'
-                              title={groupedContent.title}
-                            >
-                              {groupedContent.title}
+                        return (
+                          <div
+                            key={groupedContent.contentId}
+                            className={`rounded-2xl border p-4 transition-colors ${
+                              isCurrentContent
+                                ? 'border-emerald-400/50 bg-emerald-500/10'
+                                : 'border-white/10 bg-black/20'
+                            }`}
+                          >
+                            <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
+                              <div className='min-w-0 flex-1 space-y-3'>
+                                <div className='flex flex-wrap items-center gap-2 text-[11px] text-gray-300'>
+                                  <span className='rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-medium text-gray-100'>
+                                    {groupedContent.sourceName}
+                                  </span>
+                                  {groupedContent.year &&
+                                  groupedContent.year !== 'unknown' ? (
+                                    <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-300'>
+                                      {groupedContent.year}
+                                    </span>
+                                  ) : null}
+                                  <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-300'>
+                                    {groupedContent.episodes.length > 1
+                                      ? `${groupedContent.episodes.length} 集`
+                                      : '单集资源'}
+                                  </span>
+                                </div>
+
+                                <div
+                                  className='line-clamp-3 text-base font-semibold leading-6 text-white'
+                                  title={groupedContent.title}
+                                >
+                                  {groupedContent.title}
+                                </div>
+
+                                <div className='flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400'>
+                                  <span>
+                                    {formatBytes(groupedContent.totalSizeBytes)}
+                                  </span>
+                                  <span>
+                                    更新于{' '}
+                                    {formatDateTime(groupedContent.updatedAt)}
+                                  </span>
+                                  {isCurrentContent && currentSingleEpisode ? (
+                                    <span>
+                                      下载于{' '}
+                                      {formatDateTime(
+                                        currentSingleEpisode.downloadedAt
+                                      )}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
+
+                              <div className='flex shrink-0 flex-wrap items-center gap-2'>
+                                {isCurrentContent ? (
+                                  <span className='rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-200'>
+                                    当前资源
+                                  </span>
+                                ) : (
+                                  <button
+                                    type='button'
+                                    onClick={() =>
+                                      onSelectContent(groupedContent.contentId)
+                                    }
+                                    className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-gray-200 transition-colors hover:bg-white/10'
+                                  >
+                                    查看资源
+                                  </button>
+                                )}
+
+                                {canPlayCurrentContent ? (
+                                  <button
+                                    type='button'
+                                    onClick={() => {
+                                      if (currentSingleEpisodeOfflineHref) {
+                                        router.push(
+                                          currentSingleEpisodeOfflineHref
+                                        );
+                                      }
+                                    }}
+                                    className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20'
+                                  >
+                                    离线播放
+                                  </button>
+                                ) : null}
+                              </div>
                             </div>
-                            <span
-                              className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                                isCurrentContent
-                                  ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-                                  : 'border-white/10 bg-white/10 text-gray-300'
-                              }`}
-                            >
-                              {isCurrentContent ? '当前' : '查看'}
-                            </span>
                           </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className='mt-4 grid gap-3 md:grid-cols-2'>
+                      {groupedLocalContents.map((groupedContent) => {
+                        const isCurrentContent =
+                          groupedContent.contentId === content.contentId;
 
-                          <div className='mt-2 text-xs text-gray-300'>
-                            {groupedContent.sourceName}
-                            {groupedContent.year &&
-                            groupedContent.year !== 'unknown'
-                              ? ` · ${groupedContent.year}`
-                              : ''}
-                          </div>
-                          <div className='mt-2 text-xs text-gray-400'>
-                            {groupedContent.episodes.length} 集 ·{' '}
-                            {formatBytes(groupedContent.totalSizeBytes)} ·
-                            更新于 {formatDateTime(groupedContent.updatedAt)}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
+                        return (
+                          <button
+                            type='button'
+                            key={groupedContent.contentId}
+                            onClick={() => {
+                              if (!isCurrentContent) {
+                                onSelectContent(groupedContent.contentId);
+                              }
+                            }}
+                            className={`rounded-xl border p-3 text-left transition-colors ${
+                              isCurrentContent
+                                ? 'border-emerald-400/50 bg-emerald-500/10'
+                                : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
+                            }`}
+                          >
+                            <div className='flex items-start justify-between gap-3'>
+                              <div
+                                className='line-clamp-2 text-sm font-semibold text-white'
+                                title={groupedContent.title}
+                              >
+                                {groupedContent.title}
+                              </div>
+                              <span
+                                className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                                  isCurrentContent
+                                    ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                    : 'border-white/10 bg-white/10 text-gray-300'
+                                }`}
+                              >
+                                {isCurrentContent ? '当前' : '查看'}
+                              </span>
+                            </div>
+
+                            <div className='mt-2 text-xs text-gray-300'>
+                              {groupedContent.sourceName}
+                              {groupedContent.year &&
+                              groupedContent.year !== 'unknown'
+                                ? ` · ${groupedContent.year}`
+                                : ''}
+                            </div>
+                            <div className='mt-2 text-xs text-gray-400'>
+                              {groupedContent.episodes.length} 集 ·{' '}
+                              {formatBytes(groupedContent.totalSizeBytes)} ·
+                              更新于 {formatDateTime(groupedContent.updatedAt)}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               ) : null}
 
@@ -2619,7 +2737,7 @@ function DownloadedContentDialog({
                   isAdultContent &&
                   adultRelatedDownloadOptions.length > 0 ? (
                     <div className='mt-4 max-h-[320px] overflow-y-auto pr-1'>
-                      <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+                      <div className='space-y-3'>
                         {adultRelatedDownloadOptions.map((option) => (
                           <button
                             type='button'
@@ -2628,42 +2746,51 @@ function DownloadedContentDialog({
                             onClick={() =>
                               void handleStartAdultRelatedDownload(option)
                             }
-                            className={`rounded-xl border p-3 text-left transition-colors ${
+                            className={`w-full rounded-2xl border p-4 text-left transition-colors ${
                               option.isActionable
                                 ? 'border-emerald-500/20 bg-black/20 hover:border-emerald-400/40 hover:bg-white/5'
                                 : 'border-white/10 bg-black/20 text-gray-400'
                             }`}
                           >
-                            <div className='flex items-start justify-between gap-3'>
-                              <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
-                                {option.totalEpisodes > 1
-                                  ? `${option.totalEpisodes} 集`
-                                  : '单集'}
-                              </span>
-                              <span
-                                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${getAdultRelatedDownloadActionBadgeClassName(
-                                  option
-                                )}`}
-                              >
-                                {getAdultRelatedDownloadActionLabel(option)}
-                              </span>
-                            </div>
+                            <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
+                              <div className='min-w-0 flex-1 space-y-3'>
+                                <div className='flex flex-wrap items-center gap-2 text-[11px] text-gray-300'>
+                                  <span className='rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-medium text-gray-100'>
+                                    {option.detail.source_name}
+                                  </span>
+                                  {option.detail.year &&
+                                  option.detail.year !== 'unknown' ? (
+                                    <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-300'>
+                                      {option.detail.year}
+                                    </span>
+                                  ) : null}
+                                  <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-300'>
+                                    {option.totalEpisodes > 1
+                                      ? `${option.totalEpisodes} 集`
+                                      : '单集资源'}
+                                  </span>
+                                </div>
 
-                            <div
-                              className='mt-4 line-clamp-2 text-sm font-semibold text-white'
-                              title={option.detail.title}
-                            >
-                              {option.detail.title}
-                            </div>
-                            <div className='mt-2 text-xs text-gray-300'>
-                              {option.detail.source_name}
-                              {option.detail.year &&
-                              option.detail.year !== 'unknown'
-                                ? ` · ${option.detail.year}`
-                                : ''}
-                            </div>
-                            <div className='mt-2 text-xs text-gray-400'>
-                              {getAdultRelatedDownloadStatus(option)}
+                                <div
+                                  className='line-clamp-3 text-sm font-semibold leading-6 text-white'
+                                  title={option.detail.title}
+                                >
+                                  {option.detail.title}
+                                </div>
+                                <div className='text-xs text-gray-400'>
+                                  {getAdultRelatedDownloadStatus(option)}
+                                </div>
+                              </div>
+
+                              <div className='flex shrink-0 items-center'>
+                                <span
+                                  className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${getAdultRelatedDownloadActionBadgeClassName(
+                                    option
+                                  )}`}
+                                >
+                                  {getAdultRelatedDownloadActionLabel(option)}
+                                </span>
+                              </div>
                             </div>
                           </button>
                         ))}
@@ -2727,80 +2854,82 @@ function DownloadedContentDialog({
                 </div>
               ) : null}
 
-              <div className='grid gap-3 md:grid-cols-2 lg:grid-cols-3'>
-                {content.episodes.map((episode) => {
-                  const offlineHref = buildOfflinePlayHref({
-                    content,
-                    episodeIndex: episode.episodeIndex,
-                  });
-                  const isSelected = selectedEpisodeIndexSet.has(
-                    episode.episodeIndex
-                  );
+              {shouldShowEpisodeGrid ? (
+                <div className='grid gap-3 md:grid-cols-2 lg:grid-cols-3'>
+                  {content.episodes.map((episode) => {
+                    const offlineHref = buildOfflinePlayHref({
+                      content,
+                      episodeIndex: episode.episodeIndex,
+                    });
+                    const isSelected = selectedEpisodeIndexSet.has(
+                      episode.episodeIndex
+                    );
 
-                  return (
-                    <button
-                      type='button'
-                      key={`${content.contentId}-${episode.episodeIndex}`}
-                      onClick={() => {
-                        if (isEditing) {
-                          handleToggleEpisodeSelection(episode.episodeIndex);
-                          return;
+                    return (
+                      <button
+                        type='button'
+                        key={`${content.contentId}-${episode.episodeIndex}`}
+                        onClick={() => {
+                          if (isEditing) {
+                            handleToggleEpisodeSelection(episode.episodeIndex);
+                            return;
+                          }
+
+                          router.push(offlineHref);
+                        }}
+                        aria-pressed={isEditing ? isSelected : undefined}
+                        aria-label={
+                          isEditing
+                            ? `${isSelected ? '取消选择' : '选择'} ${
+                                episode.episodeTitle
+                              }`
+                            : `离线播放 ${episode.episodeTitle}`
                         }
+                        className={`rounded-xl border p-3 text-left transition-colors ${
+                          isEditing
+                            ? isSelected
+                              ? 'border-emerald-400/60 bg-emerald-500/10'
+                              : 'border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/5'
+                            : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
+                        }`}
+                      >
+                        <div className='grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2'>
+                          <div className='flex min-w-0 items-center gap-2'>
+                            <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
+                              {formatEpisodeCode(episode.episodeIndex)}
+                            </span>
+                            <div
+                              className='truncate text-sm font-semibold text-white'
+                              title={episode.episodeTitle}
+                            >
+                              {episode.episodeTitle}
+                            </div>
+                          </div>
 
-                        router.push(offlineHref);
-                      }}
-                      aria-pressed={isEditing ? isSelected : undefined}
-                      aria-label={
-                        isEditing
-                          ? `${isSelected ? '取消选择' : '选择'} ${
-                              episode.episodeTitle
-                            }`
-                          : `离线播放 ${episode.episodeTitle}`
-                      }
-                      className={`rounded-xl border p-3 text-left transition-colors ${
-                        isEditing
-                          ? isSelected
-                            ? 'border-emerald-400/60 bg-emerald-500/10'
-                            : 'border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/5'
-                          : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
-                      }`}
-                    >
-                      <div className='grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2'>
-                        <div className='flex min-w-0 items-center gap-2'>
-                          <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
-                            {formatEpisodeCode(episode.episodeIndex)}
-                          </span>
-                          <div
-                            className='truncate text-sm font-semibold text-white'
-                            title={episode.episodeTitle}
-                          >
-                            {episode.episodeTitle}
+                          {isEditing ? (
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                isSelected
+                                  ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                  : 'border border-white/10 bg-white/5 text-gray-400'
+                              }`}
+                            >
+                              {isSelected ? '已选' : '选择'}
+                            </span>
+                          ) : null}
+
+                          <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300'>
+                            <span>{formatBytes(episode.sizeBytes)}</span>
+                            <span>
+                              下载于 {formatDateTime(episode.downloadedAt)}
+                            </span>
                           </div>
                         </div>
-
-                        {isEditing ? (
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                              isSelected
-                                ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-                                : 'border border-white/10 bg-white/5 text-gray-400'
-                            }`}
-                          >
-                            {isSelected ? '已选' : '选择'}
-                          </span>
-                        ) : null}
-
-                        <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300'>
-                          <span>{formatBytes(episode.sizeBytes)}</span>
-                          <span>
-                            下载于 {formatDateTime(episode.downloadedAt)}
-                          </span>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
