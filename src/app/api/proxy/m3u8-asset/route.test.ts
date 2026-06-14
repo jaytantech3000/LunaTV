@@ -46,7 +46,7 @@ describe('/api/proxy/m3u8-asset', () => {
     );
   });
 
-  it('buffers key assets instead of streaming them directly', async () => {
+  it('streams key assets directly while keeping the longer key timeout', async () => {
     const request = new NextRequest(
       'http://localhost/api/proxy/m3u8-asset?source=demo&url=https%3A%2F%2Fexample.com%2Fkey.bin&kind=key&sig=demo&referer=https%3A%2F%2Fplayer.example%2F'
     );
@@ -60,7 +60,7 @@ describe('/api/proxy/m3u8-asset', () => {
       }),
       expect.objectContaining({
         initialUrlValidated: true,
-        responseMode: 'buffer',
+        responseMode: 'stream',
         timeoutMs: 25000,
       })
     );

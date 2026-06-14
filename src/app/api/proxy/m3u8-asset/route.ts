@@ -197,7 +197,7 @@ async function handleAssetRequest(
             : FETCH_TIMEOUT_MS,
         maxRedirects: MAX_REDIRECTS,
         initialUrlValidated: true,
-        responseMode: isKeyRequest && method === 'GET' ? 'buffer' : 'stream',
+        responseMode: 'stream',
       }
     );
   } catch (error: any) {
