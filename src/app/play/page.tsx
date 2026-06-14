@@ -6,7 +6,7 @@ import Artplayer from 'artplayer';
 import Hls from 'hls.js';
 import { Heart } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   deleteFavorite,
@@ -28,7 +28,10 @@ import {
 import { isDesktopLocalDownloadRuntimeEnabled } from '@/lib/download/desktop-runtime';
 import { normalizeVodDetailForPlayback } from '@/lib/download/normalize';
 import {
-  buildOfflinePlaybackDetail,
+  applyOfflinePlaybackOwner,
+  buildGroupedOfflinePlaybackDetail,
+  getGroupedOfflineContents,
+  OfflinePlaybackEpisodeEntry,
   validateDownloadedEpisode,
 } from '@/lib/download/offline';
 import { looksLikeManifestUrl } from '@/lib/download/proxy-url';
@@ -319,8 +322,19 @@ function PlayPageClient() {
       return buildDownloadContentId(source, id);
     })();
   const downloadStoreHydrated = useDownloadStore((state) => state.hasHydrated);
-  const offlineContent = useDownloadStore((state) =>
-    offlineContentId ? state.library[offlineContentId] : undefined
+  const offlineLibrary = useDownloadStore((state) => state.library);
+  const offlineContent = offlineContentId
+    ? offlineLibrary[offlineContentId]
+    : undefined;
+  const groupedOfflineContents = useMemo(
+    () =>
+      offlineContentId
+        ? getGroupedOfflineContents({
+            library: offlineLibrary,
+            activeContentId: offlineContentId,
+          })
+        : [],
+    [offlineContentId, offlineLibrary]
   );
 
   // -----------------------------------------------------------------------------
@@ -467,7 +481,9 @@ function PlayPageClient() {
   const [currentEpisodeIndex, setCurrentEpisodeIndex] = useState(
     initialEpisodeQueryIndex
   );
-  const [offlineEpisodeOrder, setOfflineEpisodeOrder] = useState<number[]>([]);
+  const [offlineEpisodeEntries, setOfflineEpisodeEntries] = useState<
+    OfflinePlaybackEpisodeEntry[]
+  >([]);
 
   const currentSourceRef = useRef(currentSource);
   const currentIdRef = useRef(currentId);
@@ -476,9 +492,10 @@ function PlayPageClient() {
   const videoDoubanIdRef = useRef(videoDoubanId);
   const detailRef = useRef<SearchResult | null>(detail);
   const currentEpisodeIndexRef = useRef(currentEpisodeIndex);
-  const offlineEpisodeOrderRef = useRef<number[]>([]);
+  const offlineEpisodeEntriesRef = useRef<OfflinePlaybackEpisodeEntry[]>([]);
   const episodeProgressMapRef = useRef<Record<number, number>>({});
   const playbackHistoryRestoreKeyRef = useRef('');
+  const skipNextPlaybackHistoryRestoreRef = useRef(false);
 
   // 同步最新值到 refs
   useEffect(() => {
@@ -499,8 +516,8 @@ function PlayPageClient() {
     videoDoubanId,
   ]);
   useEffect(() => {
-    offlineEpisodeOrderRef.current = offlineEpisodeOrder;
-  }, [offlineEpisodeOrder]);
+    offlineEpisodeEntriesRef.current = offlineEpisodeEntries;
+  }, [offlineEpisodeEntries]);
 
   // 视频播放地址
   const [videoUrl, setVideoUrl] = useState('');
@@ -1173,8 +1190,15 @@ function PlayPageClient() {
         return;
       }
 
-      const { detail: offlineDetail, episodeOrder } =
-        buildOfflinePlaybackDetail(offlineContent);
+      const offlinePlaybackContents =
+        groupedOfflineContents.length > 0
+          ? groupedOfflineContents
+          : [offlineContent];
+      const { detail: offlineDetail, episodeEntries } =
+        buildGroupedOfflinePlaybackDetail({
+          contents: offlinePlaybackContents,
+          activeContentId: offlineContent.contentId,
+        });
 
       if (!offlineDetail.episodes.length) {
         setError('当前离线内容没有可播放剧集');
@@ -1183,15 +1207,29 @@ function PlayPageClient() {
       }
 
       let targetIndex = 0;
-      const mappedTargetIndex = episodeOrder.findIndex(
-        (episodeIndex) => episodeIndex === initialEpisodeQueryIndex
+      const mappedTargetIndex = episodeEntries.findIndex(
+        (episode) =>
+          episode.contentId === offlineContent.contentId &&
+          episode.episodeIndex === initialEpisodeQueryIndex
       );
       if (mappedTargetIndex >= 0) {
         targetIndex = mappedTargetIndex;
+      } else {
+        const fallbackTargetIndex = episodeEntries.findIndex(
+          (episode) => episode.episodeIndex === initialEpisodeQueryIndex
+        );
+        if (fallbackTargetIndex >= 0) {
+          targetIndex = fallbackTargetIndex;
+        }
       }
 
-      const targetEpisodeMeta = offlineContent.episodes.find(
-        (episode) => episode.episodeIndex === episodeOrder[targetIndex]
+      const targetEpisodeEntry = episodeEntries[targetIndex];
+      const targetContent =
+        offlinePlaybackContents.find(
+          (content) => content.contentId === targetEpisodeEntry?.contentId
+        ) || offlineContent;
+      const targetEpisodeMeta = targetContent.episodes.find(
+        (episode) => episode.episodeIndex === targetEpisodeEntry?.episodeIndex
       );
 
       if (
@@ -1202,10 +1240,16 @@ function PlayPageClient() {
         return;
       }
 
-      const playableDetail = normalizeVodDetailForPlayback(offlineDetail);
+      const playableDetail = normalizeVodDetailForPlayback(
+        applyOfflinePlaybackOwner({
+          detail: offlineDetail,
+          contents: offlinePlaybackContents,
+          ownerContentId: targetContent.contentId,
+        })
+      );
 
       setNeedPrefer(false);
-      setOfflineEpisodeOrder(episodeOrder);
+      setOfflineEpisodeEntries(episodeEntries);
       setCurrentSource(playableDetail.source);
       setCurrentId(playableDetail.id);
       setVideoYear(playableDetail.year);
@@ -1218,7 +1262,7 @@ function PlayPageClient() {
 
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.set('offline', '1');
-      newUrl.searchParams.set('contentId', offlineContent.contentId);
+      newUrl.searchParams.set('contentId', targetContent.contentId);
       newUrl.searchParams.set('source', playableDetail.source);
       newUrl.searchParams.set('id', playableDetail.id);
       newUrl.searchParams.set('year', playableDetail.year);
@@ -1228,7 +1272,10 @@ function PlayPageClient() {
       } else {
         newUrl.searchParams.delete('doubanId');
       }
-      newUrl.searchParams.set('episode', String(episodeOrder[targetIndex] + 1));
+      newUrl.searchParams.set(
+        'episode',
+        String((targetEpisodeEntry?.episodeIndex || 0) + 1)
+      );
       window.history.replaceState({}, '', newUrl.toString());
 
       setLoadingStage('ready');
@@ -1357,7 +1404,7 @@ function PlayPageClient() {
       const playableDetail = normalizeVodDetailForPlayback(detailData);
 
       setNeedPrefer(false);
-      setOfflineEpisodeOrder([]);
+      setOfflineEpisodeEntries([]);
       setCurrentSource(playableDetail.source);
       setCurrentId(playableDetail.id);
       setVideoYear(playableDetail.year);
@@ -1402,6 +1449,7 @@ function PlayPageClient() {
     initialEpisodeQueryIndex,
     isOfflineMode,
     offlineContent,
+    groupedOfflineContents,
     router,
     searchTitle,
     searchType,
@@ -1421,12 +1469,23 @@ function PlayPageClient() {
         return;
       }
 
-      if (isOfflineMode && offlineEpisodeOrder.length === 0) {
+      if (isOfflineMode && offlineEpisodeEntries.length === 0) {
+        return;
+      }
+
+      if (skipNextPlaybackHistoryRestoreRef.current) {
+        skipNextPlaybackHistoryRestoreRef.current = false;
         return;
       }
 
       const restoreKey = `${currentSource}:${currentId}:${
-        isOfflineMode ? offlineEpisodeOrder.join(',') : 'online'
+        isOfflineMode
+          ? offlineEpisodeEntries
+              .map((episode) =>
+                `${episode.contentId}:${episode.episodeIndex + 1}`
+              )
+              .join('|')
+          : 'online'
       }`;
 
       if (playbackHistoryRestoreKeyRef.current === restoreKey) {
@@ -1475,7 +1534,7 @@ function PlayPageClient() {
     };
 
     initFromHistory();
-  }, [currentId, currentSource, detail, isOfflineMode, offlineEpisodeOrder]);
+  }, [currentId, currentSource, detail, isOfflineMode, offlineEpisodeEntries]);
 
   // 跳过片头片尾配置处理
   useEffect(() => {
@@ -1601,11 +1660,8 @@ function PlayPageClient() {
   // 集数切换
   // ---------------------------------------------------------------------------
   const getPlaybackRecordEpisodeNumber = (episodeIndex: number): number => {
-    if (
-      isOfflineMode &&
-      offlineEpisodeOrderRef.current[episodeIndex] !== undefined
-    ) {
-      return offlineEpisodeOrderRef.current[episodeIndex] + 1;
+    if (isOfflineMode && offlineEpisodeEntriesRef.current[episodeIndex]) {
+      return offlineEpisodeEntriesRef.current[episodeIndex].episodeIndex + 1;
     }
 
     return episodeIndex + 1;
@@ -1613,8 +1669,24 @@ function PlayPageClient() {
 
   const getPlaybackRecordEpisodeIndex = (episodeNumber: number): number => {
     if (isOfflineMode) {
-      return offlineEpisodeOrderRef.current.findIndex(
-        (episodeIndex) => episodeIndex + 1 === episodeNumber
+      const currentOfflinePlaybackContentId =
+        currentSourceRef.current && currentIdRef.current
+          ? buildDownloadContentId(
+              currentSourceRef.current,
+              currentIdRef.current
+            )
+          : offlineContentId;
+      const exactMatchIndex = offlineEpisodeEntriesRef.current.findIndex(
+        (episode) =>
+          episode.contentId === currentOfflinePlaybackContentId &&
+          episode.episodeIndex + 1 === episodeNumber
+      );
+      if (exactMatchIndex >= 0) {
+        return exactMatchIndex;
+      }
+
+      return offlineEpisodeEntriesRef.current.findIndex(
+        (episode) => episode.episodeIndex + 1 === episodeNumber
       );
     }
 
@@ -1646,9 +1718,22 @@ function PlayPageClient() {
     );
   };
 
-  const getEpisodeResumeTime = (episodeIndex: number): number => {
+  const getEpisodeResumeTime = (
+    episodeIndex: number,
+    options: {
+      source?: string;
+      id?: string;
+    } = {}
+  ): number => {
+    const targetSource = options.source || currentSourceRef.current;
+    const targetId = options.id || currentIdRef.current;
     const episodeNumber = getPlaybackRecordEpisodeNumber(episodeIndex);
-    const cachedProgress = episodeProgressMapRef.current[episodeNumber];
+    const shouldReuseCachedProgress =
+      targetSource === currentSourceRef.current &&
+      targetId === currentIdRef.current;
+    const cachedProgress = shouldReuseCachedProgress
+      ? episodeProgressMapRef.current[episodeNumber]
+      : undefined;
 
     if (
       typeof cachedProgress === 'number' &&
@@ -1658,18 +1743,20 @@ function PlayPageClient() {
       return cachedProgress;
     }
 
-    if (!currentSourceRef.current || !currentIdRef.current) {
+    if (!targetSource || !targetId) {
       return 0;
     }
 
     const storedProgress = readStoredEpisodeProgress(
-      currentSourceRef.current,
-      currentIdRef.current,
+      targetSource,
+      targetId,
       episodeNumber
     );
 
     if (storedProgress && storedProgress > 0) {
-      episodeProgressMapRef.current[episodeNumber] = storedProgress;
+      if (shouldReuseCachedProgress) {
+        episodeProgressMapRef.current[episodeNumber] = storedProgress;
+      }
       return storedProgress;
     }
 
@@ -1681,9 +1768,34 @@ function PlayPageClient() {
       return;
     }
 
-    const nextEpisodeNumber = getPlaybackRecordEpisodeNumber(episodeIndex);
     const newUrl = new URL(window.location.href);
-    newUrl.searchParams.set('episode', String(nextEpisodeNumber));
+    if (isOfflineMode) {
+      const targetEpisode = offlineEpisodeEntriesRef.current[episodeIndex];
+      const targetContent = groupedOfflineContents.find(
+        (content) => content.contentId === targetEpisode?.contentId
+      );
+
+      if (targetEpisode && targetContent) {
+        newUrl.searchParams.set('offline', '1');
+        newUrl.searchParams.set('contentId', targetContent.contentId);
+        newUrl.searchParams.set('source', targetContent.source);
+        newUrl.searchParams.set('id', targetContent.vodId);
+        newUrl.searchParams.set('title', targetContent.title);
+        newUrl.searchParams.set('year', targetContent.year);
+        if (targetContent.doubanId) {
+          newUrl.searchParams.set('doubanId', String(targetContent.doubanId));
+        } else {
+          newUrl.searchParams.delete('doubanId');
+        }
+        newUrl.searchParams.set(
+          'episode',
+          String(targetEpisode.episodeIndex + 1)
+        );
+      }
+    } else {
+      const nextEpisodeNumber = getPlaybackRecordEpisodeNumber(episodeIndex);
+      newUrl.searchParams.set('episode', String(nextEpisodeNumber));
+    }
     window.history.replaceState({}, '', newUrl.toString());
   };
 
@@ -1748,14 +1860,18 @@ function PlayPageClient() {
     }
 
     void (async () => {
+      let resumeTime = 0;
+
       if (isOfflineMode) {
-        const targetOriginalEpisodeIndex =
-          offlineEpisodeOrderRef.current[episodeIndex] ?? episodeIndex;
-        const targetEpisodeMeta = offlineContent?.episodes.find(
-          (episode) => episode.episodeIndex === targetOriginalEpisodeIndex
+        const targetEpisode = offlineEpisodeEntriesRef.current[episodeIndex];
+        const targetContent = groupedOfflineContents.find(
+          (content) => content.contentId === targetEpisode?.contentId
+        );
+        const targetEpisodeMeta = targetContent?.episodes.find(
+          (episode) => episode.episodeIndex === targetEpisode?.episodeIndex
         );
 
-        if (!targetEpisodeMeta) {
+        if (!targetEpisode || !targetContent || !targetEpisodeMeta) {
           setError('当前离线剧集不存在，请返回下载页重新下载');
           return;
         }
@@ -1769,10 +1885,50 @@ function PlayPageClient() {
           setError('离线资源缺失或首片段不可用，请返回下载页重新下载');
           return;
         }
+
+        resumeTime = getEpisodeResumeTime(episodeIndex, {
+          source: targetContent.source,
+          id: targetContent.vodId,
+        });
+
+        const currentOfflinePlaybackContentId =
+          currentSourceRef.current && currentIdRef.current
+            ? buildDownloadContentId(
+                currentSourceRef.current,
+                currentIdRef.current
+              )
+            : '';
+
+        if (currentOfflinePlaybackContentId !== targetContent.contentId) {
+          const currentOfflineDetail = detailRef.current;
+          if (!currentOfflineDetail) {
+            setError('离线播放信息缺失，请刷新后重试');
+            return;
+          }
+
+          skipNextPlaybackHistoryRestoreRef.current = true;
+          const nextOfflineDetail = normalizeVodDetailForPlayback(
+            applyOfflinePlaybackOwner({
+              detail: currentOfflineDetail,
+              contents: groupedOfflineContents,
+              ownerContentId: targetContent.contentId,
+            })
+          );
+
+          setCurrentSource(targetContent.source);
+          setCurrentId(targetContent.vodId);
+          setVideoYear(targetContent.year);
+          setVideoTitle(targetContent.title || videoTitleRef.current);
+          setVideoCover(targetContent.poster);
+          setVideoDoubanId(targetContent.doubanId || 0);
+          setDetail(nextOfflineDetail);
+        }
+      } else {
+        resumeTime = getEpisodeResumeTime(episodeIndex);
       }
 
       void saveCurrentPlayProgress();
-      resumeTimeRef.current = getEpisodeResumeTime(episodeIndex) || 0;
+      resumeTimeRef.current = resumeTime || 0;
       setCurrentEpisodeIndex(episodeIndex);
       updateEpisodeQueryParam(episodeIndex);
       setError(null);
@@ -2896,13 +3052,19 @@ function PlayPageClient() {
               }
               downloadEpisodeIndex={
                 isOfflineMode
-                  ? offlineEpisodeOrder[currentEpisodeIndex] ??
+                  ? offlineEpisodeEntries[currentEpisodeIndex]?.episodeIndex ??
                     currentEpisodeIndex
                   : currentEpisodeIndex
               }
               isOfflineMode={isOfflineMode}
               searchTitle={
-                isOfflineMode ? offlineContent?.searchTitle || searchTitle : searchTitle
+                isOfflineMode
+                  ? offlineLibrary[
+                      buildDownloadContentId(currentSource, currentId)
+                    ]?.searchTitle ||
+                    offlineContent?.searchTitle ||
+                    searchTitle
+                  : searchTitle
               }
             />
           )}

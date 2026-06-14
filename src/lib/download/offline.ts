@@ -9,9 +9,28 @@ import { collectMediaPlaylistResources } from './manifest';
 import { getResourceIndex } from './resource-index';
 import { DownloadedContentMeta, DownloadedEpisodeMeta } from './types';
 
+export interface OfflinePlaybackEpisodeEntry {
+  contentId: string;
+  source: string;
+  sourceName: string;
+  vodId: string;
+  title: string;
+  searchTitle?: string;
+  poster: string;
+  year: string;
+  desc?: string;
+  typeName?: string;
+  doubanId?: number;
+  episodeIndex: number;
+  episodeTitle: string;
+  playbackManifestUrl: string;
+  downloadedAt: number;
+}
+
 export interface OfflinePlaybackDetail {
   detail: SearchResult;
   episodeOrder: number[];
+  episodeEntries: OfflinePlaybackEpisodeEntry[];
 }
 
 export function sortDownloadedEpisodes(
@@ -20,32 +39,199 @@ export function sortDownloadedEpisodes(
   return [...episodes].sort((a, b) => a.episodeIndex - b.episodeIndex);
 }
 
+function normalizeOfflineGroupingTitle(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize('NFKC')
+    .replace(/[\s\-_.·•・:：,，!！?？'"“”‘’`~()（）[\]【】{}<>《》/\\|]/g, '');
+}
+
+function getOfflineTitleGroupingKey(title?: string | null): string | null {
+  const normalizedTitle = title?.trim() || '';
+  if (!normalizedTitle) {
+    return null;
+  }
+
+  const key = normalizeOfflineGroupingTitle(normalizedTitle);
+  return key || null;
+}
+
+export function getGroupedOfflineContents(params: {
+  library: Record<string, DownloadedContentMeta>;
+  activeContentId: string;
+}): DownloadedContentMeta[] {
+  const { library, activeContentId } = params;
+  const activeContent = library[activeContentId];
+
+  if (!activeContent) {
+    return [];
+  }
+
+  const activeTitleKey = getOfflineTitleGroupingKey(activeContent.title);
+  const groupedContents = Object.values(library).filter((content) => {
+    if (content.contentId === activeContent.contentId) {
+      return true;
+    }
+
+    if (!activeTitleKey) {
+      return false;
+    }
+
+    return getOfflineTitleGroupingKey(content.title) === activeTitleKey;
+  });
+
+  return [...groupedContents].sort((left, right) => {
+    if (left.contentId === activeContentId) {
+      return -1;
+    }
+
+    if (right.contentId === activeContentId) {
+      return 1;
+    }
+
+    if (right.updatedAt !== left.updatedAt) {
+      return right.updatedAt - left.updatedAt;
+    }
+
+    return left.sourceName.localeCompare(right.sourceName, 'zh-CN');
+  });
+}
+
+function buildOfflinePlaybackDetailWithOwner(params: {
+  contents: DownloadedContentMeta[];
+  episodeEntries: OfflinePlaybackEpisodeEntry[];
+  ownerContentId: string;
+}): SearchResult {
+  const { contents, episodeEntries, ownerContentId } = params;
+  const ownerContent =
+    contents.find((content) => content.contentId === ownerContentId) ||
+    contents[0];
+
+  const duplicateEpisodeCounts = new Map<number, number>();
+  episodeEntries.forEach((entry) => {
+    duplicateEpisodeCounts.set(
+      entry.episodeIndex,
+      (duplicateEpisodeCounts.get(entry.episodeIndex) || 0) + 1
+    );
+  });
+
+  return {
+    id: ownerContent.vodId,
+    title: ownerContent.title,
+    poster: ownerContent.poster,
+    episodes: episodeEntries.map((episode) => episode.playbackManifestUrl),
+    episodes_titles: episodeEntries.map((episode) => {
+      const duplicateCount = duplicateEpisodeCounts.get(episode.episodeIndex) || 0;
+      if (duplicateCount <= 1) {
+        return episode.episodeTitle;
+      }
+
+      const sourceLabel = episode.sourceName || episode.source;
+      return `${episode.episodeTitle} · ${sourceLabel}`;
+    }),
+    source: ownerContent.source,
+    source_name: ownerContent.sourceName,
+    year: ownerContent.year,
+    desc: ownerContent.desc,
+    type_name: ownerContent.typeName,
+    douban_id: ownerContent.doubanId,
+  };
+}
+
+export function buildGroupedOfflinePlaybackDetail(params: {
+  contents: DownloadedContentMeta[];
+  activeContentId: string;
+}): OfflinePlaybackDetail {
+  const { contents, activeContentId } = params;
+  const episodeEntries = [...contents]
+    .flatMap((content) =>
+      sortDownloadedEpisodes(content.episodes).map((episode) => ({
+        contentId: content.contentId,
+        source: content.source,
+        sourceName: content.sourceName,
+        vodId: content.vodId,
+        title: content.title,
+        searchTitle: content.searchTitle,
+        poster: content.poster,
+        year: content.year,
+        desc: content.desc,
+        typeName: content.typeName,
+        doubanId: content.doubanId,
+        episodeIndex: episode.episodeIndex,
+        episodeTitle:
+          episode.episodeTitle ||
+          content.episodeTitles[episode.episodeIndex] ||
+          `第 ${episode.episodeIndex + 1} 集`,
+        playbackManifestUrl: episode.playbackManifestUrl,
+        downloadedAt: episode.downloadedAt,
+      }))
+    )
+    .sort((left, right) => {
+      if (left.episodeIndex !== right.episodeIndex) {
+        return left.episodeIndex - right.episodeIndex;
+      }
+
+      if (left.contentId === activeContentId && right.contentId !== activeContentId) {
+        return -1;
+      }
+
+      if (right.contentId === activeContentId && left.contentId !== activeContentId) {
+        return 1;
+      }
+
+      if (right.downloadedAt !== left.downloadedAt) {
+        return right.downloadedAt - left.downloadedAt;
+      }
+
+      return left.sourceName.localeCompare(right.sourceName, 'zh-CN');
+    });
+
+  return {
+    detail: buildOfflinePlaybackDetailWithOwner({
+      contents,
+      episodeEntries,
+      ownerContentId: activeContentId,
+    }),
+    episodeOrder: episodeEntries.map((episode) => episode.episodeIndex),
+    episodeEntries,
+  };
+}
+
 export function buildOfflinePlaybackDetail(
   content: DownloadedContentMeta
 ): OfflinePlaybackDetail {
-  const sortedEpisodes = sortDownloadedEpisodes(content.episodes);
-  const episodeOrder = sortedEpisodes.map((episode) => episode.episodeIndex);
+  return buildGroupedOfflinePlaybackDetail({
+    contents: [content],
+    activeContentId: content.contentId,
+  });
+}
+
+export function applyOfflinePlaybackOwner(params: {
+  detail: SearchResult;
+  contents: DownloadedContentMeta[];
+  ownerContentId: string;
+}): SearchResult {
+  const { detail, contents, ownerContentId } = params;
+  const ownerContent =
+    contents.find((content) => content.contentId === ownerContentId) ||
+    contents[0];
+
+  if (!ownerContent) {
+    return detail;
+  }
 
   return {
-    detail: {
-      id: content.vodId,
-      title: content.title,
-      poster: content.poster,
-      episodes: sortedEpisodes.map((episode) => episode.playbackManifestUrl),
-      episodes_titles: sortedEpisodes.map(
-        (episode) =>
-          episode.episodeTitle ||
-          content.episodeTitles[episode.episodeIndex] ||
-          `第 ${episode.episodeIndex + 1} 集`
-      ),
-      source: content.source,
-      source_name: content.sourceName,
-      year: content.year,
-      desc: content.desc,
-      type_name: content.typeName,
-      douban_id: content.doubanId,
-    },
-    episodeOrder,
+    ...detail,
+    id: ownerContent.vodId,
+    title: ownerContent.title,
+    poster: ownerContent.poster,
+    source: ownerContent.source,
+    source_name: ownerContent.sourceName,
+    year: ownerContent.year,
+    desc: ownerContent.desc,
+    type_name: ownerContent.typeName,
+    douban_id: ownerContent.doubanId,
   };
 }
 
