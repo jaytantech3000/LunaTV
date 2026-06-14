@@ -25,7 +25,10 @@ import {
   normalizeVodDetailForPlayback,
   normalizeVodSearchResultsForPlayback,
 } from '@/lib/download/normalize';
-import { buildOfflinePlayHref } from '@/lib/download/offline';
+import {
+  buildOfflinePlayHref,
+  sortDownloadedEpisodes,
+} from '@/lib/download/offline';
 import {
   sortActiveDownloadTaskGroups,
   sortActiveDownloadTasks,
@@ -41,6 +44,7 @@ import {
   MIN_CONCURRENT_DOWNLOAD_TASKS,
 } from '@/lib/download/types';
 import { searchPlaybackSources } from '@/lib/playback-source-prefetch';
+import { acquireScrollLock } from '@/lib/scroll-lock';
 import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
@@ -59,6 +63,8 @@ const compactActionButtonClassName =
   'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors';
 const dialogHeaderActionButtonClassName =
   'inline-flex h-10 w-[88px] shrink-0 items-center justify-center rounded-xl border border-white/15 px-0 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10';
+const dialogHeaderIconButtonClassName =
+  'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/15 text-gray-200 transition-colors hover:bg-white/10';
 
 function formatDateTime(timestamp: number): string {
   if (!Number.isFinite(timestamp) || timestamp <= 0) {
@@ -169,6 +175,25 @@ interface DownloadedContentCardGroup {
   totalEpisodeCount: number;
   totalSizeBytes: number;
   updatedAt: number;
+}
+
+interface GroupedOfflineEpisodeEntry {
+  contentId: string;
+  sourceName: string;
+  contentTitle: string;
+  episodeIndex: number;
+  episodeTitle: string;
+  sizeBytes: number;
+  downloadedAt: number;
+  offlineHref: string;
+  isCurrentContent: boolean;
+}
+
+interface SelectableEpisodeTarget {
+  key: string;
+  contentId: string;
+  episodeIndex: number;
+  episodeTitle: string;
 }
 
 interface AdultRelatedDownloadOption {
@@ -538,6 +563,53 @@ function buildDownloadedContentCardGroups(
   return [...cardGroups].sort(
     (left, right) => right.updatedAt - left.updatedAt
   );
+}
+
+function buildGroupedOfflineEpisodeEntries(params: {
+  contents: DownloadedContentMeta[];
+  activeContentId: string;
+}): GroupedOfflineEpisodeEntry[] {
+  const { contents, activeContentId } = params;
+
+  return contents
+    .flatMap((groupedContent) =>
+      sortDownloadedEpisodes(groupedContent.episodes).map((episode) => ({
+        contentId: groupedContent.contentId,
+        sourceName: groupedContent.sourceName,
+        contentTitle: groupedContent.title,
+        episodeIndex: episode.episodeIndex,
+        episodeTitle: episode.episodeTitle,
+        sizeBytes: episode.sizeBytes,
+        downloadedAt: episode.downloadedAt,
+        offlineHref: buildOfflinePlayHref({
+          content: groupedContent,
+          episodeIndex: episode.episodeIndex,
+        }),
+        isCurrentContent: groupedContent.contentId === activeContentId,
+      }))
+    )
+    .sort((left, right) => {
+      if (left.episodeIndex !== right.episodeIndex) {
+        return left.episodeIndex - right.episodeIndex;
+      }
+
+      if (left.isCurrentContent !== right.isCurrentContent) {
+        return left.isCurrentContent ? -1 : 1;
+      }
+
+      if (right.downloadedAt !== left.downloadedAt) {
+        return right.downloadedAt - left.downloadedAt;
+      }
+
+      return left.sourceName.localeCompare(right.sourceName, 'zh-CN');
+    });
+}
+
+function buildEpisodeSelectionKey(
+  contentId: string,
+  episodeIndex: number
+): string {
+  return `${contentId}::${episodeIndex}`;
 }
 
 function getMoreDownloadEpisodeStatus(
@@ -916,10 +988,6 @@ function getActiveTaskStatusClassName(task: DownloadTask): string {
 
 function getGroupedCollectionLabel(groupingKind?: 'adult' | 'title'): string {
   return groupingKind === 'adult' ? '同人名归集' : '同名聚合';
-}
-
-function getGroupedCollectionTitle(groupingKind?: 'adult' | 'title'): string {
-  return groupingKind === 'adult' ? '同人名已下载资源' : '同名已下载资源';
 }
 
 function ActiveTasksSection({
@@ -1539,7 +1607,7 @@ function DownloadedContentsSection({
   );
 }
 
-function DownloadedContentDialog({
+export function DownloadedContentDialog({
   content,
   contentGroup,
   onSelectContent,
@@ -1551,9 +1619,7 @@ function DownloadedContentDialog({
   const library = useDownloadStore((state) => state.library);
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [selectedEpisodeIndexes, setSelectedEpisodeIndexes] = useState<
-    number[]
-  >([]);
+  const [selectedEpisodeKeys, setSelectedEpisodeKeys] = useState<string[]>([]);
   const [isDeletingSelected, setIsDeletingSelected] = useState(false);
   const [isRestartingSelected, setIsRestartingSelected] = useState(false);
   const [isTitleGroupingEnabled, setIsTitleGroupingEnabled] = useState(
@@ -1584,6 +1650,9 @@ function DownloadedContentDialog({
     string | null
   >(null);
   const detailRequestKeyRef = useRef(`${content.source}:${content.vodId}`);
+  const dialogMenuRef = useRef<HTMLDivElement | null>(null);
+  const closeFrameRef = useRef<number | null>(null);
+  const [isDialogMenuOpen, setIsDialogMenuOpen] = useState(false);
   const shouldCollapseDescription = (content.desc?.length || 0) > 140;
   const isAdultContent = useMemo(
     () =>
@@ -1661,6 +1730,7 @@ function DownloadedContentDialog({
   const canToggleLocalTitleGrouping = Boolean(
     localTitleContentGroup && localTitleGroupedContents.length > 1
   );
+  const hasDialogMenuActions = isAdultContent || canToggleLocalTitleGrouping;
   const effectiveContentGroup = useMemo(
     () =>
       isTitleGroupingEnabled && localTitleContentGroup
@@ -1680,9 +1750,6 @@ function DownloadedContentDialog({
   const groupedCollectionLabel = getGroupedCollectionLabel(
     effectiveContentGroup?.groupingKind
   );
-  const groupedCollectionTitle = getGroupedCollectionTitle(
-    effectiveContentGroup?.groupingKind
-  );
   const groupedCollectionIdentity =
     effectiveContentGroup?.groupingKind === 'adult'
       ? adultGroupingQuery || effectiveContentGroup.title
@@ -1694,40 +1761,81 @@ function DownloadedContentDialog({
   const groupedCollectionKind = effectiveContentGroup?.groupingKind;
   const isAdultGroupedCollection =
     groupedCollectionKind === 'adult' && isGroupedCollection;
+  const dialogTitle =
+    isAdultGroupedCollection && groupedCollectionIdentity
+      ? groupedCollectionIdentity
+      : content.title;
   const usesAdultSingleEpisodeLayout =
     isAdultGroupedCollection && content.episodes.length === 1;
-  const currentSingleEpisode = usesAdultSingleEpisodeLayout
-    ? content.episodes[0] || null
-    : null;
-  const currentSingleEpisodeOfflineHref = currentSingleEpisode
-    ? buildOfflinePlayHref({
-        content,
-        episodeIndex: currentSingleEpisode.episodeIndex,
-      })
-    : null;
-  const shouldShowEpisodeGrid = !usesAdultSingleEpisodeLayout || isEditing;
-  const groupedCollectionDescription =
-    groupedCollectionKind === 'adult'
-      ? usesAdultSingleEpisodeLayout && !isEditing
-        ? `当前按“${groupedCollectionIdentity}”归集，成人资源改用列表展示，单集可直接在这里播放。`
-        : `当前按“${groupedCollectionIdentity}”归集，成人资源改用列表展示，可在这里切换查看各条离线内容。`
-      : `当前按“${groupedCollectionIdentity}”聚合同名不同源资源，可在这里切换查看各来源的离线内容。`;
+  const groupedPlayableEpisodes = useMemo(
+    () =>
+      isGroupedCollection
+        ? buildGroupedOfflineEpisodeEntries({
+            contents: groupedLocalContents,
+            activeContentId: content.contentId,
+          })
+        : [],
+    [content.contentId, groupedLocalContents, isGroupedCollection]
+  );
+  const groupedPlayableEpisodeCount = useMemo(
+    () =>
+      new Set(groupedPlayableEpisodes.map((episode) => episode.episodeIndex))
+        .size,
+    [groupedPlayableEpisodes]
+  );
+  const shouldShowGroupedEpisodeList =
+    isGroupedCollection && groupedPlayableEpisodes.length > 0;
+  const shouldShowEpisodeGrid =
+    !shouldShowGroupedEpisodeList &&
+    (!usesAdultSingleEpisodeLayout || isEditing);
+  const selectableEpisodes = useMemo<SelectableEpisodeTarget[]>(
+    () =>
+      shouldShowGroupedEpisodeList
+        ? groupedPlayableEpisodes.map((episode) => ({
+            key: buildEpisodeSelectionKey(
+              episode.contentId,
+              episode.episodeIndex
+            ),
+            contentId: episode.contentId,
+            episodeIndex: episode.episodeIndex,
+            episodeTitle: episode.episodeTitle,
+          }))
+        : content.episodes.map((episode) => ({
+            key: buildEpisodeSelectionKey(content.contentId, episode.episodeIndex),
+            contentId: content.contentId,
+            episodeIndex: episode.episodeIndex,
+            episodeTitle: episode.episodeTitle,
+          })),
+    [
+      content.contentId,
+      content.episodes,
+      groupedPlayableEpisodes,
+      shouldShowGroupedEpisodeList,
+    ]
+  );
+  const allSelectableEpisodeKeys = useMemo(
+    () => selectableEpisodes.map((episode) => episode.key),
+    [selectableEpisodes]
+  );
+  const selectedEpisodeKeySet = useMemo(
+    () => new Set(selectedEpisodeKeys),
+    [selectedEpisodeKeys]
+  );
+  const selectedEpisodeTargets = useMemo(
+    () =>
+      selectableEpisodes.filter((episode) =>
+        selectedEpisodeKeySet.has(episode.key)
+      ),
+    [selectableEpisodes, selectedEpisodeKeySet]
+  );
   const downloadedEpisodeIndexSet = useMemo(
     () => new Set(content.episodes.map((episode) => episode.episodeIndex)),
     [content.episodes]
   );
-  const allEpisodeIndexes = useMemo(
-    () => content.episodes.map((episode) => episode.episodeIndex),
-    [content.episodes]
-  );
-  const selectedEpisodeIndexSet = useMemo(
-    () => new Set(selectedEpisodeIndexes),
-    [selectedEpisodeIndexes]
-  );
   const allEpisodesSelected =
-    allEpisodeIndexes.length > 0 &&
-    allEpisodeIndexes.every((episodeIndex) =>
-      selectedEpisodeIndexSet.has(episodeIndex)
+    allSelectableEpisodeKeys.length > 0 &&
+    allSelectableEpisodeKeys.every((episodeKey) =>
+      selectedEpisodeKeySet.has(episodeKey)
     );
   const downloadableSources = useMemo(
     () =>
@@ -1862,7 +1970,7 @@ function DownloadedContentDialog({
     detailRequestKeyRef.current = `${content.source}:${content.vodId}`;
     setIsDescriptionExpanded(false);
     setIsEditing(false);
-    setSelectedEpisodeIndexes([]);
+    setSelectedEpisodeKeys([]);
     setIsDeletingSelected(false);
     setIsRestartingSelected(false);
     setSelectionFeedback(null);
@@ -1876,28 +1984,59 @@ function DownloadedContentDialog({
     setHasLoadedAdultGroupedContents(false);
     setMoreDownloadsError(null);
     setMoreDownloadsFeedback(null);
+    setIsDialogMenuOpen(false);
   }, [content.contentId, content.source, content.vodId]);
 
   useEffect(() => {
     setIsTitleGroupingEnabled(contentGroup.groupingKind === 'title');
   }, [contentGroup.groupingKind, titleGroupingIdentity?.key]);
 
+  useEffect(
+    () => () => {
+      if (closeFrameRef.current !== null) {
+        window.cancelAnimationFrame(closeFrameRef.current);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
-    setSelectedEpisodeIndexes((currentState) => {
-      const nextState = currentState.filter((episodeIndex) =>
-        allEpisodeIndexes.includes(episodeIndex)
+    if (!isDialogMenuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        dialogMenuRef.current &&
+        !dialogMenuRef.current.contains(event.target as Node)
+      ) {
+        setIsDialogMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [isDialogMenuOpen]);
+
+  useEffect(() => {
+    setSelectedEpisodeKeys((currentState) => {
+      const nextState = currentState.filter((episodeKey) =>
+        allSelectableEpisodeKeys.includes(episodeKey)
       );
 
       return nextState.length === currentState.length
         ? currentState
         : nextState;
     });
-  }, [allEpisodeIndexes]);
+  }, [allSelectableEpisodeKeys]);
 
   const handleToggleEditing = () => {
     setIsEditing((currentState) => {
       if (currentState) {
-        setSelectedEpisodeIndexes([]);
+        setSelectedEpisodeKeys([]);
       }
 
       return !currentState;
@@ -1907,19 +2046,26 @@ function DownloadedContentDialog({
   };
 
   const handleToggleSelectAll = () => {
-    setSelectedEpisodeIndexes(allEpisodesSelected ? [] : allEpisodeIndexes);
+    setSelectedEpisodeKeys(
+      allEpisodesSelected ? [] : allSelectableEpisodeKeys
+    );
   };
 
-  const handleToggleEpisodeSelection = (episodeIndex: number) => {
-    setSelectedEpisodeIndexes((currentState) =>
-      currentState.includes(episodeIndex)
-        ? currentState.filter((currentIndex) => currentIndex !== episodeIndex)
-        : [...currentState, episodeIndex]
+  const handleToggleEpisodeSelection = (
+    contentId: string,
+    episodeIndex: number
+  ) => {
+    const targetKey = buildEpisodeSelectionKey(contentId, episodeIndex);
+
+    setSelectedEpisodeKeys((currentState) =>
+      currentState.includes(targetKey)
+        ? currentState.filter((currentKey) => currentKey !== targetKey)
+        : [...currentState, targetKey]
     );
   };
 
   const handleDeleteSelectedEpisodes = async () => {
-    if (selectedEpisodeIndexes.length === 0 || isDeletingSelected) {
+    if (selectedEpisodeTargets.length === 0 || isDeletingSelected) {
       return;
     }
 
@@ -1928,14 +2074,17 @@ function DownloadedContentDialog({
     setIsDeletingSelected(true);
 
     try {
-      for (const episodeIndex of selectedEpisodeIndexes) {
-        await onDeleteEpisode(content.contentId, episodeIndex);
+      for (const selectedEpisode of selectedEpisodeTargets) {
+        await onDeleteEpisode(
+          selectedEpisode.contentId,
+          selectedEpisode.episodeIndex
+        );
       }
 
       setSelectionFeedback(
-        `已删除 ${selectedEpisodeIndexes.length} 集离线内容。`
+        `已删除 ${selectedEpisodeTargets.length} 条离线内容。`
       );
-      setSelectedEpisodeIndexes([]);
+      setSelectedEpisodeKeys([]);
     } catch (error) {
       setSelectionError(
         error instanceof Error ? error.message : '删除离线内容失败'
@@ -1943,6 +2092,59 @@ function DownloadedContentDialog({
     } finally {
       setIsDeletingSelected(false);
     }
+  };
+
+  const resolveDownloadableContent = async (
+    targetContent: DownloadedContentMeta
+  ): Promise<{
+    detail: SearchResult;
+    availableSources: SearchResult[];
+  }> => {
+    const [detailResponse, matchedSources] = await Promise.all([
+      (async () => {
+        const searchParams = new URLSearchParams({
+          source: targetContent.source,
+          id: targetContent.vodId,
+        });
+        const response = await fetch(`/api/detail?${searchParams.toString()}`, {
+          cache: 'no-store',
+        });
+        const payload = (await response.json()) as SearchResult & {
+          error?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(payload.error || '获取可下载剧集失败');
+        }
+
+        return payload;
+      })(),
+      searchPlaybackSources({
+        title: targetContent.title,
+        year:
+          targetContent.year && targetContent.year !== 'unknown'
+            ? targetContent.year
+            : undefined,
+        doubanId: targetContent.doubanId,
+        allowAdultCandidates: isAdultContentResult({
+          title: targetContent.title,
+          type_name: targetContent.typeName,
+          source_name: targetContent.sourceName,
+          desc: targetContent.desc,
+        }),
+      }).catch(() => []),
+    ]);
+
+    const normalizedDetail = normalizeVodDetailForPlayback(detailResponse);
+    const nextAvailableSources = matchedSources.filter(
+      (source) =>
+        buildSearchResultKey(source) !== buildSearchResultKey(normalizedDetail)
+    );
+
+    return {
+      detail: normalizedDetail,
+      availableSources: nextAvailableSources,
+    };
   };
 
   const loadDownloadableDetail = async (): Promise<{
@@ -1965,57 +2167,15 @@ function DownloadedContentDialog({
     try {
       setIsLoadingDownloadableDetail(true);
       setMoreDownloadsError(null);
-
-      const [detailResponse, matchedSources] = await Promise.all([
-        (async () => {
-          const searchParams = new URLSearchParams({
-            source: content.source,
-            id: content.vodId,
-          });
-          const response = await fetch(
-            `/api/detail?${searchParams.toString()}`,
-            {
-              cache: 'no-store',
-            }
-          );
-          const payload = (await response.json()) as SearchResult & {
-            error?: string;
-          };
-
-          if (!response.ok) {
-            throw new Error(payload.error || '获取可下载剧集失败');
-          }
-
-          return payload;
-        })(),
-        searchPlaybackSources({
-          title: content.title,
-          year:
-            content.year && content.year !== 'unknown'
-              ? content.year
-              : undefined,
-          doubanId: content.doubanId,
-          allowAdultCandidates: isAdultContent,
-        }).catch(() => []),
-      ]);
-
-      const normalizedDetail = normalizeVodDetailForPlayback(detailResponse);
-      const nextAvailableSources = matchedSources.filter(
-        (source) =>
-          buildSearchResultKey(source) !==
-          buildSearchResultKey(normalizedDetail)
-      );
+      const resolvedContent = await resolveDownloadableContent(content);
 
       if (detailRequestKeyRef.current !== requestKey) {
         return null;
       }
 
-      setDownloadableDetail(normalizedDetail);
-      setDownloadableAvailableSources(nextAvailableSources);
-      return {
-        detail: normalizedDetail,
-        availableSources: nextAvailableSources,
-      };
+      setDownloadableDetail(resolvedContent.detail);
+      setDownloadableAvailableSources(resolvedContent.availableSources);
+      return resolvedContent;
     } catch (error) {
       if (detailRequestKeyRef.current === requestKey) {
         setMoreDownloadsError(
@@ -2031,7 +2191,7 @@ function DownloadedContentDialog({
   };
 
   const handleRestartSelectedEpisodes = async () => {
-    if (selectedEpisodeIndexes.length === 0 || isRestartingSelected) {
+    if (selectedEpisodeTargets.length === 0 || isRestartingSelected) {
       return;
     }
 
@@ -2040,27 +2200,60 @@ function DownloadedContentDialog({
     setIsRestartingSelected(true);
 
     try {
-      const resolvedDownloadable =
-        (downloadableDetail && {
-          detail: downloadableDetail,
-          availableSources: downloadableAvailableSources,
-        }) ||
-        (await loadDownloadableDetail());
+      const episodeIndexesByContentId = new Map<string, number[]>();
 
-      if (!resolvedDownloadable) {
-        setSelectionError('获取可重新下载的剧集失败');
-        return;
-      }
-
-      const result = await downloadManager.restartBatchEpisodeDownloads({
-        detail: resolvedDownloadable.detail,
-        episodeIndexes: selectedEpisodeIndexes,
-        availableSources: resolvedDownloadable.availableSources,
-        searchTitle: content.searchTitle,
+      selectedEpisodeTargets.forEach((selectedEpisode) => {
+        const currentEpisodeIndexes =
+          episodeIndexesByContentId.get(selectedEpisode.contentId) || [];
+        currentEpisodeIndexes.push(selectedEpisode.episodeIndex);
+        episodeIndexesByContentId.set(
+          selectedEpisode.contentId,
+          currentEpisodeIndexes
+        );
       });
 
-      setSelectionFeedback(getBatchFeedbackMessage(result));
-      setSelectedEpisodeIndexes([]);
+      const aggregateResult = {
+        queuedCount: 0,
+        restartedCount: 0,
+        skippedCount: 0,
+      };
+
+      for (const [targetContentId, episodeIndexes] of Array.from(
+        episodeIndexesByContentId.entries()
+      )) {
+        const targetContent = library[targetContentId];
+        if (!targetContent) {
+          aggregateResult.skippedCount += episodeIndexes.length;
+          continue;
+        }
+
+        const resolvedDownloadable =
+          targetContentId === content.contentId
+            ? (downloadableDetail && {
+                detail: downloadableDetail,
+                availableSources: downloadableAvailableSources,
+              }) ||
+              (await loadDownloadableDetail())
+            : await resolveDownloadableContent(targetContent);
+
+        if (!resolvedDownloadable) {
+          throw new Error('获取可重新下载的剧集失败');
+        }
+
+        const result = await downloadManager.restartBatchEpisodeDownloads({
+          detail: resolvedDownloadable.detail,
+          episodeIndexes,
+          availableSources: resolvedDownloadable.availableSources,
+          searchTitle: targetContent.searchTitle,
+        });
+
+        aggregateResult.queuedCount += result.queuedCount;
+        aggregateResult.restartedCount += result.restartedCount;
+        aggregateResult.skippedCount += result.skippedCount;
+      }
+
+      setSelectionFeedback(getBatchFeedbackMessage(aggregateResult));
+      setSelectedEpisodeKeys([]);
     } catch (error) {
       setSelectionError(
         error instanceof Error ? error.message : '重新下载离线内容失败'
@@ -2242,6 +2435,39 @@ function DownloadedContentDialog({
     ? isLoadingAdultGroupedContents
     : isLoadingDownloadableDetail;
 
+  const handleRequestClose = (
+    event?: React.MouseEvent<HTMLButtonElement>
+  ) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+
+    setIsDialogMenuOpen(false);
+    setIsMoreDownloadsOpen(false);
+    setIsEditing(false);
+    setSelectionFeedback(null);
+    setSelectionError(null);
+    setMoreDownloadsError(null);
+    setMoreDownloadsFeedback(null);
+
+    const closeDialog = () => {
+      closeFrameRef.current = null;
+      onClose();
+    };
+
+    if (typeof window.requestAnimationFrame === 'function') {
+      if (closeFrameRef.current !== null) {
+        window.cancelAnimationFrame(closeFrameRef.current);
+      }
+
+      closeFrameRef.current = window.requestAnimationFrame(() => {
+        closeDialog();
+      });
+      return;
+    }
+
+    closeDialog();
+  };
+
   if (typeof document === 'undefined') {
     return null;
   }
@@ -2252,7 +2478,7 @@ function DownloadedContentDialog({
         type='button'
         aria-label='关闭离线资源详情'
         className='absolute inset-0 bg-black/75 backdrop-blur-sm'
-        onClick={onClose}
+        onClick={handleRequestClose}
       />
 
       <div className='relative z-[10001] flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#040b15]/95 text-white shadow-2xl shadow-black/50'>
@@ -2263,7 +2489,7 @@ function DownloadedContentDialog({
                 已下载资源
               </div>
               <div className='break-words text-2xl font-semibold text-white'>
-                {content.title}
+                {dialogTitle}
               </div>
               <div className='flex flex-wrap items-center gap-2 text-sm text-gray-300'>
                 <span>{content.sourceName}</span>
@@ -2271,45 +2497,102 @@ function DownloadedContentDialog({
                 <span>{formatBytes(content.totalSizeBytes)}</span>
                 {isGroupedCollection ? (
                   <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200'>
-                    {groupedCollectionLabel} · {groupedCollectionIdentity} ·{' '}
-                    {groupedLocalContents.length} 部资源
+                    {isAdultGroupedCollection
+                      ? `已归集 ${groupedLocalContents.length} 部资源`
+                      : `${groupedCollectionLabel} · ${groupedCollectionIdentity} · ${groupedLocalContents.length} 部资源`}
                   </span>
                 ) : null}
-                {canToggleLocalTitleGrouping ? (
+                {!isAdultContent ? (
                   <button
                     type='button'
-                    onClick={() =>
-                      setIsTitleGroupingEnabled((currentState) => !currentState)
-                    }
-                    className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                      isTitleGroupingEnabled
-                        ? 'border-sky-500/20 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
-                        : 'border-white/10 bg-white/5 text-gray-200 hover:bg-white/10'
-                    }`}
+                    onClick={handleToggleMoreDownloads}
+                    className='inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20'
                   >
-                    {`同名聚合：${isTitleGroupingEnabled ? '开' : '关'}`}
+                    {isLoadingMoreDownloads
+                      ? '加载中...'
+                      : isMoreDownloadsOpen
+                      ? '收起更多'
+                      : '下载更多'}
                   </button>
                 ) : null}
-                <button
-                  type='button'
-                  onClick={handleToggleMoreDownloads}
-                  className='inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20'
-                >
-                  {isLoadingMoreDownloads
-                    ? '加载中...'
-                    : isMoreDownloadsOpen
-                    ? '收起更多'
-                    : isAdultContent
-                    ? '按人名归集'
-                    : '下载更多'}
-                </button>
               </div>
             </div>
 
             <div className='flex shrink-0 flex-wrap items-center justify-end gap-2'>
+              {hasDialogMenuActions ? (
+                <div ref={dialogMenuRef} className='relative'>
+                  <button
+                    type='button'
+                    aria-label='更多设置'
+                    aria-expanded={isDialogMenuOpen}
+                    onClick={() =>
+                      setIsDialogMenuOpen((currentState) => !currentState)
+                    }
+                    className={`${dialogHeaderIconButtonClassName} ${
+                      (isAdultContent && isMoreDownloadsOpen) ||
+                      (canToggleLocalTitleGrouping && isTitleGroupingEnabled)
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                        : ''
+                    }`}
+                  >
+                    <Settings2 className='h-4 w-4' />
+                  </button>
+
+                  {isDialogMenuOpen ? (
+                    <div className='absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-2xl border border-white/10 bg-[#09111d] shadow-2xl shadow-black/40'>
+                      {canToggleLocalTitleGrouping ? (
+                        <button
+                          type='button'
+                          onClick={() => {
+                            setIsDialogMenuOpen(false);
+                            setIsTitleGroupingEnabled(
+                              (currentState) => !currentState
+                            );
+                          }}
+                          className='flex w-full flex-col items-start gap-1 px-4 py-3 text-left transition-colors hover:bg-white/5'
+                        >
+                          <span className='text-sm font-medium text-white'>
+                            {isTitleGroupingEnabled
+                              ? '关闭同名聚合'
+                              : '开启同名聚合'}
+                          </span>
+                          <span className='text-xs leading-5 text-gray-400'>
+                            聚合当前离线列表中的同名不同源资源，便于统一查看和切换。
+                          </span>
+                        </button>
+                      ) : null}
+
+                      {isAdultContent ? (
+                        <button
+                          type='button'
+                          onClick={() => {
+                            setIsDialogMenuOpen(false);
+                            handleToggleMoreDownloads();
+                          }}
+                          className={`flex w-full flex-col items-start gap-1 px-4 py-3 text-left transition-colors hover:bg-white/5 ${
+                            canToggleLocalTitleGrouping
+                              ? 'border-t border-white/10'
+                              : ''
+                          }`}
+                        >
+                          <span className='text-sm font-medium text-white'>
+                            {isMoreDownloadsOpen ? '收起人名归集' : '按人名归集'}
+                          </span>
+                          <span className='text-xs leading-5 text-gray-400'>
+                            {adultGroupingQuery
+                              ? `按“${adultGroupingQuery}”归集更多可下载资源`
+                              : '根据当前条目识别的人名查找更多资源'}
+                          </span>
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               {isEditing ? (
                 <>
-                  {selectedEpisodeIndexes.length > 0 && (
+                  {selectedEpisodeTargets.length > 0 && (
                     <>
                       <button
                         type='button'
@@ -2356,7 +2639,7 @@ function DownloadedContentDialog({
 
               <button
                 type='button'
-                onClick={onClose}
+                onClick={handleRequestClose}
                 className={dialogHeaderActionButtonClassName}
               >
                 关闭
@@ -2401,8 +2684,9 @@ function DownloadedContentDialog({
                 {isGroupedCollection ? (
                   <>
                     <span className='rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-amber-200'>
-                      {groupedCollectionLabel}下 {groupedLocalContents.length}{' '}
-                      部资源
+                      {isAdultGroupedCollection
+                        ? `已归集 ${groupedLocalContents.length} 部资源`
+                        : `${groupedCollectionLabel}下 ${groupedLocalContents.length} 部资源`}
                     </span>
                     <span className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300'>
                       合计 {groupedCollectionEpisodeCount} 集 ·{' '}
@@ -2487,127 +2771,10 @@ function DownloadedContentDialog({
                 </div>
               ) : null}
 
-              {isGroupedCollection ? (
-                <div className='rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4'>
-                  <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
-                    <div className='space-y-1'>
-                      <div className='text-sm font-semibold text-white'>
-                        {groupedCollectionTitle}
-                      </div>
-                      <div className='text-xs text-gray-400'>
-                        {groupedCollectionDescription}
-                      </div>
-                    </div>
-                    <span className='inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-200'>
-                      {groupedLocalContents.length} 部资源 ·{' '}
-                      {groupedCollectionEpisodeCount} 集
-                    </span>
-                  </div>
-
-                  {isAdultGroupedCollection ? (
-                    <div className='mt-4 space-y-3'>
-                      {groupedLocalContents.map((groupedContent) => {
-                        const isCurrentContent =
-                          groupedContent.contentId === content.contentId;
-                        const canPlayCurrentContent =
-                          isCurrentContent &&
-                          Boolean(currentSingleEpisodeOfflineHref) &&
-                          !isEditing;
-
-                        return (
-                          <div
-                            key={groupedContent.contentId}
-                            className={`rounded-2xl border p-4 transition-colors ${
-                              isCurrentContent
-                                ? 'border-emerald-400/50 bg-emerald-500/10'
-                                : 'border-white/10 bg-black/20'
-                            }`}
-                          >
-                            <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
-                              <div className='min-w-0 flex-1 space-y-3'>
-                                <div className='flex flex-wrap items-center gap-2 text-[11px] text-gray-300'>
-                                  <span className='rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-medium text-gray-100'>
-                                    {groupedContent.sourceName}
-                                  </span>
-                                  {groupedContent.year &&
-                                  groupedContent.year !== 'unknown' ? (
-                                    <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-300'>
-                                      {groupedContent.year}
-                                    </span>
-                                  ) : null}
-                                  <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-300'>
-                                    {groupedContent.episodes.length > 1
-                                      ? `${groupedContent.episodes.length} 集`
-                                      : '单集资源'}
-                                  </span>
-                                </div>
-
-                                <div
-                                  className='line-clamp-3 text-base font-semibold leading-6 text-white'
-                                  title={groupedContent.title}
-                                >
-                                  {groupedContent.title}
-                                </div>
-
-                                <div className='flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400'>
-                                  <span>
-                                    {formatBytes(groupedContent.totalSizeBytes)}
-                                  </span>
-                                  <span>
-                                    更新于{' '}
-                                    {formatDateTime(groupedContent.updatedAt)}
-                                  </span>
-                                  {isCurrentContent && currentSingleEpisode ? (
-                                    <span>
-                                      下载于{' '}
-                                      {formatDateTime(
-                                        currentSingleEpisode.downloadedAt
-                                      )}
-                                    </span>
-                                  ) : null}
-                                </div>
-                              </div>
-
-                              <div className='flex shrink-0 flex-wrap items-center gap-2'>
-                                {isCurrentContent ? (
-                                  <span className='rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-200'>
-                                    当前资源
-                                  </span>
-                                ) : (
-                                  <button
-                                    type='button'
-                                    onClick={() =>
-                                      onSelectContent(groupedContent.contentId)
-                                    }
-                                    className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-gray-200 transition-colors hover:bg-white/10'
-                                  >
-                                    查看资源
-                                  </button>
-                                )}
-
-                                {canPlayCurrentContent ? (
-                                  <button
-                                    type='button'
-                                    onClick={() => {
-                                      if (currentSingleEpisodeOfflineHref) {
-                                        router.push(
-                                          currentSingleEpisodeOfflineHref
-                                        );
-                                      }
-                                    }}
-                                    className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20'
-                                  >
-                                    离线播放
-                                  </button>
-                                ) : null}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className='mt-4 grid gap-3 md:grid-cols-2'>
+              {shouldShowGroupedEpisodeList ? (
+                <div className='space-y-4'>
+                  <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+                    <div className='flex flex-wrap gap-2'>
                       {groupedLocalContents.map((groupedContent) => {
                         const isCurrentContent =
                           groupedContent.contentId === content.contentId;
@@ -2616,52 +2783,127 @@ function DownloadedContentDialog({
                           <button
                             type='button'
                             key={groupedContent.contentId}
+                            disabled={isEditing || isCurrentContent}
                             onClick={() => {
-                              if (!isCurrentContent) {
+                              if (!isEditing && !isCurrentContent) {
                                 onSelectContent(groupedContent.contentId);
                               }
                             }}
-                            className={`rounded-xl border p-3 text-left transition-colors ${
+                            title={
                               isCurrentContent
-                                ? 'border-emerald-400/50 bg-emerald-500/10'
-                                : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
+                                ? `${groupedContent.sourceName} 当前详情`
+                                : `切换到 ${groupedContent.sourceName} 详情`
+                            }
+                            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                              isCurrentContent
+                                ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                : 'border-white/10 bg-white/5 text-gray-300 hover:border-emerald-400/20 hover:bg-white/10'
                             }`}
                           >
-                            <div className='flex items-start justify-between gap-3'>
-                              <div
-                                className='line-clamp-2 text-sm font-semibold text-white'
-                                title={groupedContent.title}
-                              >
-                                {groupedContent.title}
-                              </div>
-                              <span
-                                className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                                  isCurrentContent
-                                    ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-                                    : 'border-white/10 bg-white/10 text-gray-300'
-                                }`}
-                              >
-                                {isCurrentContent ? '当前' : '查看'}
+                            <span>{groupedContent.sourceName}</span>
+                            {groupedContent.episodes.length > 1 ? (
+                              <span className='opacity-70'>
+                                {groupedContent.episodes.length} 集
                               </span>
-                            </div>
-
-                            <div className='mt-2 text-xs text-gray-300'>
-                              {groupedContent.sourceName}
-                              {groupedContent.year &&
-                              groupedContent.year !== 'unknown'
-                                ? ` · ${groupedContent.year}`
-                                : ''}
-                            </div>
-                            <div className='mt-2 text-xs text-gray-400'>
-                              {groupedContent.episodes.length} 集 ·{' '}
-                              {formatBytes(groupedContent.totalSizeBytes)} ·
-                              更新于 {formatDateTime(groupedContent.updatedAt)}
-                            </div>
+                            ) : null}
                           </button>
                         );
                       })}
                     </div>
-                  )}
+
+                    <div className='text-xs text-gray-400'>
+                      {groupedPlayableEpisodes.length} 条离线资源 · 覆盖{' '}
+                      {groupedPlayableEpisodeCount} 集
+                    </div>
+                  </div>
+
+                  <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+                    {groupedPlayableEpisodes.map((episode) => {
+                      const selectionKey = buildEpisodeSelectionKey(
+                        episode.contentId,
+                        episode.episodeIndex
+                      );
+                      const isSelected =
+                        selectedEpisodeKeySet.has(selectionKey);
+
+                      return (
+                        <button
+                          type='button'
+                          key={`${episode.contentId}-${episode.episodeIndex}`}
+                          onClick={() => {
+                            if (isEditing) {
+                              handleToggleEpisodeSelection(
+                                episode.contentId,
+                                episode.episodeIndex
+                              );
+                              return;
+                            }
+
+                            router.push(episode.offlineHref);
+                          }}
+                          aria-pressed={isEditing ? isSelected : undefined}
+                          aria-label={
+                            isEditing
+                              ? `${isSelected ? '取消选择' : '选择'} ${
+                                  episode.sourceName
+                                } 的 ${episode.episodeTitle}`
+                              : `离线播放 ${episode.sourceName} 的 ${episode.episodeTitle}`
+                          }
+                          className={`rounded-xl border p-3 text-left transition-colors ${
+                            isEditing
+                              ? isSelected
+                                ? 'border-emerald-400/60 bg-emerald-500/10'
+                                : 'border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/5'
+                              : episode.isCurrentContent
+                              ? 'border-emerald-400/40 bg-emerald-500/10 hover:bg-emerald-500/15'
+                              : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
+                          }`}
+                        >
+                          <div className='grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2'>
+                            <div className='flex min-w-0 items-center gap-2'>
+                              <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
+                                {formatEpisodeCode(episode.episodeIndex)}
+                              </span>
+                              <div
+                                className='truncate text-sm font-semibold text-white'
+                                title={episode.episodeTitle}
+                              >
+                                {episode.episodeTitle}
+                              </div>
+                            </div>
+
+                            {isEditing ? (
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                  isSelected
+                                    ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                    : 'border border-white/10 bg-white/5 text-gray-400'
+                                }`}
+                              >
+                                {isSelected ? '已选' : '选择'}
+                              </span>
+                            ) : null}
+
+                            <div className='col-span-2 flex flex-wrap items-center gap-2 text-[11px] text-gray-300'>
+                              <span className='rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-medium text-gray-100'>
+                                {episode.sourceName}
+                              </span>
+                              {episode.contentTitle !== dialogTitle ? (
+                                <span className='text-gray-400'>
+                                  {episode.contentTitle}
+                                </span>
+                              ) : null}
+                            </div>
+
+                            <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
+                              <span>{formatBytes(episode.sizeBytes)}</span>
+                              <span>{formatDateTime(episode.downloadedAt)}</span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               ) : null}
 
@@ -2863,8 +3105,11 @@ function DownloadedContentDialog({
                       content,
                       episodeIndex: episode.episodeIndex,
                     });
-                    const isSelected = selectedEpisodeIndexSet.has(
-                      episode.episodeIndex
+                    const isSelected = selectedEpisodeKeySet.has(
+                      buildEpisodeSelectionKey(
+                        content.contentId,
+                        episode.episodeIndex
+                      )
                     );
 
                     return (
@@ -2873,7 +3118,10 @@ function DownloadedContentDialog({
                         key={`${content.contentId}-${episode.episodeIndex}`}
                         onClick={() => {
                           if (isEditing) {
-                            handleToggleEpisodeSelection(episode.episodeIndex);
+                            handleToggleEpisodeSelection(
+                              content.contentId,
+                              episode.episodeIndex
+                            );
                             return;
                           }
 
@@ -3201,11 +3449,8 @@ export default function DownloadsClient() {
     if (!isSettingsOpen && !selectedContentId && !selectedActiveTaskContentId) {
       return;
     }
-    if (typeof document === 'undefined') {
-      return;
-    }
 
-    const previousOverflow = document.body.style.overflow;
+    const releaseScrollLock = acquireScrollLock();
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         if (selectedContentId) {
@@ -3220,11 +3465,10 @@ export default function DownloadsClient() {
       }
     };
 
-    document.body.style.overflow = 'hidden';
     window.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      releaseScrollLock();
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isSettingsOpen, selectedContentId, selectedActiveTaskContentId]);

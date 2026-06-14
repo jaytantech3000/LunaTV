@@ -9,6 +9,7 @@ import {
   buildDownloadTaskId,
   DownloadTask,
 } from '@/lib/download/types';
+import { acquireScrollLock } from '@/lib/scroll-lock';
 import { SearchResult } from '@/lib/types';
 
 import { useDownloadStore } from '@/stores/downloadStore';
@@ -267,12 +268,11 @@ export default function BatchEpisodeDownloadDialog({
   ]);
 
   useEffect(() => {
-    if (!isOpen || typeof document === 'undefined') {
+    if (!isOpen) {
       return;
     }
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const releaseScrollLock = acquireScrollLock();
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !isStartingBatchDownload) {
@@ -283,7 +283,7 @@ export default function BatchEpisodeDownloadDialog({
     window.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      releaseScrollLock();
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen, isStartingBatchDownload, onClose]);
