@@ -23,7 +23,10 @@ export function normalizeHeaderUrl(
 }
 
 function normalizeHostname(hostname: string): string {
-  return hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  return hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '');
 }
 
 function isBlockedHostname(hostname: string): boolean {
@@ -204,12 +207,24 @@ export function clearProxyValidationCachesForTests(): void {
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
-  timeoutMs: number
+  timeoutMs: number,
+  responseMode: 'stream' | 'buffer' = 'stream'
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+
+    if (responseMode !== 'buffer') {
+      return response;
+    }
+
+    const body = await response.arrayBuffer();
+    return new Response(body, {
+      headers: new Headers(response.headers),
+      status: response.status,
+      statusText: response.statusText,
+    });
   } finally {
     clearTimeout(timer);
   }
@@ -222,10 +237,12 @@ export async function fetchWithValidatedRedirects(
     timeoutMs: number;
     maxRedirects?: number;
     initialUrlValidated?: boolean;
+    responseMode?: 'stream' | 'buffer';
   }
 ): Promise<Response> {
   const maxRedirects = options.maxRedirects ?? 3;
   const initialUrlValidated = options.initialUrlValidated === true;
+  const responseMode = options.responseMode ?? 'stream';
   let currentUrl = rawUrl;
 
   for (let i = 0; i <= maxRedirects; i += 1) {
@@ -236,7 +253,8 @@ export async function fetchWithValidatedRedirects(
     const response = await fetchWithTimeout(
       validatedUrl,
       { ...init, redirect: 'manual' },
-      options.timeoutMs
+      options.timeoutMs,
+      responseMode
     );
 
     if (
