@@ -1,5 +1,7 @@
 import { SearchResult } from '@/lib/types';
+import { isAdultContentResult } from '@/lib/yellow';
 
+import { buildAdultDownloadGroupingKey } from './adult';
 import {
   hasCachedDownload,
   matchDownloadResponse,
@@ -31,6 +33,19 @@ export interface OfflinePlaybackDetail {
   detail: SearchResult;
   episodeOrder: number[];
   episodeEntries: OfflinePlaybackEpisodeEntry[];
+}
+
+export interface OfflineRelatedVideoEntry {
+  contentId: string;
+  source: string;
+  sourceName: string;
+  vodId: string;
+  title: string;
+  poster: string;
+  year: string;
+  episodeCount: number;
+  href: string;
+  updatedAt: number;
 }
 
 export function sortDownloadedEpisodes(
@@ -96,6 +111,153 @@ export function getGroupedOfflineContents(params: {
 
     return left.sourceName.localeCompare(right.sourceName, 'zh-CN');
   });
+}
+
+export function isAdultDownloadedContent(
+  content: DownloadedContentMeta | null | undefined
+): boolean {
+  if (!content) {
+    return false;
+  }
+
+  return isAdultContentResult({
+    title: content.title,
+    source_name: content.sourceName,
+    desc: content.desc,
+    type_name: content.typeName,
+  });
+}
+
+export function getOfflinePlaybackContents(params: {
+  library: Record<string, DownloadedContentMeta>;
+  activeContentId: string;
+}): DownloadedContentMeta[] {
+  const { library, activeContentId } = params;
+  const activeContent = library[activeContentId];
+
+  if (!activeContent) {
+    return [];
+  }
+
+  if (isAdultDownloadedContent(activeContent)) {
+    return [activeContent];
+  }
+
+  const groupedContents = getGroupedOfflineContents({
+    library,
+    activeContentId,
+  });
+
+  return groupedContents.length > 0 ? groupedContents : [activeContent];
+}
+
+function getAdultGroupingKeyForOfflineContent(
+  content: DownloadedContentMeta
+): string | null {
+  return buildAdultDownloadGroupingKey({
+    title: content.title,
+    searchTitle: content.searchTitle,
+    sourceName: content.sourceName,
+    desc: content.desc,
+    typeName: content.typeName,
+  });
+}
+
+function getOfflinePrimaryEpisodeIndex(content: DownloadedContentMeta): number {
+  const firstEpisode = sortDownloadedEpisodes(content.episodes)[0];
+  return firstEpisode?.episodeIndex ?? 0;
+}
+
+function buildOfflineRelatedVideoEntry(
+  content: DownloadedContentMeta
+): OfflineRelatedVideoEntry {
+  return {
+    contentId: content.contentId,
+    source: content.source,
+    sourceName: content.sourceName,
+    vodId: content.vodId,
+    title: content.title,
+    poster: content.poster,
+    year: content.year,
+    episodeCount: content.episodes.length,
+    href: buildOfflinePlayHref({
+      content,
+      episodeIndex: getOfflinePrimaryEpisodeIndex(content),
+    }),
+    updatedAt: content.updatedAt,
+  };
+}
+
+export function getSameTitleOfflineVideoEntries(params: {
+  library: Record<string, DownloadedContentMeta>;
+  activeContentId: string;
+}): OfflineRelatedVideoEntry[] {
+  const { library, activeContentId } = params;
+
+  return getGroupedOfflineContents({
+    library,
+    activeContentId,
+  })
+    .filter((content) => content.contentId !== activeContentId)
+    .filter((content) => content.episodes.length > 0)
+    .map(buildOfflineRelatedVideoEntry);
+}
+
+export function getAdultRelatedOfflineVideoEntries(params: {
+  library: Record<string, DownloadedContentMeta>;
+  activeContentId: string;
+}): OfflineRelatedVideoEntry[] {
+  const { library, activeContentId } = params;
+  const activeContent = library[activeContentId];
+
+  if (!activeContent) {
+    return [];
+  }
+
+  const activeGroupingKey = getAdultGroupingKeyForOfflineContent(activeContent);
+  if (!activeGroupingKey) {
+    return [];
+  }
+
+  const activeTitleKey = getOfflineTitleGroupingKey(activeContent.title);
+  const seenTitleKeys = new Set<string>();
+
+  return Object.values(library)
+    .filter((content) => content.contentId !== activeContent.contentId)
+    .filter((content) => content.episodes.length > 0)
+    .filter(
+      (content) =>
+        getAdultGroupingKeyForOfflineContent(content) === activeGroupingKey
+    )
+    .filter((content) => {
+      const contentTitleKey = getOfflineTitleGroupingKey(content.title);
+      return !activeTitleKey || contentTitleKey !== activeTitleKey;
+    })
+    .sort((left, right) => {
+      if (right.updatedAt !== left.updatedAt) {
+        return right.updatedAt - left.updatedAt;
+      }
+
+      if (right.episodes.length !== left.episodes.length) {
+        return right.episodes.length - left.episodes.length;
+      }
+
+      if (left.title !== right.title) {
+        return left.title.localeCompare(right.title, 'zh-CN');
+      }
+
+      return left.sourceName.localeCompare(right.sourceName, 'zh-CN');
+    })
+    .filter((content) => {
+      const titleKey = getOfflineTitleGroupingKey(content.title) || content.contentId;
+      if (seenTitleKeys.has(titleKey)) {
+        return false;
+      }
+
+      seenTitleKeys.add(titleKey);
+      return true;
+    })
+    .map(buildOfflineRelatedVideoEntry);
 }
 
 function buildOfflinePlaybackDetailWithOwner(params: {
