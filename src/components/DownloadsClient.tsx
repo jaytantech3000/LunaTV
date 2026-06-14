@@ -57,6 +57,8 @@ const concurrentTaskOptions = Array.from(
 
 const compactActionButtonClassName =
   'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors';
+const dialogHeaderActionButtonClassName =
+  'inline-flex h-10 w-[88px] shrink-0 items-center justify-center rounded-xl border border-white/15 px-0 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10';
 
 function formatDateTime(timestamp: number): string {
   if (!Number.isFinite(timestamp) || timestamp <= 0) {
@@ -2337,7 +2339,7 @@ function DownloadedContentDialog({
                   <button
                     type='button'
                     onClick={handleToggleEditing}
-                    className='rounded-xl border border-white/15 px-3 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+                    className={dialogHeaderActionButtonClassName}
                   >
                     完成
                   </button>
@@ -2346,7 +2348,7 @@ function DownloadedContentDialog({
                 <button
                   type='button'
                   onClick={handleToggleEditing}
-                  className='rounded-xl border border-white/15 px-3 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+                  className={dialogHeaderActionButtonClassName}
                 >
                   编辑
                 </button>
@@ -2355,7 +2357,7 @@ function DownloadedContentDialog({
               <button
                 type='button'
                 onClick={onClose}
-                className='inline-flex h-10 min-w-[72px] shrink-0 items-center justify-center rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+                className={dialogHeaderActionButtonClassName}
               >
                 关闭
               </button>
