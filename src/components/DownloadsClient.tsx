@@ -1554,6 +1554,8 @@ function DownloadedContentDialog({
   >([]);
   const [isDeletingSelected, setIsDeletingSelected] = useState(false);
   const [isRestartingSelected, setIsRestartingSelected] = useState(false);
+  const [isLocalTitleGroupingEnabled, setIsLocalTitleGroupingEnabled] =
+    useState(false);
   const [selectionFeedback, setSelectionFeedback] = useState<string | null>(
     null
   );
@@ -1609,22 +1611,85 @@ function DownloadedContentDialog({
       contentGroup.adultGroupingQuery,
     ]
   );
+  const titleGroupingIdentity = useMemo(
+    () => getTitleGroupingIdentity(content.title),
+    [content.title]
+  );
+  const localTitleGroupedContents = useMemo(
+    () =>
+      titleGroupingIdentity
+        ? Object.values(library)
+            .filter((libraryItem) => {
+              if (
+                getAdultGroupingIdentity({
+                  title: libraryItem.title,
+                  searchTitle: libraryItem.searchTitle,
+                  sourceName: libraryItem.sourceName,
+                  desc: libraryItem.desc,
+                  typeName: libraryItem.typeName,
+                })
+              ) {
+                return false;
+              }
+
+              return (
+                getTitleGroupingIdentity(libraryItem.title)?.key ===
+                titleGroupingIdentity.key
+              );
+            })
+            .sort((left, right) => right.updatedAt - left.updatedAt)
+        : [],
+    [library, titleGroupingIdentity]
+  );
+  const localTitleContentGroup = useMemo(
+    () =>
+      titleGroupingIdentity && localTitleGroupedContents.length > 1
+        ? buildGroupedDownloadedContentCardGroup(
+            titleGroupingIdentity.key,
+            titleGroupingIdentity.title,
+            'title',
+            localTitleGroupedContents
+          )
+        : null,
+    [localTitleGroupedContents, titleGroupingIdentity]
+  );
+  const canToggleLocalTitleGrouping = Boolean(
+    !contentGroup.groupingKind &&
+      !isAdultContent &&
+      localTitleContentGroup &&
+      localTitleGroupedContents.length > 1
+  );
+  const effectiveContentGroup = useMemo(
+    () =>
+      contentGroup.groupingKind
+        ? contentGroup
+        : isLocalTitleGroupingEnabled
+        ? localTitleContentGroup
+        : null,
+    [contentGroup, isLocalTitleGroupingEnabled, localTitleContentGroup]
+  );
   const groupedLocalContents = useMemo(
-    () => contentGroup.contents,
-    [contentGroup.contents]
+    () => effectiveContentGroup?.contents || contentGroup.contents,
+    [contentGroup.contents, effectiveContentGroup]
   );
   const isGroupedCollection =
-    Boolean(contentGroup.groupingKind) && groupedLocalContents.length > 1;
+    Boolean(effectiveContentGroup?.groupingKind) &&
+    groupedLocalContents.length > 1;
   const groupedCollectionLabel = getGroupedCollectionLabel(
-    contentGroup.groupingKind
+    effectiveContentGroup?.groupingKind
   );
   const groupedCollectionTitle = getGroupedCollectionTitle(
-    contentGroup.groupingKind
+    effectiveContentGroup?.groupingKind
   );
   const groupedCollectionIdentity =
-    contentGroup.groupingKind === 'adult'
-      ? adultGroupingQuery || contentGroup.title
-      : contentGroup.title;
+    effectiveContentGroup?.groupingKind === 'adult'
+      ? adultGroupingQuery || effectiveContentGroup.title
+      : effectiveContentGroup?.title || content.title;
+  const groupedCollectionEpisodeCount =
+    effectiveContentGroup?.totalEpisodeCount || content.episodes.length;
+  const groupedCollectionTotalSizeBytes =
+    effectiveContentGroup?.totalSizeBytes || content.totalSizeBytes;
+  const groupedCollectionKind = effectiveContentGroup?.groupingKind;
   const downloadedEpisodeIndexSet = useMemo(
     () => new Set(content.episodes.map((episode) => episode.episodeIndex)),
     [content.episodes]
@@ -1790,6 +1855,10 @@ function DownloadedContentDialog({
     setMoreDownloadsError(null);
     setMoreDownloadsFeedback(null);
   }, [content.contentId, content.source, content.vodId]);
+
+  useEffect(() => {
+    setIsLocalTitleGroupingEnabled(false);
+  }, [titleGroupingIdentity?.key]);
 
   useEffect(() => {
     setSelectedEpisodeIndexes((currentState) => {
@@ -2184,6 +2253,25 @@ function DownloadedContentDialog({
                     {groupedLocalContents.length} 部资源
                   </span>
                 ) : null}
+                {canToggleLocalTitleGrouping ? (
+                  <button
+                    type='button'
+                    onClick={() =>
+                      setIsLocalTitleGroupingEnabled(
+                        (currentState) => !currentState
+                      )
+                    }
+                    className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                      isLocalTitleGroupingEnabled
+                        ? 'border-sky-500/20 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
+                        : 'border-white/10 bg-white/5 text-gray-200 hover:bg-white/10'
+                    }`}
+                  >
+                    {isLocalTitleGroupingEnabled
+                      ? '收起同名不同源'
+                      : '展开同名不同源'}
+                  </button>
+                ) : null}
                 <button
                   type='button'
                   onClick={handleToggleMoreDownloads}
@@ -2299,8 +2387,8 @@ function DownloadedContentDialog({
                       部资源
                     </span>
                     <span className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300'>
-                      合计 {contentGroup.totalEpisodeCount} 集 ·{' '}
-                      {formatBytes(contentGroup.totalSizeBytes)}
+                      合计 {groupedCollectionEpisodeCount} 集 ·{' '}
+                      {formatBytes(groupedCollectionTotalSizeBytes)}
                     </span>
                   </>
                 ) : null}
@@ -2389,14 +2477,14 @@ function DownloadedContentDialog({
                         {groupedCollectionTitle}
                       </div>
                       <div className='text-xs text-gray-400'>
-                        {contentGroup.groupingKind === 'adult'
+                        {groupedCollectionKind === 'adult'
                           ? `当前按“${groupedCollectionIdentity}”归集，可在这里切换查看同名资源的离线内容。`
                           : `当前按“${groupedCollectionIdentity}”聚合同名不同源资源，可在这里切换查看各来源的离线内容。`}
                       </div>
                     </div>
                     <span className='inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-200'>
                       {groupedLocalContents.length} 部资源 ·{' '}
-                      {contentGroup.totalEpisodeCount} 集
+                      {groupedCollectionEpisodeCount} 集
                     </span>
                   </div>
 
@@ -3126,7 +3214,7 @@ export default function DownloadsClient() {
                   : 'border-gray-200 bg-white/85 text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-900/60 dark:text-gray-200 dark:hover:bg-gray-900'
               }`}
             >
-              同名不同源聚合
+              全局同名聚合
               {groupSameTitleAcrossSources ? '：开' : '：关'}
             </button>
             <button
