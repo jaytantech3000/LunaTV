@@ -78,6 +78,10 @@ function copyHeader(
   }
 }
 
+function shouldForwardUpstreamContentLength(headers: Headers): boolean {
+  return !headers.has('content-encoding');
+}
+
 function resolveReferer(
   decodedUrl: string,
   request: NextRequest,
@@ -216,7 +220,9 @@ async function handleAssetRequest(
   );
   headers.set('Vary', 'Range');
   copyHeader(upstream.headers, headers, 'content-type', 'Content-Type');
-  copyHeader(upstream.headers, headers, 'content-length', 'Content-Length');
+  if (shouldForwardUpstreamContentLength(upstream.headers)) {
+    copyHeader(upstream.headers, headers, 'content-length', 'Content-Length');
+  }
   copyHeader(upstream.headers, headers, 'content-range', 'Content-Range');
   copyHeader(upstream.headers, headers, 'accept-ranges', 'Accept-Ranges');
   if (!headers.has('Content-Type')) {

@@ -67,4 +67,28 @@ describe('/api/proxy/m3u8-asset', () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('demo-key');
   });
+
+  it('omits upstream content length when the response body was content-encoded', async () => {
+    (fetchWithValidatedRedirects as jest.Mock).mockResolvedValue(
+      new Response(Uint8Array.from([1, 2, 3, 4]), {
+        headers: {
+          'content-encoding': 'gzip',
+          'content-length': '41',
+          'content-type': 'application/octet-stream',
+        },
+        status: 200,
+      })
+    );
+
+    const request = new NextRequest(
+      'http://localhost/api/proxy/m3u8-asset?source=demo&url=https%3A%2F%2Fexample.com%2Fkey.bin&kind=key&sig=demo&referer=https%3A%2F%2Fplayer.example%2F'
+    );
+
+    const response = await GET(request);
+
+    expect(response.headers.get('Content-Length')).toBeNull();
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([
+      1, 2, 3, 4,
+    ]);
+  });
 });
