@@ -79,6 +79,7 @@ interface BatchDownloadResult {
 const RESOURCE_DOWNLOAD_WORKER_COUNT = 3;
 const MAX_RESOURCE_DOWNLOAD_RETRIES = 2;
 const RESOURCE_DOWNLOAD_TIMEOUT_MS = 45_000;
+const RESOURCE_CACHE_LOOKUP_TIMEOUT_MS = 8_000;
 const PROGRESS_FLUSH_INTERVAL_MS = 250;
 const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
@@ -93,6 +94,29 @@ function getCurrentOwnerUsername(): string {
 
 function now(): number {
   return Date.now();
+}
+
+function withOperationTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  errorFactory: () => Error
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(errorFactory());
+    }, Math.max(1, timeoutMs));
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      }
+    );
+  });
 }
 
 function getEpisodeTitle(detail: SearchResult, episodeIndex: number): string {
@@ -157,6 +181,24 @@ function collectDownloadManifestCandidateUrls(
       )
     )
   );
+}
+
+export async function resolveDownloadResourceCachedState(
+  url: string,
+  options: {
+    timeoutMs?: number;
+  } = {}
+): Promise<boolean> {
+  try {
+    return await withOperationTimeout(
+      hasCachedDownload(url),
+      options.timeoutMs ?? RESOURCE_CACHE_LOOKUP_TIMEOUT_MS,
+      () => new Error(`检查离线缓存超时: ${url}`)
+    );
+  } catch (error) {
+    console.warn('检查离线缓存失败，按未缓存处理:', error);
+    return false;
+  }
 }
 
 export function buildDownloadManifestCandidateUrls(
@@ -1142,7 +1184,9 @@ class DownloadManager {
           const resource = manifestResult.resources[cursor];
           cursor += 1;
 
-          const isCached = await hasCachedDownload(resource.url);
+          const isCached = await resolveDownloadResourceCachedState(
+            resource.url
+          );
           ensureRunnerActive();
 
           if (isCached) {
