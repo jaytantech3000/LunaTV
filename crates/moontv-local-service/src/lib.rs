@@ -6312,7 +6312,7 @@ fn build_runtime_public_config_response(config: &ServiceConfig) -> RuntimePublic
         douban_proxy: config.douban_proxy.clone(),
         douban_image_proxy_type: config.douban_image_proxy_type.clone(),
         douban_image_proxy: config.douban_image_proxy.clone(),
-        disable_yellow_filter: config.disable_yellow_filter,
+        disable_yellow_filter: !config.adult_content_filter_enabled,
         fluid_search: config.fluid_search,
         enable_web_live: config
             .enable_web_live_override

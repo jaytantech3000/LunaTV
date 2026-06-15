@@ -1,3 +1,10 @@
+jest.mock('@/lib/auth', () => ({
+  requireAuthContextFromRequest: jest.fn(() => ({
+    username: 'tester',
+    source: 'request-cookie',
+  })),
+}));
+
 jest.mock('@/lib/download/vod-proxy', () => ({
   resolveVodProxyRequest: jest.fn(),
 }));

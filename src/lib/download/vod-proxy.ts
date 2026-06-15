@@ -252,10 +252,13 @@ export function createVodProxyHeaders(
   const contentLength = hasExplicitContentLength
     ? options?.contentLength ?? null
     : upstreamResponse.headers.get('content-length');
+  const hasContentEncoding =
+    typeof upstreamResponse.headers.has === 'function'
+      ? upstreamResponse.headers.has('content-encoding')
+      : Boolean(upstreamResponse.headers.get('content-encoding'));
 
   const canForwardContentLength =
-    hasExplicitContentLength ||
-    !upstreamResponse.headers.has('content-encoding');
+    hasExplicitContentLength || !hasContentEncoding;
 
   if (shouldIncludeContentLength && canForwardContentLength && contentLength) {
     headers.set('Content-Length', contentLength);

@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { DEFAULT_AD_FILTER_CONFIG, filterM3U8 } from '@/lib/ad-filter';
+import { requireAuthContextFromRequest } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { resolveVodProxyRequest } from '@/lib/download/vod-proxy';
 import { getBaseUrl, resolveUrl } from '@/lib/live';
@@ -358,7 +359,9 @@ function buildUpstreamRequestContext(
 
   const upstreamHeaders: Record<string, string> = {
     'User-Agent':
-      sourceUserAgent?.trim() || request.headers.get('user-agent') || DEFAULT_UA,
+      sourceUserAgent?.trim() ||
+      request.headers.get('user-agent') ||
+      DEFAULT_UA,
   };
 
   if (refererToSend) {
@@ -405,7 +408,12 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   let proxyRequest;
   try {
-    proxyRequest = await resolveVodProxyRequest(request);
+    const authContext = requireAuthContextFromRequest(request);
+    proxyRequest = await resolveVodProxyRequest({
+      authContext,
+      source,
+      upstreamUrl: decodedUrl,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Proxy request failed';
@@ -444,29 +452,18 @@ export async function GET(request: NextRequest): Promise<Response> {
       }
     );
   } catch (error: any) {
-    return jsonError(
-      'Upstream fetch failed',
-      502,
-      error?.message || 'unknown'
-    );
+    return jsonError('Upstream fetch failed', 502, error?.message || 'unknown');
   }
 
   if (!upstream.ok) {
-    return jsonError(
-      'Upstream returned non-OK',
-      502,
-      String(upstream.status)
-    );
+    return jsonError('Upstream returned non-OK', 502, String(upstream.status));
   }
 
   let content: string;
   try {
     content = await readTextWithLimit(upstream, MAX_PLAYLIST_BYTES);
   } catch (error: any) {
-    return jsonError(
-      error?.message || 'Unable to read playlist',
-      502
-    );
+    return jsonError(error?.message || 'Unable to read playlist', 502);
   }
 
   if (!content.trimStart().startsWith('#EXTM3U')) {

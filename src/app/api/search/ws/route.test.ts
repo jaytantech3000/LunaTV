@@ -48,6 +48,7 @@ describe('/api/search/ws', () => {
     (getConfig as jest.Mock).mockResolvedValue({
       SiteConfig: {
         DisableYellowFilter: false,
+        SearchDownstreamMaxPage: 5,
       },
     });
     (getAvailableApiSites as jest.Mock).mockResolvedValue([
@@ -74,7 +75,10 @@ describe('/api/search/ws', () => {
       expect.objectContaining({
         key: 'adult-source',
       }),
-      'onlyfans'
+      'onlyfans',
+      {
+        maxPages: 5,
+      }
     );
     expect(filterAdultContentResults).toHaveBeenCalledTimes(1);
   });

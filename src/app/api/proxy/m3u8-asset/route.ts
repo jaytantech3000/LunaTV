@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { requireAuthContextFromRequest } from '@/lib/auth';
 import { resolveVodProxyRequest } from '@/lib/download/vod-proxy';
 import { verifyM3U8ProxySignature } from '@/lib/m3u8-proxy';
 import {
@@ -143,7 +144,12 @@ async function handleAssetRequest(
 
   let proxyRequest;
   try {
-    proxyRequest = await resolveVodProxyRequest(request);
+    const authContext = requireAuthContextFromRequest(request);
+    proxyRequest = await resolveVodProxyRequest({
+      authContext,
+      source,
+      upstreamUrl: decodedUrl,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Proxy request failed';

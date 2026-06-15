@@ -1,96 +1,78 @@
-jest.mock('@/lib/auth', () => ({
-  getAuthInfoFromCookie: jest.fn(),
-}));
+jest.mock('@/lib/auth', () => {
+  const actual = jest.requireActual('@/lib/auth');
+  return {
+    ...actual,
+    requireAuthContextFromRequest: jest.fn(),
+  };
+});
 
-jest.mock('@/lib/config', () => ({
-  getAvailableApiSites: jest.fn(),
-  getCacheTime: jest.fn(),
-  getConfig: jest.fn(),
-}));
-
-jest.mock('@/lib/downstream', () => ({
-  searchFromApi: jest.fn(),
-}));
-
-jest.mock('@/lib/episode-rewriter', () => ({
-  rewriteEpisodesForAdFilterMany: jest.fn(),
+jest.mock('@/lib/core/content/service', () => ({
+  searchContent: jest.fn(),
 }));
 
 import { NextRequest } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
-import {
-  getAvailableApiSites,
-  getCacheTime,
-  getConfig,
-} from '@/lib/config';
-import { searchFromApi } from '@/lib/downstream';
-import { rewriteEpisodesForAdFilterMany } from '@/lib/episode-rewriter';
+import { AuthContextError, requireAuthContextFromRequest } from '@/lib/auth';
+import { searchContent } from '@/lib/core/content/service';
 
 import { GET } from './route';
 
 describe('/api/search', () => {
-  const adultResult = {
+  const searchResult = {
     id: 'adult-1',
-    title: 'OnlyFans 精选合集',
+    title: 'OnlyFans 绮鹃€夊悎闆?',
     source: 'adult-source',
-    source_name: '🔞成人资源',
+    source_name: '馃敒鎴愪汉璧勬簮',
     poster: '',
     episodes: ['https://example.com/1.m3u8'],
-    episodes_titles: ['第1集'],
+    episodes_titles: ['绗?闆?'],
     year: '2026',
   };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (getAuthInfoFromCookie as jest.Mock).mockReturnValue({
+    (requireAuthContextFromRequest as jest.Mock).mockReturnValue({
       username: 'tester',
+      source: 'request-cookie',
     });
-    (getConfig as jest.Mock).mockResolvedValue({
-      SiteConfig: {
-        DisableYellowFilter: false,
-      },
+    (searchContent as jest.Mock).mockResolvedValue({
+      results: [searchResult],
+      cacheTime: 60,
     });
-    (getAvailableApiSites as jest.Mock).mockResolvedValue([
-      {
-        key: 'adult-source',
-        name: '成人源',
-      },
-    ]);
-    (getCacheTime as jest.Mock).mockResolvedValue(60);
-    (rewriteEpisodesForAdFilterMany as jest.Mock).mockImplementation(
-      async (results: unknown[]) => results
-    );
   });
 
-  it('filters adult results when site adult filtering is enabled', async () => {
-    (searchFromApi as jest.Mock).mockResolvedValue([adultResult]);
-
+  it('passes the adult flag through to the content service', async () => {
     const request = new NextRequest(
-      'http://localhost/api/search?q=onlyfans'
+      'http://localhost/api/search?q=onlyfans&adult=1'
     );
 
     const response = await GET(request);
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(payload.results).toEqual([]);
+    expect(payload.results).toEqual([searchResult]);
+    expect(searchContent).toHaveBeenCalledWith({
+      authContext: expect.objectContaining({
+        username: 'tester',
+      }),
+      query: 'onlyfans',
+      allowAdultResults: true,
+    });
   });
 
-  it('keeps adult results when site adult filtering is disabled', async () => {
-    (getConfig as jest.Mock).mockResolvedValue({
-      SiteConfig: {
-        DisableYellowFilter: true,
-      },
+  it('returns auth errors from the request auth context helper', async () => {
+    (requireAuthContextFromRequest as jest.Mock).mockImplementation(() => {
+      throw new AuthContextError();
     });
-    (searchFromApi as jest.Mock).mockResolvedValue([adultResult]);
 
     const request = new NextRequest('http://localhost/api/search?q=onlyfans');
 
     const response = await GET(request);
     const payload = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(payload.results).toEqual([adultResult]);
+    expect(response.status).toBe(401);
+    expect(payload).toEqual({
+      error: 'Unauthorized',
+    });
   });
 });
