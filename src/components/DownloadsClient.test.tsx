@@ -41,7 +41,8 @@ jest.mock('./NavigationFeedbackProvider', () => ({
   })),
 }));
 
-import { DownloadedContentDialog } from './DownloadsClient';
+import DownloadsClient, { DownloadedContentDialog } from './DownloadsClient';
+import { SiteProvider } from './SiteProvider';
 
 function buildDownloadedContentMeta(
   partial: Partial<DownloadedContentMeta> & Pick<DownloadedContentMeta, 'contentId' | 'source' | 'vodId'>
@@ -86,6 +87,7 @@ describe('DownloadedContentDialog', () => {
     mockRouter.replace.mockReset();
     mockRouter.prefetch.mockReset();
     mockBeginNavigation.mockReset();
+    localStorage.clear();
     useDownloadStore.setState({
       hasHydrated: true,
       library: {},
@@ -603,5 +605,48 @@ describe('DownloadedContentDialog', () => {
     expect(
       screen.getByText('已将 miuzxc vol.2 设为归集封面。')
     ).toBeInTheDocument();
+  });
+
+  it('hides downloaded adult resources when adult filtering is enabled', async () => {
+    const adultContent = buildDownloadedContentMeta({
+      contentId: 'adult-a:1',
+      source: 'adult-a',
+      vodId: '1',
+      sourceName: '豆豆资源',
+      title: 'OnlyFans 精选合集',
+      typeName: '伦理片',
+      updatedAt: 1710000003000,
+    });
+    const normalContent = buildDownloadedContentMeta({
+      contentId: 'source-a:2',
+      source: 'source-a',
+      vodId: '2',
+      sourceName: '源 A',
+      title: '普通剧集',
+      updatedAt: 1710000004000,
+    });
+
+    useDownloadStore.setState({
+      library: {
+        [adultContent.contentId]: adultContent,
+        [normalContent.contentId]: normalContent,
+      },
+    });
+
+    render(
+      <SiteProvider siteName='LunaTV' adultContentFilterEnabled>
+        <DownloadsClient />
+      </SiteProvider>
+    );
+
+    expect(
+      screen.getByText('成人内容过滤已开启，已暂时隐藏 1 部离线成人资源。')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '查看 普通剧集 的离线资源详情' })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '查看 OnlyFans 精选合集 的离线资源详情' })
+    ).not.toBeInTheDocument();
   });
 });

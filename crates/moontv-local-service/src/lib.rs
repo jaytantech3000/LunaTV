@@ -908,6 +908,7 @@ struct RuntimePublicConfigResponse {
     douban_proxy: Option<String>,
     douban_image_proxy_type: Option<String>,
     douban_image_proxy: Option<String>,
+    disable_yellow_filter: bool,
     fluid_search: bool,
     enable_web_live: bool,
     player_audio_spike_protection: bool,
@@ -6311,6 +6312,7 @@ fn build_runtime_public_config_response(config: &ServiceConfig) -> RuntimePublic
         douban_proxy: config.douban_proxy.clone(),
         douban_image_proxy_type: config.douban_image_proxy_type.clone(),
         douban_image_proxy: config.douban_image_proxy.clone(),
+        disable_yellow_filter: config.disable_yellow_filter,
         fluid_search: config.fluid_search,
         enable_web_live: config
             .enable_web_live_override
@@ -8384,6 +8386,7 @@ segment0.ts
             &temp_dir,
             json!({
               "cache_time": 7200,
+              "disable_yellow_filter": true,
               "douban_proxy_type": "custom",
               "douban_proxy": "https://proxy.example.com/fetch?url=",
               "douban_image_proxy_type": "custom",
@@ -8454,6 +8457,10 @@ segment0.ts
         );
         assert_eq!(
             payload.get("enableWebLive").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload.get("disableYellowFilter").and_then(Value::as_bool),
             Some(true)
         );
         assert_eq!(

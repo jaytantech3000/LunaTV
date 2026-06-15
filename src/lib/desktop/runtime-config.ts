@@ -18,6 +18,7 @@ export interface DesktopRuntimePublicConfigPayload {
   doubanProxy?: string | null;
   doubanImageProxyType?: string | null;
   doubanImageProxy?: string | null;
+  disableYellowFilter?: boolean;
   fluidSearch?: boolean;
   enableWebLive?: boolean;
   playerAudioSpikeProtection?: boolean;
@@ -105,6 +106,10 @@ export function mergeDesktopRuntimePublicConfig(
       payload.doubanImageProxyType ?? currentConfig.DOUBAN_IMAGE_PROXY_TYPE,
     DOUBAN_IMAGE_PROXY:
       payload.doubanImageProxy ?? currentConfig.DOUBAN_IMAGE_PROXY,
+    DISABLE_YELLOW_FILTER:
+      payload.disableYellowFilter ??
+      currentConfig.DISABLE_YELLOW_FILTER ??
+      false,
     FLUID_SEARCH: payload.fluidSearch ?? currentConfig.FLUID_SEARCH ?? true,
     ENABLE_WEB_LIVE:
       payload.enableWebLive ?? currentConfig.ENABLE_WEB_LIVE ?? false,

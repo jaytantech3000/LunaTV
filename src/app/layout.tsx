@@ -98,6 +98,10 @@ function buildDesktopRuntimeBootstrapScript() {
           payload.doubanImageProxy,
           current.DOUBAN_IMAGE_PROXY
         ),
+        DISABLE_YELLOW_FILTER: coalesce(
+          payload.disableYellowFilter,
+          current.DISABLE_YELLOW_FILTER
+        ),
         FLUID_SEARCH: coalesce(payload.fluidSearch, coalesce(current.FLUID_SEARCH, true)),
         ENABLE_WEB_LIVE: coalesce(
           payload.enableWebLive,
@@ -223,7 +227,11 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           <DesktopRuntimeSync />
-          <SiteProvider siteName={siteName} announcement={announcement}>
+          <SiteProvider
+            siteName={siteName}
+            announcement={announcement}
+            adultContentFilterEnabled={!runtimeConfig.DISABLE_YELLOW_FILTER}
+          >
             {children}
             <GlobalErrorIndicator />
           </SiteProvider>

@@ -53,6 +53,7 @@ export interface PlayRecord {
   search_title?: string; // 搜索时使用的标题
   playback_mode?: 'online' | 'offline';
   offline_content_id?: string;
+  is_adult?: boolean;
 }
 
 // ---- 收藏类型 ----
@@ -66,6 +67,7 @@ export interface Favorite {
   search_title?: string;
   playback_mode?: 'online' | 'offline';
   offline_content_id?: string;
+  is_adult?: boolean;
   origin?: 'vod' | 'live';
 }
 
