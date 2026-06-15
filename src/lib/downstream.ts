@@ -18,6 +18,8 @@ interface ApiSearchItem {
   type_name?: string;
 }
 
+const PROXY_WRAPPER_FALLBACK_TIMEOUT_MS = 4000;
+
 function buildDownstreamHeaders(
   apiSite: ApiSite,
   baseHeaders: Record<string, string>
@@ -41,6 +43,121 @@ function hasCustomDetailUrl(apiSite: ApiSite): boolean {
   return Boolean(apiSite.detail?.trim().match(/^https?:\/\//i));
 }
 
+export function resolveDirectUrlFromProxyUrl(url: string): string | null {
+  try {
+    const proxyUrl = new URL(url);
+    const target = proxyUrl.searchParams.get('url')?.trim();
+    if (!target || !/^https?:\/\//i.test(target)) {
+      return null;
+    }
+
+    const directUrl = new URL(target);
+    if (proxyUrl.origin === directUrl.origin) {
+      return null;
+    }
+
+    for (const [name, value] of Array.from(proxyUrl.searchParams.entries())) {
+      if (name === 'url') continue;
+      directUrl.searchParams.append(name, value);
+    }
+
+    return directUrl.toString();
+  } catch {
+    return null;
+  }
+}
+
+function buildDownstreamTargets(
+  url: string,
+  timeoutMs: number
+): Array<{ url: string; timeoutMs: number }> {
+  const directUrl = resolveDirectUrlFromProxyUrl(url);
+  if (!directUrl || directUrl === url) {
+    return [{ url, timeoutMs }];
+  }
+
+  return [
+    {
+      url,
+      timeoutMs: Math.min(timeoutMs, PROXY_WRAPPER_FALLBACK_TIMEOUT_MS),
+    },
+    { url: directUrl, timeoutMs },
+  ];
+}
+
+async function fetchDownstreamText(
+  url: string,
+  headers: HeadersInit,
+  timeoutMs: number
+): Promise<string> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      headers,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const error = new Error(`下游请求失败: ${response.status}`) as Error & {
+        status?: number;
+      };
+      error.status = response.status;
+      throw error;
+    }
+
+    return await response.text();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchDownstreamTextWithFallback(
+  apiSite: ApiSite,
+  url: string,
+  baseHeaders: Record<string, string>,
+  timeoutMs: number
+): Promise<string> {
+  const headers = buildDownstreamHeaders(apiSite, baseHeaders);
+  let lastError: unknown = null;
+
+  for (const target of buildDownstreamTargets(url, timeoutMs)) {
+    try {
+      return await fetchDownstreamText(target.url, headers, target.timeoutMs);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('下游请求失败');
+}
+
+async function fetchDownstreamJson<T>(
+  apiSite: ApiSite,
+  url: string,
+  baseHeaders: Record<string, string>,
+  timeoutMs: number
+): Promise<T> {
+  const headers = buildDownstreamHeaders(apiSite, baseHeaders);
+  let lastError: unknown = null;
+
+  for (const target of buildDownstreamTargets(url, timeoutMs)) {
+    try {
+      const text = await fetchDownstreamText(
+        target.url,
+        headers,
+        target.timeoutMs
+      );
+      return JSON.parse(text) as T;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('下游请求失败');
+}
+
 /**
  * 通用的带缓存搜索函数
  */
@@ -62,25 +179,13 @@ async function searchWithCache(
   }
 
   // 缓存未命中，发起网络请求
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    const response = await fetch(url, {
-      headers: buildDownstreamHeaders(apiSite, API_CONFIG.search.headers),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      if (response.status === 403) {
-        setCachedSearchPage(apiSite.key, query, page, 'forbidden', []);
-      }
-      return { results: [] };
-    }
-
-    const data = await response.json();
+    const data = await fetchDownstreamJson<any>(
+      apiSite,
+      url,
+      API_CONFIG.search.headers,
+      timeoutMs
+    );
     if (
       !data ||
       !data.list ||
@@ -150,7 +255,9 @@ async function searchWithCache(
     setCachedSearchPage(apiSite.key, query, page, 'ok', results, pageCount);
     return { results, pageCount };
   } catch (error: any) {
-    clearTimeout(timeoutId);
+    if (error?.status === 403) {
+      setCachedSearchPage(apiSite.key, query, page, 'forbidden', []);
+    }
     // 识别被 AbortController 中止（超时）
     const aborted =
       error?.name === 'AbortError' ||
@@ -250,22 +357,12 @@ export async function getDetailFromApi(
   }
 
   const detailUrl = `${apiSite.api}${API_CONFIG.detail.path}${id}`;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-  const response = await fetch(detailUrl, {
-    headers: buildDownstreamHeaders(apiSite, API_CONFIG.detail.headers),
-    signal: controller.signal,
-  });
-
-  clearTimeout(timeoutId);
-
-  if (!response.ok) {
-    throw new Error(`详情请求失败: ${response.status}`);
-  }
-
-  const data = await response.json();
+  const data = await fetchDownstreamJson<any>(
+    apiSite,
+    detailUrl,
+    API_CONFIG.detail.headers,
+    10000
+  );
 
   if (
     !data ||
@@ -335,22 +432,12 @@ async function handleSpecialSourceDetail(
   apiSite: ApiSite
 ): Promise<SearchResult> {
   const detailUrl = `${apiSite.detail}/index.php/vod/detail/id/${id}.html`;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-  const response = await fetch(detailUrl, {
-    headers: buildDownstreamHeaders(apiSite, API_CONFIG.detail.headers),
-    signal: controller.signal,
-  });
-
-  clearTimeout(timeoutId);
-
-  if (!response.ok) {
-    throw new Error(`详情页请求失败: ${response.status}`);
-  }
-
-  const html = await response.text();
+  const html = await fetchDownstreamTextWithFallback(
+    apiSite,
+    detailUrl,
+    API_CONFIG.detail.headers,
+    10000
+  );
   let matches: string[] = [];
 
   if (apiSite.key === 'ffzy') {

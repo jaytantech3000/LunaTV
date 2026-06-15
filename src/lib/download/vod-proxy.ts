@@ -246,12 +246,18 @@ export function createVodProxyHeaders(
   headers.set('Cache-Control', 'no-store');
 
   const shouldIncludeContentLength = options?.includeContentLength !== false;
-  const contentLength =
+  const hasExplicitContentLength = Boolean(
     options && 'contentLength' in options
-      ? options.contentLength
-      : upstreamResponse.headers.get('content-length');
+  );
+  const contentLength = hasExplicitContentLength
+    ? options?.contentLength ?? null
+    : upstreamResponse.headers.get('content-length');
 
-  if (shouldIncludeContentLength && contentLength) {
+  const canForwardContentLength =
+    hasExplicitContentLength ||
+    !upstreamResponse.headers.has('content-encoding');
+
+  if (shouldIncludeContentLength && canForwardContentLength && contentLength) {
     headers.set('Content-Length', contentLength);
   }
 

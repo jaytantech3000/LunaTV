@@ -2,11 +2,16 @@
 
 import { X } from 'lucide-react';
 
+import {
+  type SearchHistoryEntry,
+  getSearchHistoryModeLabel,
+} from '@/lib/search-history';
+
 interface SearchHistorySectionProps {
-  items: string[];
-  onSelect: (keyword: string) => void;
+  items: SearchHistoryEntry[];
+  onSelect: (entry: SearchHistoryEntry) => void;
   onClear: () => void | Promise<void>;
-  onDelete: (keyword: string) => void | Promise<void>;
+  onDelete: (entry: SearchHistoryEntry) => void | Promise<void>;
   className?: string;
 }
 
@@ -38,14 +43,19 @@ export default function SearchHistorySection({
         </button>
       </div>
       <div className='mt-3 flex flex-wrap gap-2'>
-        {items.map((keyword) => (
-          <div key={keyword} className='group relative'>
+        {items.map((entry) => (
+          <div key={entry.rawValue} className='group relative'>
             <button
               type='button'
-              onClick={() => onSelect(keyword)}
-              className='rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
+              onClick={() => onSelect(entry)}
+              className='inline-flex items-center gap-2 rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
             >
-              {keyword}
+              <span>{entry.keyword}</span>
+              {entry.mode ? (
+                <span className='rounded-full border border-gray-300/80 bg-white/80 px-2 py-0.5 text-[11px] text-gray-500 dark:border-gray-700 dark:bg-gray-900/80 dark:text-gray-400'>
+                  {getSearchHistoryModeLabel(entry.mode)}
+                </span>
+              ) : null}
             </button>
             <button
               type='button'
@@ -53,7 +63,7 @@ export default function SearchHistorySection({
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                void onDelete(keyword);
+                void onDelete(entry);
               }}
               className='absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-gray-400 text-white opacity-0 transition-colors group-hover:opacity-100 hover:bg-red-500'
             >

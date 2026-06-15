@@ -49,6 +49,8 @@ import {
 } from '@/lib/player-enhancements';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
+import { acquireScrollLock } from '@/lib/scroll-lock';
+import { apiFetch } from '@/lib/transport/api-client';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
@@ -80,22 +82,9 @@ export const UserMenu: React.FC = () => {
   // Body 滚动锁定 - 使用 overflow 方式避免布局问题
   useEffect(() => {
     if (isSettingsOpen || isChangePasswordOpen) {
-      const body = document.body;
-      const html = document.documentElement;
-
-      // 保存原始样式
-      const originalBodyOverflow = body.style.overflow;
-      const originalHtmlOverflow = html.style.overflow;
-
-      // 只设置 overflow 来阻止滚动
-      body.style.overflow = 'hidden';
-      html.style.overflow = 'hidden';
-
-      return () => {
-        // 恢复所有原始样式
-        body.style.overflow = originalBodyOverflow;
-        html.style.overflow = originalHtmlOverflow;
-      };
+      return acquireScrollLock({
+        lockHtml: true,
+      });
     }
   }, [isSettingsOpen, isChangePasswordOpen]);
 

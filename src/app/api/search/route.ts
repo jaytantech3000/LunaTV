@@ -13,9 +13,11 @@ export async function GET(request: NextRequest) {
     const authContext = requireAuthContextFromRequest(request);
     const { searchParams } = new URL(request.url);
     const query = searchParams.get('q');
+    const allowAdultResults = searchParams.get('adult') === '1';
     const { results, cacheTime } = await searchContent({
       authContext,
       query,
+      allowAdultResults,
     });
 
     if (!query?.trim()) {
@@ -28,7 +30,6 @@ export async function GET(request: NextRequest) {
     }
 
     if (results.length === 0) {
-      // no cache if empty
       return NextResponse.json({ results: [] }, { status: 200 });
     }
 

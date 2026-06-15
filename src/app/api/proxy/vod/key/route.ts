@@ -46,7 +46,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       headers: createVodProxyHeaders(
         upstreamResponse,
         upstreamResponse.headers.get('Content-Type') ||
-          'application/octet-stream'
+          'application/octet-stream',
+        {
+          contentLength: Buffer.byteLength(keyBuffer).toString(),
+        }
       ),
     });
   } catch (error) {

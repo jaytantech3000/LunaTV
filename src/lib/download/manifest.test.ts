@@ -73,7 +73,7 @@ describe('manifest parsing helpers', () => {
     ]);
   });
 
-  it('collects ll-hls part, preload and rendition resources', () => {
+  it('collects ll-hls parts but skips transient preload and rendition resources', () => {
     const manifest = `#EXTM3U
 #EXT-X-PART:DURATION=0.333,URI="/api/proxy/vod/segment?source=demo&url=https%3A%2F%2Fexample.com%2Fpart-0001.ts"
 #EXT-X-PRELOAD-HINT:TYPE=PART,URI="/api/proxy/vod/segment?source=demo&url=https%3A%2F%2Fexample.com%2Fpart-0002.ts"
@@ -85,14 +85,6 @@ describe('manifest parsing helpers', () => {
       {
         type: 'segment',
         url: '/api/proxy/vod/segment?source=demo&url=https%3A%2F%2Fexample.com%2Fpart-0001.ts',
-      },
-      {
-        type: 'segment',
-        url: '/api/proxy/vod/segment?source=demo&url=https%3A%2F%2Fexample.com%2Fpart-0002.ts',
-      },
-      {
-        type: 'manifest',
-        url: '/api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fexample.com%2Faudio.m3u8',
       },
       {
         type: 'segment',
@@ -114,9 +106,7 @@ describe('manifest parsing helpers', () => {
     const originalFetch = global.fetch;
     const fetchMock = jest
       .fn()
-      .mockResolvedValueOnce(
-        createErrorResponse(403, '{"error":"blocked"}')
-      )
+      .mockResolvedValueOnce(createErrorResponse(403, '{"error":"blocked"}'))
       .mockResolvedValueOnce(
         createManifestResponse(
           `#EXTM3U
@@ -142,11 +132,36 @@ describe('manifest parsing helpers', () => {
     }
   });
 
-  it('includes the manifest url in network failure errors', async () => {
+  it('retries transient 502 manifest failures before succeeding', async () => {
     const originalFetch = global.fetch;
     const fetchMock = jest
       .fn()
-      .mockRejectedValueOnce(new TypeError('Load failed'));
+      .mockResolvedValueOnce(createErrorResponse(502, 'bad gateway'))
+      .mockResolvedValueOnce(
+        createManifestResponse(
+          `#EXTM3U
+#EXTINF:4.0,
+/api/proxy/vod/segment?source=demo&url=https%3A%2F%2Fexample.com%2F0001.ts`
+        )
+      );
+
+    global.fetch = fetchMock as typeof fetch;
+
+    try {
+      const result = await parseManifestForDownloadWithFallback([
+        '/api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fexample.com%2Fretryable.m3u8',
+      ]);
+
+      expect(result.playbackManifestUrl).toContain('retryable.m3u8');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('includes the manifest url in network failure errors', async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = jest.fn().mockRejectedValue(new TypeError('Load failed'));
 
     global.fetch = fetchMock as typeof fetch;
 
@@ -158,6 +173,7 @@ describe('manifest parsing helpers', () => {
       ).rejects.toThrow(
         '获取 manifest 失败: /api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fexample.com%2Fbroken.m3u8 (Load failed)'
       );
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     } finally {
       global.fetch = originalFetch;
     }

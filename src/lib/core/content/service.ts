@@ -1,3 +1,5 @@
+/* eslint-disable no-console */
+
 import { AuthContext } from '@/lib/auth';
 import {
   ApiSite,
@@ -145,6 +147,7 @@ function buildSuggestions(
 export async function searchContent(params: {
   authContext: AuthContext;
   query: string | null;
+  allowAdultResults?: boolean;
 }): Promise<{
   results: SearchResult[];
   cacheTime: number;
@@ -180,7 +183,12 @@ export async function searchContent(params: {
     )
     .flatMap((result) => result.value);
 
-  results = applyAdultContentFilter(results, context.adultContentFilterEnabled);
+  if (!params.allowAdultResults) {
+    results = applyAdultContentFilter(
+      results,
+      context.adultContentFilterEnabled
+    );
+  }
 
   return {
     results,

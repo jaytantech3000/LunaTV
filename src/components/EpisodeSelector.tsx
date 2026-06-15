@@ -9,6 +9,7 @@ import React, {
   useState,
 } from 'react';
 
+import { applyVerticalWheelToHorizontalScroll } from '@/lib/horizontal-wheel';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
 
@@ -18,6 +19,16 @@ interface VideoInfo {
   loadSpeed: string;
   pingTime: number;
   hasError?: boolean; // 添加错误状态标识
+}
+
+interface RelatedVideoOption {
+  contentId: string;
+  title: string;
+  poster: string;
+  sourceName: string;
+  year: string;
+  episodeCount: number;
+  href: string;
 }
 
 interface EpisodeSelectorProps {
@@ -43,6 +54,15 @@ interface EpisodeSelectorProps {
   /** 预计算的测速结果，避免重复测速 */
   precomputedVideoInfo?: Map<string, VideoInfo>;
   sourceSwitchEnabled?: boolean;
+  episodeTabLabel?: string;
+  episodeListVariant?: 'episodes' | 'related-videos';
+  relatedVideos?: RelatedVideoOption[];
+  relatedVideosEmptyText?: string;
+  onRelatedVideoSelect?: (contentId: string, href: string) => void;
+  episodeHeaderActionLabel?: string;
+  onEpisodeHeaderAction?: () => void;
+  episodeHeaderActionDisabled?: boolean;
+  episodeHeaderActionTitle?: string;
 }
 
 /**
@@ -63,6 +83,15 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   sourceSearchError = null,
   precomputedVideoInfo,
   sourceSwitchEnabled = true,
+  episodeTabLabel = '选集',
+  episodeListVariant = 'episodes',
+  relatedVideos = [],
+  relatedVideosEmptyText = '暂无可直接播放的相关视频',
+  onRelatedVideoSelect,
+  episodeHeaderActionLabel,
+  onEpisodeHeaderAction,
+  episodeHeaderActionDisabled = false,
+  episodeHeaderActionTitle,
 }) => {
   const router = useRouter();
   const pageCount = Math.ceil(totalEpisodes / episodesPerPage);
@@ -129,7 +158,12 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
       return;
     }
     const episodeUrl =
-      source.episodes.length > 1 ? source.episodes[1] : source.episodes[0];
+      source.episodes.find((candidateUrl) => Boolean(candidateUrl)) ||
+      source.episodes[0];
+
+    if (!episodeUrl) {
+      return;
+    }
 
     // 标记为已尝试
     setAttemptedSources((prev) => new Set(prev).add(sourceKey));
@@ -248,50 +282,16 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
 
   const categoryContainerRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
-
-  // 添加鼠标悬停状态管理
-  const [isCategoryHovered, setIsCategoryHovered] = useState(false);
-
-  // 阻止页面竖向滚动
-  const preventPageScroll = useCallback((e: WheelEvent) => {
-    if (isCategoryHovered) {
-      e.preventDefault();
-    }
-  }, [isCategoryHovered]);
-
-  // 处理滚轮事件，实现横向滚动
-  const handleWheel = useCallback((e: WheelEvent) => {
-    if (isCategoryHovered && categoryContainerRef.current) {
-      e.preventDefault(); // 阻止默认的竖向滚动
-
-      const container = categoryContainerRef.current;
-      const scrollAmount = e.deltaY * 2; // 调整滚动速度
-
-      // 根据滚轮方向进行横向滚动
-      container.scrollBy({
-        left: scrollAmount,
-        behavior: 'smooth'
+  const handleCategoryWheel = useCallback(
+    (event: React.WheelEvent<HTMLDivElement>) => {
+      applyVerticalWheelToHorizontalScroll({
+        container: event.currentTarget,
+        event,
+        speedMultiplier: 2,
       });
-    }
-  }, [isCategoryHovered]);
-
-  // 添加全局wheel事件监听器
-  useEffect(() => {
-    if (isCategoryHovered) {
-      // 鼠标悬停时阻止页面滚动
-      document.addEventListener('wheel', preventPageScroll, { passive: false });
-      document.addEventListener('wheel', handleWheel, { passive: false });
-    } else {
-      // 鼠标离开时恢复页面滚动
-      document.removeEventListener('wheel', preventPageScroll);
-      document.removeEventListener('wheel', handleWheel);
-    }
-
-    return () => {
-      document.removeEventListener('wheel', preventPageScroll);
-      document.removeEventListener('wheel', handleWheel);
-    };
-  }, [isCategoryHovered, preventPageScroll, handleWheel]);
+    },
+    []
+  );
 
   // 当分页切换时，将激活的分页标签滚动到视口中间
   useEffect(() => {
@@ -353,141 +353,244 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     [onSourceChange]
   );
 
+  const handleRelatedVideoClick = useCallback(
+    (video: RelatedVideoOption) => {
+      if (onRelatedVideoSelect) {
+        onRelatedVideoSelect(video.contentId, video.href);
+        return;
+      }
+
+      if (typeof window !== 'undefined') {
+        window.location.assign(video.href);
+      }
+    },
+    [onRelatedVideoSelect]
+  );
+
   const currentStart = currentPage * episodesPerPage + 1;
   const currentEnd = Math.min(
     currentStart + episodesPerPage - 1,
     totalEpisodes
   );
+  const usesRelatedVideosHeader =
+    episodeListVariant === 'related-videos' && !sourceSwitchEnabled;
 
   return (
     <div className='md:ml-2 px-4 py-0 h-full rounded-xl bg-black/10 dark:bg-white/5 flex flex-col border border-white/0 dark:border-white/30 overflow-hidden'>
-      {/* 主要的 Tab 切换 - 无缝融入设计 */}
-      <div className='flex mb-1 -mx-6 flex-shrink-0'>
-        {(totalEpisodes > 1 || !sourceSwitchEnabled) && (
-          <div
-            onClick={() => setActiveTab('episodes')}
-            className={`flex-1 py-3 px-6 text-center cursor-pointer transition-all duration-200 font-medium
-              ${activeTab === 'episodes'
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-gray-700 hover:text-green-600 bg-black/5 dark:bg-white/5 dark:text-gray-300 dark:hover:text-green-400 hover:bg-black/3 dark:hover:bg-white/3'
-              }
-            `.trim()}
-          >
-            选集
+      {/* 顶部标题/标签区 */}
+      {usesRelatedVideosHeader ? (
+        <div className='mb-1 -mx-6 flex flex-shrink-0 items-center justify-between border-b border-white/10 px-6 py-3'>
+          <div className='text-lg font-semibold text-green-600 dark:text-green-400'>
+            {episodeTabLabel}
+          </div>
+          {episodeHeaderActionLabel ? (
+            <button
+              type='button'
+              onClick={onEpisodeHeaderAction}
+              disabled={episodeHeaderActionDisabled}
+              title={episodeHeaderActionTitle || episodeHeaderActionLabel}
+              className={`inline-flex h-9 items-center justify-center rounded-xl border px-3 text-sm font-medium transition-colors ${
+                episodeHeaderActionDisabled
+                  ? 'cursor-not-allowed border-white/10 bg-white/5 text-gray-500'
+                  : 'border-emerald-400/40 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/15 dark:text-emerald-300'
+              }`}
+            >
+              {episodeHeaderActionLabel}
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <div className='flex mb-1 -mx-6 flex-shrink-0'>
+          {(totalEpisodes > 1 || !sourceSwitchEnabled) && (
+            <div
+              onClick={() => setActiveTab('episodes')}
+              className={`flex-1 py-3 px-6 text-center cursor-pointer transition-all duration-200 font-medium
+                ${
+                  activeTab === 'episodes'
+                    ? 'text-green-600 dark:text-green-400'
+                    : 'text-gray-700 hover:text-green-600 bg-black/5 dark:bg-white/5 dark:text-gray-300 dark:hover:text-green-400 hover:bg-black/3 dark:hover:bg-white/3'
+                }
+              `.trim()}
+            >
+              {episodeTabLabel}
             </div>
           )}
-        {sourceSwitchEnabled && (
-          <div
-            onClick={handleSourceTabClick}
-            className={`flex-1 py-3 px-6 text-center cursor-pointer transition-all duration-200 font-medium
-              ${activeTab === 'sources'
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-gray-700 hover:text-green-600 bg-black/5 dark:bg-white/5 dark:text-gray-300 dark:hover:text-green-400 hover:bg-black/3 dark:hover:bg-white/3'
-              }
-            `.trim()}
-          >
-            换源
-          </div>
-        )}
-      </div>
+          {sourceSwitchEnabled && (
+            <div
+              onClick={handleSourceTabClick}
+              className={`flex-1 py-3 px-6 text-center cursor-pointer transition-all duration-200 font-medium
+                ${
+                  activeTab === 'sources'
+                    ? 'text-green-600 dark:text-green-400'
+                    : 'text-gray-700 hover:text-green-600 bg-black/5 dark:bg-white/5 dark:text-gray-300 dark:hover:text-green-400 hover:bg-black/3 dark:hover:bg-white/3'
+                }
+              `.trim()}
+            >
+              换源
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 选集 Tab 内容 */}
       {activeTab === 'episodes' && (
         <>
-          {/* 分类标签 */}
-          <div className='flex items-center gap-4 mb-4 border-b border-gray-300 dark:border-gray-700 -mx-6 px-6 flex-shrink-0'>
-            <div
-              className='flex-1 overflow-x-auto'
-              ref={categoryContainerRef}
-              onMouseEnter={() => setIsCategoryHovered(true)}
-              onMouseLeave={() => setIsCategoryHovered(false)}
-            >
-              <div className='flex gap-2 min-w-max'>
-                {categories.map((label, idx) => {
-                  const isActive = idx === displayPage;
+          {episodeListVariant === 'related-videos' ? (
+            <div className='flex-1 overflow-y-auto space-y-3 pt-4 pb-4'>
+              {relatedVideos.length === 0 ? (
+                <div className='rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-500 dark:text-gray-300'>
+                  {relatedVideosEmptyText}
+                </div>
+              ) : (
+                relatedVideos.map((video) => (
+                  <button
+                    key={video.contentId}
+                    type='button'
+                    onClick={() => handleRelatedVideoClick(video)}
+                    className='w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-left transition-colors hover:border-emerald-400/40 hover:bg-white/5'
+                  >
+                    <div className='flex items-start gap-3'>
+                      <div className='h-20 w-14 flex-shrink-0 overflow-hidden rounded-xl bg-gray-200 dark:bg-white/10'>
+                        {video.poster ? (
+                          <img
+                            src={processImageUrl(video.poster)}
+                            alt={video.title}
+                            className='h-full w-full object-cover'
+                            onError={(event) => {
+                              const target = event.target as HTMLImageElement;
+                              target.style.display = 'none';
+                            }}
+                          />
+                        ) : null}
+                      </div>
+
+                      <div className='min-w-0 flex-1 space-y-2'>
+                        <div className='line-clamp-2 text-sm font-semibold leading-5 text-gray-900 dark:text-gray-100'>
+                          {video.title}
+                        </div>
+
+                        <div className='flex flex-wrap items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400'>
+                          <span className='rounded-full border border-white/10 bg-white/5 px-2 py-1 text-gray-700 dark:text-gray-200'>
+                            {video.sourceName}
+                          </span>
+                          {video.year && video.year !== 'unknown' ? (
+                            <span>{video.year}</span>
+                          ) : null}
+                          <span>
+                            {video.episodeCount > 1
+                              ? `${video.episodeCount} 集`
+                              : '单集'}
+                          </span>
+                        </div>
+
+                        <div className='text-xs font-medium text-emerald-600 dark:text-emerald-400'>
+                          点击直接播放
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          ) : (
+            <>
+              {/* 分类标签 */}
+              <div className='flex items-center gap-4 mb-4 border-b border-gray-300 dark:border-gray-700 -mx-6 px-6 flex-shrink-0'>
+                <div
+                  className='flex-1 overflow-x-auto'
+                  ref={categoryContainerRef}
+                  onWheel={handleCategoryWheel}
+                >
+                  <div className='flex gap-2 min-w-max'>
+                    {categories.map((label, idx) => {
+                      const isActive = idx === displayPage;
+                      return (
+                        <button
+                          key={label}
+                          ref={(el) => {
+                            buttonRefs.current[idx] = el;
+                          }}
+                          onClick={() => handleCategoryClick(idx)}
+                          className={`w-20 relative py-2 text-sm font-medium transition-colors whitespace-nowrap flex-shrink-0 text-center 
+                            ${
+                              isActive
+                                ? 'text-green-500 dark:text-green-400'
+                                : 'text-gray-700 hover:text-green-600 dark:text-gray-300 dark:hover:text-green-400'
+                            }
+                          `.trim()}
+                        >
+                          {label}
+                          {isActive && (
+                            <div className='absolute bottom-0 left-0 right-0 h-0.5 bg-green-500 dark:bg-green-400' />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                {/* 向上/向下按钮 */}
+                <button
+                  className='flex-shrink-0 w-8 h-8 rounded-md flex items-center justify-center text-gray-700 hover:text-green-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:text-green-400 dark:hover:bg-white/20 transition-colors transform translate-y-[-4px]'
+                  onClick={() => {
+                    // 切换集数排序（正序/倒序）
+                    setDescending((prev) => !prev);
+                  }}
+                >
+                  <svg
+                    className='w-4 h-4'
+                    fill='none'
+                    stroke='currentColor'
+                    viewBox='0 0 24 24'
+                  >
+                    <path
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                      strokeWidth='2'
+                      d='M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4'
+                    />
+                  </svg>
+                </button>
+              </div>
+
+              {/* 集数网格 */}
+              <div className='flex flex-wrap gap-3 overflow-y-auto flex-1 content-start pb-4'>
+                {(() => {
+                  const len = currentEnd - currentStart + 1;
+                  const episodes = Array.from({ length: len }, (_, i) =>
+                    descending ? currentEnd - i : currentStart + i
+                  );
+                  return episodes;
+                })().map((episodeNumber) => {
+                  const isActive = episodeNumber === value;
                   return (
                     <button
-                      key={label}
-                      ref={(el) => {
-                        buttonRefs.current[idx] = el;
-                      }}
-                      onClick={() => handleCategoryClick(idx)}
-                      className={`w-20 relative py-2 text-sm font-medium transition-colors whitespace-nowrap flex-shrink-0 text-center 
-                        ${isActive
-                          ? 'text-green-500 dark:text-green-400'
-                          : 'text-gray-700 hover:text-green-600 dark:text-gray-300 dark:hover:text-green-400'
-                        }
-                      `.trim()}
+                      key={episodeNumber}
+                      onClick={() => handleEpisodeClick(episodeNumber - 1)}
+                      className={`h-10 min-w-10 px-3 py-2 flex items-center justify-center text-sm font-medium rounded-md transition-all duration-200 whitespace-nowrap font-mono
+                        ${
+                          isActive
+                            ? 'bg-green-500 text-white shadow-lg shadow-green-500/25 dark:bg-green-600'
+                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300 hover:scale-105 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20'
+                        }`.trim()}
                     >
-                      {label}
-                      {isActive && (
-                        <div className='absolute bottom-0 left-0 right-0 h-0.5 bg-green-500 dark:bg-green-400' />
-                      )}
+                      {(() => {
+                        const title = episodes_titles?.[episodeNumber - 1];
+                        if (!title) {
+                          return episodeNumber;
+                        }
+                        // 如果匹配"第X集"、"第X话"、"X集"、"X话"格式，提取中间的数字
+                        const match = title.match(/(?:第)?(\d+)(?:集|话)/);
+                        if (match) {
+                          return match[1];
+                        }
+                        return title;
+                      })()}
                     </button>
                   );
                 })}
               </div>
-            </div>
-            {/* 向上/向下按钮 */}
-            <button
-              className='flex-shrink-0 w-8 h-8 rounded-md flex items-center justify-center text-gray-700 hover:text-green-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:text-green-400 dark:hover:bg-white/20 transition-colors transform translate-y-[-4px]'
-              onClick={() => {
-                // 切换集数排序（正序/倒序）
-                setDescending((prev) => !prev);
-              }}
-            >
-              <svg
-                className='w-4 h-4'
-                fill='none'
-                stroke='currentColor'
-                viewBox='0 0 24 24'
-              >
-                <path
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  strokeWidth='2'
-                  d='M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4'
-                />
-              </svg>
-            </button>
-          </div>
-
-          {/* 集数网格 */}
-          <div className='flex flex-wrap gap-3 overflow-y-auto flex-1 content-start pb-4'>
-            {(() => {
-              const len = currentEnd - currentStart + 1;
-              const episodes = Array.from({ length: len }, (_, i) =>
-                descending ? currentEnd - i : currentStart + i
-              );
-              return episodes;
-            })().map((episodeNumber) => {
-              const isActive = episodeNumber === value;
-              return (
-                <button
-                  key={episodeNumber}
-                  onClick={() => handleEpisodeClick(episodeNumber - 1)}
-                  className={`h-10 min-w-10 px-3 py-2 flex items-center justify-center text-sm font-medium rounded-md transition-all duration-200 whitespace-nowrap font-mono
-                    ${isActive
-                      ? 'bg-green-500 text-white shadow-lg shadow-green-500/25 dark:bg-green-600'
-                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 hover:scale-105 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20'
-                    }`.trim()}
-                >
-                  {(() => {
-                    const title = episodes_titles?.[episodeNumber - 1];
-                    if (!title) {
-                      return episodeNumber;
-                    }
-                    // 如果匹配"第X集"、"第X话"、"X集"、"X话"格式，提取中间的数字
-                    const match = title.match(/(?:第)?(\d+)(?:集|话)/);
-                    if (match) {
-                      return match[1];
-                    }
-                    return title;
-                  })()}
-                </button>
-              );
-            })}
-          </div>
+            </>
+          )}
         </>
       )}
 
@@ -554,10 +657,11 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                           !isCurrentSource && handleSourceClick(source)
                         }
                         className={`flex items-start gap-3 px-2 py-3 rounded-lg transition-all select-none duration-200 relative
-                      ${isCurrentSource
-                            ? 'bg-green-500/10 dark:bg-green-500/20 border-green-500/30 border'
-                            : 'hover:bg-gray-200/50 dark:hover:bg-white/10 hover:scale-[1.02] cursor-pointer'
-                          }`.trim()}
+                      ${
+                        isCurrentSource
+                          ? 'bg-green-500/10 dark:bg-green-500/20 border-green-500/30 border'
+                          : 'hover:bg-gray-200/50 dark:hover:bg-white/10 hover:scale-[1.02] cursor-pointer'
+                      }`.trim()}
                       >
                         {/* 封面 */}
                         <div className='flex-shrink-0 w-12 h-20 bg-gray-300 dark:bg-gray-600 rounded overflow-hidden'>
@@ -612,8 +716,8 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                                   const textColorClasses = isUltraHigh
                                     ? 'text-purple-600 dark:text-purple-400'
                                     : isHigh
-                                      ? 'text-green-600 dark:text-green-400'
-                                      : 'text-yellow-600 dark:text-yellow-400';
+                                    ? 'text-green-600 dark:text-green-400'
+                                    : 'text-yellow-600 dark:text-yellow-400';
 
                                   return (
                                     <div

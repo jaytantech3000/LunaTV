@@ -17,6 +17,14 @@
 import { getAuthInfoFromBrowserCookie } from './auth';
 import { purgeOfflineDownloads } from './download/session';
 import { getRuntimeConfig } from './runtime-config';
+import {
+  type SearchHistoryEntry,
+  type SearchHistoryMode,
+  decodeSearchHistoryValue,
+  decodeSearchHistoryValues,
+  encodeSearchHistoryValue,
+  resolveSearchHistoryRawValue,
+} from './search-history';
 import { buildApiUrl } from './transport/endpoint';
 import { SkipConfig } from './types';
 
@@ -422,6 +430,32 @@ class HybridCacheManager {
 // 获取缓存管理器实例
 const cacheManager = HybridCacheManager.getInstance();
 
+function dispatchSearchHistoryUpdated(rawHistory: string[]): void {
+  window.dispatchEvent(
+    new CustomEvent('searchHistoryUpdated', {
+      detail: decodeSearchHistoryValues(rawHistory),
+    })
+  );
+}
+
+function shouldReplaceSearchHistoryValue(
+  rawHistoryValue: string,
+  keyword: string,
+  mode?: SearchHistoryMode
+): boolean {
+  const entry = decodeSearchHistoryValue(rawHistoryValue);
+
+  if (!entry || entry.keyword !== keyword) {
+    return false;
+  }
+
+  if (!mode) {
+    return !entry.mode;
+  }
+
+  return !entry.mode || entry.mode === mode;
+}
+
 export function getCachedPlayRecordsSnapshot(): Record<
   string,
   PlayRecord
@@ -500,6 +534,7 @@ async function handleDatabaseOperationFailure(
   try {
     let freshData: any;
     let eventName: string;
+    let eventDetail: any;
 
     switch (dataType) {
       case 'playRecords':
@@ -508,6 +543,7 @@ async function handleDatabaseOperationFailure(
         );
         cacheManager.cachePlayRecords(freshData);
         eventName = 'playRecordsUpdated';
+        eventDetail = freshData;
         break;
       case 'favorites':
         freshData = await fetchFromApi<Record<string, Favorite>>(
@@ -515,6 +551,7 @@ async function handleDatabaseOperationFailure(
         );
         cacheManager.cacheFavorites(freshData);
         eventName = 'favoritesUpdated';
+        eventDetail = freshData;
         break;
       case 'searchHistory':
         freshData = await fetchFromApi<string[]>(
@@ -522,13 +559,14 @@ async function handleDatabaseOperationFailure(
         );
         cacheManager.cacheSearchHistory(freshData);
         eventName = 'searchHistoryUpdated';
+        eventDetail = decodeSearchHistoryValues(freshData);
         break;
     }
 
     // 触发更新事件通知组件
     window.dispatchEvent(
       new CustomEvent(eventName, {
-        detail: freshData,
+        detail: eventDetail,
       })
     );
   } catch (refreshErr) {
@@ -553,11 +591,7 @@ async function refreshSearchHistorySilently(): Promise<void> {
       }
     );
     cacheManager.cacheSearchHistory(freshData);
-    window.dispatchEvent(
-      new CustomEvent('searchHistoryUpdated', {
-        detail: freshData,
-      })
-    );
+    dispatchSearchHistoryUpdated(freshData);
   } catch (error) {
     if (wasRedirectedToLogin(error) || isUnauthorizedRequestError(error)) {
       return;
@@ -859,7 +893,7 @@ export async function deletePlayRecord(
  * 获取搜索历史。
  * 数据库存储模式下使用混合缓存策略：优先返回缓存数据，后台异步同步最新数据。
  */
-export async function getSearchHistory(): Promise<string[]> {
+export async function getSearchHistory(): Promise<SearchHistoryEntry[]> {
   // 服务器端渲染阶段直接返回空
   if (typeof window === 'undefined') {
     return [];
@@ -879,12 +913,7 @@ export async function getSearchHistory(): Promise<string[]> {
           // 只有数据真正不同时才更新缓存
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cacheSearchHistory(freshData);
-            // 触发数据更新事件
-            window.dispatchEvent(
-              new CustomEvent('searchHistoryUpdated', {
-                detail: freshData,
-              })
-            );
+            dispatchSearchHistoryUpdated(freshData);
           }
         })
         .catch((err) => {
@@ -895,7 +924,7 @@ export async function getSearchHistory(): Promise<string[]> {
           console.warn('后台同步搜索历史失败:', err);
         });
 
-      return cachedData;
+      return decodeSearchHistoryValues(cachedData);
     } else {
       // 缓存为空，直接从 API 获取并缓存
       try {
@@ -906,7 +935,7 @@ export async function getSearchHistory(): Promise<string[]> {
           }
         );
         cacheManager.cacheSearchHistory(freshData);
-        return freshData;
+        return decodeSearchHistoryValues(freshData);
       } catch (err) {
         console.error('获取搜索历史失败:', err);
         return [];
@@ -919,8 +948,7 @@ export async function getSearchHistory(): Promise<string[]> {
     const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
     if (!raw) return [];
     const arr = JSON.parse(raw) as string[];
-    // 仅返回字符串数组
-    return Array.isArray(arr) ? arr : [];
+    return decodeSearchHistoryValues(Array.isArray(arr) ? arr : []);
   } catch (err) {
     console.error('读取搜索历史失败:', err);
     triggerGlobalError('读取搜索历史失败');
@@ -932,15 +960,25 @@ export async function getSearchHistory(): Promise<string[]> {
  * 将关键字添加到搜索历史。
  * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
  */
-export async function addSearchHistory(keyword: string): Promise<void> {
+export async function addSearchHistory(
+  keyword: string,
+  mode?: SearchHistoryMode
+): Promise<void> {
   const trimmed = keyword.trim();
-  if (!trimmed) return;
+  const encodedKeyword = encodeSearchHistoryValue(trimmed, mode);
+
+  if (!encodedKeyword) return;
 
   // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
   if (shouldUseRemoteUserDataStorage()) {
     // 立即更新缓存
     const cachedHistory = cacheManager.getCachedSearchHistory() || [];
-    const newHistory = [trimmed, ...cachedHistory.filter((k) => k !== trimmed)];
+    const newHistory = [
+      encodedKeyword,
+      ...cachedHistory.filter(
+        (value) => !shouldReplaceSearchHistoryValue(value, trimmed, mode)
+      ),
+    ];
     // 限制长度
     if (newHistory.length > SEARCH_HISTORY_LIMIT) {
       newHistory.length = SEARCH_HISTORY_LIMIT;
@@ -948,11 +986,7 @@ export async function addSearchHistory(keyword: string): Promise<void> {
     cacheManager.cacheSearchHistory(newHistory);
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('searchHistoryUpdated', {
-        detail: newHistory,
-      })
-    );
+    dispatchSearchHistoryUpdated(newHistory);
 
     // 异步同步到数据库
     try {
@@ -961,7 +995,7 @@ export async function addSearchHistory(keyword: string): Promise<void> {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ keyword: trimmed }),
+        body: JSON.stringify({ keyword: encodedKeyword }),
         redirectOnUnauthorized: false,
       });
     } catch (err) {
@@ -974,18 +1008,23 @@ export async function addSearchHistory(keyword: string): Promise<void> {
   if (typeof window === 'undefined') return;
 
   try {
-    const history = await getSearchHistory();
-    const newHistory = [trimmed, ...history.filter((k) => k !== trimmed)];
+    const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
+    const parsedHistory = raw ? JSON.parse(raw) : [];
+    const history = Array.isArray(parsedHistory)
+      ? (parsedHistory as string[])
+      : [];
+    const newHistory = [
+      encodedKeyword,
+      ...history.filter(
+        (value) => !shouldReplaceSearchHistoryValue(value, trimmed, mode)
+      ),
+    ];
     // 限制长度
     if (newHistory.length > SEARCH_HISTORY_LIMIT) {
       newHistory.length = SEARCH_HISTORY_LIMIT;
     }
     localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(newHistory));
-    window.dispatchEvent(
-      new CustomEvent('searchHistoryUpdated', {
-        detail: newHistory,
-      })
-    );
+    dispatchSearchHistoryUpdated(newHistory);
   } catch (err) {
     console.error('保存搜索历史失败:', err);
     triggerGlobalError('保存搜索历史失败');
@@ -1003,11 +1042,7 @@ export async function clearSearchHistory(): Promise<void> {
     cacheManager.cacheSearchHistory([]);
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('searchHistoryUpdated', {
-        detail: [],
-      })
-    );
+    dispatchSearchHistoryUpdated([]);
 
     // 异步同步到数据库
     try {
@@ -1024,40 +1059,41 @@ export async function clearSearchHistory(): Promise<void> {
   // localStorage 模式
   if (typeof window === 'undefined') return;
   localStorage.removeItem(SEARCH_HISTORY_KEY);
-  window.dispatchEvent(
-    new CustomEvent('searchHistoryUpdated', {
-      detail: [],
-    })
-  );
+  dispatchSearchHistoryUpdated([]);
 }
 
 /**
  * 删除单条搜索历史。
  * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
  */
-export async function deleteSearchHistory(keyword: string): Promise<void> {
-  const trimmed = keyword.trim();
-  if (!trimmed) return;
+export async function deleteSearchHistory(
+  entry: SearchHistoryEntry | string
+): Promise<void> {
+  const rawValue = resolveSearchHistoryRawValue(entry);
+  const trimmedKeyword =
+    typeof entry === 'string' ? entry.trim() : entry.keyword.trim();
+
+  if (!rawValue || !trimmedKeyword) return;
 
   // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
   if (shouldUseRemoteUserDataStorage()) {
     // 立即更新缓存
     const cachedHistory = cacheManager.getCachedSearchHistory() || [];
-    const newHistory = cachedHistory.filter((k) => k !== trimmed);
+    const newHistory = cachedHistory.filter((value) =>
+      typeof entry === 'string'
+        ? !shouldReplaceSearchHistoryValue(value, trimmedKeyword)
+        : value !== rawValue
+    );
     cacheManager.cacheSearchHistory(newHistory);
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('searchHistoryUpdated', {
-        detail: newHistory,
-      })
-    );
+    dispatchSearchHistoryUpdated(newHistory);
 
     // 异步同步到数据库
     try {
       await fetchWithAuth(
         `${USER_DATA_API_PATHS.searchHistory}?keyword=${encodeURIComponent(
-          trimmed
+          rawValue
         )}`,
         {
           method: 'DELETE',
@@ -1074,14 +1110,18 @@ export async function deleteSearchHistory(keyword: string): Promise<void> {
   if (typeof window === 'undefined') return;
 
   try {
-    const history = await getSearchHistory();
-    const newHistory = history.filter((k) => k !== trimmed);
-    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(newHistory));
-    window.dispatchEvent(
-      new CustomEvent('searchHistoryUpdated', {
-        detail: newHistory,
-      })
+    const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
+    const parsedHistory = raw ? JSON.parse(raw) : [];
+    const history = Array.isArray(parsedHistory)
+      ? (parsedHistory as string[])
+      : [];
+    const newHistory = history.filter((value) =>
+      typeof entry === 'string'
+        ? !shouldReplaceSearchHistoryValue(value, trimmedKeyword)
+        : value !== rawValue
     );
+    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(newHistory));
+    dispatchSearchHistoryUpdated(newHistory);
   } catch (err) {
     console.error('删除搜索历史失败:', err);
     triggerGlobalError('删除搜索历史失败');
@@ -1471,11 +1511,7 @@ export async function refreshAllCache(): Promise<void> {
 
     if (searchHistory.status === 'fulfilled') {
       cacheManager.cacheSearchHistory(searchHistory.value);
-      window.dispatchEvent(
-        new CustomEvent('searchHistoryUpdated', {
-          detail: searchHistory.value,
-        })
-      );
+      dispatchSearchHistoryUpdated(searchHistory.value);
     }
 
     if (skipConfigs.status === 'fulfilled') {

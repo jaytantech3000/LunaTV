@@ -4,12 +4,19 @@ import Hls from 'hls.js';
 
 import { buildApiUrl } from '@/lib/transport/endpoint';
 
+import {
+  getVideoQualityFromResolution,
+  parseVideoQualityFromManifest,
+  parseVideoQualityHints,
+  pickBetterVideoQuality,
+} from './video-quality';
+
 function getDoubanImageProxyConfig(): {
   proxyType:
-  | 'server'
-  | 'cmliussss-cdn-tencent'
-  | 'cmliussss-cdn-ali'
-  | 'custom';
+    | 'server'
+    | 'cmliussss-cdn-tencent'
+    | 'cmliussss-cdn-ali'
+    | 'custom';
   proxyUrl: string;
 } {
   let doubanImageProxyType =
@@ -62,6 +69,293 @@ export function processImageUrl(originalUrl: string): string {
   }
 }
 
+function createDetectionFallback(): {
+  quality: string;
+  loadSpeed: string;
+  pingTime: number;
+} {
+  return {
+    quality: '未知',
+    loadSpeed: '未知',
+    pingTime: 0,
+  };
+}
+
+function formatSpeed(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
+    return '未知';
+  }
+
+  const speedInKilobytes = bytesPerSecond / 1024;
+
+  if (speedInKilobytes >= 1024) {
+    return `${(speedInKilobytes / 1024).toFixed(1)} MB/s`;
+  }
+
+  return `${speedInKilobytes.toFixed(1)} KB/s`;
+}
+
+function buildAbortSignal(timeoutMs: number): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => window.clearTimeout(timeoutId),
+  };
+}
+
+function mergeVideoMetrics(
+  ...candidates: Array<{
+    quality?: string;
+    loadSpeed?: string;
+    pingTime?: number;
+  } | null>
+): {
+  quality: string;
+  loadSpeed: string;
+  pingTime: number;
+} {
+  return candidates.reduce<{
+    quality: string;
+    loadSpeed: string;
+    pingTime: number;
+  }>((mergedMetrics, candidate) => {
+    if (!candidate) {
+      return mergedMetrics;
+    }
+
+    const nextQuality = candidate.quality || '未知';
+
+    return {
+      quality: pickBetterVideoQuality(mergedMetrics.quality, nextQuality),
+      loadSpeed:
+        mergedMetrics.loadSpeed !== '未知'
+          ? mergedMetrics.loadSpeed
+          : candidate.loadSpeed || '未知',
+      pingTime:
+        mergedMetrics.pingTime > 0
+          ? mergedMetrics.pingTime
+          : Math.max(0, Math.round(candidate.pingTime || 0)),
+    };
+  }, createDetectionFallback());
+}
+
+async function probeManifestByFetch(m3u8Url: string): Promise<{
+  quality: string;
+  loadSpeed: string;
+  pingTime: number;
+} | null> {
+  if (typeof window === 'undefined' || !m3u8Url.trim()) {
+    return null;
+  }
+
+  const { signal, cleanup } = buildAbortSignal(4500);
+  const requestStartedAt = performance.now();
+
+  try {
+    const response = await fetch(m3u8Url, {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      signal,
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const manifestText = await response.text();
+    const elapsedMilliseconds = Math.max(
+      performance.now() - requestStartedAt,
+      1
+    );
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    const measuredBytes = Math.max(
+      contentLength > 0 ? contentLength : 0,
+      new TextEncoder().encode(manifestText).length
+    );
+
+    return {
+      quality: pickBetterVideoQuality(
+        parseVideoQualityHints([m3u8Url, response.url]),
+        parseVideoQualityFromManifest(manifestText)
+      ),
+      loadSpeed: formatSpeed(measuredBytes / (elapsedMilliseconds / 1000)),
+      pingTime: Math.round(elapsedMilliseconds),
+    };
+  } catch (error) {
+    return null;
+  } finally {
+    cleanup();
+  }
+}
+
+async function probeManifestByMediaElement(m3u8Url: string): Promise<{
+  quality: string;
+  loadSpeed: string;
+  pingTime: number;
+} | null> {
+  if (typeof document === 'undefined' || !m3u8Url.trim()) {
+    return null;
+  }
+
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    const startedAt = performance.now();
+    let quality = '未知';
+    let loadSpeed = '未知';
+    let pingTime = 0;
+    let fragmentStartedAt = 0;
+    let settled = false;
+    let hls: Hls | null = null;
+
+    const cleanup = () => {
+      if (hls) {
+        hls.destroy();
+        hls = null;
+      }
+
+      video.removeAttribute('src');
+      video.load();
+      video.remove();
+    };
+
+    const settle = () => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      window.clearTimeout(timeoutId);
+      cleanup();
+
+      if (quality === '未知' && loadSpeed === '未知' && pingTime <= 0) {
+        resolve(null);
+        return;
+      }
+
+      resolve({
+        quality,
+        loadSpeed,
+        pingTime: Math.max(0, Math.round(pingTime)),
+      });
+    };
+
+    const updateQuality = (nextQuality: string) => {
+      quality = pickBetterVideoQuality(quality, nextQuality);
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      settle();
+    }, 3500);
+
+    video.muted = true;
+    video.preload = 'metadata';
+
+    video.onloadedmetadata = () => {
+      updateQuality(
+        getVideoQualityFromResolution(video.videoWidth, video.videoHeight)
+      );
+      if (pingTime <= 0) {
+        pingTime = performance.now() - startedAt;
+      }
+      settle();
+    };
+
+    video.onerror = () => {
+      settle();
+    };
+
+    if (Hls.isSupported()) {
+      hls = new Hls({
+        enableWorker: false,
+        lowLatencyMode: false,
+      });
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (pingTime <= 0) {
+          pingTime = performance.now() - startedAt;
+        }
+
+        const bestLevel = hls?.levels.reduce((bestCandidate, level) => {
+          const bestArea =
+            (bestCandidate?.width || 0) * (bestCandidate?.height || 0);
+          const currentArea = (level.width || 0) * (level.height || 0);
+          return currentArea > bestArea ? level : bestCandidate;
+        }, null as { width?: number; height?: number; name?: string } | null);
+
+        updateQuality(
+          getVideoQualityFromResolution(bestLevel?.width, bestLevel?.height)
+        );
+        updateQuality(
+          parseVideoQualityHints(
+            hls?.levels.map((level) => level.name || '') || []
+          )
+        );
+
+        if (quality !== '未知') {
+          settle();
+        }
+      });
+
+      hls.on(Hls.Events.FRAG_LOADING, () => {
+        fragmentStartedAt = performance.now();
+      });
+
+      hls.on(Hls.Events.FRAG_LOADED, (_event: any, data: any) => {
+        if (loadSpeed !== '未知') {
+          return;
+        }
+
+        const loadedBytes =
+          (typeof data?.stats?.loaded === 'number' && data.stats.loaded) ||
+          data?.payload?.byteLength ||
+          0;
+        const elapsedMilliseconds =
+          typeof data?.stats?.loading?.start === 'number' &&
+          typeof data?.stats?.loading?.end === 'number'
+            ? data.stats.loading.end - data.stats.loading.start
+            : fragmentStartedAt > 0
+            ? performance.now() - fragmentStartedAt
+            : 0;
+
+        if (loadedBytes > 0 && elapsedMilliseconds > 0) {
+          loadSpeed = formatSpeed(loadedBytes / (elapsedMilliseconds / 1000));
+        }
+
+        if (pingTime <= 0) {
+          pingTime = performance.now() - startedAt;
+        }
+
+        if (quality !== '未知' || loadSpeed !== '未知') {
+          settle();
+        }
+      });
+
+      hls.on(Hls.Events.ERROR, (_event: any, data: any) => {
+        if (data?.fatal) {
+          settle();
+        }
+      });
+
+      hls.loadSource(m3u8Url);
+      hls.attachMedia(video);
+      return;
+    }
+
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = m3u8Url;
+      video.load();
+      return;
+    }
+
+    settle();
+  });
+}
+
 /**
  * 从m3u8地址获取视频质量等级和网络信息
  * @param m3u8Url m3u8播放列表的URL
@@ -72,150 +366,24 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
   loadSpeed: string; // 自动转换为KB/s或MB/s
   pingTime: number; // 网络延迟（毫秒）
 }> {
-  try {
-    // 直接使用m3u8 URL作为视频源，避免CORS问题
-    return new Promise((resolve, reject) => {
-      const video = document.createElement('video');
-      video.muted = true;
-      video.preload = 'metadata';
-
-      // 测量网络延迟（ping时间） - 使用m3u8 URL而不是ts文件
-      const pingStart = performance.now();
-      let pingTime = 0;
-
-      // 测量ping时间（使用m3u8 URL）
-      fetch(m3u8Url, { method: 'HEAD', mode: 'no-cors' })
-        .then(() => {
-          pingTime = performance.now() - pingStart;
-        })
-        .catch(() => {
-          pingTime = performance.now() - pingStart; // 记录到失败为止的时间
-        });
-
-      // 固定使用hls.js加载
-      const hls = new Hls();
-
-      // 设置超时处理
-      const timeout = setTimeout(() => {
-        hls.destroy();
-        video.remove();
-        reject(new Error('Timeout loading video metadata'));
-      }, 4000);
-
-      video.onerror = () => {
-        clearTimeout(timeout);
-        hls.destroy();
-        video.remove();
-        reject(new Error('Failed to load video metadata'));
-      };
-
-      let actualLoadSpeed = '未知';
-      let hasSpeedCalculated = false;
-      let hasMetadataLoaded = false;
-
-      let fragmentStartTime = 0;
-
-      // 检查是否可以返回结果
-      const checkAndResolve = () => {
-        if (
-          hasMetadataLoaded &&
-          (hasSpeedCalculated || actualLoadSpeed !== '未知')
-        ) {
-          clearTimeout(timeout);
-          const width = video.videoWidth;
-          if (width && width > 0) {
-            hls.destroy();
-            video.remove();
-
-            // 根据视频宽度判断视频质量等级，使用经典分辨率的宽度作为分割点
-            const quality =
-              width >= 3840
-                ? '4K' // 4K: 3840x2160
-                : width >= 2560
-                  ? '2K' // 2K: 2560x1440
-                  : width >= 1920
-                    ? '1080p' // 1080p: 1920x1080
-                    : width >= 1280
-                      ? '720p' // 720p: 1280x720
-                      : width >= 854
-                        ? '480p'
-                        : 'SD'; // 480p: 854x480
-
-            resolve({
-              quality,
-              loadSpeed: actualLoadSpeed,
-              pingTime: Math.round(pingTime),
-            });
-          } else {
-            // webkit 无法获取尺寸，直接返回
-            resolve({
-              quality: '未知',
-              loadSpeed: actualLoadSpeed,
-              pingTime: Math.round(pingTime),
-            });
-          }
-        }
-      };
-
-      // 监听片段加载开始
-      hls.on(Hls.Events.FRAG_LOADING, () => {
-        fragmentStartTime = performance.now();
-      });
-
-      // 监听片段加载完成，只需首个分片即可计算速度
-      hls.on(Hls.Events.FRAG_LOADED, (event: any, data: any) => {
-        if (
-          fragmentStartTime > 0 &&
-          data &&
-          data.payload &&
-          !hasSpeedCalculated
-        ) {
-          const loadTime = performance.now() - fragmentStartTime;
-          const size = data.payload.byteLength || 0;
-
-          if (loadTime > 0 && size > 0) {
-            const speedKBps = size / 1024 / (loadTime / 1000);
-
-            // 立即计算速度，无需等待更多分片
-            const avgSpeedKBps = speedKBps;
-
-            if (avgSpeedKBps >= 1024) {
-              actualLoadSpeed = `${(avgSpeedKBps / 1024).toFixed(1)} MB/s`;
-            } else {
-              actualLoadSpeed = `${avgSpeedKBps.toFixed(1)} KB/s`;
-            }
-            hasSpeedCalculated = true;
-            checkAndResolve(); // 尝试返回结果
-          }
-        }
-      });
-
-      hls.loadSource(m3u8Url);
-      hls.attachMedia(video);
-
-      // 监听hls.js错误
-      hls.on(Hls.Events.ERROR, (event: any, data: any) => {
-        console.error('HLS错误:', data);
-        if (data.fatal) {
-          clearTimeout(timeout);
-          hls.destroy();
-          video.remove();
-          reject(new Error(`HLS播放失败: ${data.type}`));
-        }
-      });
-
-      // 监听视频元数据加载完成
-      video.onloadedmetadata = () => {
-        hasMetadataLoaded = true;
-        checkAndResolve(); // 尝试返回结果
-      };
-    });
-  } catch (error) {
-    throw new Error(
-      `Error getting video resolution: ${error instanceof Error ? error.message : String(error)
-      }`
-    );
+  if (!m3u8Url.trim()) {
+    return createDetectionFallback();
   }
+
+  const urlHintMetrics = {
+    ...createDetectionFallback(),
+    quality: parseVideoQualityHints([m3u8Url]),
+  };
+  const manifestMetrics = await probeManifestByFetch(m3u8Url);
+  const needsMediaProbe =
+    !manifestMetrics ||
+    manifestMetrics.quality === '未知' ||
+    manifestMetrics.loadSpeed === '未知';
+  const mediaMetrics = needsMediaProbe
+    ? await probeManifestByMediaElement(m3u8Url)
+    : null;
+
+  return mergeVideoMetrics(urlHintMetrics, manifestMetrics, mediaMetrics);
 }
 
 export function cleanHtmlTags(text: string): string {

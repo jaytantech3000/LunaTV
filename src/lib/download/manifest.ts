@@ -1,9 +1,18 @@
 import { putDownloadResponse } from './cache';
 import { looksLikeManifestUrl } from './proxy-url';
+import {
+  createTimeoutAbortSignal,
+  DownloadRequestError,
+  isAbortError,
+  isRetryableDownloadError,
+  waitForRetry,
+} from './request';
 import { DownloadResource, ManifestParseResult } from './types';
 
 const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
+const MANIFEST_REQUEST_TIMEOUT_MS = 20_000;
+const MAX_MANIFEST_FETCH_RETRIES = 2;
 
 function summarizeManifestErrorBody(body: string): string {
   const normalizedBody = body.replace(/\s+/g, ' ').trim();
@@ -44,11 +53,6 @@ function extractUriAttribute(line: string): string | null {
 function getKeyMethod(line: string): string | null {
   const attributes = parseAttributeList(line);
   return attributes.METHOD || null;
-}
-
-function getPreloadHintType(line: string): string | null {
-  const attributes = parseAttributeList(line);
-  return attributes.TYPE || null;
 }
 
 export function isMasterPlaylist(content: string): boolean {
@@ -140,27 +144,10 @@ export function collectMediaPlaylistResources(
     }
 
     if (line.startsWith('#EXT-X-PRELOAD-HINT:')) {
-      const uri = extractUriAttribute(line);
-      if (uri) {
-        resources.push({
-          url: uri,
-          type:
-            getPreloadHintType(line)?.toUpperCase() === 'MAP'
-              ? 'map'
-              : 'segment',
-        });
-      }
       return;
     }
 
     if (line.startsWith('#EXT-X-RENDITION-REPORT:')) {
-      const uri = extractUriAttribute(line);
-      if (uri) {
-        resources.push({
-          url: uri,
-          type: 'manifest',
-        });
-      }
       return;
     }
 
@@ -194,6 +181,10 @@ async function fetchManifestText(
   url: string,
   signal?: AbortSignal
 ): Promise<string> {
+  const timeoutSignal = createTimeoutAbortSignal({
+    sourceSignal: signal,
+    timeoutMs: MANIFEST_REQUEST_TIMEOUT_MS,
+  });
   let response: Response;
   try {
     response = await fetch(url, {
@@ -202,18 +193,32 @@ async function fetchManifestText(
       headers: {
         [DOWNLOAD_REQUEST_INTENT_HEADER]: BACKGROUND_DOWNLOAD_REQUEST_INTENT,
       },
-      signal,
+      signal: timeoutSignal.signal,
     });
   } catch (error) {
-    if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+    if (timeoutSignal.didTimeout()) {
+      throw new DownloadRequestError({
+        message: `获取 manifest 超时: ${url}`,
+        kind: 'timeout',
+        url,
+        cause: error,
+      });
+    }
+
+    if (signal?.aborted || isAbortError(error)) {
       throw error;
     }
 
-    throw new Error(
-      `获取 manifest 失败: ${url} (${
+    throw new DownloadRequestError({
+      message: `获取 manifest 失败: ${url} (${
         error instanceof Error ? error.message : '未知网络错误'
-      })`
-    );
+      })`,
+      kind: 'network',
+      url,
+      cause: error,
+    });
+  } finally {
+    timeoutSignal.cleanup();
   }
 
   if (!response.ok) {
@@ -224,11 +229,14 @@ async function fetchManifestText(
       detail = '';
     }
 
-    throw new Error(
-      `获取 manifest 失败: ${url} (${response.status}${
+    throw new DownloadRequestError({
+      message: `获取 manifest 失败: ${url} (${response.status}${
         detail ? `, ${detail}` : ''
-      })`
-    );
+      })`,
+      kind: 'http',
+      url,
+      status: response.status,
+    });
   }
 
   let manifestText = '';
@@ -320,19 +328,35 @@ export async function parseManifestForDownloadWithFallback(
   let lastError: Error | null = null;
 
   for (const candidateUrl of candidates) {
-    if (options.signal?.aborted) {
-      throw lastError || new Error('下载已取消');
-    }
-
-    try {
-      return await parseManifestForDownload(candidateUrl, options);
-    } catch (error) {
+    for (
+      let attempt = 1;
+      attempt <= MAX_MANIFEST_FETCH_RETRIES + 1;
+      attempt += 1
+    ) {
       if (options.signal?.aborted) {
-        throw error;
+        throw lastError || new Error('下载已取消');
       }
 
-      lastError =
-        error instanceof Error ? error : new Error('获取 manifest 失败');
+      try {
+        return await parseManifestForDownload(candidateUrl, options);
+      } catch (error) {
+        if (options.signal?.aborted) {
+          throw error;
+        }
+
+        lastError =
+          error instanceof Error ? error : new Error('获取 manifest 失败');
+
+        if (
+          attempt <= MAX_MANIFEST_FETCH_RETRIES &&
+          isRetryableDownloadError(error)
+        ) {
+          await waitForRetry(attempt);
+          continue;
+        }
+
+        break;
+      }
     }
   }
 

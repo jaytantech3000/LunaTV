@@ -182,8 +182,7 @@ function scoreNormalizedTitleMatch(
 
   if (candidate.includes(expected) || expected.includes(candidate)) {
     if (
-      Math.min(candidate.length, expected.length) <
-      MIN_LOOSE_TITLE_MATCH_LENGTH
+      Math.min(candidate.length, expected.length) < MIN_LOOSE_TITLE_MATCH_LENGTH
     ) {
       return Number.NEGATIVE_INFINITY;
     }
@@ -406,7 +405,9 @@ function hasHighConfidenceDoubanMatch(
   );
 }
 
-async function fetchPlaybackSearchQuery(query: string): Promise<SearchResult[]> {
+async function fetchPlaybackSearchQuery(
+  query: string
+): Promise<SearchResult[]> {
   const response = await apiFetch('/search', {
     credentials: 'same-origin',
     searchParams: { q: query },
@@ -608,9 +609,12 @@ export async function preferBestPlaybackSource(
           }
 
           const episodeUrl =
-            source.episodes.length > 1
-              ? source.episodes[1]
-              : source.episodes[0];
+            source.episodes.find((candidateUrl) => Boolean(candidateUrl)) ||
+            source.episodes[0];
+
+          if (!episodeUrl) {
+            return null;
+          }
           const metrics = await getVideoResolutionFromM3u8(episodeUrl);
 
           return {
