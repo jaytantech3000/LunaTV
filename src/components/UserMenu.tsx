@@ -48,7 +48,6 @@ import {
   updatePlayerEnhancementPreference,
 } from '@/lib/player-enhancements';
 import { getRuntimeConfig } from '@/lib/runtime-config';
-import { apiFetch } from '@/lib/transport/api-client';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { apiFetch } from '@/lib/transport/api-client';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -1262,7 +1261,8 @@ export const UserMenu: React.FC = () => {
                         动态保护
                       </p>
                       <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-                        只在疑似对白片段里学习基线，宏大 BGM 和场景音高过对白时再压
+                        只在疑似对白片段里学习基线，宏大 BGM
+                        和场景音高过对白时再压
                       </p>
                     </div>
                     <label className='flex items-center cursor-pointer'>
@@ -1273,9 +1273,7 @@ export const UserMenu: React.FC = () => {
                           checked={audioDynamicProtectionEnabled}
                           disabled={audioSpikeProtectionLevel === 'off'}
                           onChange={(e) =>
-                            handleAudioDynamicProtectionToggle(
-                              e.target.checked
-                            )
+                            handleAudioDynamicProtectionToggle(e.target.checked)
                           }
                         />
                         <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 peer-disabled:bg-gray-200 transition-colors dark:bg-gray-600 dark:peer-disabled:bg-gray-700'></div>

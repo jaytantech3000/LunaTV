@@ -8,15 +8,22 @@ import {
   Download,
   Film,
   Home,
+  Loader2,
   Radio,
   Star,
   Tv,
 } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { type MouseEvent, useCallback, useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
+
+import {
+  isModifiedNavigationEvent,
+  useNavigationFeedback,
+} from './NavigationFeedbackProvider';
 
 interface MobileBottomNavProps {
   /**
@@ -27,6 +34,8 @@ interface MobileBottomNavProps {
 
 const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
   const pathname = usePathname();
+  const router = useRouter();
+  const { beginNavigation, pendingNavigation } = useNavigationFeedback();
 
   // 当前激活路径：优先使用传入的 activePath，否则回退到浏览器地址
   const currentActive = activePath ?? pathname;
@@ -126,6 +135,58 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
     };
   }, []);
 
+  const prefetchRoute = useCallback(
+    (href: string) => {
+      router.prefetch(href);
+    },
+    [router]
+  );
+
+  const pendingNavigationHref =
+    pendingNavigation?.kind === 'nav' ? pendingNavigation.href : null;
+
+  const pushRouteWithPaint = useCallback(
+    (href: string) => {
+      window.setTimeout(() => {
+        router.push(href);
+      }, 0);
+    },
+    [router]
+  );
+
+  const handleNavClick = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>, href: string, label: string) => {
+      if (event.defaultPrevented || isModifiedNavigationEvent(event)) {
+        return;
+      }
+
+      event.preventDefault();
+      if (
+        decodeURIComponent(currentActive) === decodeURIComponent(href) ||
+        pendingNavigationHref === href
+      ) {
+        return;
+      }
+
+      flushSync(() => {
+        beginNavigation({
+          href,
+          kind: 'nav',
+          label,
+        });
+      });
+      prefetchRoute(href);
+      pushRouteWithPaint(href);
+    },
+    [
+      beginNavigation,
+      currentActive,
+      pendingNavigationHref,
+      prefetchRoute,
+      pushRouteWithPaint,
+    ]
+  );
+
   const isActive = (href: string) => {
     const typeMatch = href.match(/type=([^&]+)/)?.[1];
 
@@ -153,6 +214,7 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
       <ul className='flex items-center overflow-x-auto scrollbar-hide'>
         {navItems.map((item) => {
           const active = isActive(item.href);
+          const isPending = pendingNavigationHref === item.href;
           return (
             <li
               key={item.href}
@@ -164,15 +226,27 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
             >
               <Link
                 href={item.href}
+                prefetch
+                onClick={(event) =>
+                  handleNavClick(event, item.href, item.label)
+                }
+                onPointerDown={() => prefetchRoute(item.href)}
+                onMouseEnter={() => prefetchRoute(item.href)}
+                onFocus={() => prefetchRoute(item.href)}
                 className='flex flex-col items-center justify-center w-full h-14 gap-1 text-xs'
               >
-                <item.icon
-                  className={`h-6 w-6 ${
-                    active
-                      ? 'text-green-600 dark:text-green-400'
-                      : 'text-gray-500 dark:text-gray-400'
-                  }`}
-                />
+                <div className='relative flex items-center justify-center'>
+                  <item.icon
+                    className={`h-6 w-6 ${
+                      active
+                        ? 'text-green-600 dark:text-green-400'
+                        : 'text-gray-500 dark:text-gray-400'
+                    }`}
+                  />
+                  {isPending ? (
+                    <Loader2 className='absolute -right-2 -top-1 h-3 w-3 animate-spin text-green-500 dark:text-green-400' />
+                  ) : null}
+                </div>
                 <span
                   className={
                     active
