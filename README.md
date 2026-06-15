@@ -288,66 +288,7 @@ Zeabur 是一站式云端部署平台，使用预构建的 Docker 镜像可以�
 
 ### 多 Vercel 账号部署（突破免费流量限额）
 
-Vercel 免费账号有带宽限制，超限后账号会被暂停。可通过多账号 + Cloudflare Worker 分流的方式绕过限制。
-
-**架构概览：**
-
-```
-用户 → your-domain.com（Cloudflare 橙云 + Worker）
-            │ 随机分发
-    ┌───────┴───────┐
-    ▼               ▼
-vc1.your-domain  vc2.your-domain  ...
-    │               │
-Vercel 账号 A   Vercel 账号 B     （共享同一个 Upstash）
-```
-
-**核心要点：**
-
-1. **共享 Upstash**：所有 Vercel 账号配置相同的 `UPSTASH_REDIS_REST_URL` 和 `UPSTASH_REDIS_REST_TOKEN`，指向同一个数据库，用户数据全局一致。新账号不要通过 Marketplace 重新集成（会创建独立数据库）。
-
-2. **后端子域名（灰云）**：每个 Vercel 账号绑定独立子域名（如 `vc1.your-domain.com`），Cloudflare 设为灰云（DNS only），不对外公开。
-
-3. **Cloudflare Worker 代码**：
-
-   ```javascript
-   const BACKENDS = [
-     'https://vc1.your-domain.com',
-     'https://vc2.your-domain.com',
-   ];
-
-   export default {
-     async fetch(request, env) {
-       const backend = BACKENDS[Math.floor(Math.random() * BACKENDS.length)];
-       const url = new URL(request.url);
-       const headers = new Headers(request.headers);
-       headers.set('x-forwarded-host', url.hostname);
-
-       // buffer body，避免 POST stream 在 redirect 时无法重传
-       const body = request.body ? await request.arrayBuffer() : null;
-
-       const response = await fetch(new Request(backend + url.pathname + url.search, {
-         method: request.method, headers, body, redirect: 'follow',
-       }));
-
-       // 修正 Set-Cookie domain：去掉后端 host 绑定，让浏览器种在公开域名上
-       const newResponse = new Response(response.body, response);
-       const setCookie = response.headers.get('set-cookie');
-       if (setCookie) {
-         newResponse.headers.set('set-cookie',
-           setCookie.replace(/;\s*domain=[^;]*/gi, '').replace(/;\s*secure/gi, '; Secure')
-         );
-       }
-       return newResponse;
-     }
-   };
-   ```
-
-4. **Cron Job 只保留一个账号**：`/api/cron` 非幂等，多账号并发执行会导致 Redis 写冲突，其余账号在 Project Settings → Cron Jobs 中禁用。
-
-5. **公开入口（橙云）**：`your-domain.com` CNAME 开橙云，绑定 Worker Route `your-domain.com/*`。
-
-**扩展**：新增账号时，在 Worker 的 `BACKENDS` 数组加一行即可，无需修改任何代码。
+详见 [多 Vercel 账号分布式部署设计](docs/superpowers/specs/2026-06-12-multi-vercel-distributed-deployment-design.md)。
 
 ---
 
