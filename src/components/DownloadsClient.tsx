@@ -28,6 +28,7 @@ import {
 import {
   buildOfflinePlayHref,
   getDownloadedEpisodeDurationSeconds,
+  isAdultDownloadedContent,
   sortDownloadedEpisodes,
 } from '@/lib/download/offline';
 import {
@@ -54,6 +55,7 @@ import { isAdultContentResult } from '@/lib/yellow';
 import { useDownloadStore } from '@/stores/downloadStore';
 
 import { useNavigationFeedback } from './NavigationFeedbackProvider';
+import { useSite } from './SiteProvider';
 
 const concurrentTaskOptions = Array.from(
   {
@@ -3880,6 +3882,7 @@ function DownloadSettingsDialog({
 
 export default function DownloadsClient() {
   const searchParams = useSearchParams();
+  const { adultContentFilterEnabled } = useSite();
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [pendingBulkAction, setPendingBulkAction] = useState<
@@ -3931,12 +3934,23 @@ export default function DownloadsClient() {
       ),
     [library]
   );
+  const visibleDownloadedContents = useMemo(
+    () =>
+      adultContentFilterEnabled
+        ? downloadedContents.filter(
+            (content) => !isAdultDownloadedContent(content)
+          )
+        : downloadedContents,
+    [adultContentFilterEnabled, downloadedContents]
+  );
+  const hiddenAdultDownloadedContentCount =
+    downloadedContents.length - visibleDownloadedContents.length;
   const downloadedContentCardGroups = useMemo(
     () =>
-      buildDownloadedContentCardGroups(downloadedContents, {
+      buildDownloadedContentCardGroups(visibleDownloadedContents, {
         groupSameTitleAcrossSources,
       }),
-    [downloadedContents, groupSameTitleAcrossSources]
+    [groupSameTitleAcrossSources, visibleDownloadedContents]
   );
   const pauseableTaskCount = useMemo(
     () =>
@@ -4004,6 +4018,12 @@ export default function DownloadsClient() {
       setSelectedContentId(null);
     }
   }, [selectedContentId, selectedContent]);
+
+  useEffect(() => {
+    if (selectedContentId && !selectedDownloadedContentGroup) {
+      setSelectedContentId(null);
+    }
+  }, [selectedContentId, selectedDownloadedContentGroup]);
 
   useEffect(() => {
     if (selectedActiveTaskContentId && !selectedActiveTaskGroup) {
@@ -4212,6 +4232,13 @@ export default function DownloadsClient() {
         </div>
       )}
 
+      {adultContentFilterEnabled && hiddenAdultDownloadedContentCount > 0 ? (
+        <div className='rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-800/40 dark:bg-amber-950/40 dark:text-amber-200'>
+          成人内容过滤已开启，已暂时隐藏 {hiddenAdultDownloadedContentCount}{' '}
+          部离线成人资源。
+        </div>
+      ) : null}
+
       <ActiveTasksSection
         activeTaskGroups={activeTaskCardGroups}
         totalContentCount={activeTaskGroups.length}
@@ -4221,7 +4248,7 @@ export default function DownloadsClient() {
 
       <DownloadedContentsSection
         contentGroups={downloadedContentCardGroups}
-        totalContentCount={downloadedContents.length}
+        totalContentCount={visibleDownloadedContents.length}
         activeContentId={selectedContentId}
         onOpenContent={handleOpenDownloadedContent}
       />

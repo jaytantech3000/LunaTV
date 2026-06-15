@@ -171,7 +171,11 @@ export default async function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <SiteProvider siteName={siteName} announcement={announcement}>
+          <SiteProvider
+            siteName={siteName}
+            announcement={announcement}
+            adultContentFilterEnabled={!disableYellowFilter}
+          >
             {children}
             <GlobalErrorIndicator />
           </SiteProvider>

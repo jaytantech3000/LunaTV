@@ -417,6 +417,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               save_time: Date.now(),
               search_title: actualQuery || actualTitle,
               playback_mode: origin === 'vod' ? 'online' : undefined,
+              is_adult: origin === 'vod' ? shouldAllowAdultPlayback : undefined,
               origin,
             });
             if (from === 'search') {

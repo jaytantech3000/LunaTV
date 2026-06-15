@@ -67,6 +67,7 @@ import { acquireScrollLock } from '@/lib/scroll-lock';
 import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
+import { isAdultContentResult } from '@/lib/yellow';
 
 import CurrentEpisodeDownloadControl from '@/components/CurrentEpisodeDownloadControl';
 import EpisodeSelector from '@/components/EpisodeSelector';
@@ -2049,6 +2050,13 @@ function PlayPageClient() {
         offline_content_id: isOfflineMode
           ? activeOfflineContentId || undefined
           : undefined,
+        is_adult: isAdultContentResult({
+          title: videoTitleRef.current,
+          source_name: detailRef.current?.source_name || '',
+          type_name: detailRef.current?.type_name,
+          class: detailRef.current?.class,
+          desc: detailRef.current?.desc,
+        }),
       });
 
       lastSaveTimeRef.current = Date.now();
@@ -2367,6 +2375,13 @@ function PlayPageClient() {
           offline_content_id: isOfflineMode
             ? activeOfflineContentId || undefined
             : undefined,
+          is_adult: isAdultContentResult({
+            title: videoTitleRef.current,
+            source_name: detailRef.current?.source_name || '',
+            type_name: detailRef.current?.type_name,
+            class: detailRef.current?.class,
+            desc: detailRef.current?.desc,
+          }),
         });
         setFavorited(true);
       }
