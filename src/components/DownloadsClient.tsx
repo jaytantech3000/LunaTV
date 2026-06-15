@@ -1,10 +1,10 @@
 'use client';
 
-import { Settings2 } from 'lucide-react';
+import { Loader2, Settings2 } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 
 import {
   buildAdultContentMatchKey,
@@ -27,6 +27,7 @@ import {
 } from '@/lib/download/normalize';
 import {
   buildOfflinePlayHref,
+  getDownloadedEpisodeDurationSeconds,
   sortDownloadedEpisodes,
 } from '@/lib/download/offline';
 import {
@@ -51,6 +52,8 @@ import { processImageUrl } from '@/lib/utils';
 import { isAdultContentResult } from '@/lib/yellow';
 
 import { useDownloadStore } from '@/stores/downloadStore';
+
+import { useNavigationFeedback } from './NavigationFeedbackProvider';
 
 const concurrentTaskOptions = Array.from(
   {
@@ -81,6 +84,79 @@ function formatDateTime(timestamp: number): string {
 
 function formatEpisodeCode(episodeIndex: number): string {
   return `EP${String(episodeIndex + 1).padStart(2, '0')}`;
+}
+
+function normalizeMetadataText(value?: string | null): string | null {
+  const normalizedValue = value?.trim();
+  return normalizedValue ? normalizedValue : null;
+}
+
+function extractDurationText(
+  ...values: Array<string | null | undefined>
+): string | null {
+  const durationPatterns = [
+    /((?:\d+(?:\.\d+)?)\s*小时(?:\s*\d+\s*分钟)?)/i,
+    /((?:\d+(?:\.\d+)?)\s*(?:分钟|min(?:ute)?s?))/i,
+    /((?:\d{1,2}:\d{2})(?::\d{2})?)/,
+  ];
+
+  for (const value of values) {
+    const normalizedValue = normalizeMetadataText(value);
+    if (!normalizedValue) {
+      continue;
+    }
+
+    for (const pattern of durationPatterns) {
+      const matchedDuration = normalizedValue.match(pattern)?.[1]?.trim();
+      if (matchedDuration) {
+        return matchedDuration.replace(/\s+/g, '');
+      }
+    }
+  }
+
+  return null;
+}
+
+function formatDurationLabel(totalSeconds: number): string {
+  const normalizedSeconds = Math.max(1, Math.round(totalSeconds));
+  const hours = Math.floor(normalizedSeconds / 3600);
+  const minutes = Math.floor((normalizedSeconds % 3600) / 60);
+  const seconds = normalizedSeconds % 60;
+
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}小时${minutes}分钟` : `${hours}小时`;
+  }
+
+  if (minutes > 0) {
+    return `${minutes}分钟`;
+  }
+
+  return `${seconds}秒`;
+}
+
+function getDisplayableOfflineRemark(
+  remarks?: string | null,
+  episodeTitle?: string | null
+): string | null {
+  const normalizedRemarks = normalizeMetadataText(remarks);
+  if (!normalizedRemarks) {
+    return null;
+  }
+
+  const normalizedEpisodeTitle = normalizeMetadataText(episodeTitle);
+  if (normalizedEpisodeTitle && normalizedRemarks === normalizedEpisodeTitle) {
+    return null;
+  }
+
+  if (
+    /^(hd|sd|uhd|4k|8k|高清|超清|蓝光|中字|国语|完结|全集|已完结|第?\s*\d+\s*集|更新至.+)$/i.test(
+      normalizedRemarks
+    )
+  ) {
+    return null;
+  }
+
+  return normalizedRemarks;
 }
 
 function buildSearchResultKey(
@@ -181,6 +257,13 @@ interface GroupedOfflineEpisodeEntry {
   contentId: string;
   sourceName: string;
   contentTitle: string;
+  poster: string;
+  remarks?: string;
+  year: string;
+  typeName?: string;
+  desc?: string;
+  rootManifestUrl: string;
+  playbackManifestUrl: string;
   episodeIndex: number;
   episodeTitle: string;
   sizeBytes: number;
@@ -205,6 +288,13 @@ interface AdultRelatedDownloadOption {
   activeEpisodeCount: number;
   pausedOrErrorEpisodeCount: number;
   isActionable: boolean;
+}
+
+interface AdultGroupCoverMenuState {
+  poster: string;
+  title: string;
+  x: number;
+  y: number;
 }
 
 function getAdultGroupingIdentity(
@@ -251,6 +341,20 @@ function getTitleGroupingIdentity(
     key,
     title: normalizedTitle,
   };
+}
+
+function getAdultGroupPoster(contents: DownloadedContentMeta[]): string {
+  const customPoster = contents.find((content) =>
+    Boolean(content.adultGroupPoster?.trim())
+  )?.adultGroupPoster;
+  if (customPoster?.trim()) {
+    return customPoster.trim();
+  }
+
+  return (
+    contents.find((content) => Boolean(content.poster.trim()))?.poster.trim() ||
+    ''
+  );
 }
 
 function buildSingleActiveTaskCardGroup(
@@ -434,7 +538,9 @@ function buildSingleDownloadedContentCardGroup(
     id: content.contentId,
     contentId: content.contentId,
     title: content.title,
-    poster: content.poster,
+    poster: adultGroupingQuery
+      ? getAdultGroupPoster([content])
+      : content.poster.trim(),
     sourceName: content.sourceName,
     year: content.year,
     adultGroupingQuery,
@@ -460,7 +566,10 @@ function buildGroupedDownloadedContentCardGroup(
     id: `${groupingKind}:${key}`,
     contentId: leadContent.contentId,
     title: groupingLabel,
-    poster: leadContent.poster,
+    poster:
+      groupingKind === 'adult'
+        ? getAdultGroupPoster(sortedContents)
+        : leadContent.poster.trim(),
     sourceName: leadContent.sourceName,
     year: leadContent.year,
     groupingKind,
@@ -577,6 +686,13 @@ function buildGroupedOfflineEpisodeEntries(params: {
         contentId: groupedContent.contentId,
         sourceName: groupedContent.sourceName,
         contentTitle: groupedContent.title,
+        poster: groupedContent.poster,
+        remarks: groupedContent.remarks,
+        year: groupedContent.year,
+        typeName: groupedContent.typeName,
+        desc: groupedContent.desc,
+        rootManifestUrl: episode.rootManifestUrl,
+        playbackManifestUrl: episode.playbackManifestUrl,
         episodeIndex: episode.episodeIndex,
         episodeTitle: episode.episodeTitle,
         sizeBytes: episode.sizeBytes,
@@ -1615,6 +1731,7 @@ export function DownloadedContentDialog({
   onDeleteEpisode,
 }: DownloadedContentDialogProps) {
   const router = useRouter();
+  const { beginNavigation } = useNavigationFeedback();
   const tasks = useDownloadStore((state) => state.tasks);
   const library = useDownloadStore((state) => state.library);
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
@@ -1649,10 +1766,18 @@ export function DownloadedContentDialog({
   const [moreDownloadsFeedback, setMoreDownloadsFeedback] = useState<
     string | null
   >(null);
+  const [groupedEpisodeDurationByKey, setGroupedEpisodeDurationByKey] =
+    useState<Record<string, string>>({});
+  const [pendingOfflineNavigationKey, setPendingOfflineNavigationKey] =
+    useState<string | null>(null);
   const detailRequestKeyRef = useRef(`${content.source}:${content.vodId}`);
   const dialogMenuRef = useRef<HTMLDivElement | null>(null);
+  const adultCoverMenuRef = useRef<HTMLDivElement | null>(null);
   const closeFrameRef = useRef<number | null>(null);
+  const offlineNavigationResetTimerRef = useRef<number | null>(null);
   const [isDialogMenuOpen, setIsDialogMenuOpen] = useState(false);
+  const [adultCoverMenu, setAdultCoverMenu] =
+    useState<AdultGroupCoverMenuState | null>(null);
   const shouldCollapseDescription = (content.desc?.length || 0) > 140;
   const isAdultContent = useMemo(
     () =>
@@ -1740,13 +1865,16 @@ export function DownloadedContentDialog({
         : null,
     [contentGroup, isTitleGroupingEnabled, localTitleContentGroup]
   );
-  const groupedLocalContents = useMemo(
-    () => effectiveContentGroup?.contents || contentGroup.contents,
-    [contentGroup.contents, effectiveContentGroup]
+  const groupedResolvedContents = useMemo(
+    () =>
+      (effectiveContentGroup?.contents || contentGroup.contents).map(
+        (groupedContent) => library[groupedContent.contentId] || groupedContent
+      ),
+    [contentGroup.contents, effectiveContentGroup, library]
   );
   const isGroupedCollection =
     Boolean(effectiveContentGroup?.groupingKind) &&
-    groupedLocalContents.length > 1;
+    groupedResolvedContents.length > 1;
   const groupedCollectionLabel = getGroupedCollectionLabel(
     effectiveContentGroup?.groupingKind
   );
@@ -1765,17 +1893,33 @@ export function DownloadedContentDialog({
     isAdultGroupedCollection && groupedCollectionIdentity
       ? groupedCollectionIdentity
       : content.title;
+  const dialogPosterTitle = isAdultGroupedCollection ? dialogTitle : content.title;
+  const dialogPosterAlt = isAdultGroupedCollection
+    ? `${dialogPosterTitle} 归集图`
+    : dialogPosterTitle;
+  const dialogPoster = useMemo(() => {
+    if (!isAdultGroupedCollection) {
+      return content.poster;
+    }
+
+    const groupedPoster = getAdultGroupPoster(groupedResolvedContents);
+    if (groupedPoster) {
+      return groupedPoster;
+    }
+
+    return content.poster;
+  }, [content.poster, groupedResolvedContents, isAdultGroupedCollection]);
   const usesAdultSingleEpisodeLayout =
     isAdultGroupedCollection && content.episodes.length === 1;
   const groupedPlayableEpisodes = useMemo(
     () =>
       isGroupedCollection
         ? buildGroupedOfflineEpisodeEntries({
-            contents: groupedLocalContents,
+            contents: groupedResolvedContents,
             activeContentId: content.contentId,
           })
         : [],
-    [content.contentId, groupedLocalContents, isGroupedCollection]
+    [content.contentId, groupedResolvedContents, isGroupedCollection]
   );
   const groupedPlayableEpisodeCount = useMemo(
     () =>
@@ -1783,11 +1927,33 @@ export function DownloadedContentDialog({
         .size,
     [groupedPlayableEpisodes]
   );
+  const groupedPlayableSourceNames = useMemo(
+    () =>
+      Array.from(
+        new Set(groupedPlayableEpisodes.map((episode) => episode.sourceName))
+      ),
+    [groupedPlayableEpisodes]
+  );
+  const groupedPlayableEpisodeTitleCount = useMemo(
+    () =>
+      new Set(
+        groupedPlayableEpisodes
+          .map((episode) => episode.episodeTitle.trim())
+          .filter(Boolean)
+      ).size,
+    [groupedPlayableEpisodes]
+  );
   const shouldShowGroupedEpisodeList =
     isGroupedCollection && groupedPlayableEpisodes.length > 0;
   const shouldShowEpisodeGrid =
     !shouldShowGroupedEpisodeList &&
     (!usesAdultSingleEpisodeLayout || isEditing);
+  const shouldShowAdultGroupedSourceSummary =
+    isAdultGroupedCollection && groupedPlayableSourceNames.length > 1;
+  const shouldShowAdultGroupedEpisodeCode =
+    !isAdultGroupedCollection || groupedPlayableEpisodeCount > 1;
+  const shouldShowAdultGroupedEpisodeTitle =
+    !isAdultGroupedCollection || groupedPlayableEpisodeTitleCount > 1;
   const selectableEpisodes = useMemo<SelectableEpisodeTarget[]>(
     () =>
       shouldShowGroupedEpisodeList
@@ -1984,8 +2150,72 @@ export function DownloadedContentDialog({
     setHasLoadedAdultGroupedContents(false);
     setMoreDownloadsError(null);
     setMoreDownloadsFeedback(null);
+    setGroupedEpisodeDurationByKey({});
+    setPendingOfflineNavigationKey(null);
     setIsDialogMenuOpen(false);
+    setAdultCoverMenu(null);
   }, [content.contentId, content.source, content.vodId]);
+
+  useEffect(() => {
+    if (!isAdultGroupedCollection || !shouldShowGroupedEpisodeList) {
+      setGroupedEpisodeDurationByKey({});
+      return;
+    }
+
+    let cancelled = false;
+    setGroupedEpisodeDurationByKey({});
+
+    const loadGroupedEpisodeDurations = async () => {
+      const durationEntries = await Promise.all(
+        groupedPlayableEpisodes.map(async (episode) => {
+          const durationSeconds = await getDownloadedEpisodeDurationSeconds({
+            playbackManifestUrl: episode.playbackManifestUrl,
+            rootManifestUrl: episode.rootManifestUrl,
+          }).catch(() => null);
+
+          return [
+            buildEpisodeSelectionKey(episode.contentId, episode.episodeIndex),
+            typeof durationSeconds === 'number' &&
+            Number.isFinite(durationSeconds) &&
+            durationSeconds > 0
+              ? formatDurationLabel(durationSeconds)
+              : null,
+          ] as const;
+        })
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      const nextDurationMap = durationEntries.reduce<Record<string, string>>(
+        (result, [episodeKey, durationLabel]) => {
+          if (durationLabel) {
+            result[episodeKey] = durationLabel;
+          }
+
+          return result;
+        },
+        {}
+      );
+
+      if (Object.keys(nextDurationMap).length === 0) {
+        return;
+      }
+
+      setGroupedEpisodeDurationByKey(nextDurationMap);
+    };
+
+    void loadGroupedEpisodeDurations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    groupedPlayableEpisodes,
+    isAdultGroupedCollection,
+    shouldShowGroupedEpisodeList,
+  ]);
 
   useEffect(() => {
     setIsTitleGroupingEnabled(contentGroup.groupingKind === 'title');
@@ -1995,6 +2225,10 @@ export function DownloadedContentDialog({
     () => () => {
       if (closeFrameRef.current !== null) {
         window.cancelAnimationFrame(closeFrameRef.current);
+      }
+
+      if (offlineNavigationResetTimerRef.current !== null) {
+        window.clearTimeout(offlineNavigationResetTimerRef.current);
       }
     },
     []
@@ -2022,6 +2256,35 @@ export function DownloadedContentDialog({
   }, [isDialogMenuOpen]);
 
   useEffect(() => {
+    if (!adultCoverMenu) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        adultCoverMenuRef.current &&
+        !adultCoverMenuRef.current.contains(event.target as Node)
+      ) {
+        setAdultCoverMenu(null);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setAdultCoverMenu(null);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [adultCoverMenu]);
+
+  useEffect(() => {
     setSelectedEpisodeKeys((currentState) => {
       const nextState = currentState.filter((episodeKey) =>
         allSelectableEpisodeKeys.includes(episodeKey)
@@ -2034,6 +2297,7 @@ export function DownloadedContentDialog({
   }, [allSelectableEpisodeKeys]);
 
   const handleToggleEditing = () => {
+    setAdultCoverMenu(null);
     setIsEditing((currentState) => {
       if (currentState) {
         setSelectedEpisodeKeys([]);
@@ -2062,6 +2326,110 @@ export function DownloadedContentDialog({
         ? currentState.filter((currentKey) => currentKey !== targetKey)
         : [...currentState, targetKey]
     );
+  };
+
+  const handleOpenOfflinePlayback = (params: {
+    href: string;
+    selectionKey: string;
+    label: string;
+  }) => {
+    const { href, selectionKey, label } = params;
+
+    if (offlineNavigationResetTimerRef.current !== null) {
+      window.clearTimeout(offlineNavigationResetTimerRef.current);
+      offlineNavigationResetTimerRef.current = null;
+    }
+
+    flushSync(() => {
+      setPendingOfflineNavigationKey(selectionKey);
+      beginNavigation({
+        href,
+        kind: 'card',
+        label,
+      });
+    });
+
+    router.prefetch(href);
+
+    offlineNavigationResetTimerRef.current = window.setTimeout(() => {
+      setPendingOfflineNavigationKey(null);
+      offlineNavigationResetTimerRef.current = null;
+    }, 8000);
+
+    window.setTimeout(() => {
+      router.push(href);
+    }, 0);
+  };
+
+  const handleOpenAdultCoverMenu = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    params: {
+      poster: string;
+      title: string;
+    }
+  ) => {
+    if (!isAdultGroupedCollection || isEditing) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDialogMenuOpen(false);
+
+    const menuWidth = 176;
+    const menuHeight = 64;
+    const viewportPadding = 12;
+
+    setAdultCoverMenu({
+      poster: params.poster.trim(),
+      title: params.title,
+      x: Math.max(
+        viewportPadding,
+        Math.min(
+          event.clientX,
+          window.innerWidth - menuWidth - viewportPadding
+        )
+      ),
+      y: Math.max(
+        viewportPadding,
+        Math.min(
+          event.clientY,
+          window.innerHeight - menuHeight - viewportPadding
+        )
+      ),
+    });
+  };
+
+  const handleSetAdultGroupPoster = () => {
+    if (!adultCoverMenu || !isAdultGroupedCollection) {
+      return;
+    }
+
+    const targetPoster = adultCoverMenu.poster.trim();
+    if (!targetPoster) {
+      setSelectionFeedback(null);
+      setSelectionError('当前资源没有可用封面');
+      setAdultCoverMenu(null);
+      return;
+    }
+
+    const { library: latestLibrary, upsertLibraryItem } =
+      useDownloadStore.getState();
+    const targetContents = groupedResolvedContents.map(
+      (groupedContent) => latestLibrary[groupedContent.contentId] || groupedContent
+    );
+
+    targetContents.forEach((groupedContent) => {
+      upsertLibraryItem({
+        ...groupedContent,
+        adultGroupPoster: targetPoster,
+        updatedAt: groupedContent.updatedAt,
+      });
+    });
+
+    setSelectionError(null);
+    setSelectionFeedback(`已将 ${adultCoverMenu.title} 设为归集封面。`);
+    setAdultCoverMenu(null);
   };
 
   const handleDeleteSelectedEpisodes = async () => {
@@ -2125,6 +2493,8 @@ export function DownloadedContentDialog({
           targetContent.year && targetContent.year !== 'unknown'
             ? targetContent.year
             : undefined,
+        searchType: targetContent.searchType,
+        query: targetContent.searchTitle || undefined,
         doubanId: targetContent.doubanId,
         allowAdultCandidates: isAdultContentResult({
           title: targetContent.title,
@@ -2245,6 +2615,7 @@ export function DownloadedContentDialog({
           episodeIndexes,
           availableSources: resolvedDownloadable.availableSources,
           searchTitle: targetContent.searchTitle,
+          searchType: targetContent.searchType,
         });
 
         aggregateResult.queuedCount += result.queuedCount;
@@ -2390,6 +2761,7 @@ export function DownloadedContentDialog({
         episodeIndex,
         availableSources: resolvedDownloadable.availableSources,
         searchTitle: content.searchTitle,
+        searchType: content.searchType,
       });
       setMoreDownloadsFeedback(
         `已将 ${getEpisodeTitleFromSources(
@@ -2418,6 +2790,7 @@ export function DownloadedContentDialog({
         detail: option.detail,
         episodeIndexes: option.actionableEpisodeIndexes,
         searchTitle: adultGroupingQuery || content.searchTitle,
+        searchType: content.searchType,
       });
       setMoreDownloadsFeedback(
         option.actionableEpisodeIndexes.length > 1
@@ -2448,6 +2821,7 @@ export function DownloadedContentDialog({
     setSelectionError(null);
     setMoreDownloadsError(null);
     setMoreDownloadsFeedback(null);
+    setAdultCoverMenu(null);
 
     const closeDialog = () => {
       closeFrameRef.current = null;
@@ -2473,7 +2847,8 @@ export function DownloadedContentDialog({
   }
 
   return createPortal(
-    <div className='fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6'>
+    <>
+      <div className='fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6'>
       <button
         type='button'
         aria-label='关闭离线资源详情'
@@ -2498,8 +2873,8 @@ export function DownloadedContentDialog({
                 {isGroupedCollection ? (
                   <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200'>
                     {isAdultGroupedCollection
-                      ? `已归集 ${groupedLocalContents.length} 部资源`
-                      : `${groupedCollectionLabel} · ${groupedCollectionIdentity} · ${groupedLocalContents.length} 部资源`}
+                      ? `已归集 ${groupedResolvedContents.length} 部资源`
+                      : `${groupedCollectionLabel} · ${groupedCollectionIdentity} · ${groupedResolvedContents.length} 部资源`}
                   </span>
                 ) : null}
                 {!isAdultContent ? (
@@ -2652,10 +3027,10 @@ export function DownloadedContentDialog({
           <div className='overflow-y-auto border-b border-white/10 p-4 lg:border-b-0 lg:border-r lg:border-white/10 lg:p-6'>
             <div className='space-y-4'>
               <div className='relative aspect-[4/5] overflow-hidden rounded-3xl bg-black/40'>
-                {content.poster ? (
+                {dialogPoster ? (
                   <Image
-                    src={processImageUrl(content.poster)}
-                    alt={content.title}
+                    src={processImageUrl(dialogPoster)}
+                    alt={dialogPosterAlt}
                     fill
                     className='object-cover'
                     referrerPolicy='no-referrer'
@@ -2663,13 +3038,13 @@ export function DownloadedContentDialog({
                   />
                 ) : (
                   <div className='absolute inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-700/70 via-gray-900 to-black text-5xl font-semibold text-white/80'>
-                    {content.title.slice(0, 1)}
+                    {dialogPosterTitle.slice(0, 1)}
                   </div>
                 )}
                 <div className='absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent' />
                 <div className='absolute inset-x-0 bottom-0 p-4'>
                   <div className='line-clamp-2 text-xl font-semibold text-white'>
-                    {content.title}
+                    {dialogPosterTitle}
                   </div>
                 </div>
               </div>
@@ -2685,8 +3060,8 @@ export function DownloadedContentDialog({
                   <>
                     <span className='rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-amber-200'>
                       {isAdultGroupedCollection
-                        ? `已归集 ${groupedLocalContents.length} 部资源`
-                        : `${groupedCollectionLabel}下 ${groupedLocalContents.length} 部资源`}
+                        ? `已归集 ${groupedResolvedContents.length} 部资源`
+                        : `${groupedCollectionLabel}下 ${groupedResolvedContents.length} 部资源`}
                     </span>
                     <span className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300'>
                       合计 {groupedCollectionEpisodeCount} 集 ·{' '}
@@ -2774,42 +3149,50 @@ export function DownloadedContentDialog({
               {shouldShowGroupedEpisodeList ? (
                 <div className='space-y-4'>
                   <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-                    <div className='flex flex-wrap gap-2'>
-                      {groupedLocalContents.map((groupedContent) => {
-                        const isCurrentContent =
-                          groupedContent.contentId === content.contentId;
+                    {isAdultGroupedCollection ? (
+                      shouldShowAdultGroupedSourceSummary ? (
+                        <div className='text-xs text-gray-400'>
+                          来源：{groupedPlayableSourceNames.join('、')}
+                        </div>
+                      ) : null
+                    ) : (
+                      <div className='flex flex-wrap gap-2'>
+                        {groupedResolvedContents.map((groupedContent) => {
+                          const isCurrentContent =
+                            groupedContent.contentId === content.contentId;
 
-                        return (
-                          <button
-                            type='button'
-                            key={groupedContent.contentId}
-                            disabled={isEditing || isCurrentContent}
-                            onClick={() => {
-                              if (!isEditing && !isCurrentContent) {
-                                onSelectContent(groupedContent.contentId);
+                          return (
+                            <button
+                              type='button'
+                              key={groupedContent.contentId}
+                              disabled={isEditing || isCurrentContent}
+                              onClick={() => {
+                                if (!isEditing && !isCurrentContent) {
+                                  onSelectContent(groupedContent.contentId);
+                                }
+                              }}
+                              title={
+                                isCurrentContent
+                                  ? `${groupedContent.sourceName} 当前详情`
+                                  : `切换到 ${groupedContent.sourceName} 详情`
                               }
-                            }}
-                            title={
-                              isCurrentContent
-                                ? `${groupedContent.sourceName} 当前详情`
-                                : `切换到 ${groupedContent.sourceName} 详情`
-                            }
-                            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
-                              isCurrentContent
-                                ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-                                : 'border-white/10 bg-white/5 text-gray-300 hover:border-emerald-400/20 hover:bg-white/10'
-                            }`}
-                          >
-                            <span>{groupedContent.sourceName}</span>
-                            {groupedContent.episodes.length > 1 ? (
-                              <span className='opacity-70'>
-                                {groupedContent.episodes.length} 集
-                              </span>
-                            ) : null}
-                          </button>
-                        );
-                      })}
-                    </div>
+                              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                                isCurrentContent
+                                  ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                  : 'border-white/10 bg-white/5 text-gray-300 hover:border-emerald-400/20 hover:bg-white/10'
+                              }`}
+                            >
+                              <span>{groupedContent.sourceName}</span>
+                              {groupedContent.episodes.length > 1 ? (
+                                <span className='opacity-70'>
+                                  {groupedContent.episodes.length} 集
+                                </span>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     <div className='text-xs text-gray-400'>
                       {groupedPlayableEpisodes.length} 条离线资源 · 覆盖{' '}
@@ -2817,7 +3200,7 @@ export function DownloadedContentDialog({
                     </div>
                   </div>
 
-                  <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+                  <div className='grid gap-3 md:grid-cols-2'>
                     {groupedPlayableEpisodes.map((episode) => {
                       const selectionKey = buildEpisodeSelectionKey(
                         episode.contentId,
@@ -2825,6 +3208,48 @@ export function DownloadedContentDialog({
                       );
                       const isSelected =
                         selectedEpisodeKeySet.has(selectionKey);
+                      const isPendingOfflineNavigation =
+                        !isEditing &&
+                        pendingOfflineNavigationKey === selectionKey;
+                      const adultEpisodeActionSubject =
+                        episode.contentTitle || episode.episodeTitle;
+                      const adultEpisodeMarker = [
+                        shouldShowAdultGroupedEpisodeCode
+                          ? formatEpisodeCode(episode.episodeIndex)
+                          : null,
+                        shouldShowAdultGroupedEpisodeTitle
+                          ? normalizeMetadataText(episode.episodeTitle)
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ');
+                      const adultDurationText =
+                        groupedEpisodeDurationByKey[selectionKey] ||
+                        extractDurationText(episode.remarks, episode.desc);
+                      const adultEpisodeRemark = adultDurationText
+                        ? null
+                        : getDisplayableOfflineRemark(
+                            episode.remarks,
+                            episode.episodeTitle
+                          );
+                      const adultPrimaryMeta = [
+                        adultDurationText || adultEpisodeRemark,
+                        episode.sourceName,
+                        episode.year && episode.year !== 'unknown'
+                          ? episode.year
+                          : null,
+                      ].filter((item): item is string => Boolean(item));
+                      const adultSecondaryMeta = [
+                        adultEpisodeMarker || null,
+                      ]
+                        .filter((item): item is string => Boolean(item))
+                        .slice(0, 3);
+                      const groupedEpisodeActionSubject =
+                        isAdultGroupedCollection
+                          ? shouldShowAdultGroupedSourceSummary
+                            ? `${adultEpisodeActionSubject} · ${episode.sourceName}`
+                            : adultEpisodeActionSubject
+                          : `${episode.sourceName} 的 ${episode.episodeTitle}`;
 
                       return (
                         <button
@@ -2839,67 +3264,166 @@ export function DownloadedContentDialog({
                               return;
                             }
 
-                            router.push(episode.offlineHref);
+                            if (pendingOfflineNavigationKey) {
+                              return;
+                            }
+
+                            handleOpenOfflinePlayback({
+                              href: episode.offlineHref,
+                              selectionKey,
+                              label: groupedEpisodeActionSubject,
+                            });
                           }}
+                          onContextMenu={(event) =>
+                            handleOpenAdultCoverMenu(event, {
+                              poster: episode.poster,
+                              title: adultEpisodeActionSubject,
+                            })
+                          }
                           aria-pressed={isEditing ? isSelected : undefined}
+                          aria-busy={isPendingOfflineNavigation || undefined}
                           aria-label={
                             isEditing
-                              ? `${isSelected ? '取消选择' : '选择'} ${
-                                  episode.sourceName
-                                } 的 ${episode.episodeTitle}`
-                              : `离线播放 ${episode.sourceName} 的 ${episode.episodeTitle}`
+                              ? `${isSelected ? '取消选择' : '选择'} ${groupedEpisodeActionSubject}`
+                              : `离线播放 ${groupedEpisodeActionSubject}`
                           }
                           className={`rounded-xl border p-3 text-left transition-colors ${
                             isEditing
                               ? isSelected
                                 ? 'border-emerald-400/60 bg-emerald-500/10'
                                 : 'border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/5'
+                              : isPendingOfflineNavigation
+                              ? 'border-emerald-300/60 bg-emerald-500/15 shadow-[0_0_0_1px_rgba(110,231,183,0.2)]'
                               : episode.isCurrentContent
                               ? 'border-emerald-400/40 bg-emerald-500/10 hover:bg-emerald-500/15'
                               : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
                           }`}
                         >
-                          <div className='grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2'>
-                            <div className='flex min-w-0 items-center gap-2'>
-                              <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
-                                {formatEpisodeCode(episode.episodeIndex)}
-                              </span>
-                              <div
-                                className='truncate text-sm font-semibold text-white'
-                                title={episode.episodeTitle}
-                              >
-                                {episode.episodeTitle}
+                          {isAdultGroupedCollection ? (
+                            <div className='grid grid-cols-[92px_minmax(0,1fr)_auto] items-start gap-3'>
+                              <div className='relative h-28 overflow-hidden rounded-2xl bg-black/30'>
+                                {episode.poster ? (
+                                  <Image
+                                    src={processImageUrl(episode.poster)}
+                                    alt={`${adultEpisodeActionSubject} 封面`}
+                                    fill
+                                    className='object-cover'
+                                    referrerPolicy='no-referrer'
+                                    sizes='92px'
+                                  />
+                                ) : (
+                                  <div className='absolute inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-700/70 via-gray-900 to-black text-3xl font-semibold text-white/70'>
+                                    {adultEpisodeActionSubject.slice(0, 1)}
+                                  </div>
+                                )}
+                                <div className='absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent' />
                               </div>
-                            </div>
 
-                            {isEditing ? (
-                              <span
-                                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                                  isSelected
-                                    ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-                                    : 'border border-white/10 bg-white/5 text-gray-400'
-                                }`}
-                              >
-                                {isSelected ? '已选' : '选择'}
-                              </span>
-                            ) : null}
+                              <div className='min-w-0 space-y-1'>
+                                <div
+                                  className='line-clamp-2 text-sm font-semibold text-white'
+                                  title={adultEpisodeActionSubject}
+                                >
+                                  {adultEpisodeActionSubject}
+                                </div>
 
-                            <div className='col-span-2 flex flex-wrap items-center gap-2 text-[11px] text-gray-300'>
-                              <span className='rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-medium text-gray-100'>
-                                {episode.sourceName}
-                              </span>
-                              {episode.contentTitle !== dialogTitle ? (
-                                <span className='text-gray-400'>
-                                  {episode.contentTitle}
+                                {adultPrimaryMeta.length > 0 ? (
+                                  <div className='flex flex-wrap items-center gap-2'>
+                                    {adultPrimaryMeta.map((item, index) => (
+                                      <span
+                                        key={`${episode.contentId}-${item}`}
+                                        title={item}
+                                        className={`rounded-full px-2.5 py-1 text-[11px] ${
+                                          index === 0 && adultDurationText
+                                            ? 'border border-emerald-400/30 bg-emerald-500/10 font-medium text-emerald-100'
+                                            : 'border border-white/10 bg-white/5 text-gray-200'
+                                        }`}
+                                      >
+                                        {item}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : null}
+
+                                {adultSecondaryMeta.length > 0 ? (
+                                  <div className='flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
+                                    {adultSecondaryMeta.map((item) => (
+                                      <span
+                                        key={`${episode.contentId}-${item}`}
+                                        title={item}
+                                      >
+                                        {item}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+
+                              {isEditing ? (
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                    isSelected
+                                      ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                      : 'border border-white/10 bg-white/5 text-gray-400'
+                                  }`}
+                                >
+                                  {isSelected ? '已选' : '选择'}
+                                </span>
+                              ) : isPendingOfflineNavigation ? (
+                                <span className='inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-100'>
+                                  <Loader2 className='h-3 w-3 animate-spin' />
+                                  正在打开
                                 </span>
                               ) : null}
-                            </div>
 
-                            <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
-                              <span>{formatBytes(episode.sizeBytes)}</span>
-                              <span>{formatDateTime(episode.downloadedAt)}</span>
+                              <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
+                                <span>{formatBytes(episode.sizeBytes)}</span>
+                                <span>{formatDateTime(episode.downloadedAt)}</span>
+                              </div>
                             </div>
-                          </div>
+                          ) : (
+                            <div className='grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2'>
+                              <div className='flex min-w-0 items-center gap-2'>
+                                <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
+                                  {formatEpisodeCode(episode.episodeIndex)}
+                                </span>
+                                <div
+                                  className='truncate text-sm font-semibold text-white'
+                                  title={episode.episodeTitle}
+                                >
+                                  {episode.episodeTitle}
+                                </div>
+                              </div>
+
+                              {isEditing ? (
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                    isSelected
+                                      ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                      : 'border border-white/10 bg-white/5 text-gray-400'
+                                  }`}
+                                >
+                                  {isSelected ? '已选' : '选择'}
+                                </span>
+                              ) : null}
+
+                              <div className='col-span-2 flex flex-wrap items-center gap-2 text-[11px] text-gray-300'>
+                                <span className='rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-medium text-gray-100'>
+                                  {episode.sourceName}
+                                </span>
+                                {episode.contentTitle !== dialogTitle ? (
+                                  <span className='text-gray-400'>
+                                    {episode.contentTitle}
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
+                                <span>{formatBytes(episode.sizeBytes)}</span>
+                                <span>{formatDateTime(episode.downloadedAt)}</span>
+                              </div>
+                            </div>
+                          )}
                         </button>
                       );
                     })}
@@ -3105,12 +3629,14 @@ export function DownloadedContentDialog({
                       content,
                       episodeIndex: episode.episodeIndex,
                     });
-                    const isSelected = selectedEpisodeKeySet.has(
-                      buildEpisodeSelectionKey(
-                        content.contentId,
-                        episode.episodeIndex
-                      )
+                    const selectionKey = buildEpisodeSelectionKey(
+                      content.contentId,
+                      episode.episodeIndex
                     );
+                    const isSelected = selectedEpisodeKeySet.has(selectionKey);
+                    const isPendingOfflineNavigation =
+                      !isEditing &&
+                      pendingOfflineNavigationKey === selectionKey;
 
                     return (
                       <button
@@ -3125,9 +3651,18 @@ export function DownloadedContentDialog({
                             return;
                           }
 
-                          router.push(offlineHref);
+                          if (pendingOfflineNavigationKey) {
+                            return;
+                          }
+
+                          handleOpenOfflinePlayback({
+                            href: offlineHref,
+                            selectionKey,
+                            label: episode.episodeTitle,
+                          });
                         }}
                         aria-pressed={isEditing ? isSelected : undefined}
+                        aria-busy={isPendingOfflineNavigation || undefined}
                         aria-label={
                           isEditing
                             ? `${isSelected ? '取消选择' : '选择'} ${
@@ -3140,6 +3675,8 @@ export function DownloadedContentDialog({
                             ? isSelected
                               ? 'border-emerald-400/60 bg-emerald-500/10'
                               : 'border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/5'
+                            : isPendingOfflineNavigation
+                            ? 'border-emerald-300/60 bg-emerald-500/15 shadow-[0_0_0_1px_rgba(110,231,183,0.2)]'
                             : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
                         }`}
                       >
@@ -3166,6 +3703,11 @@ export function DownloadedContentDialog({
                             >
                               {isSelected ? '已选' : '选择'}
                             </span>
+                          ) : isPendingOfflineNavigation ? (
+                            <span className='inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-100'>
+                              <Loader2 className='h-3 w-3 animate-spin' />
+                              正在打开
+                            </span>
                           ) : null}
 
                           <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300'>
@@ -3184,7 +3726,31 @@ export function DownloadedContentDialog({
           </div>
         </div>
       </div>
-    </div>,
+    </div>
+
+      {adultCoverMenu ? (
+        <div
+          ref={adultCoverMenuRef}
+          role='menu'
+          aria-label='归集封面操作'
+          className='fixed z-[10002] w-44 overflow-hidden rounded-2xl border border-white/10 bg-[#09111d] shadow-2xl shadow-black/50'
+          style={{
+            left: adultCoverMenu.x,
+            top: adultCoverMenu.y,
+          }}
+        >
+          <button
+            type='button'
+            role='menuitem'
+            onClick={handleSetAdultGroupPoster}
+            disabled={!adultCoverMenu.poster}
+            className='flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-medium text-white transition-colors hover:bg-white/5 disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:bg-transparent'
+          >
+            <span>设为封面</span>
+          </button>
+        </div>
+      ) : null}
+    </>,
     document.body
   );
 }

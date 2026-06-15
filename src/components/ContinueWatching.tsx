@@ -146,14 +146,16 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
                     poster={record.cover}
                     year={record.year}
                     source={source}
-                    source_name={record.source_name}
-                    progress={getProgress(record)}
-                    episodes={record.total_episodes}
-                    currentEpisode={record.index}
-                    query={record.search_title}
-                    from='playrecord'
-                    onDelete={() =>
-                      setPlayRecords((prev) =>
+                  source_name={record.source_name}
+                  progress={getProgress(record)}
+                  episodes={record.total_episodes}
+                  currentEpisode={record.index}
+                  query={record.search_title}
+                  playbackMode={record.playback_mode}
+                  offlineContentId={record.offline_content_id}
+                  from='playrecord'
+                  onDelete={() =>
+                    setPlayRecords((prev) =>
                         prev.filter((r) => r.key !== record.key)
                       )
                     }

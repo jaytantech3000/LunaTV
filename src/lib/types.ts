@@ -12,6 +12,8 @@ export interface PlayRecord {
   total_time: number; // 总进度（秒）
   save_time: number; // 记录保存时间（时间戳）
   search_title: string; // 搜索时使用的标题
+  playback_mode?: 'online' | 'offline';
+  offline_content_id?: string;
 }
 
 // 收藏数据结构
@@ -23,6 +25,8 @@ export interface Favorite {
   cover: string;
   save_time: number; // 记录保存时间（时间戳）
   search_title: string; // 搜索时使用的标题
+  playback_mode?: 'online' | 'offline';
+  offline_content_id?: string;
   origin?: 'vod' | 'live';
 }
 
@@ -100,6 +104,7 @@ export interface SearchResult {
   poster: string;
   episodes: string[];
   episodes_titles: string[];
+  remarks?: string;
   source: string;
   source_name: string;
   class?: string;

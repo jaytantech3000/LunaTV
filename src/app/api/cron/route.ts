@@ -198,6 +198,8 @@ async function refreshRecordAndFavorites() {
                 total_time: record.total_time,
                 save_time: record.save_time,
                 search_title: record.search_title,
+                playback_mode: record.playback_mode,
+                offline_content_id: record.offline_content_id,
               });
               console.log(
                 `更新播放记录: ${record.title} (${record.total_episodes} -> ${episodeCount})`
@@ -250,6 +252,9 @@ async function refreshRecordAndFavorites() {
                 total_episodes: favEpisodeCount,
                 save_time: fav.save_time,
                 search_title: fav.search_title,
+                playback_mode: fav.playback_mode,
+                offline_content_id: fav.offline_content_id,
+                origin: fav.origin,
               });
               console.log(
                 `更新收藏: ${fav.title} (${fav.total_episodes} -> ${favEpisodeCount})`

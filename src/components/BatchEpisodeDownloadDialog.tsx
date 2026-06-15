@@ -20,6 +20,7 @@ interface BatchEpisodeDownloadDialogProps {
   episodeIndex: number;
   isOpen: boolean;
   searchTitle?: string;
+  searchType?: string;
   onClose: () => void;
   onComplete?: (message: string) => void;
 }
@@ -152,6 +153,7 @@ export default function BatchEpisodeDownloadDialog({
   episodeIndex,
   isOpen,
   searchTitle,
+  searchType,
   onClose,
   onComplete,
 }: BatchEpisodeDownloadDialogProps) {
@@ -391,6 +393,7 @@ export default function BatchEpisodeDownloadDialog({
         episodeIndexes: selectedEpisodeIndexes,
         availableSources,
         searchTitle,
+        searchType,
       });
       const feedbackMessage = `批量下载：${getBatchFeedbackMessage(
         result.queuedCount,

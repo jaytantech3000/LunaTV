@@ -1,13 +1,24 @@
+jest.mock('./cache', () => ({
+  hasCachedDownload: jest.fn(),
+  matchDownloadResponse: jest.fn(),
+  putDownloadResponse: jest.fn(),
+}));
+
+import { matchDownloadResponse } from './cache';
 import {
   applyOfflinePlaybackOwner,
   buildGroupedOfflinePlaybackDetail,
+  buildOfflinePlayHref,
   getAdultRelatedOfflineVideoEntries,
+  getDownloadedEpisodeDurationSeconds,
   getGroupedOfflineContents,
   getOfflinePlaybackContents,
   getSameTitleOfflineVideoEntries,
   isAdultDownloadedContent,
 } from './offline';
 import { DownloadedContentMeta } from './types';
+
+const mockedMatchDownloadResponse = jest.mocked(matchDownloadResponse);
 
 function buildContent(
   partial: Partial<DownloadedContentMeta>
@@ -19,6 +30,7 @@ function buildContent(
     sourceName: partial.sourceName || '线路A',
     title: partial.title || '银河列车',
     searchTitle: partial.searchTitle,
+    searchType: partial.searchType,
     poster: partial.poster || 'https://example.com/poster-a.jpg',
     year: partial.year || '2026',
     desc: partial.desc || '剧情简介',
@@ -33,6 +45,28 @@ function buildContent(
 }
 
 describe('offline playback grouping helpers', () => {
+  beforeEach(() => {
+    mockedMatchDownloadResponse.mockReset();
+  });
+
+  it('reads episode duration from the cached playback manifest', async () => {
+    mockedMatchDownloadResponse.mockResolvedValue(
+      new Response(`#EXTM3U
+#EXTINF:10.0,
+segment-1.ts
+#EXTINF:20.5,
+segment-2.ts
+`)
+    );
+
+    await expect(
+      getDownloadedEpisodeDurationSeconds({
+        playbackManifestUrl: 'https://example.com/play.m3u8',
+        rootManifestUrl: 'https://example.com/root.m3u8',
+      })
+    ).resolves.toBe(30.5);
+  });
+
   it('groups same-title offline contents and keeps the active content first', () => {
     const activeContent = buildContent({
       contentId: 'source-a:1',
@@ -216,6 +250,26 @@ describe('offline playback grouping helpers', () => {
         updatedAt: 2000,
       },
     ]);
+  });
+
+  it('preserves the stored search mode in offline playback links', () => {
+    const content = buildContent({
+      contentId: 'source-a:1',
+      source: 'source-a',
+      vodId: '1',
+      title: '银河列车',
+      year: '2026',
+      searchType: 'tv',
+    });
+
+    expect(
+      buildOfflinePlayHref({
+        content,
+        episodeIndex: 1,
+      })
+    ).toBe(
+      '/play?offline=1&contentId=source-a%3A1&source=source-a&id=1&title=%E9%93%B6%E6%B2%B3%E5%88%97%E8%BD%A6&year=2026&episode=2&stype=tv'
+    );
   });
 
   it('merges cross-source offline episodes into one ordered playback list', () => {
