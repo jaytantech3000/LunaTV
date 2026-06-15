@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { changelog, ChangelogEntry } from '@/lib/changelog';
+import { acquireScrollLock } from '@/lib/scroll-lock';
 import { CURRENT_VERSION } from '@/lib/version';
 import { compareVersions, UpdateStatus } from '@/lib/version_check';
 
@@ -51,22 +52,9 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
   // Body 滚动锁定 - 使用 overflow 方式避免布局问题
   useEffect(() => {
     if (isOpen) {
-      const body = document.body;
-      const html = document.documentElement;
-
-      // 保存原始样式
-      const originalBodyOverflow = body.style.overflow;
-      const originalHtmlOverflow = html.style.overflow;
-
-      // 只设置 overflow 来阻止滚动
-      body.style.overflow = 'hidden';
-      html.style.overflow = 'hidden';
-
-      return () => {
-        // 恢复所有原始样式
-        body.style.overflow = originalBodyOverflow;
-        html.style.overflow = originalHtmlOverflow;
-      };
+      return acquireScrollLock({
+        lockHtml: true,
+      });
     }
   }, [isOpen]);
 
@@ -187,12 +175,13 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
     return (
       <div
         key={entry.version}
-        className={`p-4 rounded-lg border ${isCurrentVersion
-          ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
-          : isUpdate
+        className={`p-4 rounded-lg border ${
+          isCurrentVersion
+            ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
+            : isUpdate
             ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
             : 'bg-gray-50 dark:bg-gray-800/60 border-gray-200 dark:border-gray-700'
-          }`}
+        }`}
       >
         {/* 版本标题 */}
         <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3'>
@@ -444,10 +433,11 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
                       .map((entry, index) => (
                         <div
                           key={index}
-                          className={`p-4 rounded-lg border ${entry.version === latestVersion
-                            ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
-                            : 'bg-gray-50 dark:bg-gray-800/60 border-gray-200 dark:border-gray-700'
-                            }`}
+                          className={`p-4 rounded-lg border ${
+                            entry.version === latestVersion
+                              ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
+                              : 'bg-gray-50 dark:bg-gray-800/60 border-gray-200 dark:border-gray-700'
+                          }`}
                         >
                           <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3'>
                             <div className='flex flex-wrap items-center gap-2'>

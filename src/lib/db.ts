@@ -54,14 +54,17 @@ export class DbManager {
     this.storage = getStorage();
     // 启动时自动触发数据迁移（异步，不阻塞构造）
     if (this.storage && typeof this.storage.migrateData === 'function') {
-      this.migrationPromise = this.storage.migrateData().then(async () => {
-        // 数据结构迁移完成后，执行密码哈希迁移
-        if (typeof this.storage.migratePasswords === 'function') {
-          await this.storage.migratePasswords();
-        }
-      }).catch((err) => {
-        console.error('数据迁移异常:', err);
-      });
+      this.migrationPromise = this.storage
+        .migrateData()
+        .then(async () => {
+          // 数据结构迁移完成后，执行密码哈希迁移
+          if (typeof this.storage.migratePasswords === 'function') {
+            await this.storage.migratePasswords();
+          }
+        })
+        .catch((err) => {
+          console.error('数据迁移异常:', err);
+        });
     }
   }
 
@@ -199,23 +202,26 @@ export class DbManager {
 
   // 获取全部用户名
   async getAllUsers(): Promise<string[]> {
-    if (typeof (this.storage as any).getAllUsers === 'function') {
-      return (this.storage as any).getAllUsers();
+    const storage = this.storage as Partial<IStorage> | null;
+    if (storage && typeof storage.getAllUsers === 'function') {
+      return storage.getAllUsers();
     }
     return [];
   }
 
   // ---------- 管理员配置 ----------
   async getAdminConfig(): Promise<AdminConfig | null> {
-    if (typeof (this.storage as any).getAdminConfig === 'function') {
-      return (this.storage as any).getAdminConfig();
+    const storage = this.storage as Partial<IStorage> | null;
+    if (storage && typeof storage.getAdminConfig === 'function') {
+      return storage.getAdminConfig();
     }
     return null;
   }
 
   async saveAdminConfig(config: AdminConfig): Promise<void> {
-    if (typeof (this.storage as any).setAdminConfig === 'function') {
-      await (this.storage as any).setAdminConfig(config);
+    const storage = this.storage as Partial<IStorage> | null;
+    if (storage && typeof storage.setAdminConfig === 'function') {
+      await storage.setAdminConfig(config);
     }
   }
 

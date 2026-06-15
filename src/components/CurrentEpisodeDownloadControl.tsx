@@ -1,11 +1,14 @@
 'use client';
 
+import { Info } from 'lucide-react';
 import Link from 'next/link';
-import { useMemo, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getOfflineDownloadSupportState } from '@/lib/download/cache';
+import { resolveDownloadablePlaybackSources } from '@/lib/download/downloadable';
 import {
+  formatBytes,
   formatTaskSizeProgress,
   formatTransferRate,
   getDownloadStatusLabel,
@@ -18,9 +21,11 @@ import {
 import {
   buildDownloadContentId,
   buildDownloadTaskId,
-  DownloadTask,
 } from '@/lib/download/types';
 import { SearchResult } from '@/lib/types';
+import { isAdultContentResult } from '@/lib/yellow';
+
+import BatchEpisodeDownloadDialog from '@/components/BatchEpisodeDownloadDialog';
 
 import { useDownloadStore } from '@/stores/downloadStore';
 
@@ -28,273 +33,136 @@ interface CurrentEpisodeDownloadControlProps {
   detail: SearchResult;
   availableSources?: SearchResult[];
   episodeIndex: number;
+  downloadEpisodeIndex?: number;
   isOfflineMode?: boolean;
-}
-
-interface BatchEpisodeOption {
-  episodeIndex: number;
-  episodeTitle: string;
-  hasSource: boolean;
-  isCurrent: boolean;
-  isDownloaded: boolean;
-  isSelectable: boolean;
-  task?: DownloadTask;
-}
-
-const BATCH_EPISODES_PER_PAGE = 50;
-
-function normalizeEpisodeSelection(indexes: number[]): number[] {
-  return Array.from(new Set(indexes)).sort((left, right) => left - right);
-}
-
-function buildEpisodePageRanges(
-  totalEpisodes: number,
-  episodesPerPage: number
-): Array<{ start: number; end: number }> {
-  const pageCount = Math.ceil(totalEpisodes / episodesPerPage);
-
-  return Array.from({ length: pageCount }, (_, pageIndex) => {
-    const start = pageIndex * episodesPerPage + 1;
-    const end = Math.min(start + episodesPerPage - 1, totalEpisodes);
-    return { start, end };
-  });
-}
-
-function getBatchFeedbackMessage(
-  queuedCount: number,
-  skippedCount: number
-): string {
-  const parts: string[] = [];
-
-  if (queuedCount > 0) {
-    parts.push(`已加入 ${queuedCount} 集`);
-  }
-
-  if (skippedCount > 0) {
-    parts.push(`跳过 ${skippedCount} 集`);
-  }
-
-  if (parts.length === 0) {
-    return '没有可加入的剧集。';
-  }
-
-  const suffix = skippedCount > 0 ? '（已下载、已在队列中或当前不可下载）' : '';
-
-  return `${parts.join('，')}${suffix}。`;
-}
-
-function getEpisodeTaskStatusText(option: BatchEpisodeOption): string {
-  if (!option.hasSource) {
-    return '不可下载';
-  }
-
-  if (option.isDownloaded) {
-    return '已下载';
-  }
-
-  switch (option.task?.status) {
-    case 'downloading':
-      return '下载中';
-    case 'queued':
-      return '排队中';
-    case 'paused':
-      return '已暂停';
-    case 'error':
-      return '下载失败';
-    default:
-      return '可下载';
-  }
-}
-
-function getEpisodeButtonClassName(params: {
-  option: BatchEpisodeOption;
-  isSelected: boolean;
-}): string {
-  const { option, isSelected } = params;
-
-  if (!option.hasSource) {
-    return 'border-gray-200 bg-gray-100/80 text-gray-400 dark:border-gray-800 dark:bg-gray-900/40 dark:text-gray-600 cursor-not-allowed';
-  }
-
-  if (option.isDownloaded) {
-    return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 cursor-not-allowed';
-  }
-
-  if (option.task?.status === 'downloading') {
-    return 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300 cursor-not-allowed';
-  }
-
-  if (option.task?.status === 'queued') {
-    return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 cursor-not-allowed';
-  }
-
-  if (isSelected) {
-    return 'border-emerald-500 bg-emerald-500/20 text-emerald-900 shadow-lg shadow-emerald-500/10 dark:text-emerald-50';
-  }
-
-  if (option.task?.status === 'error') {
-    return 'border-red-500/30 bg-red-500/5 text-red-700 hover:border-red-400 hover:bg-red-500/10 dark:text-red-300';
-  }
-
-  if (option.task?.status === 'paused') {
-    return 'border-orange-500/30 bg-orange-500/5 text-orange-700 hover:border-orange-400 hover:bg-orange-500/10 dark:text-orange-300';
-  }
-
-  return 'border-gray-200 bg-white/90 text-gray-800 hover:border-emerald-400 hover:bg-emerald-50 dark:border-gray-800 dark:bg-gray-950/70 dark:text-gray-100 dark:hover:bg-emerald-950/20';
+  searchTitle?: string;
+  searchType?: string;
+  compact?: boolean;
 }
 
 export default function CurrentEpisodeDownloadControl({
   detail,
   availableSources = [],
   episodeIndex,
+  downloadEpisodeIndex,
   isOfflineMode = false,
+  searchTitle,
+  searchType,
+  compact = false,
 }: CurrentEpisodeDownloadControlProps) {
+  const targetEpisodeIndex =
+    typeof downloadEpisodeIndex === 'number'
+      ? downloadEpisodeIndex
+      : episodeIndex;
   const contentId = buildDownloadContentId(detail.source, detail.id);
-  const taskId = buildDownloadTaskId(contentId, episodeIndex);
-  const totalEpisodes = detail.episodes.length;
+  const taskId = buildDownloadTaskId(contentId, targetEpisodeIndex);
+
   const [actionError, setActionError] = useState<string | null>(null);
   const [batchFeedback, setBatchFeedback] = useState<string | null>(null);
   const [isBatchDialogOpen, setIsBatchDialogOpen] = useState(false);
-  const [isStartingBatchDownload, setIsStartingBatchDownload] = useState(false);
-  const [batchCurrentPage, setBatchCurrentPage] = useState(() =>
-    Math.floor(episodeIndex / BATCH_EPISODES_PER_PAGE)
-  );
-  const [isBatchDescending, setIsBatchDescending] = useState(false);
-  const [selectedEpisodeIndexes, setSelectedEpisodeIndexes] = useState<
-    number[]
-  >([]);
+  const [isPreparingBatchDialog, setIsPreparingBatchDialog] = useState(false);
+  const [isCompactPanelOpen, setIsCompactPanelOpen] = useState(false);
+  const [downloadDialogDetail, setDownloadDialogDetail] =
+    useState<SearchResult | null>(null);
+  const [downloadDialogAvailableSources, setDownloadDialogAvailableSources] =
+    useState<SearchResult[]>([]);
+  const [downloadSupport, setDownloadSupport] = useState<ReturnType<
+    typeof getOfflineDownloadSupportState
+  > | null>(null);
+  const compactPanelRef = useRef<HTMLDivElement | null>(null);
+  const compactPanelSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const compactTriggerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [compactPanelPosition, setCompactPanelPosition] = useState<{
+    right: number;
+    top: number;
+  } | null>(null);
 
-  const tasks = useDownloadStore((state) => state.tasks);
   const task = useDownloadStore((state) => state.tasks[taskId]);
   const content = useDownloadStore((state) => state.library[contentId]);
-  const downloadedEpisode = getDownloadedEpisodeMeta(content, episodeIndex);
-  const downloadSupport = useMemo(() => getOfflineDownloadSupportState(), []);
-
-  const downloadedEpisodeIndexes = new Set(
-    content?.episodes.map((episode) => episode.episodeIndex) || []
+  const downloadedEpisode = getDownloadedEpisodeMeta(
+    content,
+    targetEpisodeIndex
   );
 
-  const episodeOptions: BatchEpisodeOption[] = detail.episodes.map(
-    (episodeUrl, targetEpisodeIndex) => {
-      const targetTaskId = buildDownloadTaskId(contentId, targetEpisodeIndex);
-      const episodeTask = tasks[targetTaskId];
-      const isDownloaded =
-        downloadedEpisodeIndexes.has(targetEpisodeIndex) ||
-        episodeTask?.status === 'done';
-      const isSelectable =
-        Boolean(episodeUrl) &&
-        !isDownloaded &&
-        (!episodeTask || ['paused', 'error'].includes(episodeTask.status));
-
-      return {
-        episodeIndex: targetEpisodeIndex,
-        episodeTitle:
-          detail.episodes_titles[targetEpisodeIndex] ||
-          `第 ${targetEpisodeIndex + 1} 集`,
-        hasSource: Boolean(episodeUrl),
-        isCurrent: targetEpisodeIndex === episodeIndex,
-        isDownloaded,
-        isSelectable,
-        task: episodeTask,
-      };
-    }
-  );
-
-  const selectableEpisodeIndexes = episodeOptions
-    .filter((option) => option.isSelectable)
-    .map((option) => option.episodeIndex);
-  const selectableEpisodeIndexesKey = selectableEpisodeIndexes.join(',');
-  const selectedEpisodeSet = new Set(selectedEpisodeIndexes);
-  const selectedCount = selectedEpisodeIndexes.length;
-  const selectableCount = selectableEpisodeIndexes.length;
-  const downloadedCount = episodeOptions.filter(
-    (option) => option.isDownloaded
-  ).length;
-  const activeCount = episodeOptions.filter((option) =>
-    ['downloading', 'queued'].includes(option.task?.status || '')
-  ).length;
-  const pausedOrFailedCount = episodeOptions.filter((option) =>
-    ['paused', 'error'].includes(option.task?.status || '')
-  ).length;
-
-  const pageRanges = buildEpisodePageRanges(
-    totalEpisodes,
-    BATCH_EPISODES_PER_PAGE
-  );
-  const pageCount = pageRanges.length;
-  const displayedPageIndex = isBatchDescending
-    ? pageCount - 1 - batchCurrentPage
-    : batchCurrentPage;
-  const pageLabels = isBatchDescending
-    ? [...pageRanges].reverse().map(({ start, end }) => `${end}-${start}`)
-    : pageRanges.map(({ start, end }) => `${start}-${end}`);
-
-  const currentPageStartIndex = batchCurrentPage * BATCH_EPISODES_PER_PAGE;
-  const currentPageEndIndex = Math.min(
-    currentPageStartIndex + BATCH_EPISODES_PER_PAGE,
-    totalEpisodes
-  );
-  const visibleEpisodeOptions = episodeOptions.slice(
-    currentPageStartIndex,
-    currentPageEndIndex
-  );
-  if (isBatchDescending) {
-    visibleEpisodeOptions.reverse();
-  }
+  useEffect(() => {
+    setDownloadSupport(getOfflineDownloadSupportState());
+  }, []);
 
   useEffect(() => {
     setActionError(null);
     setBatchFeedback(null);
     setIsBatchDialogOpen(false);
-    setIsStartingBatchDownload(false);
-    setBatchCurrentPage(Math.floor(episodeIndex / BATCH_EPISODES_PER_PAGE));
-    setIsBatchDescending(false);
-    setSelectedEpisodeIndexes([]);
-  }, [detail.id, detail.source, episodeIndex]);
+    setIsPreparingBatchDialog(false);
+    setIsCompactPanelOpen(false);
+    setDownloadDialogDetail(null);
+    setDownloadDialogAvailableSources([]);
+  }, [
+    detail.id,
+    detail.source,
+    episodeIndex,
+    searchTitle,
+    searchType,
+    targetEpisodeIndex,
+  ]);
 
-  useEffect(() => {
-    if (!isBatchDialogOpen || typeof document === 'undefined') {
+  const updateCompactPanelPosition = useCallback(() => {
+    if (!compactTriggerButtonRef.current || typeof window === 'undefined') {
       return;
     }
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const triggerRect = compactTriggerButtonRef.current.getBoundingClientRect();
+    setCompactPanelPosition({
+      top: triggerRect.bottom + 8,
+      right: Math.max(16, window.innerWidth - triggerRect.right),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!compact || !isCompactPanelOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        compactPanelRef.current?.contains(event.target as Node) ||
+        compactPanelSurfaceRef.current?.contains(event.target as Node)
+      ) {
+        return;
+      }
+
+      setIsCompactPanelOpen(false);
+    };
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setIsBatchDialogOpen(false);
+        setIsCompactPanelOpen(false);
       }
     };
 
+    updateCompactPanelPosition();
+
+    const handleViewportChange = () => {
+      updateCompactPanelPosition();
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', handleViewportChange);
+    window.addEventListener('scroll', handleViewportChange, true);
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('scroll', handleViewportChange, true);
     };
-  }, [isBatchDialogOpen]);
-
-  useEffect(() => {
-    if (!isBatchDialogOpen) {
-      return;
-    }
-
-    const nextSelectableEpisodeIndexes = selectableEpisodeIndexesKey
-      ? selectableEpisodeIndexesKey.split(',').map((value) => Number(value))
-      : [];
-    const selectableEpisodeSet = new Set(nextSelectableEpisodeIndexes);
-    setSelectedEpisodeIndexes((previousIndexes) => {
-      const nextIndexes = previousIndexes.filter((targetEpisodeIndex) =>
-        selectableEpisodeSet.has(targetEpisodeIndex)
-      );
-
-      return nextIndexes.length === previousIndexes.length
-        ? previousIndexes
-        : nextIndexes;
-    });
-  }, [isBatchDialogOpen, selectableEpisodeIndexesKey]);
+  }, [compact, isCompactPanelOpen, updateCompactPanelPosition]);
 
   if (!detail.episodes[episodeIndex]) {
+    return null;
+  }
+
+  if (!downloadSupport) {
     return null;
   }
 
@@ -306,37 +174,161 @@ export default function CurrentEpisodeDownloadControl({
     );
   }
 
-  const canBatchDownload = !isOfflineMode && totalEpisodes > 1;
+  const shouldAllowAdultPlayback = isAdultContentResult({
+    title: detail.title,
+    source_name: detail.source_name,
+    desc: detail.desc,
+    type_name: detail.type_name,
+  });
+  const batchDialogDetail = isOfflineMode
+    ? downloadDialogDetail || detail
+    : detail;
+  const batchDialogAvailableSources = isOfflineMode
+    ? downloadDialogAvailableSources
+    : availableSources;
+  const batchDialogEpisodeIndex = isOfflineMode
+    ? targetEpisodeIndex
+    : episodeIndex;
+  const downloadDialogLabel = isOfflineMode
+    ? '下载更多'
+    : detail.episodes.length > 1
+    ? '下载剧集'
+    : '下载选项';
+  const episodeLabel =
+    detail.episodes_titles[episodeIndex] || `第 ${episodeIndex + 1} 集`;
+  const filledButtonClassName =
+    'inline-flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50';
+  const secondaryButtonClassName =
+    'inline-flex items-center justify-center rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/20';
+  const neutralButtonClassName =
+    'inline-flex items-center justify-center rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/10';
+  const dangerButtonClassName =
+    'inline-flex items-center justify-center rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/20';
+  const compactPanelTitle = isOfflineMode ? '离线下载详情' : '下载详情';
+  const compactButtonLabel = isCompactPanelOpen
+    ? `收起${compactPanelTitle}`
+    : `查看${compactPanelTitle}`;
+  const compactPanelClassName =
+    'fixed isolate z-[10020] w-80 max-w-[calc(100vw-2rem)] rounded-2xl border border-[#1d2738] bg-[#05070c] p-4 opacity-100 shadow-[0_24px_80px_rgba(0,0,0,0.72)] sm:w-96';
+  const compactIndicatorClassName =
+    task?.status === 'error'
+      ? 'bg-red-400'
+      : task?.status === 'downloading'
+      ? 'bg-sky-400 animate-pulse'
+      : task?.status === 'paused'
+      ? 'bg-amber-400'
+      : downloadedEpisode
+      ? 'bg-emerald-400'
+      : 'bg-gray-400';
+  const conciseEpisodeLabel =
+    episodeLabel.trim() === '全集' ? '当前内容' : episodeLabel;
+  const standardStatusLabel = task
+    ? getDownloadStatusLabel(task.status)
+    : downloadedEpisode
+    ? '已缓存'
+    : '未缓存';
+  const standardStatusClassName =
+    task?.status === 'error'
+      ? 'border-red-200/80 bg-red-50 text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300'
+      : task?.status === 'paused'
+      ? 'border-amber-200/80 bg-amber-50 text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-300'
+      : task?.status === 'downloading'
+      ? 'border-sky-200/80 bg-sky-50 text-sky-700 dark:border-sky-900/40 dark:bg-sky-950/20 dark:text-sky-300'
+      : task?.status === 'queued'
+      ? 'border-gray-200/80 bg-gray-100 text-gray-600 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-300'
+      : downloadedEpisode || task?.status === 'done'
+      ? 'border-emerald-200/80 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-300'
+      : 'border-gray-200/80 bg-white/80 text-gray-600 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300';
+  const standardSummary = task
+    ? `${
+        task.totalResources > 0
+          ? `${task.downloadedResources}/${task.totalResources} 个资源`
+          : `${task.progress}%`
+      } · ${formatTaskSizeProgress(task)}${
+        task.status === 'downloading'
+          ? ` · ${formatTransferRate(task.downloadSpeedBytesPerSecond)}`
+          : ''
+      }`
+    : downloadedEpisode
+    ? `${formatBytes(downloadedEpisode.sizeBytes)} · ${
+        downloadedEpisode.resourceCount
+      } 个资源已缓存`
+    : detail.episodes.length > 1
+    ? '可缓存当前集，也可从下载选项批量选择剧集。'
+    : '可缓存当前内容，稍后离线播放。';
 
-  const handleOpenBatchDialog = () => {
-    const defaultSelection = episodeOptions[episodeIndex]?.isSelectable
-      ? [episodeIndex]
-      : [];
+  const ensureDownloadDialogSources = async (): Promise<{
+    detail: SearchResult;
+    availableSources: SearchResult[];
+  } | null> => {
+    if (!isOfflineMode) {
+      return {
+        detail,
+        availableSources,
+      };
+    }
 
-    setActionError(null);
-    setBatchFeedback(null);
-    setBatchCurrentPage(Math.floor(episodeIndex / BATCH_EPISODES_PER_PAGE));
-    setIsBatchDescending(false);
-    setSelectedEpisodeIndexes(defaultSelection);
-    setIsBatchDialogOpen(true);
+    if (downloadDialogDetail) {
+      return {
+        detail: downloadDialogDetail,
+        availableSources: downloadDialogAvailableSources,
+      };
+    }
+
+    try {
+      setActionError(null);
+      setIsPreparingBatchDialog(true);
+
+      const resolvedSources = await resolveDownloadablePlaybackSources({
+        source: detail.source,
+        id: detail.id,
+        title: detail.title.trim(),
+        year: detail.year || undefined,
+        searchType,
+        query: searchTitle || detail.title,
+        doubanId: detail.douban_id,
+        allowAdultCandidates: shouldAllowAdultPlayback,
+      });
+
+      setDownloadDialogDetail(resolvedSources.detail);
+      setDownloadDialogAvailableSources(resolvedSources.availableSources);
+      return resolvedSources;
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : '获取可下载剧集失败'
+      );
+      return null;
+    } finally {
+      setIsPreparingBatchDialog(false);
+    }
   };
 
-  const handleCloseBatchDialog = () => {
-    if (isStartingBatchDownload) {
+  const handleOpenBatchDialog = async () => {
+    setActionError(null);
+    setBatchFeedback(null);
+
+    const resolvedSources = await ensureDownloadDialogSources();
+    if (!resolvedSources) {
       return;
     }
 
-    setIsBatchDialogOpen(false);
+    setIsBatchDialogOpen(true);
   };
 
   const handleStart = async () => {
     try {
       setActionError(null);
       setBatchFeedback(null);
+      const downloadSources = await ensureDownloadDialogSources();
+      if (!downloadSources) {
+        return;
+      }
       await downloadManager.startEpisodeDownload({
-        detail,
-        episodeIndex,
-        availableSources,
+        detail: downloadSources.detail,
+        episodeIndex: targetEpisodeIndex,
+        availableSources: downloadSources.availableSources,
+        searchTitle,
+        searchType,
       });
     } catch (error) {
       setActionError(
@@ -375,7 +367,7 @@ export default function CurrentEpisodeDownloadControl({
   const handleDelete = async () => {
     try {
       setActionError(null);
-      await downloadManager.deleteEpisode(contentId, episodeIndex);
+      await downloadManager.deleteEpisode(contentId, targetEpisodeIndex);
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : '删除离线文件失败'
@@ -383,461 +375,296 @@ export default function CurrentEpisodeDownloadControl({
     }
   };
 
-  const handleToggleEpisodeSelection = (targetEpisodeIndex: number) => {
-    const option = episodeOptions[targetEpisodeIndex];
-    if (!option?.isSelectable) {
-      return;
-    }
+  const renderStandardActionButtons = () => (
+    <>
+      {downloadedEpisode && content && (
+        <Link
+          href={buildOfflinePlayHref({
+            content,
+            episodeIndex: targetEpisodeIndex,
+          })}
+          className={filledButtonClassName}
+        >
+          {isOfflineMode ? '当前为离线播放' : '离线播放'}
+        </Link>
+      )}
 
-    setSelectedEpisodeIndexes((previousIndexes) => {
-      const previousIndexSet = new Set(previousIndexes);
-      if (previousIndexSet.has(targetEpisodeIndex)) {
-        previousIndexSet.delete(targetEpisodeIndex);
-      } else {
-        previousIndexSet.add(targetEpisodeIndex);
-      }
+      {!downloadedEpisode && !task && !isOfflineMode && (
+        <button
+          type='button'
+          onClick={handleStart}
+          className={filledButtonClassName}
+        >
+          下载当前集
+        </button>
+      )}
 
-      return normalizeEpisodeSelection(Array.from(previousIndexSet));
-    });
-  };
+      {task?.status === 'downloading' && (
+        <button
+          type='button'
+          onClick={handlePause}
+          className={secondaryButtonClassName}
+        >
+          暂停下载
+        </button>
+      )}
 
-  const handleSelectAll = () => {
-    setSelectedEpisodeIndexes(selectableEpisodeIndexes);
-  };
+      {task?.status === 'queued' && (
+        <span className='inline-flex cursor-default items-center rounded-lg border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-400'>
+          排队中
+        </span>
+      )}
 
-  const handleSelectFromCurrent = () => {
-    setSelectedEpisodeIndexes(
-      selectableEpisodeIndexes.filter(
-        (targetEpisodeIndex) => targetEpisodeIndex >= episodeIndex
-      )
-    );
-  };
+      {task?.status === 'paused' && (
+        <button
+          type='button'
+          onClick={handleResume}
+          className={filledButtonClassName}
+        >
+          继续下载
+        </button>
+      )}
 
-  const handleInvertSelection = () => {
-    setSelectedEpisodeIndexes((previousIndexes) => {
-      const previousIndexSet = new Set(previousIndexes);
-      return selectableEpisodeIndexes.filter(
-        (targetEpisodeIndex) => !previousIndexSet.has(targetEpisodeIndex)
-      );
-    });
-  };
+      {task?.status === 'error' && (
+        <button
+          type='button'
+          onClick={handleResume}
+          className={filledButtonClassName}
+        >
+          重试下载
+        </button>
+      )}
 
-  const handleClearSelection = () => {
-    setSelectedEpisodeIndexes([]);
-  };
-
-  const handleChangeBatchPage = (displayIndex: number) => {
-    if (isBatchDescending) {
-      setBatchCurrentPage(pageCount - 1 - displayIndex);
-      return;
-    }
-
-    setBatchCurrentPage(displayIndex);
-  };
-
-  const handleStartBatchDownload = async () => {
-    if (selectedCount === 0) {
-      setActionError('请先选择要下载的剧集');
-      return;
-    }
-
-    try {
-      setActionError(null);
-      setIsStartingBatchDownload(true);
-
-      const result = await downloadManager.startBatchEpisodeDownloads({
-        detail,
-        episodeIndexes: selectedEpisodeIndexes,
-        availableSources,
-      });
-
-      setBatchFeedback(
-        `批量下载：${getBatchFeedbackMessage(
-          result.queuedCount,
-          result.skippedCount
-        )}`
-      );
-      setIsBatchDialogOpen(false);
-    } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : '批量下载启动失败'
-      );
-    } finally {
-      setIsStartingBatchDownload(false);
-    }
-  };
-
-  const batchDialog = (
-    <div className='fixed inset-0 z-[10000] flex items-center justify-center p-4'>
       <button
         type='button'
-        aria-label='关闭批量下载弹窗'
-        className='absolute inset-0 bg-black/70 backdrop-blur-sm'
-        onClick={handleCloseBatchDialog}
-      />
+        onClick={() => void handleOpenBatchDialog()}
+        disabled={isPreparingBatchDialog}
+        className={secondaryButtonClassName}
+      >
+        {isPreparingBatchDialog ? '加载中...' : downloadDialogLabel}
+      </button>
 
-      <div className='relative z-[10001] flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-[#04110d] text-white shadow-2xl shadow-black/40'>
-        <div className='border-b border-white/10 px-5 py-5 lg:px-6'>
-          <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
-            <div className='space-y-2'>
-              <div className='text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/80'>
-                批量下载
-              </div>
-              <div className='text-2xl font-semibold text-white'>
-                {detail.title}
-              </div>
-              <div className='text-sm text-gray-300'>
-                自由选择要加入离线下载的剧集。已选 {selectedCount} 集，可选{' '}
-                {selectableCount} 集。
-              </div>
-            </div>
+      {task && task.status !== 'done' && (
+        <button
+          type='button'
+          onClick={handleCancel}
+          className={neutralButtonClassName}
+        >
+          取消
+        </button>
+      )}
 
-            <div className='flex items-center gap-2 self-start'>
-              <button
-                type='button'
-                onClick={handleCloseBatchDialog}
-                className='rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
-              >
-                关闭
-              </button>
-            </div>
-          </div>
+      {downloadedEpisode && (
+        <button
+          type='button'
+          onClick={handleDelete}
+          className={dangerButtonClassName}
+        >
+          删除
+        </button>
+      )}
+    </>
+  );
 
-          <div className='mt-4 flex flex-wrap gap-2 text-xs'>
-            <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-emerald-200'>
-              已下载 {downloadedCount}
-            </span>
-            <span className='rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1 text-sky-200'>
-              进行中 {activeCount}
-            </span>
-            <span className='rounded-full border border-orange-500/20 bg-orange-500/10 px-3 py-1 text-orange-200'>
-              可恢复 {pausedOrFailedCount}
-            </span>
-            <span className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300'>
-              当前集 {episodeIndex + 1}
-            </span>
-          </div>
-        </div>
+  const renderCompactActionButtons = () => (
+    <div className='grid gap-2 sm:grid-cols-2'>
+      {task?.status === 'downloading' && (
+        <button
+          type='button'
+          onClick={handlePause}
+          className={`${secondaryButtonClassName} w-full`}
+        >
+          暂停下载
+        </button>
+      )}
 
-        <div className='flex-1 overflow-y-auto px-5 py-5 lg:px-6'>
-          <div className='space-y-5'>
-            <div className='flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/5 p-4'>
-              <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
-                <div className='space-y-1'>
-                  <div className='text-sm font-medium text-white'>
-                    快速选择
-                  </div>
-                  <div className='text-xs text-gray-400'>
-                    支持全选、反选、从当前集起选择，也可以直接逐集点选。
-                  </div>
-                </div>
+      {task?.status === 'queued' && (
+        <span className='inline-flex w-full cursor-default items-center justify-center rounded-lg border border-gray-700 bg-white/5 px-3 py-2 text-sm font-medium text-gray-400'>
+          排队中
+        </span>
+      )}
 
-                <div className='flex flex-wrap gap-2'>
-                  <button
-                    type='button'
-                    onClick={handleSelectAll}
-                    disabled={selectableCount === 0}
-                    className='rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-gray-500'
-                  >
-                    全选可下载
-                  </button>
-                  <button
-                    type='button'
-                    onClick={handleSelectFromCurrent}
-                    disabled={selectableCount === 0}
-                    className='rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:text-gray-500'
-                  >
-                    从当前集起
-                  </button>
-                  <button
-                    type='button'
-                    onClick={handleInvertSelection}
-                    disabled={selectableCount === 0}
-                    className='rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:text-gray-500'
-                  >
-                    反选
-                  </button>
-                  <button
-                    type='button'
-                    onClick={handleClearSelection}
-                    disabled={selectedCount === 0}
-                    className='rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:text-gray-500'
-                  >
-                    清空
-                  </button>
-                </div>
-              </div>
+      {task?.status === 'paused' && (
+        <button
+          type='button'
+          onClick={handleResume}
+          className={`${filledButtonClassName} w-full`}
+        >
+          继续下载
+        </button>
+      )}
 
-              {pageCount > 1 && (
-                <div className='flex items-center gap-3 border-t border-white/10 pt-4'>
-                  <div className='flex-1 overflow-x-auto'>
-                    <div className='flex min-w-max gap-2'>
-                      {pageLabels.map((label, displayIndex) => {
-                        const isActive = displayIndex === displayedPageIndex;
+      {task?.status === 'error' && (
+        <button
+          type='button'
+          onClick={handleResume}
+          className={`${filledButtonClassName} w-full`}
+        >
+          重试下载
+        </button>
+      )}
 
-                        return (
-                          <button
-                            key={label}
-                            type='button'
-                            onClick={() =>
-                              handleChangeBatchPage(displayIndex)
-                            }
-                            className={`relative rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                              isActive
-                                ? 'bg-emerald-500/15 text-emerald-200'
-                                : 'text-gray-400 hover:bg-white/5 hover:text-white'
-                            }`}
-                          >
-                            {label}
-                            {isActive && (
-                              <span className='absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-emerald-400' />
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+      {!downloadedEpisode && !task && !isOfflineMode && (
+        <button
+          type='button'
+          onClick={handleStart}
+          className={`${filledButtonClassName} w-full`}
+        >
+          下载当前集
+        </button>
+      )}
 
-                  <button
-                    type='button'
-                    onClick={() =>
-                      setIsBatchDescending((previous) => !previous)
-                    }
-                    className='flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-gray-200 transition-colors hover:bg-white/10'
-                    title='切换正序/倒序'
-                  >
-                    <svg
-                      className='h-4 w-4'
-                      fill='none'
-                      stroke='currentColor'
-                      viewBox='0 0 24 24'
-                    >
-                      <path
-                        strokeLinecap='round'
-                        strokeLinejoin='round'
-                        strokeWidth='2'
-                        d='M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4'
-                      />
-                    </svg>
-                  </button>
-                </div>
-              )}
-            </div>
+      <button
+        type='button'
+        onClick={() => void handleOpenBatchDialog()}
+        disabled={isPreparingBatchDialog}
+        className={`${secondaryButtonClassName} w-full`}
+      >
+        {isPreparingBatchDialog ? '加载中...' : downloadDialogLabel}
+      </button>
 
-            <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
-              {visibleEpisodeOptions.map((option) => {
-                const isSelected = selectedEpisodeSet.has(option.episodeIndex);
+      {task && task.status !== 'done' && (
+        <button
+          type='button'
+          onClick={handleCancel}
+          className={`${neutralButtonClassName} w-full`}
+        >
+          取消下载
+        </button>
+      )}
 
-                return (
-                  <button
-                    key={`${contentId}-${option.episodeIndex}`}
-                    type='button'
-                    disabled={!option.isSelectable}
-                    onClick={() =>
-                      handleToggleEpisodeSelection(option.episodeIndex)
-                    }
-                    className={`flex min-h-[112px] flex-col items-start rounded-2xl border px-4 py-4 text-left transition-all ${getEpisodeButtonClassName(
-                      {
-                        option,
-                        isSelected,
-                      }
-                    )}`}
-                  >
-                    <div className='flex w-full items-start justify-between gap-2'>
-                      <div className='text-xs font-medium uppercase tracking-[0.18em] opacity-70'>
-                        EP {String(option.episodeIndex + 1).padStart(2, '0')}
-                      </div>
-
-                      <div className='flex flex-wrap justify-end gap-1'>
-                        {option.isCurrent && (
-                          <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-current'>
-                            当前
-                          </span>
-                        )}
-                        {isSelected && (
-                          <span className='rounded-full border border-emerald-400/40 bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-100'>
-                            已选
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className='mt-4 w-full'>
-                      <div className='truncate text-base font-semibold text-current'>
-                        {option.episodeTitle}
-                      </div>
-                      <div className='mt-2 text-xs opacity-70'>
-                        {getEpisodeTaskStatusText(option)}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {visibleEpisodeOptions.length === 0 && (
-              <div className='rounded-2xl border border-dashed border-white/10 px-6 py-10 text-center text-sm text-gray-400'>
-                当前没有可显示的剧集。
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className='border-t border-white/10 px-5 py-4 lg:px-6'>
-          <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
-            <div className='space-y-2'>
-              <div className='text-sm text-gray-300'>
-                已选 {selectedCount} 集。
-                {selectedCount > 0 &&
-                  ' 点击“开始下载”后会按队列顺序依次下载。'}
-              </div>
-              {actionError && (
-                <div className='text-sm text-red-300'>{actionError}</div>
-              )}
-            </div>
-
-            <div className='flex flex-wrap gap-2'>
-              <button
-                type='button'
-                onClick={handleCloseBatchDialog}
-                disabled={isStartingBatchDownload}
-                className='rounded-xl border border-white/10 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:text-gray-500'
-              >
-                取消
-              </button>
-              <button
-                type='button'
-                onClick={handleStartBatchDownload}
-                disabled={selectedCount === 0 || isStartingBatchDownload}
-                className='rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-400'
-              >
-                {isStartingBatchDownload
-                  ? '正在加入队列...'
-                  : `开始下载 ${selectedCount > 0 ? selectedCount : ''}`.trim()}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+      {downloadedEpisode && (
+        <button
+          type='button'
+          onClick={handleDelete}
+          className={`${dangerButtonClassName} w-full`}
+        >
+          删除
+        </button>
+      )}
     </div>
   );
+
+  if (compact) {
+    return (
+      <>
+        <div ref={compactPanelRef} className='relative flex items-center'>
+          <button
+            ref={compactTriggerButtonRef}
+            type='button'
+            onClick={() => {
+              if (!isCompactPanelOpen) {
+                updateCompactPanelPosition();
+              }
+
+              setIsCompactPanelOpen((currentState) => !currentState);
+            }}
+            aria-label={compactButtonLabel}
+            title={compactPanelTitle}
+            className={`group relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-gray-200/50 bg-white/80 text-gray-600 shadow-sm backdrop-blur-sm transition-all duration-200 hover:bg-white hover:text-gray-900 hover:shadow-md dark:border-gray-700/50 dark:bg-gray-800/80 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white ${
+              isCompactPanelOpen
+                ? 'border-emerald-400/40 text-emerald-500 dark:text-emerald-300'
+                : ''
+            }`}
+          >
+            <Info className='h-4 w-4' />
+            <span
+              className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white dark:ring-gray-900 ${compactIndicatorClassName}`}
+            />
+          </button>
+
+          {isCompactPanelOpen &&
+            compactPanelPosition &&
+            typeof document !== 'undefined' &&
+            createPortal(
+              <div
+                ref={compactPanelSurfaceRef}
+                className={compactPanelClassName}
+                style={{
+                  right: compactPanelPosition.right,
+                  top: compactPanelPosition.top,
+                }}
+              >
+                <div className='flex items-start justify-between gap-3'>
+                  <div className='min-w-0'>
+                    <div className='text-sm font-semibold text-white'>
+                      {compactPanelTitle}
+                    </div>
+                    <div className='mt-1 truncate text-xs text-gray-400'>
+                      {episodeLabel}
+                    </div>
+                  </div>
+                  {isOfflineMode ? (
+                    <span className='shrink-0 rounded-full border border-emerald-400/30 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-200'>
+                      当前离线播放
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className='mt-4'>{renderCompactActionButtons()}</div>
+
+                {batchFeedback && (
+                  <div className='mt-3 text-xs text-emerald-300'>
+                    {batchFeedback}
+                  </div>
+                )}
+
+                {actionError && (
+                  <div className='mt-3 text-xs text-red-400'>{actionError}</div>
+                )}
+
+                {task?.errorMessage && task.status === 'error' && (
+                  <div className='mt-2 text-xs text-red-400'>
+                    {task.errorMessage}
+                  </div>
+                )}
+              </div>,
+              document.body
+            )}
+        </div>
+
+        <BatchEpisodeDownloadDialog
+          detail={batchDialogDetail}
+          availableSources={batchDialogAvailableSources}
+          episodeIndex={batchDialogEpisodeIndex}
+          isOpen={isBatchDialogOpen}
+          searchTitle={searchTitle}
+          searchType={searchType}
+          onClose={() => setIsBatchDialogOpen(false)}
+          onComplete={(message) => {
+            setActionError(null);
+            setBatchFeedback(message);
+          }}
+        />
+      </>
+    );
+  }
 
   return (
     <>
       <div className='rounded-xl border border-emerald-200/80 bg-emerald-50/80 px-4 py-4 shadow-sm dark:border-emerald-900/40 dark:bg-emerald-950/10'>
         <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
-          <div className='space-y-1'>
-            <div className='text-sm font-medium text-emerald-700 dark:text-emerald-300'>
-              离线下载
+          <div className='min-w-0'>
+            <div className='flex flex-wrap items-center gap-2'>
+              <span className='rounded-full border border-emerald-300/80 bg-emerald-100/80 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:border-emerald-800/50 dark:bg-emerald-900/40 dark:text-emerald-300'>
+                离线下载
+              </span>
+              <span className='min-w-0 truncate text-sm font-medium text-gray-800 dark:text-gray-100'>
+                {conciseEpisodeLabel}
+              </span>
+              <span
+                className={`rounded-full border px-2.5 py-1 text-xs font-medium ${standardStatusClassName}`}
+              >
+                {standardStatusLabel}
+              </span>
             </div>
-            <div className='text-sm text-gray-700 dark:text-gray-300'>
-              {detail.episodes_titles[episodeIndex] ||
-                `第 ${episodeIndex + 1} 集`}
+            <div className='mt-1 text-xs text-gray-600 dark:text-gray-400'>
+              {standardSummary}
             </div>
-            {task && (
-              <div className='space-y-1 text-xs text-gray-600 dark:text-gray-400'>
-                <div>
-                  {getDownloadStatusLabel(task.status)}
-                  {task.totalResources > 0 &&
-                    ` · ${task.downloadedResources}/${task.totalResources}`}
-                </div>
-                <div>
-                  {formatTaskSizeProgress(task)}
-                  {task.status === 'downloading' &&
-                    ` · ${formatTransferRate(task.downloadSpeedBytesPerSecond)}`}
-                </div>
-              </div>
-            )}
           </div>
 
-          <div className='flex flex-wrap items-center gap-2'>
-            {downloadedEpisode && content && (
-              <Link
-                href={buildOfflinePlayHref({
-                  content,
-                  episodeIndex,
-                })}
-                className='inline-flex items-center rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700'
-              >
-                {isOfflineMode ? '当前为离线播放' : '离线播放'}
-              </Link>
-            )}
-
-            {!downloadedEpisode && !task && !isOfflineMode && (
-              <button
-                type='button'
-                onClick={handleStart}
-                className='inline-flex items-center rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700'
-              >
-                下载当前集
-              </button>
-            )}
-
-            {task?.status === 'downloading' && (
-              <button
-                type='button'
-                onClick={handlePause}
-                className='inline-flex items-center rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/20'
-              >
-                暂停下载
-              </button>
-            )}
-
-            {task?.status === 'queued' && (
-              <span className='inline-flex cursor-default items-center rounded-lg border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-400'>
-                排队中
-              </span>
-            )}
-
-            {task?.status === 'paused' && (
-              <button
-                type='button'
-                onClick={handleResume}
-                className='inline-flex items-center rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700'
-              >
-                继续下载
-              </button>
-            )}
-
-            {task?.status === 'error' && (
-              <button
-                type='button'
-                onClick={handleResume}
-                className='inline-flex items-center rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700'
-              >
-                重试下载
-              </button>
-            )}
-
-            {canBatchDownload && (
-              <button
-                type='button'
-                onClick={handleOpenBatchDialog}
-                className='inline-flex items-center rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/20'
-              >
-                批量下载
-              </button>
-            )}
-
-            {task && task.status !== 'done' && (
-              <button
-                type='button'
-                onClick={handleCancel}
-                className='inline-flex items-center rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/10'
-              >
-                取消
-              </button>
-            )}
-
-            {downloadedEpisode && (
-              <button
-                type='button'
-                onClick={handleDelete}
-                className='inline-flex items-center rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/20'
-              >
-                删除离线文件
-              </button>
-            )}
+          <div className='flex flex-wrap items-center gap-2 lg:justify-end'>
+            {renderStandardActionButtons()}
           </div>
         </div>
 
@@ -869,9 +696,19 @@ export default function CurrentEpisodeDownloadControl({
         )}
       </div>
 
-      {isBatchDialogOpen &&
-        typeof document !== 'undefined' &&
-        createPortal(batchDialog, document.body)}
+      <BatchEpisodeDownloadDialog
+        detail={batchDialogDetail}
+        availableSources={batchDialogAvailableSources}
+        episodeIndex={batchDialogEpisodeIndex}
+        isOpen={isBatchDialogOpen}
+        searchTitle={searchTitle}
+        searchType={searchType}
+        onClose={() => setIsBatchDialogOpen(false)}
+        onComplete={(message) => {
+          setActionError(null);
+          setBatchFeedback(message);
+        }}
+      />
     </>
   );
 }

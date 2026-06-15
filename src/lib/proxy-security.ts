@@ -1,6 +1,12 @@
 import { lookup } from 'dns/promises';
 import { isIP } from 'net';
 
+const HOST_VALIDATION_CACHE_TTL_MS = 60_000;
+const DNS_LOOKUP_TIMEOUT_MS = 4_000;
+
+const validatedHostCache = new Map<string, number>();
+const inflightHostValidationCache = new Map<string, Promise<void>>();
+
 export function normalizeHeaderUrl(
   value: string | null | undefined
 ): string | undefined {
@@ -17,7 +23,10 @@ export function normalizeHeaderUrl(
 }
 
 function normalizeHostname(hostname: string): string {
-  return hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  return hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '');
 }
 
 function isBlockedHostname(hostname: string): boolean {
@@ -77,6 +86,87 @@ function isBlockedAddress(address: string): boolean {
   return true;
 }
 
+function isHostValidationCached(hostname: string): boolean {
+  const expiresAt = validatedHostCache.get(hostname);
+  if (!expiresAt) {
+    return false;
+  }
+
+  if (expiresAt <= Date.now()) {
+    validatedHostCache.delete(hostname);
+    return false;
+  }
+
+  return true;
+}
+
+function cacheValidatedHost(hostname: string): void {
+  validatedHostCache.set(hostname, Date.now() + HOST_VALIDATION_CACHE_TTL_MS);
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+
+    promise.then(
+      (result) => {
+        clearTimeout(timeoutId);
+        resolve(result);
+      },
+      (error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function validateResolvableHostname(hostname: string): Promise<void> {
+  if (isHostValidationCached(hostname)) {
+    return;
+  }
+
+  const existingValidation = inflightHostValidationCache.get(hostname);
+  if (existingValidation) {
+    await existingValidation;
+    return;
+  }
+
+  const validationPromise = (async () => {
+    const records = await withTimeout(
+      lookup(hostname, { all: true, verbatim: true }),
+      DNS_LOOKUP_TIMEOUT_MS,
+      `Host lookup timed out: ${hostname}`
+    );
+
+    if (!records.length) {
+      throw new Error('Host did not resolve');
+    }
+
+    if (records.some((record) => isBlockedAddress(record.address))) {
+      throw new Error('Host resolves to a blocked IP address');
+    }
+
+    cacheValidatedHost(hostname);
+  })();
+
+  inflightHostValidationCache.set(hostname, validationPromise);
+
+  try {
+    await validationPromise;
+  } finally {
+    if (inflightHostValidationCache.get(hostname) === validationPromise) {
+      inflightHostValidationCache.delete(hostname);
+    }
+  }
+}
+
 export async function validateProxyTargetUrl(rawUrl: string): Promise<string> {
   let parsed: URL;
   try {
@@ -104,25 +194,37 @@ export async function validateProxyTargetUrl(rawUrl: string): Promise<string> {
     return parsed.toString();
   }
 
-  const records = await lookup(hostname, { all: true, verbatim: true });
-  if (!records.length) throw new Error('Host did not resolve');
-
-  if (records.some((record) => isBlockedAddress(record.address))) {
-    throw new Error('Host resolves to a blocked IP address');
-  }
+  await validateResolvableHostname(hostname);
 
   return parsed.toString();
+}
+
+export function clearProxyValidationCachesForTests(): void {
+  validatedHostCache.clear();
+  inflightHostValidationCache.clear();
 }
 
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
-  timeoutMs: number
+  timeoutMs: number,
+  responseMode: 'stream' | 'buffer' = 'stream'
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+
+    if (responseMode !== 'buffer') {
+      return response;
+    }
+
+    const body = await response.arrayBuffer();
+    return new Response(body, {
+      headers: new Headers(response.headers),
+      status: response.status,
+      statusText: response.statusText,
+    });
   } finally {
     clearTimeout(timer);
   }
@@ -131,17 +233,28 @@ async function fetchWithTimeout(
 export async function fetchWithValidatedRedirects(
   rawUrl: string,
   init: RequestInit,
-  options: { timeoutMs: number; maxRedirects?: number }
+  options: {
+    timeoutMs: number;
+    maxRedirects?: number;
+    initialUrlValidated?: boolean;
+    responseMode?: 'stream' | 'buffer';
+  }
 ): Promise<Response> {
   const maxRedirects = options.maxRedirects ?? 3;
+  const initialUrlValidated = options.initialUrlValidated === true;
+  const responseMode = options.responseMode ?? 'stream';
   let currentUrl = rawUrl;
 
   for (let i = 0; i <= maxRedirects; i += 1) {
-    const validatedUrl = await validateProxyTargetUrl(currentUrl);
+    const validatedUrl =
+      i === 0 && initialUrlValidated
+        ? currentUrl
+        : await validateProxyTargetUrl(currentUrl);
     const response = await fetchWithTimeout(
       validatedUrl,
       { ...init, redirect: 'manual' },
-      options.timeoutMs
+      options.timeoutMs,
+      responseMode
     );
 
     if (

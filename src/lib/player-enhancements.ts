@@ -30,14 +30,121 @@ const PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY =
   'playerAudioSpikeProtectionLevel';
 const PLAYER_AUDIO_DYNAMIC_PROTECTION_STORAGE_KEY =
   'playerAudioDynamicProtectionEnabled';
-const PLAYER_AUDIO_FIXED_CEILING_STORAGE_KEY =
-  'playerAudioFixedCeilingEnabled';
+const PLAYER_AUDIO_FIXED_CEILING_STORAGE_KEY = 'playerAudioFixedCeilingEnabled';
 const PLAYER_VISUAL_ENHANCEMENT_STORAGE_KEY = 'playerVisualEnhancementLevel';
+const PLAYER_AUDIO_DEFAULTS_MIGRATION_STORAGE_KEY =
+  'playerAudioDefaultsMigratedV2';
 
 const LEGACY_PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY =
   'playerAudioSpikeProtectionEnabled';
 const LEGACY_PLAYER_VISUAL_ENHANCEMENT_STORAGE_KEY =
   'playerVisualEnhancementEnabled';
+
+function parseStoredBooleanValue(value: string | null): boolean | null {
+  if (value === null) {
+    return null;
+  }
+
+  return normalizeBooleanSetting(value, false);
+}
+
+function shouldMigrateLegacyDefaultAudioPreferences(
+  runtimeConfig: AppRuntimeConfig
+): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const runtimeAudioSpikeProtectionLevel =
+    getDefaultAudioSpikeProtectionLevel(runtimeConfig);
+  const runtimeAudioDynamicProtection = getDefaultAudioDynamicProtectionEnabled(
+    runtimeConfig,
+    runtimeAudioSpikeProtectionLevel
+  );
+  const runtimeAudioFixedCeiling = getDefaultAudioFixedCeilingEnabled(
+    runtimeConfig,
+    runtimeAudioSpikeProtectionLevel
+  );
+
+  if (
+    runtimeAudioSpikeProtectionLevel !== 'off' ||
+    runtimeAudioDynamicProtection ||
+    runtimeAudioFixedCeiling
+  ) {
+    return false;
+  }
+
+  const rawLevel = window.localStorage.getItem(
+    PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY
+  );
+  const rawLegacyLevel = window.localStorage.getItem(
+    LEGACY_PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY
+  );
+  const rawDynamic = window.localStorage.getItem(
+    PLAYER_AUDIO_DYNAMIC_PROTECTION_STORAGE_KEY
+  );
+  const rawFixed = window.localStorage.getItem(
+    PLAYER_AUDIO_FIXED_CEILING_STORAGE_KEY
+  );
+
+  const level = normalizeAudioSpikeProtectionLevel(
+    rawLevel ?? rawLegacyLevel,
+    'off'
+  );
+  const dynamic = normalizeBooleanSetting(rawDynamic, level !== 'off');
+  const fixed = normalizeBooleanSetting(rawFixed, level !== 'off');
+
+  if (level !== 'standard' || !dynamic || !fixed) {
+    return false;
+  }
+
+  const dynamicSetting = parseStoredBooleanValue(rawDynamic);
+  const fixedSetting = parseStoredBooleanValue(rawFixed);
+
+  return (
+    rawLegacyLevel !== null ||
+    ((dynamicSetting === null || dynamicSetting) &&
+      (fixedSetting === null || fixedSetting))
+  );
+}
+
+function auditLegacyDefaultAudioPreferences(
+  runtimeConfig: AppRuntimeConfig
+): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  if (
+    window.localStorage.getItem(PLAYER_AUDIO_DEFAULTS_MIGRATION_STORAGE_KEY) ===
+    'true'
+  ) {
+    return;
+  }
+
+  if (shouldMigrateLegacyDefaultAudioPreferences(runtimeConfig)) {
+    window.localStorage.setItem(
+      PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY,
+      'off'
+    );
+    window.localStorage.setItem(
+      PLAYER_AUDIO_DYNAMIC_PROTECTION_STORAGE_KEY,
+      'false'
+    );
+    window.localStorage.setItem(
+      PLAYER_AUDIO_FIXED_CEILING_STORAGE_KEY,
+      'false'
+    );
+  }
+
+  window.localStorage.removeItem(
+    LEGACY_PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY
+  );
+  window.localStorage.setItem(
+    PLAYER_AUDIO_DEFAULTS_MIGRATION_STORAGE_KEY,
+    'true'
+  );
+}
 
 function getDefaultAudioSpikeProtectionLevel(
   runtimeConfig: AppRuntimeConfig
@@ -182,6 +289,8 @@ function readStoredBooleanPreference(
 export function readPlayerEnhancementPreferences(
   runtimeConfig: AppRuntimeConfig = getRuntimeConfig()
 ): PlayerEnhancementPreferences {
+  auditLegacyDefaultAudioPreferences(runtimeConfig);
+
   const defaults = getDefaultPlayerEnhancementPreferences(runtimeConfig);
   const storedAudioPreference = readStoredAudioSpikeProtectionLevel(
     defaults.audioSpikeProtectionLevel
@@ -232,7 +341,7 @@ export function dispatchPlayerEnhancementPreferencesUpdate(
 }
 
 export function updatePlayerEnhancementPreference<
-  K extends PlayerEnhancementPreferenceKey,
+  K extends PlayerEnhancementPreferenceKey
 >(
   key: K,
   value: PlayerEnhancementPreferences[K],

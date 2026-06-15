@@ -6,7 +6,7 @@ import Artplayer from 'artplayer';
 import Hls from 'hls.js';
 import { Heart } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   deleteFavorite,
@@ -28,7 +28,12 @@ import {
 import { isDesktopLocalDownloadRuntimeEnabled } from '@/lib/download/desktop-runtime';
 import { normalizeVodDetailForPlayback } from '@/lib/download/normalize';
 import {
-  buildOfflinePlaybackDetail,
+  applyOfflinePlaybackOwner,
+  buildGroupedOfflinePlaybackDetail,
+  getAdultRelatedOfflineVideoEntries,
+  getOfflinePlaybackContents,
+  getSameTitleOfflineVideoEntries,
+  OfflinePlaybackEpisodeEntry,
   validateDownloadedEpisode,
 } from '@/lib/download/offline';
 import { looksLikeManifestUrl } from '@/lib/download/proxy-url';
@@ -58,6 +63,7 @@ import {
   updatePlayerEnhancementPreference,
 } from '@/lib/player-enhancements';
 import { getRuntimeConfig } from '@/lib/runtime-config';
+import { acquireScrollLock } from '@/lib/scroll-lock';
 import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
@@ -163,6 +169,22 @@ function readPositiveNumberSearchParam(value: string | null): number {
   return Number.isFinite(parsedValue) && parsedValue > 0
     ? Math.trunc(parsedValue)
     : 0;
+}
+
+function isTransientPlaybackBootstrapError(
+  message: string | null | undefined
+): boolean {
+  if (!message) {
+    return false;
+  }
+
+  const normalizedMessage = message.toLowerCase();
+
+  return (
+    normalizedMessage.includes('empty src attribute') ||
+    (normalizedMessage.includes('media_element_error') &&
+      normalizedMessage.includes('empty src'))
+  );
 }
 
 function buildCachedLoaderStats() {
@@ -319,9 +341,44 @@ function PlayPageClient() {
       return buildDownloadContentId(source, id);
     })();
   const downloadStoreHydrated = useDownloadStore((state) => state.hasHydrated);
-  const offlineContent = useDownloadStore((state) =>
-    offlineContentId ? state.library[offlineContentId] : undefined
+  const offlineLibrary = useDownloadStore((state) => state.library);
+  const [activeOfflineContentId, setActiveOfflineContentId] =
+    useState(offlineContentId);
+  const offlineContent = activeOfflineContentId
+    ? offlineLibrary[activeOfflineContentId]
+    : undefined;
+  const offlinePlaybackContents = useMemo(
+    () =>
+      activeOfflineContentId
+        ? getOfflinePlaybackContents({
+            library: offlineLibrary,
+            activeContentId: activeOfflineContentId,
+          })
+        : [],
+    [activeOfflineContentId, offlineLibrary]
   );
+  const offlineAdultRelatedVideos = useMemo(
+    () =>
+      activeOfflineContentId
+        ? getAdultRelatedOfflineVideoEntries({
+            library: offlineLibrary,
+            activeContentId: activeOfflineContentId,
+          })
+        : [],
+    [activeOfflineContentId, offlineLibrary]
+  );
+  const offlineSameTitleVideos = useMemo(
+    () =>
+      activeOfflineContentId
+        ? getSameTitleOfflineVideoEntries({
+            library: offlineLibrary,
+            activeContentId: activeOfflineContentId,
+          })
+        : [],
+    [activeOfflineContentId, offlineLibrary]
+  );
+  const shouldShowOfflineAdultRelatedVideos =
+    isOfflineMode && offlineAdultRelatedVideos.length > 0;
 
   // -----------------------------------------------------------------------------
   // 状态变量（State）
@@ -333,6 +390,8 @@ function PlayPageClient() {
   const [loadingMessage, setLoadingMessage] = useState('正在搜索播放源...');
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<SearchResult | null>(null);
+  const [isOfflineSameTitleDialogOpen, setIsOfflineSameTitleDialogOpen] =
+    useState(false);
 
   // 收藏状态
   const [favorited, setFavorited] = useState(false);
@@ -467,7 +526,9 @@ function PlayPageClient() {
   const [currentEpisodeIndex, setCurrentEpisodeIndex] = useState(
     initialEpisodeQueryIndex
   );
-  const [offlineEpisodeOrder, setOfflineEpisodeOrder] = useState<number[]>([]);
+  const [offlineEpisodeEntries, setOfflineEpisodeEntries] = useState<
+    OfflinePlaybackEpisodeEntry[]
+  >([]);
 
   const currentSourceRef = useRef(currentSource);
   const currentIdRef = useRef(currentId);
@@ -476,9 +537,10 @@ function PlayPageClient() {
   const videoDoubanIdRef = useRef(videoDoubanId);
   const detailRef = useRef<SearchResult | null>(detail);
   const currentEpisodeIndexRef = useRef(currentEpisodeIndex);
-  const offlineEpisodeOrderRef = useRef<number[]>([]);
+  const offlineEpisodeEntriesRef = useRef<OfflinePlaybackEpisodeEntry[]>([]);
   const episodeProgressMapRef = useRef<Record<number, number>>({});
   const playbackHistoryRestoreKeyRef = useRef('');
+  const skipNextPlaybackHistoryRestoreRef = useRef(false);
 
   // 同步最新值到 refs
   useEffect(() => {
@@ -499,8 +561,8 @@ function PlayPageClient() {
     videoDoubanId,
   ]);
   useEffect(() => {
-    offlineEpisodeOrderRef.current = offlineEpisodeOrder;
-  }, [offlineEpisodeOrder]);
+    offlineEpisodeEntriesRef.current = offlineEpisodeEntries;
+  }, [offlineEpisodeEntries]);
 
   // 视频播放地址
   const [videoUrl, setVideoUrl] = useState('');
@@ -551,6 +613,11 @@ function PlayPageClient() {
   const [videoLoadingStage, setVideoLoadingStage] = useState<
     'initing' | 'sourceChanging'
   >('initing');
+  const [playerRecoveryNotice, setPlayerRecoveryNotice] = useState<
+    string | null
+  >(null);
+
+  const currentPlaybackMode = isOfflineMode ? 'offline' : 'online';
 
   // 播放进度保存相关
   const saveIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -567,6 +634,15 @@ function PlayPageClient() {
 
   // Wake Lock 相关
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const blockingError =
+    error && !isTransientPlaybackBootstrapError(error) ? error : null;
+  const playerLoadingDetailMessage =
+    playerRecoveryNotice ||
+    (videoLoadingStage === 'sourceChanging'
+      ? '已收到切换请求，正在连接新的播放源。'
+      : isOfflineMode
+      ? '正在读取离线缓存并恢复播放。'
+      : '正在连接播放源并准备画面。');
 
   // -----------------------------------------------------------------------------
   // 工具函数（Utils）
@@ -1173,8 +1249,15 @@ function PlayPageClient() {
         return;
       }
 
-      const { detail: offlineDetail, episodeOrder } =
-        buildOfflinePlaybackDetail(offlineContent);
+      const effectiveOfflinePlaybackContents =
+        offlinePlaybackContents.length > 0
+          ? offlinePlaybackContents
+          : [offlineContent];
+      const { detail: offlineDetail, episodeEntries } =
+        buildGroupedOfflinePlaybackDetail({
+          contents: effectiveOfflinePlaybackContents,
+          activeContentId: offlineContent.contentId,
+        });
 
       if (!offlineDetail.episodes.length) {
         setError('当前离线内容没有可播放剧集');
@@ -1183,15 +1266,29 @@ function PlayPageClient() {
       }
 
       let targetIndex = 0;
-      const mappedTargetIndex = episodeOrder.findIndex(
-        (episodeIndex) => episodeIndex === initialEpisodeQueryIndex
+      const mappedTargetIndex = episodeEntries.findIndex(
+        (episode) =>
+          episode.contentId === offlineContent.contentId &&
+          episode.episodeIndex === initialEpisodeQueryIndex
       );
       if (mappedTargetIndex >= 0) {
         targetIndex = mappedTargetIndex;
+      } else {
+        const fallbackTargetIndex = episodeEntries.findIndex(
+          (episode) => episode.episodeIndex === initialEpisodeQueryIndex
+        );
+        if (fallbackTargetIndex >= 0) {
+          targetIndex = fallbackTargetIndex;
+        }
       }
 
-      const targetEpisodeMeta = offlineContent.episodes.find(
-        (episode) => episode.episodeIndex === episodeOrder[targetIndex]
+      const targetEpisodeEntry = episodeEntries[targetIndex];
+      const targetContent =
+        effectiveOfflinePlaybackContents.find(
+          (content) => content.contentId === targetEpisodeEntry?.contentId
+        ) || offlineContent;
+      const targetEpisodeMeta = targetContent.episodes.find(
+        (episode) => episode.episodeIndex === targetEpisodeEntry?.episodeIndex
       );
 
       if (
@@ -1202,10 +1299,17 @@ function PlayPageClient() {
         return;
       }
 
-      const playableDetail = normalizeVodDetailForPlayback(offlineDetail);
+      const playableDetail = normalizeVodDetailForPlayback(
+        applyOfflinePlaybackOwner({
+          detail: offlineDetail,
+          contents: effectiveOfflinePlaybackContents,
+          ownerContentId: targetContent.contentId,
+        })
+      );
 
       setNeedPrefer(false);
-      setOfflineEpisodeOrder(episodeOrder);
+      setActiveOfflineContentId(targetContent.contentId);
+      setOfflineEpisodeEntries(episodeEntries);
       setCurrentSource(playableDetail.source);
       setCurrentId(playableDetail.id);
       setVideoYear(playableDetail.year);
@@ -1218,7 +1322,7 @@ function PlayPageClient() {
 
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.set('offline', '1');
-      newUrl.searchParams.set('contentId', offlineContent.contentId);
+      newUrl.searchParams.set('contentId', targetContent.contentId);
       newUrl.searchParams.set('source', playableDetail.source);
       newUrl.searchParams.set('id', playableDetail.id);
       newUrl.searchParams.set('year', playableDetail.year);
@@ -1228,7 +1332,10 @@ function PlayPageClient() {
       } else {
         newUrl.searchParams.delete('doubanId');
       }
-      newUrl.searchParams.set('episode', String(episodeOrder[targetIndex] + 1));
+      newUrl.searchParams.set(
+        'episode',
+        String((targetEpisodeEntry?.episodeIndex || 0) + 1)
+      );
       window.history.replaceState({}, '', newUrl.toString());
 
       setLoadingStage('ready');
@@ -1357,7 +1464,7 @@ function PlayPageClient() {
       const playableDetail = normalizeVodDetailForPlayback(detailData);
 
       setNeedPrefer(false);
-      setOfflineEpisodeOrder([]);
+      setOfflineEpisodeEntries([]);
       setCurrentSource(playableDetail.source);
       setCurrentId(playableDetail.id);
       setVideoYear(playableDetail.year);
@@ -1402,6 +1509,7 @@ function PlayPageClient() {
     initialEpisodeQueryIndex,
     isOfflineMode,
     offlineContent,
+    offlinePlaybackContents,
     router,
     searchTitle,
     searchType,
@@ -1414,6 +1522,33 @@ function PlayPageClient() {
     playbackHistoryRestoreKeyRef.current = '';
   }, [currentSource, currentId]);
 
+  useEffect(() => {
+    setIsOfflineSameTitleDialogOpen(false);
+  }, [activeOfflineContentId]);
+
+  useEffect(() => {
+    if (!isOfflineSameTitleDialogOpen) {
+      return;
+    }
+
+    const releaseScrollLock = acquireScrollLock({
+      freezeBody: true,
+      lockHtml: true,
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOfflineSameTitleDialogOpen(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      releaseScrollLock();
+    };
+  }, [isOfflineSameTitleDialogOpen]);
+
   // 播放记录处理
   useEffect(() => {
     const initFromHistory = async () => {
@@ -1421,12 +1556,23 @@ function PlayPageClient() {
         return;
       }
 
-      if (isOfflineMode && offlineEpisodeOrder.length === 0) {
+      if (isOfflineMode && offlineEpisodeEntries.length === 0) {
+        return;
+      }
+
+      if (skipNextPlaybackHistoryRestoreRef.current) {
+        skipNextPlaybackHistoryRestoreRef.current = false;
         return;
       }
 
       const restoreKey = `${currentSource}:${currentId}:${
-        isOfflineMode ? offlineEpisodeOrder.join(',') : 'online'
+        isOfflineMode
+          ? offlineEpisodeEntries
+              .map(
+                (episode) => `${episode.contentId}:${episode.episodeIndex + 1}`
+              )
+              .join('|')
+          : 'online'
       }`;
 
       if (playbackHistoryRestoreKeyRef.current === restoreKey) {
@@ -1475,7 +1621,7 @@ function PlayPageClient() {
     };
 
     initFromHistory();
-  }, [currentId, currentSource, detail, isOfflineMode, offlineEpisodeOrder]);
+  }, [currentId, currentSource, detail, isOfflineMode, offlineEpisodeEntries]);
 
   // 跳过片头片尾配置处理
   useEffect(() => {
@@ -1601,11 +1747,8 @@ function PlayPageClient() {
   // 集数切换
   // ---------------------------------------------------------------------------
   const getPlaybackRecordEpisodeNumber = (episodeIndex: number): number => {
-    if (
-      isOfflineMode &&
-      offlineEpisodeOrderRef.current[episodeIndex] !== undefined
-    ) {
-      return offlineEpisodeOrderRef.current[episodeIndex] + 1;
+    if (isOfflineMode && offlineEpisodeEntriesRef.current[episodeIndex]) {
+      return offlineEpisodeEntriesRef.current[episodeIndex].episodeIndex + 1;
     }
 
     return episodeIndex + 1;
@@ -1613,8 +1756,24 @@ function PlayPageClient() {
 
   const getPlaybackRecordEpisodeIndex = (episodeNumber: number): number => {
     if (isOfflineMode) {
-      return offlineEpisodeOrderRef.current.findIndex(
-        (episodeIndex) => episodeIndex + 1 === episodeNumber
+      const currentOfflinePlaybackContentId =
+        currentSourceRef.current && currentIdRef.current
+          ? buildDownloadContentId(
+              currentSourceRef.current,
+              currentIdRef.current
+            )
+          : activeOfflineContentId;
+      const exactMatchIndex = offlineEpisodeEntriesRef.current.findIndex(
+        (episode) =>
+          episode.contentId === currentOfflinePlaybackContentId &&
+          episode.episodeIndex + 1 === episodeNumber
+      );
+      if (exactMatchIndex >= 0) {
+        return exactMatchIndex;
+      }
+
+      return offlineEpisodeEntriesRef.current.findIndex(
+        (episode) => episode.episodeIndex + 1 === episodeNumber
       );
     }
 
@@ -1646,9 +1805,22 @@ function PlayPageClient() {
     );
   };
 
-  const getEpisodeResumeTime = (episodeIndex: number): number => {
+  const getEpisodeResumeTime = (
+    episodeIndex: number,
+    options: {
+      source?: string;
+      id?: string;
+    } = {}
+  ): number => {
+    const targetSource = options.source || currentSourceRef.current;
+    const targetId = options.id || currentIdRef.current;
     const episodeNumber = getPlaybackRecordEpisodeNumber(episodeIndex);
-    const cachedProgress = episodeProgressMapRef.current[episodeNumber];
+    const shouldReuseCachedProgress =
+      targetSource === currentSourceRef.current &&
+      targetId === currentIdRef.current;
+    const cachedProgress = shouldReuseCachedProgress
+      ? episodeProgressMapRef.current[episodeNumber]
+      : undefined;
 
     if (
       typeof cachedProgress === 'number' &&
@@ -1658,22 +1830,147 @@ function PlayPageClient() {
       return cachedProgress;
     }
 
-    if (!currentSourceRef.current || !currentIdRef.current) {
+    if (!targetSource || !targetId) {
       return 0;
     }
 
     const storedProgress = readStoredEpisodeProgress(
-      currentSourceRef.current,
-      currentIdRef.current,
+      targetSource,
+      targetId,
       episodeNumber
     );
 
     if (storedProgress && storedProgress > 0) {
-      episodeProgressMapRef.current[episodeNumber] = storedProgress;
+      if (shouldReuseCachedProgress) {
+        episodeProgressMapRef.current[episodeNumber] = storedProgress;
+      }
       return storedProgress;
     }
 
     return 0;
+  };
+
+  const handleOfflineRelatedVideoSelect = (contentId: string) => {
+    if (!isOfflineMode) {
+      return;
+    }
+
+    const targetOfflineContent = offlineLibrary[contentId];
+    if (!targetOfflineContent) {
+      setError('未找到离线内容');
+      return;
+    }
+
+    const targetPlaybackContents = getOfflinePlaybackContents({
+      library: offlineLibrary,
+      activeContentId: contentId,
+    });
+    const effectiveTargetPlaybackContents =
+      targetPlaybackContents.length > 0
+        ? targetPlaybackContents
+        : [targetOfflineContent];
+    const { detail: offlineDetail, episodeEntries } =
+      buildGroupedOfflinePlaybackDetail({
+        contents: effectiveTargetPlaybackContents,
+        activeContentId: targetOfflineContent.contentId,
+      });
+
+    if (!offlineDetail.episodes.length) {
+      setError('当前离线内容没有可播放剧集');
+      return;
+    }
+
+    const requestedEpisodeIndex =
+      targetOfflineContent.episodes[0]?.episodeIndex ?? 0;
+    const mappedTargetIndex = episodeEntries.findIndex(
+      (episode) =>
+        episode.contentId === targetOfflineContent.contentId &&
+        episode.episodeIndex === requestedEpisodeIndex
+    );
+    const targetIndex = mappedTargetIndex >= 0 ? mappedTargetIndex : 0;
+    const targetEpisodeEntry = episodeEntries[targetIndex];
+    const targetContent =
+      effectiveTargetPlaybackContents.find(
+        (content) => content.contentId === targetEpisodeEntry?.contentId
+      ) || targetOfflineContent;
+    const targetEpisodeMeta = targetContent.episodes.find(
+      (episode) => episode.episodeIndex === targetEpisodeEntry?.episodeIndex
+    );
+
+    if (!targetEpisodeEntry || !targetEpisodeMeta) {
+      setError('当前离线剧集不存在，请返回下载页重新下载');
+      return;
+    }
+
+    setError(null);
+    setIsVideoLoading(true);
+
+    void (async () => {
+      const isEpisodeReady = await validateDownloadedEpisode(targetEpisodeMeta);
+      if (!isEpisodeReady) {
+        setIsVideoLoading(false);
+        setError('离线资源缺失或首片段不可用，请返回下载页重新下载');
+        return;
+      }
+
+      const playableDetail = normalizeVodDetailForPlayback(
+        applyOfflinePlaybackOwner({
+          detail: offlineDetail,
+          contents: effectiveTargetPlaybackContents,
+          ownerContentId: targetContent.contentId,
+        })
+      );
+      const episodeNumber = (targetEpisodeEntry.episodeIndex || 0) + 1;
+      const storedProgress = readStoredEpisodeProgress(
+        targetContent.source,
+        targetContent.vodId,
+        episodeNumber
+      );
+
+      resumeTimeRef.current =
+        storedProgress && storedProgress > 0 ? storedProgress : null;
+
+      setNeedPrefer(false);
+      setActiveOfflineContentId(targetContent.contentId);
+      setOfflineEpisodeEntries(episodeEntries);
+      setCurrentSource(playableDetail.source);
+      setCurrentId(playableDetail.id);
+      setVideoYear(playableDetail.year);
+      setVideoTitle(playableDetail.title || targetContent.title);
+      setVideoCover(playableDetail.poster);
+      setVideoDoubanId(playableDetail.douban_id || 0);
+      setAvailableSources([]);
+      setDetail(playableDetail);
+      setCurrentEpisodeIndex(targetIndex);
+
+      const newUrl = new URL(window.location.href);
+      newUrl.searchParams.set('offline', '1');
+      newUrl.searchParams.set('contentId', targetContent.contentId);
+      newUrl.searchParams.set('source', playableDetail.source);
+      newUrl.searchParams.set('id', playableDetail.id);
+      newUrl.searchParams.set('year', playableDetail.year);
+      newUrl.searchParams.set('title', playableDetail.title);
+      if (playableDetail.douban_id) {
+        newUrl.searchParams.set('doubanId', String(playableDetail.douban_id));
+      } else {
+        newUrl.searchParams.delete('doubanId');
+      }
+      newUrl.searchParams.set('episode', String(episodeNumber));
+      window.history.replaceState({}, '', newUrl.toString());
+    })();
+  };
+
+  const handleOpenOfflineSameTitleDialog = () => {
+    if (!shouldShowOfflineAdultRelatedVideos) {
+      return;
+    }
+
+    setIsOfflineSameTitleDialogOpen(true);
+  };
+
+  const handleOfflineSameTitleVideoSelect = (contentId: string) => {
+    setIsOfflineSameTitleDialogOpen(false);
+    handleOfflineRelatedVideoSelect(contentId);
   };
 
   const updateEpisodeQueryParam = (episodeIndex: number): void => {
@@ -1681,9 +1978,34 @@ function PlayPageClient() {
       return;
     }
 
-    const nextEpisodeNumber = getPlaybackRecordEpisodeNumber(episodeIndex);
     const newUrl = new URL(window.location.href);
-    newUrl.searchParams.set('episode', String(nextEpisodeNumber));
+    if (isOfflineMode) {
+      const targetEpisode = offlineEpisodeEntriesRef.current[episodeIndex];
+      const targetContent = offlinePlaybackContents.find(
+        (content) => content.contentId === targetEpisode?.contentId
+      );
+
+      if (targetEpisode && targetContent) {
+        newUrl.searchParams.set('offline', '1');
+        newUrl.searchParams.set('contentId', targetContent.contentId);
+        newUrl.searchParams.set('source', targetContent.source);
+        newUrl.searchParams.set('id', targetContent.vodId);
+        newUrl.searchParams.set('title', targetContent.title);
+        newUrl.searchParams.set('year', targetContent.year);
+        if (targetContent.doubanId) {
+          newUrl.searchParams.set('doubanId', String(targetContent.doubanId));
+        } else {
+          newUrl.searchParams.delete('doubanId');
+        }
+        newUrl.searchParams.set(
+          'episode',
+          String(targetEpisode.episodeIndex + 1)
+        );
+      }
+    } else {
+      const nextEpisodeNumber = getPlaybackRecordEpisodeNumber(episodeIndex);
+      newUrl.searchParams.set('episode', String(nextEpisodeNumber));
+    }
     window.history.replaceState({}, '', newUrl.toString());
   };
 
@@ -1722,6 +2044,10 @@ function PlayPageClient() {
         total_time: Math.floor(duration),
         save_time: Date.now(),
         search_title: searchTitle,
+        playback_mode: currentPlaybackMode,
+        offline_content_id: isOfflineMode
+          ? activeOfflineContentId || undefined
+          : undefined,
       });
 
       lastSaveTimeRef.current = Date.now();
@@ -1748,14 +2074,18 @@ function PlayPageClient() {
     }
 
     void (async () => {
+      let resumeTime = 0;
+
       if (isOfflineMode) {
-        const targetOriginalEpisodeIndex =
-          offlineEpisodeOrderRef.current[episodeIndex] ?? episodeIndex;
-        const targetEpisodeMeta = offlineContent?.episodes.find(
-          (episode) => episode.episodeIndex === targetOriginalEpisodeIndex
+        const targetEpisode = offlineEpisodeEntriesRef.current[episodeIndex];
+        const targetContent = offlinePlaybackContents.find(
+          (content) => content.contentId === targetEpisode?.contentId
+        );
+        const targetEpisodeMeta = targetContent?.episodes.find(
+          (episode) => episode.episodeIndex === targetEpisode?.episodeIndex
         );
 
-        if (!targetEpisodeMeta) {
+        if (!targetEpisode || !targetContent || !targetEpisodeMeta) {
           setError('当前离线剧集不存在，请返回下载页重新下载');
           return;
         }
@@ -1769,10 +2099,51 @@ function PlayPageClient() {
           setError('离线资源缺失或首片段不可用，请返回下载页重新下载');
           return;
         }
+
+        resumeTime = getEpisodeResumeTime(episodeIndex, {
+          source: targetContent.source,
+          id: targetContent.vodId,
+        });
+
+        const currentOfflinePlaybackContentId =
+          currentSourceRef.current && currentIdRef.current
+            ? buildDownloadContentId(
+                currentSourceRef.current,
+                currentIdRef.current
+              )
+            : '';
+
+        if (currentOfflinePlaybackContentId !== targetContent.contentId) {
+          const currentOfflineDetail = detailRef.current;
+          if (!currentOfflineDetail) {
+            setError('离线播放信息缺失，请刷新后重试');
+            return;
+          }
+
+          skipNextPlaybackHistoryRestoreRef.current = true;
+          const nextOfflineDetail = normalizeVodDetailForPlayback(
+            applyOfflinePlaybackOwner({
+              detail: currentOfflineDetail,
+              contents: offlinePlaybackContents,
+              ownerContentId: targetContent.contentId,
+            })
+          );
+
+          setActiveOfflineContentId(targetContent.contentId);
+          setCurrentSource(targetContent.source);
+          setCurrentId(targetContent.vodId);
+          setVideoYear(targetContent.year);
+          setVideoTitle(targetContent.title || videoTitleRef.current);
+          setVideoCover(targetContent.poster);
+          setVideoDoubanId(targetContent.doubanId || 0);
+          setDetail(nextOfflineDetail);
+        }
+      } else {
+        resumeTime = getEpisodeResumeTime(episodeIndex);
       }
 
       void saveCurrentPlayProgress();
-      resumeTimeRef.current = getEpisodeResumeTime(episodeIndex) || 0;
+      resumeTimeRef.current = resumeTime || 0;
       setCurrentEpisodeIndex(episodeIndex);
       updateEpisodeQueryParam(episodeIndex);
       setError(null);
@@ -1991,12 +2362,29 @@ function PlayPageClient() {
           total_episodes: detailRef.current?.episodes.length || 1,
           save_time: Date.now(),
           search_title: searchTitle,
+          playback_mode: currentPlaybackMode,
+          offline_content_id: isOfflineMode
+            ? activeOfflineContentId || undefined
+            : undefined,
         });
         setFavorited(true);
       }
     } catch (err) {
       console.error('切换收藏失败:', err);
     }
+  };
+
+  const markTransientPlaybackRecovery = (message?: string | null) => {
+    console.warn('检测到可恢复的播放器启动异常:', message);
+    setPlayerRecoveryNotice(
+      isOfflineMode
+        ? '正在恢复离线播放资源，强制刷新后通常需要几秒重新连接。'
+        : '正在恢复播放资源，强制刷新后通常需要几秒重新连接。'
+    );
+    setIsVideoLoading(true);
+    setError((currentError) =>
+      isTransientPlaybackBootstrapError(currentError) ? null : currentError
+    );
   };
 
   useEffect(() => {
@@ -2008,6 +2396,7 @@ function PlayPageClient() {
         window.clearTimeout(loadingWatchdogTimer);
         loadingWatchdogTimer = null;
       }
+      setPlayerRecoveryNotice(null);
       setError(null);
       setIsVideoLoading(false);
     };
@@ -2032,9 +2421,18 @@ function PlayPageClient() {
       };
 
       const handleError = () => {
-        if (video.error?.message) {
-          setError(video.error.message);
+        const errorMessage = video.error?.message;
+        if (!errorMessage) {
+          return;
         }
+
+        if (isTransientPlaybackBootstrapError(errorMessage)) {
+          markTransientPlaybackRecovery(errorMessage);
+          return;
+        }
+
+        setPlayerRecoveryNotice(null);
+        setError(errorMessage);
       };
 
       video.addEventListener('loadedmetadata', handleMetadata);
@@ -2092,6 +2490,7 @@ function PlayPageClient() {
 
     const playbackType = getPlaybackType(videoUrl);
     setIsVideoLoading(true);
+    setPlayerRecoveryNotice(null);
 
     // 检测是否为WebKit浏览器
     const isWebkit =
@@ -2607,6 +3006,14 @@ function PlayPageClient() {
 
       artPlayerRef.current.on('error', (err: any) => {
         console.error('播放器错误:', err);
+        const errorMessage =
+          typeof err === 'string'
+            ? err
+            : err?.message || err?.text || err?.error?.message || null;
+        if (isTransientPlaybackBootstrapError(errorMessage)) {
+          markTransientPlaybackRecovery(errorMessage);
+          return;
+        }
         if (artPlayerRef.current.currentTime > 0) {
           return;
         }
@@ -2798,7 +3205,7 @@ function PlayPageClient() {
     );
   }
 
-  if (error) {
+  if (blockingError) {
     return (
       <PageLayout activePath='/play'>
         <div className='flex items-center justify-center min-h-screen bg-transparent'>
@@ -2832,7 +3239,7 @@ function PlayPageClient() {
               </h2>
               <div className='bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4'>
                 <p className='text-red-600 dark:text-red-400 font-medium'>
-                  {error}
+                  {blockingError}
                 </p>
               </div>
               <p className='text-sm text-gray-500 dark:text-gray-400'>
@@ -2866,170 +3273,231 @@ function PlayPageClient() {
     );
   }
 
+  const resolvedVideoTitle = videoTitle || '影片标题';
+  const currentEpisodeLabel =
+    totalEpisodes > 1
+      ? detail?.episodes_titles?.[currentEpisodeIndex] ||
+        `第 ${currentEpisodeIndex + 1} 集`
+      : '';
+  const canShowPlaybackInfoControl =
+    !!detail &&
+    detail.episodes.length > 0 &&
+    currentEpisodeIndex >= 0 &&
+    currentEpisodeIndex < detail.episodes.length;
+  const playbackInfoSearchTitle =
+    offlineContent?.searchTitle || searchTitle || resolvedVideoTitle;
+  const playbackInfoSearchType = offlineContent?.searchType || searchType;
+
   return (
     <PageLayout activePath='/play'>
-      <div className='flex flex-col gap-3 py-4 px-5 lg:px-[3rem] 2xl:px-20'>
-        {/* 第一行：影片标题 */}
-        <div className='py-1'>
-          <h1 className='text-xl font-semibold text-gray-900 dark:text-gray-100'>
-            {videoTitle || '影片标题'}
-            {totalEpisodes > 1 && (
-              <span className='text-gray-500 dark:text-gray-400'>
-                {` > ${
-                  detail?.episodes_titles?.[currentEpisodeIndex] ||
-                  `第 ${currentEpisodeIndex + 1} 集`
-                }`}
-              </span>
-            )}
-          </h1>
-        </div>
-
-        {!isOfflineMode &&
-          detail &&
-          detail.episodes.length > 0 &&
-          currentEpisodeIndex >= 0 &&
-          currentEpisodeIndex < detail.episodes.length && (
-            <CurrentEpisodeDownloadControl
-              detail={detail}
-              availableSources={isOfflineMode ? [] : availableSources}
-              episodeIndex={
-                isOfflineMode
-                  ? offlineEpisodeOrder[currentEpisodeIndex] ??
-                    currentEpisodeIndex
-                  : currentEpisodeIndex
-              }
-              isOfflineMode={isOfflineMode}
-            />
-          )}
-
-        {/* 第二行：播放器和选集 */}
-        <div className='space-y-2'>
-          {/* 折叠控制 - 仅在 lg 及以上屏幕显示 */}
-          <div className='hidden lg:flex justify-end'>
-            <button
-              onClick={() =>
-                setIsEpisodeSelectorCollapsed(!isEpisodeSelectorCollapsed)
-              }
-              className='group relative flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-white/80 hover:bg-white dark:bg-gray-800/80 dark:hover:bg-gray-800 backdrop-blur-sm border border-gray-200/50 dark:border-gray-700/50 shadow-sm hover:shadow-md transition-all duration-200'
-              title={
-                isEpisodeSelectorCollapsed ? '显示选集面板' : '隐藏选集面板'
-              }
-            >
-              <svg
-                className={`w-3.5 h-3.5 text-gray-500 dark:text-gray-400 transition-transform duration-200 ${
-                  isEpisodeSelectorCollapsed ? 'rotate-180' : 'rotate-0'
-                }`}
-                fill='none'
-                stroke='currentColor'
-                viewBox='0 0 24 24'
-              >
-                <path
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  strokeWidth='2'
-                  d='M9 5l7 7-7 7'
-                />
-              </svg>
-              <span className='text-xs font-medium text-gray-600 dark:text-gray-300'>
-                {isEpisodeSelectorCollapsed ? '显示' : '隐藏'}
-              </span>
-
-              {/* 精致的状态指示点 */}
+      <div className='flex flex-col gap-4 py-4 px-5 lg:px-[3rem] 2xl:px-20'>
+        <div
+          className={`grid gap-4 transition-all duration-300 ease-in-out ${
+            isEpisodeSelectorCollapsed
+              ? 'grid-cols-1'
+              : 'grid-cols-1 md:grid-cols-4'
+          }`}
+        >
+          {/* 播放器 */}
+          <div
+            className={`transition-all duration-300 ease-in-out rounded-xl border border-white/0 dark:border-white/30 ${
+              isEpisodeSelectorCollapsed ? 'col-span-1' : 'md:col-span-3'
+            }`}
+          >
+            <div className='relative h-[300px] w-full lg:h-[500px] xl:h-[650px] 2xl:h-[750px]'>
               <div
-                className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full transition-all duration-200 ${
-                  isEpisodeSelectorCollapsed
-                    ? 'bg-orange-400 animate-pulse'
-                    : 'bg-green-400'
-                }`}
+                ref={artRef}
+                className='relative h-full w-full overflow-hidden rounded-xl bg-black shadow-lg'
               ></div>
-            </button>
+              <PlayerEnhancementStatusOverlay status={audioEnhancementStatus} />
+
+              {/* 换源加载蒙层 */}
+              {isVideoLoading && (
+                <div className='absolute inset-0 z-[500] flex items-center justify-center rounded-xl bg-black/85 backdrop-blur-sm transition-all duration-300'>
+                  <div className='mx-auto max-w-md px-6 text-center'>
+                    {/* 动画影院图标 */}
+                    <div className='relative mb-8'>
+                      <div className='relative mx-auto flex h-24 w-24 transform items-center justify-center rounded-2xl bg-gradient-to-r from-green-500 to-emerald-600 shadow-2xl transition-transform duration-300 hover:scale-105'>
+                        <div className='text-4xl text-white'>🎬</div>
+                        {/* 旋转光环 */}
+                        <div className='absolute -inset-2 animate-spin rounded-2xl bg-gradient-to-r from-green-500 to-emerald-600 opacity-20'></div>
+                      </div>
+
+                      {/* 浮动粒子效果 */}
+                      <div className='pointer-events-none absolute left-0 top-0 h-full w-full'>
+                        <div className='absolute left-2 top-2 h-2 w-2 animate-bounce rounded-full bg-green-400'></div>
+                        <div
+                          className='absolute right-4 top-4 h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400'
+                          style={{ animationDelay: '0.5s' }}
+                        ></div>
+                        <div
+                          className='absolute bottom-3 left-6 h-1 w-1 animate-bounce rounded-full bg-lime-400'
+                          style={{ animationDelay: '1s' }}
+                        ></div>
+                      </div>
+                    </div>
+
+                    {/* 换源消息 */}
+                    <div className='space-y-2'>
+                      <p className='animate-pulse text-xl font-semibold text-white'>
+                        {videoLoadingStage === 'sourceChanging'
+                          ? '🔄 切换播放源...'
+                          : '🔄 视频加载中...'}
+                      </p>
+                      <p className='text-sm text-white/70'>
+                        {playerLoadingDetailMessage}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 选集和换源 - 在移动端始终显示，在 lg 及以上可折叠 */}
+          <div
+            className={`h-[300px] md:overflow-hidden transition-all duration-300 ease-in-out lg:h-[500px] xl:h-[650px] 2xl:h-[750px] ${
+              isEpisodeSelectorCollapsed
+                ? 'md:col-span-1 lg:hidden lg:opacity-0 lg:scale-95'
+                : 'md:col-span-1 lg:opacity-100 lg:scale-100'
+            }`}
+          >
+            <EpisodeSelector
+              totalEpisodes={totalEpisodes}
+              episodes_titles={detail?.episodes_titles || []}
+              value={currentEpisodeIndex + 1}
+              onChange={handleEpisodeChange}
+              onSourceChange={isOfflineMode ? undefined : handleSourceChange}
+              currentSource={currentSource}
+              currentId={currentId}
+              videoTitle={searchTitle || videoTitle}
+              availableSources={isOfflineMode ? [] : availableSources}
+              sourceSearchLoading={sourceSearchLoading}
+              sourceSearchError={sourceSearchError}
+              precomputedVideoInfo={precomputedVideoInfo}
+              sourceSwitchEnabled={!isOfflineMode}
+              episodeTabLabel={
+                shouldShowOfflineAdultRelatedVideos ? '相关视频' : '选集'
+              }
+              episodeListVariant={
+                shouldShowOfflineAdultRelatedVideos
+                  ? 'related-videos'
+                  : 'episodes'
+              }
+              relatedVideos={offlineAdultRelatedVideos}
+              relatedVideosEmptyText='暂无可直接播放的相关离线视频'
+              onRelatedVideoSelect={
+                shouldShowOfflineAdultRelatedVideos
+                  ? (contentId) => handleOfflineRelatedVideoSelect(contentId)
+                  : undefined
+              }
+              episodeHeaderActionLabel={
+                shouldShowOfflineAdultRelatedVideos ? '更多' : undefined
+              }
+              onEpisodeHeaderAction={
+                shouldShowOfflineAdultRelatedVideos
+                  ? handleOpenOfflineSameTitleDialog
+                  : undefined
+              }
+              episodeHeaderActionDisabled={
+                shouldShowOfflineAdultRelatedVideos &&
+                offlineSameTitleVideos.length === 0
+              }
+              episodeHeaderActionTitle='查看同名的其他离线视频'
+            />
           </div>
 
           <div
-            className={`grid gap-4 lg:h-[500px] xl:h-[650px] 2xl:h-[750px] transition-all duration-300 ease-in-out ${
-              isEpisodeSelectorCollapsed
-                ? 'grid-cols-1'
-                : 'grid-cols-1 md:grid-cols-4'
+            className={`${
+              isEpisodeSelectorCollapsed ? 'col-span-1' : 'md:col-span-3'
             }`}
           >
-            {/* 播放器 */}
-            <div
-              className={`h-full transition-all duration-300 ease-in-out rounded-xl border border-white/0 dark:border-white/30 ${
-                isEpisodeSelectorCollapsed ? 'col-span-1' : 'md:col-span-3'
-              }`}
-            >
-              <div className='relative w-full h-[300px] lg:h-full'>
-                <div
-                  ref={artRef}
-                  className='relative bg-black w-full h-full rounded-xl overflow-hidden shadow-lg'
-                ></div>
-                <PlayerEnhancementStatusOverlay
-                  status={audioEnhancementStatus}
-                />
-
-                {/* 换源加载蒙层 */}
-                {isVideoLoading && (
-                  <div className='absolute inset-0 bg-black/85 backdrop-blur-sm rounded-xl flex items-center justify-center z-[500] transition-all duration-300'>
-                    <div className='text-center max-w-md mx-auto px-6'>
-                      {/* 动画影院图标 */}
-                      <div className='relative mb-8'>
-                        <div className='relative mx-auto w-24 h-24 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl shadow-2xl flex items-center justify-center transform hover:scale-105 transition-transform duration-300'>
-                          <div className='text-white text-4xl'>🎬</div>
-                          {/* 旋转光环 */}
-                          <div className='absolute -inset-2 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl opacity-20 animate-spin'></div>
-                        </div>
-
-                        {/* 浮动粒子效果 */}
-                        <div className='absolute top-0 left-0 w-full h-full pointer-events-none'>
-                          <div className='absolute top-2 left-2 w-2 h-2 bg-green-400 rounded-full animate-bounce'></div>
-                          <div
-                            className='absolute top-4 right-4 w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce'
-                            style={{ animationDelay: '0.5s' }}
-                          ></div>
-                          <div
-                            className='absolute bottom-3 left-6 w-1 h-1 bg-lime-400 rounded-full animate-bounce'
-                            style={{ animationDelay: '1s' }}
-                          ></div>
-                        </div>
-                      </div>
-
-                      {/* 换源消息 */}
-                      <div className='space-y-2'>
-                        <p className='text-xl font-semibold text-white animate-pulse'>
-                          {videoLoadingStage === 'sourceChanging'
-                            ? '🔄 切换播放源...'
-                            : '🔄 视频加载中...'}
-                        </p>
-                      </div>
-                    </div>
+            <div className='rounded-2xl border border-gray-200/50 bg-white/75 px-4 py-3 shadow-sm backdrop-blur-sm dark:border-gray-700/50 dark:bg-gray-900/75'>
+              <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+                <div className='min-w-0 flex-1'>
+                  <div className='flex items-start gap-3'>
+                    <h1 className='min-w-0 flex-1 text-lg font-semibold leading-snug text-gray-900 dark:text-gray-100 sm:text-xl'>
+                      {resolvedVideoTitle}
+                    </h1>
+                    <button
+                      type='button'
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleToggleFavorite();
+                      }}
+                      aria-label={favorited ? '取消收藏' : '添加收藏'}
+                      className='mt-0.5 flex-shrink-0 rounded-full p-1 text-gray-600 transition-opacity hover:opacity-80 dark:text-gray-300'
+                    >
+                      <FavoriteIcon filled={favorited} />
+                    </button>
                   </div>
-                )}
-              </div>
-            </div>
 
-            {/* 选集和换源 - 在移动端始终显示，在 lg 及以上可折叠 */}
-            <div
-              className={`h-[300px] lg:h-full md:overflow-hidden transition-all duration-300 ease-in-out ${
-                isEpisodeSelectorCollapsed
-                  ? 'md:col-span-1 lg:hidden lg:opacity-0 lg:scale-95'
-                  : 'md:col-span-1 lg:opacity-100 lg:scale-100'
-              }`}
-            >
-              <EpisodeSelector
-                totalEpisodes={totalEpisodes}
-                episodes_titles={detail?.episodes_titles || []}
-                value={currentEpisodeIndex + 1}
-                onChange={handleEpisodeChange}
-                onSourceChange={isOfflineMode ? undefined : handleSourceChange}
-                currentSource={currentSource}
-                currentId={currentId}
-                videoTitle={searchTitle || videoTitle}
-                availableSources={isOfflineMode ? [] : availableSources}
-                sourceSearchLoading={sourceSearchLoading}
-                sourceSearchError={sourceSearchError}
-                precomputedVideoInfo={precomputedVideoInfo}
-                sourceSwitchEnabled={!isOfflineMode}
-              />
+                  {currentEpisodeLabel ? (
+                    <div className='mt-1 text-sm text-gray-500 dark:text-gray-400'>
+                      {currentEpisodeLabel}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className='flex shrink-0 items-center gap-2 self-end sm:self-start'>
+                  {canShowPlaybackInfoControl && detail ? (
+                    <CurrentEpisodeDownloadControl
+                      detail={detail}
+                      availableSources={isOfflineMode ? [] : availableSources}
+                      episodeIndex={currentEpisodeIndex}
+                      downloadEpisodeIndex={
+                        isOfflineMode
+                          ? offlineEpisodeEntries[currentEpisodeIndex]
+                              ?.episodeIndex ?? currentEpisodeIndex
+                          : currentEpisodeIndex
+                      }
+                      isOfflineMode={isOfflineMode}
+                      compact
+                      searchTitle={playbackInfoSearchTitle}
+                      searchType={playbackInfoSearchType || undefined}
+                    />
+                  ) : null}
+
+                  <button
+                    onClick={() =>
+                      setIsEpisodeSelectorCollapsed(!isEpisodeSelectorCollapsed)
+                    }
+                    className='group relative hidden lg:flex items-center space-x-1.5 rounded-full border border-gray-200/50 bg-white/80 px-3 py-1.5 shadow-sm backdrop-blur-sm transition-all duration-200 hover:bg-white hover:shadow-md dark:border-gray-700/50 dark:bg-gray-800/80 dark:hover:bg-gray-800'
+                    title={
+                      isEpisodeSelectorCollapsed
+                        ? '显示选集面板'
+                        : '隐藏选集面板'
+                    }
+                  >
+                    <svg
+                      className={`h-3.5 w-3.5 text-gray-500 transition-transform duration-200 dark:text-gray-400 ${
+                        isEpisodeSelectorCollapsed ? 'rotate-180' : 'rotate-0'
+                      }`}
+                      fill='none'
+                      stroke='currentColor'
+                      viewBox='0 0 24 24'
+                    >
+                      <path
+                        strokeLinecap='round'
+                        strokeLinejoin='round'
+                        strokeWidth='2'
+                        d='M9 5l7 7-7 7'
+                      />
+                    </svg>
+                    <span className='text-xs font-medium text-gray-600 dark:text-gray-300'>
+                      {isEpisodeSelectorCollapsed ? '显示' : '隐藏'}
+                    </span>
+
+                    <div
+                      className={`absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full transition-all duration-200 ${
+                        isEpisodeSelectorCollapsed
+                          ? 'animate-pulse bg-orange-400'
+                          : 'bg-green-400'
+                      }`}
+                    ></div>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -3039,22 +3507,8 @@ function PlayPageClient() {
           {/* 文字区 */}
           <div className='md:col-span-3'>
             <div className='p-6 flex flex-col min-h-0'>
-              {/* 标题 */}
-              <h1 className='text-3xl font-bold mb-2 tracking-wide flex items-center flex-shrink-0 text-center md:text-left w-full'>
-                {videoTitle || '影片标题'}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleToggleFavorite();
-                  }}
-                  className='ml-3 flex-shrink-0 hover:opacity-80 transition-opacity'
-                >
-                  <FavoriteIcon filled={favorited} />
-                </button>
-              </h1>
-
               {/* 关键信息行 */}
-              <div className='flex flex-wrap items-center gap-3 text-base mb-4 opacity-80 flex-shrink-0'>
+              <div className='mb-4 flex flex-wrap items-center gap-3 text-base opacity-80 flex-shrink-0'>
                 {detail?.class && (
                   <span className='text-green-600 font-semibold'>
                     {detail.class}
@@ -3130,6 +3584,100 @@ function PlayPageClient() {
           </div>
         </div>
       </div>
+
+      {isOfflineSameTitleDialogOpen ? (
+        <div
+          className='fixed inset-0 z-[10000] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm'
+          onClick={() => setIsOfflineSameTitleDialogOpen(false)}
+        >
+          <div
+            className='w-full max-w-3xl overflow-hidden rounded-[28px] border border-white/10 bg-[#0b0b0b] shadow-2xl'
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className='flex items-center justify-between border-b border-white/10 px-6 py-5'>
+              <div className='space-y-1'>
+                <h2 className='text-xl font-semibold text-white'>
+                  同名离线视频
+                </h2>
+                <p className='text-sm text-gray-400'>
+                  {offlineSameTitleVideos.length > 0
+                    ? `共 ${offlineSameTitleVideos.length} 部同名离线资源，点击即可直接播放。`
+                    : '当前没有其他同名离线视频。'}
+                </p>
+              </div>
+              <button
+                type='button'
+                onClick={() => setIsOfflineSameTitleDialogOpen(false)}
+                className='inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-lg text-gray-300 transition-colors hover:bg-white/10 hover:text-white'
+                aria-label='关闭同名离线视频弹窗'
+              >
+                ×
+              </button>
+            </div>
+
+            <div className='max-h-[70vh] overflow-y-auto px-6 py-5'>
+              {offlineSameTitleVideos.length === 0 ? (
+                <div className='rounded-2xl border border-white/10 bg-black/20 px-4 py-8 text-center text-sm text-gray-400'>
+                  暂无可播放的同名离线视频
+                </div>
+              ) : (
+                <div className='grid gap-4 md:grid-cols-2'>
+                  {offlineSameTitleVideos.map((video) => (
+                    <button
+                      key={`${video.contentId}-same-title`}
+                      type='button'
+                      onClick={() =>
+                        handleOfflineSameTitleVideoSelect(video.contentId)
+                      }
+                      className='w-full rounded-2xl border border-white/10 bg-black/20 p-4 text-left transition-colors hover:border-emerald-400/40 hover:bg-white/5'
+                    >
+                      <div className='flex items-start gap-4'>
+                        <div className='h-24 w-16 flex-shrink-0 overflow-hidden rounded-2xl bg-gray-200 dark:bg-white/10'>
+                          {video.poster ? (
+                            <img
+                              src={processImageUrl(video.poster)}
+                              alt={video.title}
+                              className='h-full w-full object-cover'
+                              onError={(event) => {
+                                const target = event.target as HTMLImageElement;
+                                target.style.display = 'none';
+                              }}
+                            />
+                          ) : null}
+                        </div>
+
+                        <div className='min-w-0 flex-1 space-y-3'>
+                          <div className='line-clamp-2 text-base font-semibold leading-6 text-white'>
+                            {video.title}
+                          </div>
+
+                          <div className='flex flex-wrap items-center gap-2 text-xs text-gray-400'>
+                            <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-200'>
+                              {video.sourceName}
+                            </span>
+                            {video.year && video.year !== 'unknown' ? (
+                              <span>{video.year}</span>
+                            ) : null}
+                            <span>
+                              {video.episodeCount > 1
+                                ? `${video.episodeCount} 集`
+                                : '单集'}
+                            </span>
+                          </div>
+
+                          <div className='text-sm font-medium text-emerald-400'>
+                            点击直接播放
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </PageLayout>
   );
 }

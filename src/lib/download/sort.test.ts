@@ -1,4 +1,4 @@
-import { sortActiveDownloadTasks } from './sort';
+import { sortActiveDownloadTaskGroups, sortActiveDownloadTasks } from './sort';
 import { DownloadTask } from './types';
 
 function buildTask(partial: Partial<DownloadTask>): DownloadTask {
@@ -24,8 +24,7 @@ function buildTask(partial: Partial<DownloadTask>): DownloadTask {
     currentSizeBytes: partial.currentSizeBytes || partial.sizeBytes || 0,
     estimatedTotalSizeBytes:
       partial.estimatedTotalSizeBytes || partial.sizeBytes || 0,
-    downloadSpeedBytesPerSecond:
-      partial.downloadSpeedBytesPerSecond || 0,
+    downloadSpeedBytesPerSecond: partial.downloadSpeedBytesPerSecond || 0,
     createdAt: partial.createdAt || 1,
     updatedAt: partial.updatedAt || 1,
     desc: partial.desc,
@@ -75,6 +74,28 @@ describe('sortActiveDownloadTasks', () => {
     expect(sortedTasks.map((task) => task.id)).toEqual([
       'episode-1',
       'episode-2',
+    ]);
+  });
+});
+
+describe('sortActiveDownloadTaskGroups', () => {
+  it('keeps group order stable when progress updates change updatedAt', () => {
+    const sortedGroups = sortActiveDownloadTaskGroups([
+      {
+        contentId: 'later',
+        createdAt: 200,
+        title: '后加入',
+      },
+      {
+        contentId: 'earlier',
+        createdAt: 100,
+        title: '先加入',
+      },
+    ]);
+
+    expect(sortedGroups.map((group) => group.contentId)).toEqual([
+      'earlier',
+      'later',
     ]);
   });
 });

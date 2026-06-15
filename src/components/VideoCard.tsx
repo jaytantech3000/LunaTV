@@ -1,9 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any,react-hooks/exhaustive-deps,@typescript-eslint/no-empty-function */
 
 import {
+  Download,
   ExternalLink,
   Heart,
   Link,
+  Loader2,
   PlayCircleIcon,
   Radio,
   Trash2,
@@ -19,6 +21,8 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import { flushSync } from 'react-dom';
+import { createPortal } from 'react-dom';
 
 import {
   deleteFavorite,
@@ -28,12 +32,17 @@ import {
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { getOfflineDownloadSupportState } from '@/lib/download/cache';
+import { resolveDownloadablePlaybackSources } from '@/lib/download/downloadable';
+import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 import { isAdultContentResult, isAdultSourceCandidate } from '@/lib/yellow';
 import { useLongPress } from '@/hooks/useLongPress';
 
+import BatchEpisodeDownloadDialog from '@/components/BatchEpisodeDownloadDialog';
 import { ImagePlaceholder } from '@/components/ImagePlaceholder';
 import MobileActionSheet from '@/components/MobileActionSheet';
+import { useNavigationFeedback } from '@/components/NavigationFeedbackProvider';
 
 export interface VideoCardProps {
   id?: string;
@@ -54,6 +63,8 @@ export interface VideoCardProps {
   type?: string;
   isBangumi?: boolean;
   isAggregate?: boolean;
+  playbackMode?: 'online' | 'offline';
+  offlineContentId?: string;
   origin?: 'vod' | 'live';
 }
 
@@ -84,17 +95,34 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       type = '',
       isBangumi = false,
       isAggregate = false,
+      playbackMode,
+      offlineContentId,
       origin = 'vod',
     }: VideoCardProps,
     ref
   ) {
     const router = useRouter();
+    const { beginNavigation } = useNavigationFeedback();
     const [favorited, setFavorited] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [isNavigating, setIsNavigating] = useState(false);
     const [showMobileActions, setShowMobileActions] = useState(false);
     const [searchFavorited, setSearchFavorited] = useState<boolean | null>(
       null
     ); // 搜索结果的收藏状态
+    const [downloadDialogDetail, setDownloadDialogDetail] =
+      useState<SearchResult | null>(null);
+    const [downloadDialogAvailableSources, setDownloadDialogAvailableSources] =
+      useState<SearchResult[]>([]);
+    const [downloadDialogError, setDownloadDialogError] = useState<
+      string | null
+    >(null);
+    const [downloadDialogFeedback, setDownloadDialogFeedback] = useState<
+      string | null
+    >(null);
+    const [isDownloadDialogLoading, setIsDownloadDialogLoading] =
+      useState(false);
+    const [isDownloadDialogOpen, setIsDownloadDialogOpen] = useState(false);
 
     // 可外部修改的可控字段
     const [dynamicEpisodes, setDynamicEpisodes] = useState<number | undefined>(
@@ -119,6 +147,20 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       setDynamicDoubanId(douban_id);
     }, [douban_id]);
 
+    useEffect(() => {
+      if (!downloadDialogFeedback) {
+        return;
+      }
+
+      const timeoutId = window.setTimeout(() => {
+        setDownloadDialogFeedback(null);
+      }, 2800);
+
+      return () => {
+        window.clearTimeout(timeoutId);
+      };
+    }, [downloadDialogFeedback]);
+
     useImperativeHandle(ref, () => ({
       setEpisodes: (eps?: number) => setDynamicEpisodes(eps),
       setSourceNames: (names?: string[]) => setDynamicSourceNames(names),
@@ -138,6 +180,8 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         ? 'movie'
         : 'tv'
       : type;
+    const effectivePlaybackMode =
+      origin === 'vod' ? playbackMode || 'online' : undefined;
     const shouldAllowAdultPlayback = useMemo(() => {
       if (origin !== 'vod') {
         return false;
@@ -160,13 +204,152 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         title: actualTitle,
         source_name: sourceNameTokens,
       });
+    }, [actualSource, actualTitle, dynamicSourceNames, origin, source_name]);
+
+    useEffect(() => {
+      setDownloadDialogDetail(null);
+      setDownloadDialogAvailableSources([]);
+      setDownloadDialogError(null);
+      setDownloadDialogFeedback(null);
+      setIsDownloadDialogLoading(false);
+      setIsDownloadDialogOpen(false);
     }, [
+      douban_id,
+      episodes,
+      id,
+      query,
+      shouldAllowAdultPlayback,
+      source,
+      title,
+      type,
+      year,
+    ]);
+
+    const destinationUrl = useMemo(() => {
+      const doubanIdParam =
+        actualDoubanId && actualDoubanId > 0
+          ? `&doubanId=${actualDoubanId}`
+          : '';
+      const adultParam = shouldAllowAdultPlayback ? '&adult=1' : '';
+
+      if (origin === 'live' && actualSource && actualId) {
+        return `/live?source=${actualSource.replace(
+          'live_',
+          ''
+        )}&id=${actualId.replace('live_', '')}`;
+      }
+
+      if (from === 'douban' || (isAggregate && !actualSource && !actualId)) {
+        return `/play?title=${encodeURIComponent(actualTitle.trim())}${
+          actualYear ? `&year=${actualYear}` : ''
+        }${actualSearchType ? `&stype=${actualSearchType}` : ''}${
+          isAggregate ? '&prefer=true' : ''
+        }${
+          actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
+        }${doubanIdParam}${adultParam}`;
+      }
+
+      if (actualSource && actualId) {
+        if (effectivePlaybackMode === 'offline' && offlineContentId) {
+          const searchParams = new URLSearchParams({
+            offline: '1',
+            contentId: offlineContentId,
+            source: actualSource,
+            id: actualId,
+            title: actualTitle,
+            year: actualYear || '',
+            episode: String(Math.max(1, currentEpisode || 1)),
+          });
+
+          return `/play?${searchParams.toString()}`;
+        }
+
+        return `/play?source=${actualSource}&id=${actualId}&title=${encodeURIComponent(
+          actualTitle
+        )}${actualYear ? `&year=${actualYear}` : ''}${
+          isAggregate ? '&prefer=true' : ''
+        }${
+          actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
+        }${
+          actualSearchType ? `&stype=${actualSearchType}` : ''
+        }${doubanIdParam}${adultParam}`;
+      }
+
+      return null;
+    }, [
+      actualDoubanId,
+      actualId,
+      actualQuery,
+      actualSearchType,
       actualSource,
       actualTitle,
-      dynamicSourceNames,
+      actualYear,
+      currentEpisode,
+      effectivePlaybackMode,
+      from,
+      isAggregate,
+      offlineContentId,
       origin,
-      source_name,
+      shouldAllowAdultPlayback,
     ]);
+
+    const prefetchDestination = useCallback(() => {
+      if (!destinationUrl) {
+        return;
+      }
+
+      router.prefetch(destinationUrl);
+    }, [destinationUrl, router]);
+
+    const beginCardNavigation = useCallback(() => {
+      if (!destinationUrl) {
+        return;
+      }
+
+      flushSync(() => {
+        setIsNavigating(true);
+        beginNavigation({
+          href: destinationUrl,
+          kind: 'card',
+          label: actualTitle.trim() || (origin === 'live' ? '直播' : '视频'),
+        });
+      });
+      prefetchDestination();
+    }, [
+      actualTitle,
+      beginNavigation,
+      destinationUrl,
+      origin,
+      prefetchDestination,
+    ]);
+
+    const pushDestinationWithPaint = useCallback(() => {
+      if (!destinationUrl) {
+        return;
+      }
+
+      window.setTimeout(() => {
+        router.push(destinationUrl);
+      }, 0);
+    }, [destinationUrl, router]);
+
+    useEffect(() => {
+      setIsNavigating(false);
+    }, [destinationUrl]);
+
+    useEffect(() => {
+      if (!isNavigating) {
+        return;
+      }
+
+      const timeoutId = window.setTimeout(() => {
+        setIsNavigating(false);
+      }, 8000);
+
+      return () => {
+        window.clearTimeout(timeoutId);
+      };
+    }, [isNavigating]);
 
     // 获取收藏状态（搜索结果页面不检查）
     useEffect(() => {
@@ -226,6 +409,9 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               cover: actualPoster,
               total_episodes: actualEpisodes ?? 1,
               save_time: Date.now(),
+              search_title: actualQuery || actualTitle,
+              playback_mode: origin === 'vod' ? 'online' : undefined,
+              origin,
             });
             if (from === 'search') {
               setSearchFavorited(true);
@@ -246,7 +432,9 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         actualYear,
         actualPoster,
         actualEpisodes,
+        actualQuery,
         favorited,
+        origin,
         searchFavorited,
       ]
     );
@@ -267,110 +455,28 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
     );
 
     const handleClick = useCallback(() => {
-      const doubanIdParam =
-        actualDoubanId && actualDoubanId > 0
-          ? `&doubanId=${actualDoubanId}`
-          : '';
-      const adultParam = shouldAllowAdultPlayback ? '&adult=1' : '';
-
-      if (origin === 'live' && actualSource && actualId) {
-        // 直播内容跳转到直播页面
-        const url = `/live?source=${actualSource.replace(
-          'live_',
-          ''
-        )}&id=${actualId.replace('live_', '')}`;
-        router.push(url);
-      } else if (
-        from === 'douban' ||
-        (isAggregate && !actualSource && !actualId)
-      ) {
-        const url = `/play?title=${encodeURIComponent(actualTitle.trim())}${
-          actualYear ? `&year=${actualYear}` : ''
-        }${actualSearchType ? `&stype=${actualSearchType}` : ''}${
-          isAggregate ? '&prefer=true' : ''
-        }${
-          actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
-        }${doubanIdParam}${adultParam}`;
-        router.push(url);
-      } else if (actualSource && actualId) {
-        const url = `/play?source=${actualSource}&id=${actualId}&title=${encodeURIComponent(
-          actualTitle
-        )}${actualYear ? `&year=${actualYear}` : ''}${
-          isAggregate ? '&prefer=true' : ''
-        }${
-          actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
-        }${
-          actualSearchType ? `&stype=${actualSearchType}` : ''
-        }${doubanIdParam}${adultParam}`;
-        router.push(url);
+      if (!destinationUrl || isNavigating) {
+        return;
       }
+
+      beginCardNavigation();
+      pushDestinationWithPaint();
     }, [
-      origin,
-      from,
-      actualSource,
-      actualId,
-      router,
-      actualTitle,
-      actualYear,
-      isAggregate,
-      actualQuery,
-      actualSearchType,
-      actualDoubanId,
-      shouldAllowAdultPlayback,
+      beginCardNavigation,
+      destinationUrl,
+      isNavigating,
+      pushDestinationWithPaint,
     ]);
 
     // 新标签页播放处理函数
     const handlePlayInNewTab = useCallback(() => {
-      const doubanIdParam =
-        actualDoubanId && actualDoubanId > 0
-          ? `&doubanId=${actualDoubanId}`
-          : '';
-      const adultParam = shouldAllowAdultPlayback ? '&adult=1' : '';
-
-      if (origin === 'live' && actualSource && actualId) {
-        // 直播内容跳转到直播页面
-        const url = `/live?source=${actualSource.replace(
-          'live_',
-          ''
-        )}&id=${actualId.replace('live_', '')}`;
-        window.open(url, '_blank');
-      } else if (
-        from === 'douban' ||
-        (isAggregate && !actualSource && !actualId)
-      ) {
-        const url = `/play?title=${encodeURIComponent(actualTitle.trim())}${
-          actualYear ? `&year=${actualYear}` : ''
-        }${actualSearchType ? `&stype=${actualSearchType}` : ''}${
-          isAggregate ? '&prefer=true' : ''
-        }${
-          actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
-        }${doubanIdParam}${adultParam}`;
-        window.open(url, '_blank');
-      } else if (actualSource && actualId) {
-        const url = `/play?source=${actualSource}&id=${actualId}&title=${encodeURIComponent(
-          actualTitle
-        )}${actualYear ? `&year=${actualYear}` : ''}${
-          isAggregate ? '&prefer=true' : ''
-        }${
-          actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
-        }${
-          actualSearchType ? `&stype=${actualSearchType}` : ''
-        }${doubanIdParam}${adultParam}`;
-        window.open(url, '_blank');
+      if (!destinationUrl) {
+        return;
       }
-    }, [
-      origin,
-      from,
-      actualSource,
-      actualId,
-      actualTitle,
-      actualYear,
-      isAggregate,
-      actualQuery,
-      actualSearchType,
-      actualDoubanId,
-      shouldAllowAdultPlayback,
-    ]);
+
+      prefetchDestination();
+      window.open(destinationUrl, '_blank');
+    }, [destinationUrl, prefetchDestination]);
 
     // 检查搜索结果的收藏状态
     const checkSearchFavoriteStatus = useCallback(async () => {
@@ -389,6 +495,64 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         }
       }
     }, [from, isAggregate, actualSource, actualId, searchFavorited]);
+
+    const handleOpenDownloadDialog = useCallback(async () => {
+      if (origin !== 'vod') {
+        return;
+      }
+
+      const supportState = getOfflineDownloadSupportState();
+      if (!supportState.supported) {
+        setDownloadDialogError(supportState.reason || '当前环境不支持离线下载');
+        return;
+      }
+
+      if (downloadDialogDetail) {
+        setDownloadDialogError(null);
+        setDownloadDialogFeedback(null);
+        setIsDownloadDialogOpen(true);
+        return;
+      }
+
+      try {
+        setDownloadDialogError(null);
+        setDownloadDialogFeedback(null);
+        setIsDownloadDialogLoading(true);
+
+        const { detail, availableSources } =
+          await resolveDownloadablePlaybackSources({
+            source: actualSource,
+            id: actualId,
+            title: actualTitle.trim(),
+            year: actualYear || undefined,
+            searchType: actualSearchType || undefined,
+            query: actualQuery || undefined,
+            doubanId: actualDoubanId,
+            allowAdultCandidates: shouldAllowAdultPlayback,
+          });
+
+        setDownloadDialogDetail(detail);
+        setDownloadDialogAvailableSources(availableSources);
+        setIsDownloadDialogOpen(true);
+      } catch (error) {
+        setDownloadDialogError(
+          error instanceof Error ? error.message : '获取可下载剧集失败'
+        );
+      } finally {
+        setIsDownloadDialogLoading(false);
+      }
+    }, [
+      actualDoubanId,
+      actualId,
+      actualQuery,
+      actualSearchType,
+      actualSource,
+      actualTitle,
+      actualYear,
+      downloadDialogDetail,
+      origin,
+      shouldAllowAdultPlayback,
+    ]);
 
     // 长按操作
     const handleLongPress = useCallback(() => {
@@ -494,6 +658,16 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           label: origin === 'live' ? '新标签页观看' : '新标签页播放',
           icon: <ExternalLink size={20} />,
           onClick: handlePlayInNewTab,
+          color: 'default' as const,
+        });
+      }
+
+      if (origin === 'vod' && actualTitle.trim()) {
+        actions.push({
+          id: 'download',
+          label: '下载',
+          icon: <Download size={20} />,
+          onClick: handleOpenDownloadDialog,
           color: 'default' as const,
         });
       }
@@ -613,15 +787,44 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       isAggregate,
       dynamicSourceNames,
       handleClick,
+      handleOpenDownloadDialog,
       handleToggleFavorite,
       handleDeleteRecord,
+      origin,
     ]);
+
+    const initialDownloadEpisodeIndex = Math.max(
+      0,
+      Math.min(
+        Math.max(0, (currentEpisode || 1) - 1),
+        Math.max(0, (downloadDialogDetail?.episodes.length || 1) - 1)
+      )
+    );
+    const shouldShowPlaybackModeBadge =
+      origin === 'vod' &&
+      (from === 'playrecord' || from === 'favorite') &&
+      Boolean(effectivePlaybackMode);
+    const playbackModeLabel =
+      effectivePlaybackMode === 'offline' ? '离线' : '在线';
+    const playbackModeClassName =
+      effectivePlaybackMode === 'offline'
+        ? 'border-emerald-500/60 text-emerald-600 dark:border-emerald-400/60 dark:text-emerald-300'
+        : 'border-sky-500/50 text-sky-600 dark:border-sky-400/50 dark:text-sky-300';
 
     return (
       <>
         <div
-          className='group relative w-full rounded-lg bg-transparent cursor-pointer transition-all duration-300 ease-in-out hover:scale-[1.05] hover:z-[500]'
+          className={`group relative w-full rounded-lg bg-transparent cursor-pointer transition-all duration-300 ease-in-out ${
+            isNavigating
+              ? 'scale-[1.02] z-[500]'
+              : 'hover:scale-[1.05] hover:z-[500] active:scale-[1.01]'
+          }`}
+          aria-busy={isNavigating}
           onClick={handleClick}
+          onPointerDown={prefetchDestination}
+          onPointerEnter={prefetchDestination}
+          onFocus={prefetchDestination}
+          onTouchStartCapture={prefetchDestination}
           {...longPressProps}
           style={
             {
@@ -721,9 +924,22 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               }}
             />
 
+            {isNavigating && (
+              <div className='absolute inset-0 z-20 flex items-center justify-center bg-black/45 backdrop-blur-[1px]'>
+                <div className='inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-black/75 px-3 py-2 text-xs font-medium text-white shadow-xl shadow-black/30'>
+                  <Loader2 className='h-4 w-4 animate-spin text-emerald-300' />
+                  <span>正在打开</span>
+                </div>
+              </div>
+            )}
+
             {/* 悬浮遮罩 */}
             <div
-              className='absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent transition-opacity duration-300 ease-in-out opacity-0 group-hover:opacity-100'
+              className={`absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent transition-opacity duration-300 ease-in-out ${
+                isNavigating
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100'
+              }`}
               style={
                 {
                   WebkitUserSelect: 'none',
@@ -1210,23 +1426,10 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                 ></div>
               </div>
             </div>
-            {config.showSourceName && source_name && (
-              <span
-                className='block text-xs text-gray-500 dark:text-gray-400 mt-1'
-                style={
-                  {
-                    WebkitUserSelect: 'none',
-                    userSelect: 'none',
-                    WebkitTouchCallout: 'none',
-                  } as React.CSSProperties
-                }
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  return false;
-                }}
-              >
+            {config.showSourceName &&
+              (source_name || shouldShowPlaybackModeBadge) && (
                 <span
-                  className='inline-block border rounded px-2 py-0.5 border-gray-500/60 dark:border-gray-400/60 transition-all duration-300 ease-in-out group-hover:border-green-500/60 group-hover:text-green-600 dark:group-hover:text-green-400'
+                  className='mt-1 flex flex-wrap items-center justify-center gap-1 text-xs text-gray-500 dark:text-gray-400'
                   style={
                     {
                       WebkitUserSelect: 'none',
@@ -1239,16 +1442,50 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                     return false;
                   }}
                 >
-                  {origin === 'live' && (
-                    <Radio
-                      size={12}
-                      className='inline-block text-gray-500 dark:text-gray-400 mr-1.5'
-                    />
+                  {source_name && (
+                    <span
+                      className='inline-block border rounded px-2 py-0.5 border-gray-500/60 dark:border-gray-400/60 transition-all duration-300 ease-in-out group-hover:border-green-500/60 group-hover:text-green-600 dark:group-hover:text-green-400'
+                      style={
+                        {
+                          WebkitUserSelect: 'none',
+                          userSelect: 'none',
+                          WebkitTouchCallout: 'none',
+                        } as React.CSSProperties
+                      }
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        return false;
+                      }}
+                    >
+                      {origin === 'live' && (
+                        <Radio
+                          size={12}
+                          className='inline-block text-gray-500 dark:text-gray-400 mr-1.5'
+                        />
+                      )}
+                      {source_name}
+                    </span>
                   )}
-                  {source_name}
+                  {shouldShowPlaybackModeBadge && (
+                    <span
+                      className={`inline-block rounded border px-2 py-0.5 transition-all duration-300 ease-in-out ${playbackModeClassName}`}
+                      style={
+                        {
+                          WebkitUserSelect: 'none',
+                          userSelect: 'none',
+                          WebkitTouchCallout: 'none',
+                        } as React.CSSProperties
+                      }
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        return false;
+                      }}
+                    >
+                      {playbackModeLabel}
+                    </span>
+                  )}
                 </span>
-              </span>
-            )}
+              )}
           </div>
         </div>
 
@@ -1270,6 +1507,86 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           totalEpisodes={actualEpisodes}
           origin={origin}
         />
+
+        {isDownloadDialogLoading &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div className='fixed inset-0 z-[10010] flex items-center justify-center p-4'>
+              <div className='absolute inset-0 bg-black/70 backdrop-blur-sm' />
+              <div className='relative z-[10011] w-full max-w-md rounded-3xl border border-white/10 bg-[#04110d] p-6 text-white shadow-2xl shadow-black/40'>
+                <div className='text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/80'>
+                  准备下载
+                </div>
+                <div className='mt-3 break-words text-2xl font-semibold text-white'>
+                  {actualTitle}
+                </div>
+                <div className='mt-3 text-sm text-gray-300'>
+                  正在加载可下载剧集和可用片源，请稍候。
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
+
+        {downloadDialogError &&
+          !isDownloadDialogLoading &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div className='fixed inset-0 z-[10010] flex items-center justify-center p-4'>
+              <button
+                type='button'
+                aria-label='关闭下载提示'
+                className='absolute inset-0 bg-black/70 backdrop-blur-sm'
+                onClick={() => setDownloadDialogError(null)}
+              />
+              <div className='relative z-[10011] w-full max-w-md rounded-3xl border border-white/10 bg-[#04110d] p-6 text-white shadow-2xl shadow-black/40'>
+                <div className='text-xs font-medium uppercase tracking-[0.24em] text-red-300/80'>
+                  下载不可用
+                </div>
+                <div className='mt-3 break-words text-2xl font-semibold text-white'>
+                  {actualTitle}
+                </div>
+                <div className='mt-3 text-sm text-gray-300'>
+                  {downloadDialogError}
+                </div>
+                <div className='mt-5 flex justify-end'>
+                  <button
+                    type='button'
+                    onClick={() => setDownloadDialogError(null)}
+                    className='inline-flex h-10 min-w-[72px] items-center justify-center rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
+
+        {downloadDialogFeedback &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div className='fixed bottom-6 left-1/2 z-[10012] w-[min(92vw,560px)] -translate-x-1/2 rounded-2xl border border-emerald-500/20 bg-[#04110d]/95 px-4 py-3 text-sm text-emerald-100 shadow-2xl shadow-black/40 backdrop-blur-sm'>
+              {downloadDialogFeedback}
+            </div>,
+            document.body
+          )}
+
+        {downloadDialogDetail && (
+          <BatchEpisodeDownloadDialog
+            detail={downloadDialogDetail}
+            availableSources={downloadDialogAvailableSources}
+            episodeIndex={initialDownloadEpisodeIndex}
+            isOpen={isDownloadDialogOpen}
+            searchTitle={actualQuery || actualTitle}
+            searchType={actualSearchType || undefined}
+            onClose={() => setIsDownloadDialogOpen(false)}
+            onComplete={(message) => {
+              setDownloadDialogError(null);
+              setDownloadDialogFeedback(message);
+            }}
+          />
+        )}
       </>
     );
   }

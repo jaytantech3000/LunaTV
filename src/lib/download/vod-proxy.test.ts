@@ -64,6 +64,28 @@ describe('createVodProxyHeaders', () => {
 
     expect(headers.get('Content-Length')).toBe('42');
   });
+
+  it('omits upstream content length when the body was content-encoded', () => {
+    const upstreamHeaders = new Map<string, string>([
+      ['content-encoding', 'gzip'],
+      ['content-length', '41'],
+      ['content-type', 'application/octet-stream'],
+    ]);
+    const upstreamResponse = {
+      headers: {
+        get(name: string) {
+          return upstreamHeaders.get(name.toLowerCase()) || null;
+        },
+        has(name: string) {
+          return upstreamHeaders.has(name.toLowerCase());
+        },
+      },
+    } as Response;
+
+    const headers = createVodProxyHeaders(upstreamResponse);
+
+    expect(headers.get('Content-Length')).toBeNull();
+  });
 });
 
 describe('rewriteVodManifestContent', () => {

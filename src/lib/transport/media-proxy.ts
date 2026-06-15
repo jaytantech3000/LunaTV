@@ -1,6 +1,6 @@
-import { ApiSearchParams, buildApiUrl, getApiBaseUrl } from './endpoint';
-
 import { getRuntimeConfig } from '@/lib/runtime-config';
+
+import { ApiSearchParams, buildApiUrl, getApiBaseUrl } from './endpoint';
 
 export const LIVE_PROXY_PATHS = {
   m3u8: '/api/proxy/m3u8',

@@ -28,13 +28,66 @@ export const yellowWords = [
   '日本伦理',
 ];
 
-const ADULT_SOURCE_MARKERS = ['🔞', '成人', '情色', '三级片', '三級', 'porn', 'av'];
+const ADULT_SOURCE_MARKERS = [
+  '🔞',
+  '成人',
+  '情色',
+  '三级片',
+  '三級',
+  'porn',
+  'av',
+  'onlyfans',
+  'only fans',
+  'fansly',
+];
+
+function normalizeAdultMarkerText(text: string): string {
+  return text.toLowerCase().normalize('NFKC').trim();
+}
+
+function compactAdultMarkerText(text: string): string {
+  return normalizeAdultMarkerText(text).replace(/[\s._-]+/g, '');
+}
+
+function containsConfiguredAdultMarker(
+  text: string,
+  markers: readonly string[]
+): boolean {
+  const normalized = normalizeAdultMarkerText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  const compact = compactAdultMarkerText(text);
+
+  return markers.some((marker) => {
+    const normalizedMarker = normalizeAdultMarkerText(marker);
+    if (!normalizedMarker) {
+      return false;
+    }
+
+    if (normalized.includes(normalizedMarker)) {
+      return true;
+    }
+
+    if (
+      normalizedMarker.includes(' ') ||
+      normalizedMarker.includes('.') ||
+      normalizedMarker.includes('_') ||
+      normalizedMarker.includes('-')
+    ) {
+      return compact.includes(compactAdultMarkerText(normalizedMarker));
+    }
+
+    return false;
+  });
+}
 
 function containsAdultMarker(text: string): boolean {
-  const normalized = text.toLowerCase();
-  return [...ADULT_SOURCE_MARKERS, ...yellowWords].some((marker) =>
-    normalized.includes(marker.toLowerCase())
-  );
+  return containsConfiguredAdultMarker(text, [
+    ...ADULT_SOURCE_MARKERS,
+    ...yellowWords,
+  ]);
 }
 
 export function isAdultSourceCandidate(
@@ -86,9 +139,7 @@ export function filterAdultContentResults<
     class?: string;
     source_name?: string;
     desc?: string;
-  },
->(
-  results: T[]
-): T[] {
+  }
+>(results: T[]): T[] {
   return results.filter((result) => !isAdultContentResult(result));
 }

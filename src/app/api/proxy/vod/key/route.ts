@@ -30,7 +30,11 @@ export async function GET(request: NextRequest): Promise<Response> {
       status: upstreamResponse.status,
       headers: createVodProxyHeaders(
         upstreamResponse,
-        upstreamResponse.headers.get('Content-Type') || 'application/octet-stream'
+        upstreamResponse.headers.get('Content-Type') ||
+          'application/octet-stream',
+        {
+          contentLength: Buffer.byteLength(keyBuffer).toString(),
+        }
       ),
     });
   } catch (error) {

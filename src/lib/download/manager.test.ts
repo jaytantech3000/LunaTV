@@ -1,7 +1,4 @@
-import {
-  DownloadedContentMeta,
-  DownloadTask,
-} from '@/lib/download/types';
+import { DownloadedContentMeta, DownloadTask } from '@/lib/download/types';
 import { SearchResult } from '@/lib/types';
 
 import {
@@ -35,6 +32,8 @@ function buildDownloadTask(partial: Partial<DownloadTask> = {}): DownloadTask {
     vodId: partial.vodId || 'vod-id',
     episodeIndex: partial.episodeIndex ?? 0,
     title: partial.title || '主角',
+    searchTitle: partial.searchTitle,
+    searchType: partial.searchType,
     poster: partial.poster || 'https://example.com/poster.jpg',
     year: partial.year || '2026',
     desc: partial.desc,
@@ -45,9 +44,9 @@ function buildDownloadTask(partial: Partial<DownloadTask> = {}): DownloadTask {
       partial.originalM3u8Url || 'https://example.com/current/index.m3u8',
     entryManifestUrl:
       partial.entryManifestUrl || 'https://example.com/current/index.m3u8',
-    manifestCandidateUrls:
-      partial.manifestCandidateUrls ||
-      ['https://example.com/current/index.m3u8'],
+    manifestCandidateUrls: partial.manifestCandidateUrls || [
+      'https://example.com/current/index.m3u8',
+    ],
     playbackManifestUrl: partial.playbackManifestUrl,
     cacheIndexId: partial.cacheIndexId || 'task:demo:vod-id:0',
     status: partial.status || 'queued',
@@ -58,8 +57,7 @@ function buildDownloadTask(partial: Partial<DownloadTask> = {}): DownloadTask {
     currentSizeBytes: partial.currentSizeBytes ?? partial.sizeBytes ?? 0,
     estimatedTotalSizeBytes:
       partial.estimatedTotalSizeBytes ?? partial.sizeBytes ?? 0,
-    downloadSpeedBytesPerSecond:
-      partial.downloadSpeedBytesPerSecond ?? 0,
+    downloadSpeedBytesPerSecond: partial.downloadSpeedBytesPerSecond ?? 0,
     createdAt: partial.createdAt ?? 1,
     updatedAt: partial.updatedAt ?? 1,
     errorMessage: partial.errorMessage,
@@ -75,26 +73,28 @@ function buildDownloadedContentMeta(
     vodId: partial.vodId || 'vod-id',
     sourceName: partial.sourceName || '演示源',
     title: partial.title || '主角',
+    searchTitle: partial.searchTitle,
+    searchType: partial.searchType,
     poster: partial.poster || 'https://example.com/poster.jpg',
+    adultGroupPoster: partial.adultGroupPoster,
     year: partial.year || '2026',
     desc: partial.desc,
     typeName: partial.typeName,
     doubanId: partial.doubanId,
     episodeTitles: partial.episodeTitles || ['第1集'],
     ownerUsername: partial.ownerUsername || 'monica',
-    episodes:
-      partial.episodes || [
-        {
-          episodeIndex: 0,
-          episodeTitle: '第1集',
-          rootManifestUrl: 'https://example.com/root.m3u8',
-          playbackManifestUrl: 'https://example.com/playback.m3u8',
-          cacheIndexId: 'task:demo:vod-id:0',
-          resourceCount: 10,
-          sizeBytes: 123,
-          downloadedAt: 1,
-        },
-      ],
+    episodes: partial.episodes || [
+      {
+        episodeIndex: 0,
+        episodeTitle: '第1集',
+        rootManifestUrl: 'https://example.com/root.m3u8',
+        playbackManifestUrl: 'https://example.com/playback.m3u8',
+        cacheIndexId: 'task:demo:vod-id:0',
+        resourceCount: 10,
+        sizeBytes: 123,
+        downloadedAt: 1,
+      },
+    ],
     totalSizeBytes: partial.totalSizeBytes ?? 123,
     updatedAt: partial.updatedAt ?? 1,
   };
@@ -151,6 +151,8 @@ describe('download manager metadata fallback', () => {
     const previousItem = buildDownloadedContentMeta({
       sourceName: 'U酷影视',
       title: '主角',
+      searchTitle: '甄嬛',
+      searchType: 'tv',
       poster: 'https://example.com/poster.jpg',
       year: '2026',
       desc: '旧简介',
@@ -170,6 +172,8 @@ describe('download manager metadata fallback', () => {
     expect(applyLibraryMetadataFallback(task, previousItem)).toMatchObject({
       sourceName: 'U酷影视',
       title: '主角',
+      searchTitle: '甄嬛',
+      searchType: 'tv',
       poster: 'https://example.com/poster.jpg',
       year: '2026',
       desc: '旧简介',
@@ -182,7 +186,10 @@ describe('download manager metadata fallback', () => {
     const previousItem = buildDownloadedContentMeta({
       sourceName: 'U酷影视',
       title: '主角',
+      searchTitle: '王雨纯',
+      searchType: 'movie',
       poster: 'https://example.com/poster.jpg',
+      adultGroupPoster: 'https://example.com/group-poster.jpg',
       year: '2026',
       desc: '旧简介',
       typeName: '国产剧',
@@ -194,6 +201,7 @@ describe('download manager metadata fallback', () => {
       episodeTitle: '第2集',
       sourceName: 'U酷影视',
       title: '',
+      searchTitle: '',
       poster: ' ',
       year: '',
       desc: '',
@@ -215,7 +223,10 @@ describe('download manager metadata fallback', () => {
     ).toMatchObject({
       sourceName: 'U酷影视',
       title: '主角',
+      searchTitle: '王雨纯',
+      searchType: 'movie',
       poster: 'https://example.com/poster.jpg',
+      adultGroupPoster: 'https://example.com/group-poster.jpg',
       year: '2026',
       desc: '旧简介',
       typeName: '国产剧',

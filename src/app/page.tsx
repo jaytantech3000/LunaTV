@@ -119,6 +119,8 @@ function HomeClient() {
     source_name: string;
     currentEpisode?: number;
     search_title?: string;
+    playback_mode?: 'online' | 'offline';
+    offline_content_id?: string;
     origin?: 'vod' | 'live';
   };
 
@@ -323,6 +325,8 @@ function HomeClient() {
           source_name: fav.source_name,
           currentEpisode,
           search_title: fav?.search_title,
+          playback_mode: fav?.playback_mode,
+          offline_content_id: fav?.offline_content_id,
           origin: fav?.origin,
         } as FavoriteItem;
       });
@@ -398,6 +402,8 @@ function HomeClient() {
                       query={item.search_title}
                       {...item}
                       from='favorite'
+                      playbackMode={item.playback_mode}
+                      offlineContentId={item.offline_content_id}
                       type={item.episodes > 1 ? 'tv' : ''}
                     />
                   </div>

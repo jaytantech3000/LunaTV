@@ -32,6 +32,7 @@ import {
   updatePlayerEnhancementPreference,
 } from '@/lib/player-enhancements';
 import { getRuntimeConfig } from '@/lib/runtime-config';
+import { acquireScrollLock } from '@/lib/scroll-lock';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
@@ -55,22 +56,9 @@ export const UserMenu: React.FC = () => {
   // Body 滚动锁定 - 使用 overflow 方式避免布局问题
   useEffect(() => {
     if (isSettingsOpen || isChangePasswordOpen) {
-      const body = document.body;
-      const html = document.documentElement;
-
-      // 保存原始样式
-      const originalBodyOverflow = body.style.overflow;
-      const originalHtmlOverflow = html.style.overflow;
-
-      // 只设置 overflow 来阻止滚动
-      body.style.overflow = 'hidden';
-      html.style.overflow = 'hidden';
-
-      return () => {
-        // 恢复所有原始样式
-        body.style.overflow = originalBodyOverflow;
-        html.style.overflow = originalHtmlOverflow;
-      };
+      return acquireScrollLock({
+        lockHtml: true,
+      });
     }
   }, [isSettingsOpen, isChangePasswordOpen]);
 
@@ -1079,7 +1067,8 @@ export const UserMenu: React.FC = () => {
                         动态保护
                       </p>
                       <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-                        只在疑似对白片段里学习基线，宏大 BGM 和场景音高过对白时再压
+                        只在疑似对白片段里学习基线，宏大 BGM
+                        和场景音高过对白时再压
                       </p>
                     </div>
                     <label className='flex items-center cursor-pointer'>
@@ -1090,9 +1079,7 @@ export const UserMenu: React.FC = () => {
                           checked={audioDynamicProtectionEnabled}
                           disabled={audioSpikeProtectionLevel === 'off'}
                           onChange={(e) =>
-                            handleAudioDynamicProtectionToggle(
-                              e.target.checked
-                            )
+                            handleAudioDynamicProtectionToggle(e.target.checked)
                           }
                         />
                         <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 peer-disabled:bg-gray-200 transition-colors dark:bg-gray-600 dark:peer-disabled:bg-gray-700'></div>

@@ -48,13 +48,16 @@ async function refreshAllLiveChannels() {
 
   // 并发刷新所有启用的直播源
   const refreshPromises = (config.LiveConfig || [])
-    .filter(liveInfo => !liveInfo.disabled)
+    .filter((liveInfo) => !liveInfo.disabled)
     .map(async (liveInfo) => {
       try {
         const nums = await refreshLiveChannels(liveInfo);
         liveInfo.channelNumber = nums;
       } catch (error) {
-        console.error(`刷新直播源失败 [${liveInfo.name || liveInfo.key}]:`, error);
+        console.error(
+          `刷新直播源失败 [${liveInfo.name || liveInfo.key}]:`,
+          error
+        );
         liveInfo.channelNumber = 0;
       }
     });
@@ -68,7 +71,12 @@ async function refreshAllLiveChannels() {
 
 async function refreshConfig() {
   let config = await getConfig();
-  if (config && config.ConfigSubscribtion && config.ConfigSubscribtion.URL && config.ConfigSubscribtion.AutoUpdate) {
+  if (
+    config &&
+    config.ConfigSubscribtion &&
+    config.ConfigSubscribtion.URL &&
+    config.ConfigSubscribtion.AutoUpdate
+  ) {
     try {
       const response = await fetch(config.ConfigSubscribtion.URL);
 
@@ -156,7 +164,11 @@ async function refreshRecordAndFavorites() {
           results[i] = await tasks[i]();
         }
       };
-      await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker()));
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, tasks.length) }, () =>
+          worker()
+        )
+      );
       return results;
     };
 
@@ -198,6 +210,8 @@ async function refreshRecordAndFavorites() {
                 total_time: record.total_time,
                 save_time: record.save_time,
                 search_title: record.search_title,
+                playback_mode: record.playback_mode,
+                offline_content_id: record.offline_content_id,
               });
               console.log(
                 `更新播放记录: ${record.title} (${record.total_episodes} -> ${episodeCount})`
@@ -250,6 +264,9 @@ async function refreshRecordAndFavorites() {
                 total_episodes: favEpisodeCount,
                 save_time: fav.save_time,
                 search_title: fav.search_title,
+                playback_mode: fav.playback_mode,
+                offline_content_id: fav.offline_content_id,
+                origin: fav.origin,
               });
               console.log(
                 `更新收藏: ${fav.title} (${fav.total_episodes} -> ${favEpisodeCount})`

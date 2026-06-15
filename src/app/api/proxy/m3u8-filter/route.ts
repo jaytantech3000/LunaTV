@@ -358,7 +358,9 @@ function buildUpstreamRequestContext(
 
   const upstreamHeaders: Record<string, string> = {
     'User-Agent':
-      sourceUserAgent?.trim() || request.headers.get('user-agent') || DEFAULT_UA,
+      sourceUserAgent?.trim() ||
+      request.headers.get('user-agent') ||
+      DEFAULT_UA,
   };
 
   if (refererToSend) {
@@ -437,32 +439,25 @@ export async function GET(request: NextRequest): Promise<Response> {
         cache: 'no-store',
         headers: upstreamHeaders,
       },
-      { timeoutMs: FETCH_TIMEOUT_MS, maxRedirects: MAX_REDIRECTS }
+      {
+        timeoutMs: FETCH_TIMEOUT_MS,
+        maxRedirects: MAX_REDIRECTS,
+        initialUrlValidated: true,
+      }
     );
   } catch (error: any) {
-    return jsonError(
-      'Upstream fetch failed',
-      502,
-      error?.message || 'unknown'
-    );
+    return jsonError('Upstream fetch failed', 502, error?.message || 'unknown');
   }
 
   if (!upstream.ok) {
-    return jsonError(
-      'Upstream returned non-OK',
-      502,
-      String(upstream.status)
-    );
+    return jsonError('Upstream returned non-OK', 502, String(upstream.status));
   }
 
   let content: string;
   try {
     content = await readTextWithLimit(upstream, MAX_PLAYLIST_BYTES);
   } catch (error: any) {
-    return jsonError(
-      error?.message || 'Unable to read playlist',
-      502
-    );
+    return jsonError(error?.message || 'Unable to read playlist', 502);
   }
 
   if (!content.trimStart().startsWith('#EXTM3U')) {

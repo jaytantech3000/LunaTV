@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from '@/lib/runtime-config';
 import {
   buildVodProxyKeyMediaUrl,
   buildVodProxyM3u8MediaUrl,
@@ -5,7 +6,6 @@ import {
   getVodProxyBasePath as getTransportVodProxyBasePath,
   VOD_PROXY_PATHS,
 } from '@/lib/transport/media-proxy';
-import { getRuntimeConfig } from '@/lib/runtime-config';
 
 import { isDesktopLocalDownloadRuntimeEnabled } from './desktop-runtime';
 

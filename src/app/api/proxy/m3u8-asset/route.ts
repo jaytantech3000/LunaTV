@@ -17,6 +17,7 @@ const DEFAULT_UA =
   '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const FETCH_TIMEOUT_MS = 15000;
+const KEY_FETCH_TIMEOUT_MS = 25000;
 const MAX_REDIRECTS = 3;
 
 function withCorsHeaders(headers: Headers): void {
@@ -77,6 +78,10 @@ function copyHeader(
   }
 }
 
+function shouldForwardUpstreamContentLength(headers: Headers): boolean {
+  return !headers.has('content-encoding');
+}
+
 function resolveReferer(
   decodedUrl: string,
   request: NextRequest,
@@ -118,6 +123,8 @@ async function handleAssetRequest(
   if (!decodedUrl) {
     return jsonError('Invalid url', 400);
   }
+  const isKeyRequest =
+    kind === 'key' || decodedUrl.toLowerCase().endsWith('.key');
 
   if (
     !verifyM3U8ProxySignature(decodedUrl, searchParams.get('sig'), {
@@ -160,7 +167,8 @@ async function handleAssetRequest(
   );
   const requestHeaders: Record<string, string> = {
     Accept: '*/*',
-    'User-Agent': apiSite.ua?.trim() || request.headers.get('user-agent') || DEFAULT_UA,
+    'User-Agent':
+      apiSite.ua?.trim() || request.headers.get('user-agent') || DEFAULT_UA,
   };
 
   if (refererToSend) {
@@ -186,14 +194,18 @@ async function handleAssetRequest(
         headers: requestHeaders,
         method,
       },
-      { timeoutMs: FETCH_TIMEOUT_MS, maxRedirects: MAX_REDIRECTS }
+      {
+        timeoutMs:
+          isKeyRequest && method === 'GET'
+            ? KEY_FETCH_TIMEOUT_MS
+            : FETCH_TIMEOUT_MS,
+        maxRedirects: MAX_REDIRECTS,
+        initialUrlValidated: true,
+        responseMode: 'stream',
+      }
     );
   } catch (error: any) {
-    return jsonError(
-      'Upstream fetch failed',
-      502,
-      error?.message || 'unknown'
-    );
+    return jsonError('Upstream fetch failed', 502, error?.message || 'unknown');
   }
 
   if (!upstream.ok && upstream.status !== 206) {
@@ -208,7 +220,9 @@ async function handleAssetRequest(
   );
   headers.set('Vary', 'Range');
   copyHeader(upstream.headers, headers, 'content-type', 'Content-Type');
-  copyHeader(upstream.headers, headers, 'content-length', 'Content-Length');
+  if (shouldForwardUpstreamContentLength(upstream.headers)) {
+    copyHeader(upstream.headers, headers, 'content-length', 'Content-Length');
+  }
   copyHeader(upstream.headers, headers, 'content-range', 'Content-Range');
   copyHeader(upstream.headers, headers, 'accept-ranges', 'Accept-Ranges');
   if (!headers.has('Content-Type')) {

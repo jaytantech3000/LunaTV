@@ -151,6 +151,8 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
                     episodes={record.total_episodes}
                     currentEpisode={record.index}
                     query={record.search_title}
+                    playbackMode={record.playback_mode}
+                    offlineContentId={record.offline_content_id}
                     from='playrecord'
                     onDelete={() =>
                       setPlayRecords((prev) =>
