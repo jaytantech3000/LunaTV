@@ -132,6 +132,25 @@ export function isAdultContentResult(
   return containsAdultMarker(searchableText);
 }
 
+export function isAdultLibraryEntry(
+  entry: Partial<{
+    title: string;
+    source_name: string;
+    search_title: string;
+    is_adult: boolean;
+  }>
+): boolean {
+  if (entry.is_adult === true) {
+    return true;
+  }
+
+  return isAdultContentResult({
+    title: entry.title,
+    source_name: entry.source_name,
+    desc: entry.search_title,
+  });
+}
+
 export function filterAdultContentResults<
   T extends {
     title?: string;

@@ -25,8 +25,10 @@ import {
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { getDoubanCategories } from '@/lib/douban.client';
+import { isAdultDownloadedContent } from '@/lib/download/offline';
 import { filterItemsByMinimumRating } from '@/lib/rating-filter';
 import { DoubanItem } from '@/lib/types';
+import { isAdultLibraryEntry } from '@/lib/yellow';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
 import ContinueWatching from '@/components/ContinueWatching';
@@ -35,6 +37,7 @@ import ScrollableRow from '@/components/ScrollableRow';
 import { useSite } from '@/components/SiteProvider';
 import VideoCard from '@/components/VideoCard';
 
+import { useDownloadStore } from '@/stores/downloadStore';
 import {
   buildHomeDiscoveryCacheEntry,
   isDiscoveryCacheEntryFresh,
@@ -93,7 +96,8 @@ function HomeClient() {
   const globalMinimumRating = useGlobalRatingFilterStore(
     (state) => state.minimumRating
   );
-  const { announcement } = useSite();
+  const { adultContentFilterEnabled, announcement } = useSite();
+  const downloadedLibrary = useDownloadStore((state) => state.library);
 
   const [showAnnouncement, setShowAnnouncement] = useState(false);
 
@@ -121,6 +125,7 @@ function HomeClient() {
     search_title?: string;
     playback_mode?: 'online' | 'offline';
     offline_content_id?: string;
+    is_adult?: boolean;
     origin?: 'vod' | 'live';
   };
 
@@ -327,11 +332,33 @@ function HomeClient() {
           search_title: fav?.search_title,
           playback_mode: fav?.playback_mode,
           offline_content_id: fav?.offline_content_id,
+          is_adult: fav?.is_adult,
           origin: fav?.origin,
         } as FavoriteItem;
       });
     setFavoriteItems(sorted);
   };
+
+  const visibleFavoriteItems = useMemo(
+    () =>
+      adultContentFilterEnabled
+        ? favoriteItems.filter((item) => {
+            if (item.origin === 'live') {
+              return true;
+            }
+
+            const offlineContent = item.offline_content_id
+              ? downloadedLibrary[item.offline_content_id]
+              : undefined;
+            if (offlineContent) {
+              return !isAdultDownloadedContent(offlineContent);
+            }
+
+            return !isAdultLibraryEntry(item);
+          })
+        : favoriteItems,
+    [adultContentFilterEnabled, downloadedLibrary, favoriteItems]
+  );
 
   // 当切换到收藏夹时加载收藏数据
   useEffect(() => {
@@ -383,7 +410,7 @@ function HomeClient() {
                 <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
                   我的收藏
                 </h2>
-                {favoriteItems.length > 0 && (
+                {visibleFavoriteItems.length > 0 && (
                   <button
                     className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
                     onClick={async () => {
@@ -396,7 +423,7 @@ function HomeClient() {
                 )}
               </div>
               <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8'>
-                {favoriteItems.map((item) => (
+                {visibleFavoriteItems.map((item) => (
                   <div key={item.id + item.source} className='w-full'>
                     <VideoCard
                       query={item.search_title}
@@ -408,7 +435,7 @@ function HomeClient() {
                     />
                   </div>
                 ))}
-                {favoriteItems.length === 0 && (
+                {visibleFavoriteItems.length === 0 && (
                   <div className='col-span-full text-center text-gray-500 py-8 dark:text-gray-400'>
                     暂无收藏内容
                   </div>

@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 'use client';
 
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 
 import type { PlayRecord } from '@/lib/db.client';
 import {
@@ -10,9 +10,14 @@ import {
   getCachedPlayRecordsSnapshot,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { isAdultDownloadedContent } from '@/lib/download/offline';
+import { isAdultLibraryEntry } from '@/lib/yellow';
 
 import ScrollableRow from '@/components/ScrollableRow';
+import { useSite } from '@/components/SiteProvider';
 import VideoCard from '@/components/VideoCard';
+
+import { useDownloadStore } from '@/stores/downloadStore';
 
 interface ContinueWatchingProps {
   className?: string;
@@ -30,6 +35,8 @@ function mapPlayRecords(
 }
 
 export default function ContinueWatching({ className }: ContinueWatchingProps) {
+  const { adultContentFilterEnabled } = useSite();
+  const library = useDownloadStore((state) => state.library);
   const [playRecords, setPlayRecords] = useState<
     (PlayRecord & { key: string })[]
   >([]);
@@ -82,8 +89,25 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
     return unsubscribe;
   }, []);
 
+  const visiblePlayRecords = useMemo(
+    () =>
+      adultContentFilterEnabled
+        ? playRecords.filter((record) => {
+            const offlineContent = record.offline_content_id
+              ? library[record.offline_content_id]
+              : undefined;
+            if (offlineContent) {
+              return !isAdultDownloadedContent(offlineContent);
+            }
+
+            return !isAdultLibraryEntry(record);
+          })
+        : playRecords,
+    [adultContentFilterEnabled, library, playRecords]
+  );
+
   // 如果没有播放记录，则不渲染组件
-  if (!loading && playRecords.length === 0) {
+  if (!loading && visiblePlayRecords.length === 0) {
     return null;
   }
 
@@ -105,7 +129,7 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
         <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
           继续观看
         </h2>
-        {!loading && playRecords.length > 0 && (
+        {!loading && visiblePlayRecords.length > 0 && (
           <button
             className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
             onClick={async () => {
@@ -133,7 +157,7 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
               </div>
             ))
           : // 显示真实数据
-            playRecords.map((record) => {
+            visiblePlayRecords.map((record) => {
               const { source, id } = parseKey(record.key);
               return (
                 <div
