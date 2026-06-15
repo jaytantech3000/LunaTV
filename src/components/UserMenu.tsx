@@ -5,6 +5,7 @@
 import {
   Check,
   ChevronDown,
+  Download,
   ExternalLink,
   KeyRound,
   LogOut,
@@ -36,6 +37,7 @@ import { acquireScrollLock } from '@/lib/scroll-lock';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
+import DownloadClientPanel from './DownloadClientPanel';
 import { VersionPanel } from './VersionPanel';
 
 interface AuthInfo {
@@ -48,6 +50,7 @@ export const UserMenu: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [isDownloadPanelOpen, setIsDownloadPanelOpen] = useState(false);
   const [isVersionPanelOpen, setIsVersionPanelOpen] = useState(false);
   const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
   const [storageType, setStorageType] = useState<string>('localstorage');
@@ -400,6 +403,11 @@ export const UserMenu: React.FC = () => {
     setIsSettingsOpen(true);
   };
 
+  const handleOpenDownloadPanel = () => {
+    setIsDownloadPanelOpen(true);
+    handleCloseMenu();
+  };
+
   const handleCloseSettings = () => {
     setIsSettingsOpen(false);
   };
@@ -633,6 +641,14 @@ export const UserMenu: React.FC = () => {
           >
             <Settings className='w-4 h-4 text-gray-500 dark:text-gray-400' />
             <span className='font-medium'>设置</span>
+          </button>
+
+          <button
+            onClick={handleOpenDownloadPanel}
+            className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm'
+          >
+            <Download className='w-4 h-4 text-gray-500 dark:text-gray-400' />
+            <span className='font-medium'>客户端下载</span>
           </button>
 
           {/* 管理面板按钮 */}
@@ -1364,6 +1380,11 @@ export const UserMenu: React.FC = () => {
       <VersionPanel
         isOpen={isVersionPanelOpen}
         onClose={() => setIsVersionPanelOpen(false)}
+      />
+
+      <DownloadClientPanel
+        isOpen={isDownloadPanelOpen}
+        onClose={() => setIsDownloadPanelOpen(false)}
       />
     </>
   );
