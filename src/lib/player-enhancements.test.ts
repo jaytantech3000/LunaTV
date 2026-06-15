@@ -11,6 +11,15 @@ describe('player enhancement preferences', () => {
     window.localStorage.clear();
   });
 
+  it('defaults audio spike protection to off when runtime config does not enable it', () => {
+    expect(getDefaultPlayerEnhancementPreferences({})).toEqual({
+      audioSpikeProtectionLevel: 'off',
+      audioDynamicProtectionEnabled: false,
+      audioFixedCeilingEnabled: false,
+      visualEnhancementLevel: 'off',
+    });
+  });
+
   it('reads runtime defaults when no local override exists', () => {
     expect(
       getDefaultPlayerEnhancementPreferences({
@@ -74,7 +83,7 @@ describe('player enhancement preferences', () => {
     });
   });
 
-  it('migrates legacy boolean storage values into levels', () => {
+  it('migrates legacy audio default storage values to the new disabled defaults', () => {
     window.localStorage.setItem('playerAudioSpikeProtectionEnabled', 'true');
     window.localStorage.setItem('playerVisualEnhancementEnabled', 'false');
 
@@ -84,11 +93,20 @@ describe('player enhancement preferences', () => {
         PLAYER_VISUAL_ENHANCEMENT_LEVEL: 'strong',
       })
     ).toEqual({
-      audioSpikeProtectionLevel: 'standard',
-      audioDynamicProtectionEnabled: true,
-      audioFixedCeilingEnabled: true,
+      audioSpikeProtectionLevel: 'off',
+      audioDynamicProtectionEnabled: false,
+      audioFixedCeilingEnabled: false,
       visualEnhancementLevel: 'off',
     });
+    expect(window.localStorage.getItem('playerAudioSpikeProtectionLevel')).toBe(
+      'off'
+    );
+    expect(
+      window.localStorage.getItem('playerAudioDynamicProtectionEnabled')
+    ).toBe('false');
+    expect(
+      window.localStorage.getItem('playerAudioFixedCeilingEnabled')
+    ).toBe('false');
   });
 
   it('backfills the new audio mode toggles from an existing stored level', () => {
@@ -107,6 +125,22 @@ describe('player enhancement preferences', () => {
       audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'off',
     });
+  });
+
+  it('migrates stored old default standard audio settings to off once', () => {
+    window.localStorage.setItem('playerAudioSpikeProtectionLevel', 'standard');
+    window.localStorage.setItem('playerAudioDynamicProtectionEnabled', 'true');
+    window.localStorage.setItem('playerAudioFixedCeilingEnabled', 'true');
+
+    expect(readPlayerEnhancementPreferences({})).toEqual({
+      audioSpikeProtectionLevel: 'off',
+      audioDynamicProtectionEnabled: false,
+      audioFixedCeilingEnabled: false,
+      visualEnhancementLevel: 'off',
+    });
+    expect(window.localStorage.getItem('playerAudioSpikeProtectionLevel')).toBe(
+      'off'
+    );
   });
 
   it('updates a single preference and dispatches a sync event', () => {

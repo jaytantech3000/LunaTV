@@ -50,6 +50,7 @@ interface ConfigFileStruct {
     audio_fixed_ceiling?: unknown;
     visual_enhancement_level?: unknown;
     audio_spike_protection?: unknown;
+    audio_defaults_migrated_v2?: unknown;
     visual_enhancement?: unknown;
   };
 }
@@ -106,6 +107,95 @@ function getDefaultPlayerEnhancementConfig(): NonNullable<
     AudioFixedCeiling: audioFixedCeiling,
     VisualEnhancement: visualEnhancementLevel !== 'off',
     VisualEnhancementLevel: visualEnhancementLevel,
+  };
+}
+
+function matchesLegacyDefaultAudioEnhancementState(params: {
+  level: unknown;
+  dynamicProtection: unknown;
+  fixedCeiling: unknown;
+}): boolean {
+  const audioSpikeProtectionLevel = normalizeAudioSpikeProtectionLevel(
+    params.level,
+    'off'
+  );
+  const audioDynamicProtection = normalizeBooleanSetting(
+    params.dynamicProtection,
+    audioSpikeProtectionLevel !== 'off'
+  );
+  const audioFixedCeiling = normalizeBooleanSetting(
+    params.fixedCeiling,
+    audioSpikeProtectionLevel !== 'off'
+  );
+
+  return (
+    audioSpikeProtectionLevel === 'standard' &&
+    audioDynamicProtection &&
+    audioFixedCeiling
+  );
+}
+
+function migrateLegacyDefaultPlayerEnhancementFileConfig(
+  fileConfig: ConfigFileStruct
+): boolean {
+  const settings = fileConfig.player_enhancements;
+  if (!settings) {
+    return false;
+  }
+
+  if (normalizeBooleanSetting(settings.audio_defaults_migrated_v2, false)) {
+    return false;
+  }
+
+  if (
+    matchesLegacyDefaultAudioEnhancementState({
+      level:
+        settings.audio_spike_protection_level ??
+        settings.audio_spike_protection,
+      dynamicProtection: settings.audio_dynamic_protection,
+      fixedCeiling: settings.audio_fixed_ceiling,
+    })
+  ) {
+    fileConfig.player_enhancements = {
+      ...settings,
+      audio_spike_protection_level: 'off',
+      audio_spike_protection: false,
+      audio_dynamic_protection: false,
+      audio_fixed_ceiling: false,
+      audio_defaults_migrated_v2: true,
+    };
+
+    return true;
+  }
+
+  fileConfig.player_enhancements = {
+    ...settings,
+    audio_defaults_migrated_v2: true,
+  };
+
+  return true;
+}
+
+function migrateLegacyDefaultPlayerEnhancementConfig(
+  config?: AdminConfig['PlayerEnhancementConfig']
+): AdminConfig['PlayerEnhancementConfig'] | undefined {
+  if (
+    !config ||
+    !matchesLegacyDefaultAudioEnhancementState({
+      level: config.AudioSpikeProtectionLevel ?? config.AudioSpikeProtection,
+      dynamicProtection: config.AudioDynamicProtection,
+      fixedCeiling: config.AudioFixedCeiling,
+    })
+  ) {
+    return config;
+  }
+
+  return {
+    ...config,
+    AudioSpikeProtection: false,
+    AudioSpikeProtectionLevel: 'off',
+    AudioDynamicProtection: false,
+    AudioFixedCeiling: false,
   };
 }
 
@@ -180,6 +270,16 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
     fileConfig = JSON.parse(adminConfig.ConfigFile) as ConfigFileStruct;
   } catch (e) {
     fileConfig = {} as ConfigFileStruct;
+  }
+
+  const fileConfigMigrated =
+    migrateLegacyDefaultPlayerEnhancementFileConfig(fileConfig);
+  adminConfig.PlayerEnhancementConfig =
+    migrateLegacyDefaultPlayerEnhancementConfig(
+      adminConfig.PlayerEnhancementConfig
+    );
+  if (fileConfigMigrated) {
+    adminConfig.ConfigFile = JSON.stringify(fileConfig, null, 2);
   }
 
   // 合并文件中的源信息
@@ -327,8 +427,12 @@ async function getInitConfig(
   } catch (e) {
     cfgFile = {} as ConfigFileStruct;
   }
+  const configFileMigrated =
+    migrateLegacyDefaultPlayerEnhancementFileConfig(cfgFile);
   const adminConfig: AdminConfig = {
-    ConfigFile: configFile,
+    ConfigFile: configFileMigrated
+      ? JSON.stringify(cfgFile, null, 2)
+      : configFile,
     ConfigSubscribtion: subConfig,
     SiteConfig: {
       SiteName: process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTV',
@@ -458,6 +562,15 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
     fileConfig = JSON.parse(adminConfig.ConfigFile || '{}') as ConfigFileStruct;
   } catch (e) {
     fileConfig = {} as ConfigFileStruct;
+  }
+  const fileConfigMigrated =
+    migrateLegacyDefaultPlayerEnhancementFileConfig(fileConfig);
+  adminConfig.PlayerEnhancementConfig =
+    migrateLegacyDefaultPlayerEnhancementConfig(
+      adminConfig.PlayerEnhancementConfig
+    );
+  if (fileConfigMigrated) {
+    adminConfig.ConfigFile = JSON.stringify(fileConfig, null, 2);
   }
 
   // 确保必要的属性存在和初始化

@@ -8,9 +8,10 @@
     "api_base_url": ""
   },
   "player_enhancements": {
-    "audio_spike_protection_level": "standard",
-    "audio_dynamic_protection": true,
-    "audio_fixed_ceiling": true,
+    "audio_defaults_migrated_v2": true,
+    "audio_spike_protection_level": "off",
+    "audio_dynamic_protection": false,
+    "audio_fixed_ceiling": false,
     "visual_enhancement_level": "off"
   },
   "api_site": {
