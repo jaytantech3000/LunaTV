@@ -199,23 +199,26 @@ export class DbManager {
 
   // 获取全部用户名
   async getAllUsers(): Promise<string[]> {
-    if (typeof (this.storage as any).getAllUsers === 'function') {
-      return (this.storage as any).getAllUsers();
+    const storage = this.storage as Partial<IStorage> | null;
+    if (storage && typeof storage.getAllUsers === 'function') {
+      return storage.getAllUsers();
     }
     return [];
   }
 
   // ---------- 管理员配置 ----------
   async getAdminConfig(): Promise<AdminConfig | null> {
-    if (typeof (this.storage as any).getAdminConfig === 'function') {
-      return (this.storage as any).getAdminConfig();
+    const storage = this.storage as Partial<IStorage> | null;
+    if (storage && typeof storage.getAdminConfig === 'function') {
+      return storage.getAdminConfig();
     }
     return null;
   }
 
   async saveAdminConfig(config: AdminConfig): Promise<void> {
-    if (typeof (this.storage as any).setAdminConfig === 'function') {
-      await (this.storage as any).setAdminConfig(config);
+    const storage = this.storage as Partial<IStorage> | null;
+    if (storage && typeof storage.setAdminConfig === 'function') {
+      await storage.setAdminConfig(config);
     }
   }
 

@@ -1,7 +1,12 @@
 import { waitFor } from '@testing-library/react';
 
 import { SearchResult } from '@/lib/types';
+
 import { useDownloadStore } from '@/stores/downloadStore';
+
+import { hasCachedDownload } from './cache';
+import { downloadManager, resolveDownloadResourceCachedState } from './manager';
+import { parseManifestForDownloadWithFallback } from './manifest';
 
 jest.mock('@/lib/auth', () => ({
   getAuthInfoFromBrowserCookie: jest.fn(() => ({
@@ -31,10 +36,6 @@ jest.mock('./resource-index', () => ({
   getResourceIndex: jest.fn().mockResolvedValue(null),
   putResourceIndex: jest.fn().mockResolvedValue(undefined),
 }));
-
-import { hasCachedDownload } from './cache';
-import { downloadManager, resolveDownloadResourceCachedState } from './manager';
-import { parseManifestForDownloadWithFallback } from './manifest';
 
 const mockedHasCachedDownload =
   hasCachedDownload as jest.MockedFunction<typeof hasCachedDownload>;
@@ -81,7 +82,9 @@ describe('resolveDownloadResourceCachedState', () => {
   });
 
   it('falls back to uncached when cache lookup stalls', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
     mockedHasCachedDownload.mockImplementation(
       () => new Promise<boolean>(() => undefined)
     );
@@ -119,7 +122,9 @@ describe('downloadManager cache lookup fallback', () => {
   });
 
   it('continues downloading when the final resource cache lookup fails', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
     mockedHasCachedDownload
       .mockRejectedValueOnce(
         new Error('Desktop download runtime request timed out')

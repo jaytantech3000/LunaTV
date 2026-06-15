@@ -2,13 +2,18 @@ jest.mock('@/lib/config', () => ({
   getConfig: jest.fn(),
 }));
 
+import type { NextRequest } from 'next/server';
+
+import type { AdminConfig } from '@/lib/admin.types';
 import { getConfig } from '@/lib/config';
-import { SearchResult } from '@/lib/types';
+import type { SearchResult } from '@/lib/types';
 
 import {
   rewriteEpisodesForAdFilter,
   shouldUseServerSideEpisodeProxy,
 } from './episode-rewriter';
+
+type MockRequest = Pick<NextRequest, 'headers' | 'nextUrl'>;
 
 function makeRequest(
   adfilter?: string,
@@ -27,7 +32,7 @@ function makeRequest(
     searchParams.set('client', options.client);
   }
 
-  return {
+  const request: MockRequest = {
     nextUrl: {
       searchParams,
       origin: `${options.protocol || 'http'}://${options.host || 'localhost:3000'}`,
@@ -43,6 +48,8 @@ function makeRequest(
       },
     },
   };
+
+  return request as unknown as NextRequest;
 }
 
 function createResult(overrides: Partial<SearchResult> = {}): SearchResult {
@@ -55,6 +62,41 @@ function createResult(overrides: Partial<SearchResult> = {}): SearchResult {
     source: 'demo',
     source_name: 'Demo',
     year: '2026',
+    ...overrides,
+  };
+}
+
+function createAdminConfig(
+  overrides: Partial<AdminConfig> = {}
+): AdminConfig {
+  return {
+    ConfigSubscribtion: {
+      URL: '',
+      AutoUpdate: false,
+      LastCheck: '',
+    },
+    ConfigFile: '{}',
+    SiteConfig: {
+      SiteName: 'LunaTV',
+      Announcement: '',
+      SearchDownstreamMaxPage: 5,
+      SiteInterfaceCacheTime: 7200,
+      DoubanProxyType: '',
+      DoubanProxy: '',
+      DoubanImageProxyType: '',
+      DoubanImageProxy: '',
+      DisableYellowFilter: false,
+      FluidSearch: true,
+      EnableWebLive: false,
+    },
+    UserConfig: {
+      Users: [],
+    },
+    SourceConfig: [],
+    CustomCategories: [],
+    AdFilterConfig: {
+      enabled: true,
+    },
     ...overrides,
   };
 }
@@ -81,17 +123,13 @@ describe('shouldUseServerSideEpisodeProxy', () => {
     delete process.env.ENABLE_M3U8_SERVER_PROXY;
     delete process.env.M3U8_SERVER_PROXY;
 
-    expect(
-      shouldUseServerSideEpisodeProxy(null as any, makeRequest() as any)
-    ).toBe(true);
+    expect(shouldUseServerSideEpisodeProxy(null, makeRequest())).toBe(true);
   });
 
   it('allows legacy env to disable server-side filtering', () => {
     process.env.ENABLE_AD_FILTER = 'false';
 
-    expect(
-      shouldUseServerSideEpisodeProxy(null as any, makeRequest() as any)
-    ).toBe(false);
+    expect(shouldUseServerSideEpisodeProxy(null, makeRequest())).toBe(false);
   });
 
   it('lets explicit proxy env override admin defaults', () => {
@@ -99,20 +137,20 @@ describe('shouldUseServerSideEpisodeProxy', () => {
 
     expect(
       shouldUseServerSideEpisodeProxy(
-        { AdFilterConfig: { enabled: true } } as any,
-        makeRequest() as any
+        createAdminConfig({ AdFilterConfig: { enabled: true } }),
+        makeRequest()
       )
     ).toBe(false);
   });
 
   it('lets the request force proxy or direct mode', () => {
-    expect(
-      shouldUseServerSideEpisodeProxy(null as any, makeRequest('server') as any)
-    ).toBe(true);
+    expect(shouldUseServerSideEpisodeProxy(null, makeRequest('server'))).toBe(
+      true
+    );
     expect(
       shouldUseServerSideEpisodeProxy(
-        { AdFilterConfig: { enabled: true } } as any,
-        makeRequest('direct') as any
+        createAdminConfig({ AdFilterConfig: { enabled: true } }),
+        makeRequest('direct')
       )
     ).toBe(false);
   });
@@ -120,18 +158,18 @@ describe('shouldUseServerSideEpisodeProxy', () => {
   it('keeps native tv clients direct unless explicitly opted in', () => {
     expect(
       shouldUseServerSideEpisodeProxy(
-        { AdFilterConfig: { enabled: true } } as any,
-        makeRequest(undefined, { userAgent: 'OrionTV okhttp' }) as any
+        createAdminConfig({ AdFilterConfig: { enabled: true } }),
+        makeRequest(undefined, { userAgent: 'OrionTV okhttp' })
       )
     ).toBe(false);
 
     expect(
       shouldUseServerSideEpisodeProxy(
-        { AdFilterConfig: { enabled: true } } as any,
+        createAdminConfig({ AdFilterConfig: { enabled: true } }),
         makeRequest('server', {
           client: 'oriontv',
           userAgent: 'OrionTV okhttp',
-        }) as any
+        })
       )
     ).toBe(true);
   });
@@ -145,10 +183,12 @@ describe('rewriteEpisodesForAdFilter', () => {
   });
 
   it('rewrites m3u8 episodes to the signed proxy url', async () => {
-    mockedGetConfig.mockResolvedValue({
-      AdFilterConfig: { enabled: true },
-      SourceConfig: [],
-    } as any);
+    mockedGetConfig.mockResolvedValue(
+      createAdminConfig({
+        AdFilterConfig: { enabled: true },
+        SourceConfig: [],
+      })
+    );
 
     const result = await rewriteEpisodesForAdFilter(
       createResult({
@@ -157,7 +197,7 @@ describe('rewriteEpisodesForAdFilter', () => {
           'https://example.com/video.mp4',
         ],
       }),
-      makeRequest() as any
+      makeRequest()
     );
 
     expect(result?.episodes[0]).toContain('/api/proxy/m3u8-filter?');
@@ -166,14 +206,24 @@ describe('rewriteEpisodesForAdFilter', () => {
   });
 
   it('skips rewriting when the source is marked as ad-filter disabled', async () => {
-    mockedGetConfig.mockResolvedValue({
-      AdFilterConfig: { enabled: true },
-      SourceConfig: [{ key: 'demo', disable_ad_filter: true }],
-    } as any);
+    mockedGetConfig.mockResolvedValue(
+      createAdminConfig({
+        AdFilterConfig: { enabled: true },
+        SourceConfig: [
+          {
+            key: 'demo',
+            name: 'Demo',
+            api: 'https://example.com/api.php',
+            from: 'custom',
+            disable_ad_filter: true,
+          },
+        ],
+      })
+    );
 
     const result = await rewriteEpisodesForAdFilter(
       createResult(),
-      makeRequest() as any
+      makeRequest()
     );
 
     expect(result?.episodes[0]).toBe('https://example.com/path/index.m3u8');

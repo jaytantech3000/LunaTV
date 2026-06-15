@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getCacheTime } from '@/lib/config';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const controller = new AbortController();

@@ -16,6 +16,13 @@ const customJestConfig = {
 
   testEnvironment: 'jest-environment-jsdom',
 
+  modulePathIgnorePatterns: [
+    '<rootDir>/.next/',
+    '<rootDir>/.next-build/',
+    '<rootDir>/.next-desktop/',
+    '<rootDir>/.next-web-sync/',
+  ],
+
   /**
    * Absolute imports and Module Path Aliases
    */
