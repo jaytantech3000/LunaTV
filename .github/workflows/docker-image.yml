@@ -8,8 +8,9 @@ on:
         required: false
         default: 'latest'
         type: string
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -33,29 +34,26 @@ jobs:
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PUSH_TAG: ${{ github.ref_name }}
         run: |
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image_name="ghcr.io/$owner/lunatv"
 
           echo "image_name=$image_name" >> "$GITHUB_OUTPUT"
 
-          if [ "${{ github.event_name }}" = "release" ]; then
-            docker_tag="$RELEASE_TAG"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            docker_tag="$PUSH_TAG"
             echo "docker_tag=$docker_tag" >> "$GITHUB_OUTPUT"
-
-            if [[ "$docker_tag" == desktop-* ]]; then
-              echo "should_run=false" >> "$GITHUB_OUTPUT"
-              echo "Skipping Docker image build for desktop release tag: $docker_tag"
-            else
-              echo "should_run=true" >> "$GITHUB_OUTPUT"
-              echo "Running Docker image build for release tag: $docker_tag"
-            fi
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Running Docker image build for pushed tag: $docker_tag"
           else
             docker_tag="${INPUT_TAG:-latest}"
             echo "docker_tag=$docker_tag" >> "$GITHUB_OUTPUT"
 
-            if [ "${{ github.ref_name }}" = "$DEFAULT_BRANCH" ]; then
+            if [[ "$docker_tag" == desktop-* ]]; then
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "Skipping Docker image build for desktop tag: $docker_tag"
+            elif [ "${{ github.ref_name }}" = "$DEFAULT_BRANCH" ]; then
               echo "should_run=true" >> "$GITHUB_OUTPUT"
               echo "Running Docker image build for workflow_dispatch on default branch: $DEFAULT_BRANCH"
             else
