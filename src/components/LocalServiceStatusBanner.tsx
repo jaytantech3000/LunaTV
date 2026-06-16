@@ -385,7 +385,7 @@ export function LocalServiceStatusBanner() {
 
   if (isMinimized) {
     return (
-      <div className='pointer-events-none fixed inset-x-0 top-[calc(env(safe-area-inset-top)+3.35rem)] z-[970] flex justify-center px-3 md:top-4'>
+      <div className='pointer-events-none fixed inset-x-0 top-[calc(env(safe-area-inset-top)+3.35rem)] z-[970] flex justify-center px-3 md:hidden'>
         <button
           aria-label='展开本地服务提示'
           className={`pointer-events-auto inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium shadow-lg shadow-slate-950/10 backdrop-blur-xl transition-colors ${
@@ -408,7 +408,7 @@ export function LocalServiceStatusBanner() {
   }
 
   return (
-    <div className='pointer-events-none fixed inset-x-0 top-[calc(env(safe-area-inset-top)+3.35rem)] z-[970] flex justify-center px-3 md:top-4'>
+    <div className='pointer-events-none fixed inset-x-0 top-[calc(env(safe-area-inset-top)+3.35rem)] z-[970] flex justify-center px-3 md:hidden'>
       <div
         className={`pointer-events-auto w-full max-w-[min(88vw,340px)] rounded-2xl border px-3 py-2 text-slate-900 shadow-[0_14px_36px_rgba(15,23,42,0.14)] backdrop-blur-xl dark:text-white ${
           isOffline
@@ -510,30 +510,161 @@ export function LocalServiceStatusSidebarPill({
 }) {
   const status = useLocalServiceStatusContext();
 
-  if (!status || status.bannerMode !== 'active') {
+  if (!status?.bannerMode) {
     return null;
   }
 
-  const { health, isChecking, isResetting, restoreDefault, storedBaseUrl } =
-    status;
+  const {
+    activate,
+    bannerMode,
+    health,
+    isActivating,
+    isChecking,
+    isResetting,
+    recheck,
+    restoreDefault,
+    storedBaseUrl,
+  } = status;
   const title = health?.baseUrl || storedBaseUrl || undefined;
+  const isActive = bannerMode === 'active';
+  const isOffline = bannerMode === 'offline';
+  const badgeLabel =
+    bannerMode === 'offline'
+      ? storedBaseUrl
+      : health?.port
+        ? `127.0.0.1:${health.port}`
+        : health?.baseUrl;
 
   if (isCollapsed) {
+    const handleCollapsedClick = () => {
+      if (isActive || isActivating || isResetting) {
+        return;
+      }
+
+      if (isOffline) {
+        recheck();
+        return;
+      }
+
+      activate();
+    };
+
     return (
       <div className='px-2 pt-1.5'>
         <div className='flex justify-center'>
-          <div
-            aria-label='本机加速已启用'
-            className='relative flex h-9 w-9 items-center justify-center rounded-2xl border border-green-500/20 bg-green-500/10 text-green-700 shadow-sm shadow-green-950/5 dark:border-green-400/20 dark:bg-green-500/10 dark:text-green-100'
-            role='status'
+          <button
+            aria-label={
+              isActive
+                ? '本机加速已启用'
+                : isOffline
+                  ? '本机加速暂不可用'
+                  : '本地服务已就绪'
+            }
+            className={`relative flex h-9 w-9 items-center justify-center rounded-2xl border shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+              isOffline
+                ? 'border-amber-300/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:border-amber-300/20 dark:bg-amber-500/10 dark:text-amber-100 dark:hover:bg-amber-500/15'
+                : 'border-green-500/20 bg-green-500/10 text-green-700 hover:bg-green-500/15 dark:border-green-400/20 dark:bg-green-500/10 dark:text-green-100 dark:hover:bg-green-500/15'
+            }`}
+            disabled={!isOffline && isActive}
+            onClick={handleCollapsedClick}
+            type='button'
             title={title}
           >
             <span
-              className={`absolute mt-[-14px] h-2 w-2 rounded-full bg-green-500 ${
+              className={`absolute mt-[-14px] h-2 w-2 rounded-full ${
+                isOffline ? 'bg-amber-400' : 'bg-green-500'
+              } ${
                 isChecking ? 'animate-pulse' : ''
               }`}
             />
-            <Zap className='h-4 w-4' />
+            {isOffline ? (
+              <AlertTriangle className='h-4 w-4' />
+            ) : isActive ? (
+              <Zap className='h-4 w-4' />
+            ) : (
+              <ServerCog className='h-4 w-4' />
+            )}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isActive) {
+    return (
+      <div className='px-2 pt-1.5'>
+        <div
+          className={`rounded-2xl border px-3 py-2 shadow-sm ${
+            isOffline
+              ? 'border-amber-300/25 bg-amber-500/10 text-amber-800 shadow-amber-950/5 dark:border-amber-300/20 dark:bg-amber-500/10 dark:text-amber-100'
+              : 'border-green-500/20 bg-green-500/10 text-green-800 shadow-green-950/5 dark:border-green-400/20 dark:bg-green-500/10 dark:text-green-100'
+          }`}
+          title={title}
+        >
+          <div className='flex min-w-0 items-center gap-2'>
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full ${
+                isOffline ? 'bg-amber-400' : 'bg-green-500'
+              } ${isChecking ? 'animate-pulse' : ''}`}
+            />
+            {isOffline ? (
+              <AlertTriangle className='h-3.5 w-3.5 shrink-0' />
+            ) : (
+              <ServerCog className='h-3.5 w-3.5 shrink-0' />
+            )}
+            <span className='min-w-0 flex-1 truncate text-[12px] font-semibold'>
+              {isOffline ? '本机加速异常' : '本地服务'}
+            </span>
+            {badgeLabel ? (
+              <span
+                className={`max-w-[104px] truncate rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                  isOffline
+                    ? 'bg-amber-500/10 text-amber-700 dark:bg-amber-500/10 dark:text-amber-100/90'
+                    : 'bg-green-600/10 text-green-700 dark:bg-green-500/10 dark:text-green-100/90'
+                }`}
+                title={badgeLabel}
+              >
+                {badgeLabel}
+              </span>
+            ) : null}
+          </div>
+          <div className='mt-2 flex items-center gap-1.5'>
+            <button
+              className={`inline-flex h-6 items-center justify-center gap-1.5 rounded-full border px-2 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                isOffline
+                  ? 'border-amber-300/25 bg-white/65 text-amber-700 hover:bg-white dark:border-white/10 dark:bg-white/5 dark:text-amber-100 dark:hover:bg-white/10'
+                  : 'border-green-500/20 bg-white/70 text-green-700 hover:bg-white dark:border-white/10 dark:bg-white/5 dark:text-green-100 dark:hover:bg-white/10'
+              }`}
+              disabled={isChecking || isActivating || isResetting}
+              onClick={recheck}
+              type='button'
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${isChecking ? 'animate-spin' : ''}`}
+              />
+              {isChecking ? '检测中...' : '检测'}
+            </button>
+            {isOffline ? (
+              <button
+                className='inline-flex h-6 items-center justify-center gap-1.5 rounded-full bg-amber-500 px-2 text-[11px] font-semibold text-[#201304] shadow-sm shadow-amber-950/10 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-amber-500/70'
+                disabled={isResetting || isActivating}
+                onClick={restoreDefault}
+                type='button'
+              >
+                <AlertTriangle className='h-3.5 w-3.5' />
+                {isResetting ? '恢复中...' : '恢复默认'}
+              </button>
+            ) : (
+              <button
+                className='inline-flex h-6 items-center justify-center gap-1.5 rounded-full bg-green-600 px-2 text-[11px] font-semibold text-white shadow-sm shadow-green-950/10 transition-colors hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-green-700/70'
+                disabled={isActivating || isResetting}
+                onClick={activate}
+                type='button'
+              >
+                <Zap className='h-3.5 w-3.5' />
+                {isActivating ? '启动中...' : '启动'}
+              </button>
+            )}
           </div>
         </div>
       </div>

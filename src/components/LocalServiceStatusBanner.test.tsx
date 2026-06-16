@@ -229,6 +229,25 @@ describe('LocalServiceStatusSidebarPill', () => {
     global.fetch = originalFetch;
   });
 
+  it('renders the ready pill in the sidebar when the local service is online', async () => {
+    global.fetch = jest.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          base_url: 'http://127.0.0.1:8787',
+          port: 8787,
+          status: 'ok',
+        })
+      )
+    ) as typeof fetch;
+
+    await renderWithStatus(<LocalServiceStatusSidebarPill />);
+
+    expect(await screen.findByText('本地服务')).toBeInTheDocument();
+    expect(screen.getByText('127.0.0.1:8787')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '启动' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '检测' })).toBeInTheDocument();
+  });
+
   it('renders the active pill in the sidebar when local acceleration is enabled', async () => {
     window.RUNTIME_CONFIG = {
       MEDIA_PROXY_BASE_URL: 'http://127.0.0.1:8787',
