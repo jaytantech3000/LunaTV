@@ -2,6 +2,7 @@ import {
   buildSignedDesktopDownloadPath,
   getDesktopAssetKeyForName,
   getDesktopReleaseConfig,
+  isClientDownloadSigningEnabled,
   listDesktopReleaseAssets,
   resolveLocalServiceBinaryUrl,
   selectLatestDesktopRelease,
@@ -35,6 +36,7 @@ describe('client-download helpers', () => {
     LOCAL_SERVICE_RELEASE_TAG: mutableEnv.LOCAL_SERVICE_RELEASE_TAG,
     LOCAL_SERVICE_RELEASE_URL_MAC_ARM64:
       mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64,
+    NODE_ENV: mutableEnv.NODE_ENV,
     RAILWAY_GIT_BRANCH: mutableEnv.RAILWAY_GIT_BRANCH,
     VERCEL_GIT_COMMIT_REF: mutableEnv.VERCEL_GIT_COMMIT_REF,
     VERCEL_GIT_REPO_OWNER: mutableEnv.VERCEL_GIT_REPO_OWNER,
@@ -74,6 +76,7 @@ describe('client-download helpers', () => {
       'LOCAL_SERVICE_RELEASE_URL_MAC_ARM64',
       originalEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64
     );
+    restoreEnvValue('NODE_ENV', originalEnv.NODE_ENV);
     restoreEnvValue('RAILWAY_GIT_BRANCH', originalEnv.RAILWAY_GIT_BRANCH);
     restoreEnvValue('VERCEL_GIT_COMMIT_REF', originalEnv.VERCEL_GIT_COMMIT_REF);
     restoreEnvValue('VERCEL_GIT_REPO_OWNER', originalEnv.VERCEL_GIT_REPO_OWNER);
@@ -213,6 +216,19 @@ describe('client-download helpers', () => {
     });
     expect(downloadPath).toContain('kind=desktop');
     expect(downloadPath).toContain('assetId=200');
+  });
+
+  it('falls back to unsigned desktop gateway paths when signing is unavailable', () => {
+    delete mutableEnv.CLIENT_DOWNLOAD_SIGNING_SECRET;
+    mutableEnv.NODE_ENV = 'production';
+
+    expect(isClientDownloadSigningEnabled()).toBe(false);
+    expect(
+      buildSignedDesktopDownloadPath({
+        assetId: 200,
+        releaseId: 100,
+      })
+    ).toBe('/api/client-download?assetId=200&kind=desktop&releaseId=100');
   });
 
   it('reads local service platform mappings from environment variables', () => {

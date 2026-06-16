@@ -4,6 +4,7 @@ import {
   fetchDesktopReleaseById,
   getDesktopAssetKeyForName,
   getDesktopReleaseConfig,
+  isClientDownloadSigningEnabled,
   isLocalServicePlatformKey,
   matchesDesktopReleaseConfig,
   resolveLocalServiceBinaryUrl,
@@ -182,26 +183,34 @@ async function handleDesktopDownload(
   const searchParams = request.nextUrl.searchParams;
   const releaseId = parsePositiveInteger(searchParams.get('releaseId'));
   const assetId = parsePositiveInteger(searchParams.get('assetId'));
-  const expires = parsePositiveInteger(searchParams.get('expires'));
-  const signature = searchParams.get('sig');
+  const signingEnabled = isClientDownloadSigningEnabled();
 
-  if (!releaseId || !assetId || !expires) {
+  if (!releaseId || !assetId) {
     return jsonError('Invalid desktop download parameters', 400);
   }
 
-  if (expires < Date.now()) {
-    return jsonError('Download link expired', 403);
-  }
+  if (signingEnabled) {
+    const expires = parsePositiveInteger(searchParams.get('expires'));
+    const signature = searchParams.get('sig');
 
-  if (
-    !verifySignedDesktopDownload({
-      assetId,
-      expires,
-      releaseId,
-      signature,
-    })
-  ) {
-    return jsonError('Invalid download signature', 403);
+    if (!expires) {
+      return jsonError('Invalid desktop download parameters', 400);
+    }
+
+    if (expires < Date.now()) {
+      return jsonError('Download link expired', 403);
+    }
+
+    if (
+      !verifySignedDesktopDownload({
+        assetId,
+        expires,
+        releaseId,
+        signature,
+      })
+    ) {
+      return jsonError('Invalid download signature', 403);
+    }
   }
 
   let release;
@@ -243,7 +252,8 @@ async function handleLocalServiceDownload(
     return jsonError('Local service binary is unavailable', 503);
   }
 
-  const fallbackFileName = platform === 'win-x64' ? 'lunatv-server.exe' : 'lunatv-server';
+  const fallbackFileName =
+    platform === 'win-x64' ? 'lunatv-server.exe' : 'lunatv-server';
   return proxyDownload(request, {
     fallbackFileName,
     method,

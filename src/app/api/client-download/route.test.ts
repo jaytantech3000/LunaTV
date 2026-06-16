@@ -2,6 +2,7 @@ jest.mock('@/lib/client-download', () => ({
   fetchDesktopReleaseById: jest.fn(),
   getDesktopAssetKeyForName: jest.fn(),
   getDesktopReleaseConfig: jest.fn(),
+  isClientDownloadSigningEnabled: jest.fn(),
   isLocalServicePlatformKey: jest.fn(),
   matchesDesktopReleaseConfig: jest.fn(),
   resolveLocalServiceBinaryUrl: jest.fn(),
@@ -19,6 +20,7 @@ import {
   fetchDesktopReleaseById,
   getDesktopAssetKeyForName,
   getDesktopReleaseConfig,
+  isClientDownloadSigningEnabled,
   isLocalServicePlatformKey,
   matchesDesktopReleaseConfig,
   resolveLocalServiceBinaryUrl,
@@ -38,13 +40,15 @@ describe('/api/client-download', () => {
       repo: 'demo/LunaTV',
       targetCommitish: 'desktop',
     });
+    (isClientDownloadSigningEnabled as jest.Mock).mockReturnValue(true);
     (verifySignedDesktopDownload as jest.Mock).mockReturnValue(true);
     (matchesDesktopReleaseConfig as jest.Mock).mockReturnValue(true);
     (getDesktopAssetKeyForName as jest.Mock).mockReturnValue('mac-arm64');
     (fetchDesktopReleaseById as jest.Mock).mockResolvedValue({
       assets: [
         {
-          browser_download_url: 'https://objects.githubusercontent.com/demo.dmg',
+          browser_download_url:
+            'https://objects.githubusercontent.com/demo.dmg',
           id: 401,
           name: 'LunaTV-aarch64.dmg',
           size: 123,
@@ -120,6 +124,20 @@ describe('/api/client-download', () => {
 
     expect(response.status).toBe(200);
     expect(resolveLocalServiceBinaryUrl).toHaveBeenCalledWith('win-x64');
+    expect(await response.text()).toBe('demo-binary');
+  });
+
+  it('allows desktop downloads without a signature when signing is disabled', async () => {
+    (isClientDownloadSigningEnabled as jest.Mock).mockReturnValue(false);
+
+    const request = new NextRequest(
+      'http://localhost/api/client-download?kind=desktop&releaseId=39&assetId=401'
+    );
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
+    expect(verifySignedDesktopDownload).not.toHaveBeenCalled();
     expect(await response.text()).toBe('demo-binary');
   });
 

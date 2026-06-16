@@ -1,6 +1,7 @@
 import { BackButton } from './BackButton';
 import DownloadSessionSync from './DownloadSessionSync';
 import GlobalRatingFilterControl from './GlobalRatingFilterControl';
+import { LocalServiceStatusBanner } from './LocalServiceStatusBanner';
 import MobileBottomNav from './MobileBottomNav';
 import MobileHeader from './MobileHeader';
 import { NavigationFeedbackProvider } from './NavigationFeedbackProvider';
@@ -48,6 +49,8 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
                 <UserMenu />
               </div>
             </div>
+
+            <LocalServiceStatusBanner />
 
             {/* 主内容 */}
             <main

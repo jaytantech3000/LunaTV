@@ -129,6 +129,10 @@ function getClientDownloadSigningSecret(): string | null {
     : 'dev-client-download-signing-secret';
 }
 
+export function isClientDownloadSigningEnabled(): boolean {
+  return Boolean(getClientDownloadSigningSecret());
+}
+
 function base64Url(input: Buffer): string {
   return input
     .toString('base64')
@@ -456,7 +460,13 @@ export function buildSignedDesktopDownloadPath(input: {
   expires?: number;
   releaseId: number;
   ttlMs?: number;
-}): string | null {
+}): string {
+  const searchParams = new URLSearchParams({
+    assetId: String(input.assetId),
+    kind: 'desktop',
+    releaseId: String(input.releaseId),
+  });
+
   const expires =
     input.expires ??
     Date.now() + (input.ttlMs ?? DEFAULT_SIGNED_DOWNLOAD_TTL_MS);
@@ -466,17 +476,10 @@ export function buildSignedDesktopDownloadPath(input: {
     releaseId: input.releaseId,
   });
 
-  if (!signature) {
-    return null;
+  if (signature) {
+    searchParams.set('expires', String(expires));
+    searchParams.set('sig', signature);
   }
-
-  const searchParams = new URLSearchParams({
-    assetId: String(input.assetId),
-    expires: String(expires),
-    kind: 'desktop',
-    releaseId: String(input.releaseId),
-    sig: signature,
-  });
 
   return `/api/client-download?${searchParams.toString()}`;
 }

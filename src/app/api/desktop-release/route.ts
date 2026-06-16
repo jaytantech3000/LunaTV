@@ -25,24 +25,16 @@ export async function GET(): Promise<Response> {
     }
 
     const { assets, missingAssetKeys } = listDesktopReleaseAssets(release);
-    const signedAssets = assets.map(({ asset, key, label }) => {
-      const downloadPath = buildSignedDesktopDownloadPath({
+    const signedAssets = assets.map(({ asset, key, label }) => ({
+      downloadPath: buildSignedDesktopDownloadPath({
         assetId: asset.id,
         releaseId: release.id,
-      });
-
-      if (!downloadPath) {
-        throw new Error('Download signing unavailable');
-      }
-
-      return {
-        downloadPath,
-        key,
-        label,
-        name: asset.name,
-        size: asset.size,
-      };
-    });
+      }),
+      key,
+      label,
+      name: asset.name,
+      size: asset.size,
+    }));
 
     const response = NextResponse.json({
       assets: signedAssets,
@@ -57,11 +49,9 @@ export async function GET(): Promise<Response> {
     response.headers.set('Vercel-CDN-Cache-Control', 'public, s-maxage=300');
     return response;
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Failed to load desktop release';
-    const status =
-      message === 'Download signing unavailable' ? 503 : 502;
-
-    return jsonError(message, status);
+    return jsonError(
+      error instanceof Error ? error.message : 'Failed to load desktop release',
+      502
+    );
   }
 }
