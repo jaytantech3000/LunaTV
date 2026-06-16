@@ -5,9 +5,11 @@ import {
   getDesktopAssetKeyForName,
   getDesktopReleaseConfig,
   isClientDownloadSigningEnabled,
+  isLocalServiceInstallerPlatformKey,
   isLocalServicePlatformKey,
   matchesDesktopReleaseConfig,
   resolveLocalServiceBinaryUrl,
+  resolveLocalServiceInstallerUrl,
   verifySignedDesktopDownload,
 } from '@/lib/client-download';
 import {
@@ -70,6 +72,10 @@ function inferContentType(fileName: string): string {
 
   if (normalizedName.endsWith('.exe')) {
     return 'application/vnd.microsoft.portable-executable';
+  }
+
+  if (normalizedName.endsWith('.pkg')) {
+    return 'application/octet-stream';
   }
 
   return 'application/octet-stream';
@@ -261,6 +267,27 @@ async function handleLocalServiceDownload(
   });
 }
 
+async function handleLocalServiceInstallerDownload(
+  request: NextRequest,
+  method: 'GET' | 'HEAD'
+): Promise<Response> {
+  const platform = request.nextUrl.searchParams.get('platform');
+  if (!isLocalServiceInstallerPlatformKey(platform)) {
+    return jsonError('Invalid local service installer platform', 400);
+  }
+
+  const targetUrl = resolveLocalServiceInstallerUrl(platform);
+  if (!targetUrl) {
+    return jsonError('Local service installer is unavailable', 503);
+  }
+
+  return proxyDownload(request, {
+    fallbackFileName: `lunatv-local-service-${platform}.pkg`,
+    method,
+    targetUrl,
+  });
+}
+
 async function handleRequest(
   request: NextRequest,
   method: 'GET' | 'HEAD'
@@ -273,6 +300,10 @@ async function handleRequest(
 
   if (kind === 'local-service') {
     return handleLocalServiceDownload(request, method);
+  }
+
+  if (kind === 'local-service-installer') {
+    return handleLocalServiceInstallerDownload(request, method);
   }
 
   return jsonError('Invalid download kind', 400);

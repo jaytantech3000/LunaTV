@@ -3,9 +3,11 @@ jest.mock('@/lib/client-download', () => ({
   getDesktopAssetKeyForName: jest.fn(),
   getDesktopReleaseConfig: jest.fn(),
   isClientDownloadSigningEnabled: jest.fn(),
+  isLocalServiceInstallerPlatformKey: jest.fn(),
   isLocalServicePlatformKey: jest.fn(),
   matchesDesktopReleaseConfig: jest.fn(),
   resolveLocalServiceBinaryUrl: jest.fn(),
+  resolveLocalServiceInstallerUrl: jest.fn(),
   verifySignedDesktopDownload: jest.fn(),
 }));
 
@@ -21,9 +23,11 @@ import {
   getDesktopAssetKeyForName,
   getDesktopReleaseConfig,
   isClientDownloadSigningEnabled,
+  isLocalServiceInstallerPlatformKey,
   isLocalServicePlatformKey,
   matchesDesktopReleaseConfig,
   resolveLocalServiceBinaryUrl,
+  resolveLocalServiceInstallerUrl,
   verifySignedDesktopDownload,
 } from '@/lib/client-download';
 import {
@@ -77,6 +81,12 @@ describe('/api/client-download', () => {
     );
     (resolveLocalServiceBinaryUrl as jest.Mock).mockReturnValue(
       'https://objects.githubusercontent.com/lunatv-server.exe'
+    );
+    (
+      isLocalServiceInstallerPlatformKey as unknown as jest.Mock
+    ).mockImplementation((value: string | null) => value === 'mac-arm64');
+    (resolveLocalServiceInstallerUrl as jest.Mock).mockReturnValue(
+      'https://objects.githubusercontent.com/lunatv-local-service-mac-arm64.pkg'
     );
   });
 
@@ -141,6 +151,22 @@ describe('/api/client-download', () => {
     expect(await response.text()).toBe('demo-binary');
   });
 
+  it('allows mac local-service installer downloads through the same gateway', async () => {
+    (validateProxyTargetUrl as jest.Mock).mockResolvedValue(
+      'https://objects.githubusercontent.com/lunatv-local-service-mac-arm64.pkg'
+    );
+
+    const request = new NextRequest(
+      'http://localhost/api/client-download?kind=local-service-installer&platform=mac-arm64'
+    );
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
+    expect(resolveLocalServiceInstallerUrl).toHaveBeenCalledWith('mac-arm64');
+    expect(await response.text()).toBe('demo-binary');
+  });
+
   it('returns 503 when a local-service platform is not configured', async () => {
     (resolveLocalServiceBinaryUrl as jest.Mock).mockReturnValue(null);
 
@@ -154,6 +180,22 @@ describe('/api/client-download', () => {
     expect(await response.json()).toEqual({
       details: undefined,
       error: 'Local service binary is unavailable',
+    });
+  });
+
+  it('returns 503 when a local-service installer is not configured', async () => {
+    (resolveLocalServiceInstallerUrl as jest.Mock).mockReturnValue(null);
+
+    const request = new NextRequest(
+      'http://localhost/api/client-download?kind=local-service-installer&platform=mac-arm64'
+    );
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      details: undefined,
+      error: 'Local service installer is unavailable',
     });
   });
 

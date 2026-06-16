@@ -13,6 +13,8 @@ export type LocalServicePlatformKey =
   | 'linux-arm64'
   | 'win-x64';
 
+export type LocalServiceInstallerPlatformKey = 'mac-arm64' | 'mac-x64';
+
 export interface GitHubReleaseAsset {
   browser_download_url: string;
   content_type?: string;
@@ -47,6 +49,7 @@ export interface DesktopReleaseAssetInfo {
 export interface LocalServiceReleaseSummary {
   configuredPlatforms: LocalServicePlatformKey[];
   displayName: string | null;
+  installerPlatforms: LocalServiceInstallerPlatformKey[];
   publishedAt: string | null;
   version: string;
 }
@@ -123,6 +126,14 @@ const LOCAL_SERVICE_RELEASE_ASSET_NAMES: Record<
   'mac-arm64': 'lunatv-server-mac-arm64',
   'mac-x64': 'lunatv-server-mac-x64',
   'win-x64': 'lunatv-server-win-x64.exe',
+};
+
+const LOCAL_SERVICE_INSTALLER_ASSET_NAMES: Record<
+  LocalServiceInstallerPlatformKey,
+  string
+> = {
+  'mac-arm64': 'lunatv-local-service-mac-arm64.pkg',
+  'mac-x64': 'lunatv-local-service-mac-x64.pkg',
 };
 
 function getClientDownloadSigningSecret(): string | null {
@@ -425,6 +436,13 @@ function buildLocalServiceReleaseAssetUrl(
   config: LocalServiceReleaseConfig
 ): string {
   const assetName = LOCAL_SERVICE_RELEASE_ASSET_NAMES[platform];
+  return buildGitHubReleaseAssetUrl(assetName, config);
+}
+
+function buildGitHubReleaseAssetUrl(
+  assetName: string,
+  config: LocalServiceReleaseConfig
+): string {
   return `https://github.com/${
     config.repo
   }/releases/download/${encodeURIComponent(config.tag)}/${encodeURIComponent(
@@ -440,6 +458,12 @@ export function isLocalServicePlatformKey(
   }
 
   return value in LOCAL_SERVICE_PLATFORM_LABELS;
+}
+
+export function isLocalServiceInstallerPlatformKey(
+  value: string | null | undefined
+): value is LocalServiceInstallerPlatformKey {
+  return value === 'mac-arm64' || value === 'mac-x64';
 }
 
 export function getLocalServicePlatformLabel(
@@ -465,10 +489,44 @@ export function resolveLocalServiceBinaryUrl(
   return buildLocalServiceReleaseAssetUrl(platform, releaseConfig);
 }
 
+export function resolveLocalServiceInstallerUrl(
+  platform: LocalServiceInstallerPlatformKey
+): string | null {
+  const releaseConfig = getLocalServiceReleaseConfig();
+  if (!releaseConfig) {
+    return null;
+  }
+
+  return buildGitHubReleaseAssetUrl(
+    LOCAL_SERVICE_INSTALLER_ASSET_NAMES[platform],
+    releaseConfig
+  );
+}
+
 export function getConfiguredLocalServicePlatforms(): LocalServicePlatformKey[] {
   return (
     Object.keys(LOCAL_SERVICE_URL_ENV_MAP) as LocalServicePlatformKey[]
   ).filter((platform) => Boolean(resolveLocalServiceBinaryUrl(platform)));
+}
+
+function listAvailableLocalServiceInstallerPlatforms(
+  release: GitHubRelease | null | undefined
+): LocalServiceInstallerPlatformKey[] {
+  if (!release) {
+    return [];
+  }
+
+  return (
+    Object.keys(
+      LOCAL_SERVICE_INSTALLER_ASSET_NAMES
+    ) as LocalServiceInstallerPlatformKey[]
+  ).filter((platform) =>
+    release.assets.some(
+      (asset) =>
+        normalizeAssetName(asset.name) ===
+        normalizeAssetName(LOCAL_SERVICE_INSTALLER_ASSET_NAMES[platform])
+    )
+  );
 }
 
 async function fetchGitHubReleaseByTag(
@@ -525,6 +583,8 @@ export async function fetchLocalServiceReleaseSummary(): Promise<LocalServiceRel
   return {
     configuredPlatforms,
     displayName: resolvedRelease?.name?.trim() || null,
+    installerPlatforms:
+      listAvailableLocalServiceInstallerPlatforms(resolvedRelease),
     publishedAt:
       resolvedRelease?.published_at || resolvedRelease?.created_at || null,
     version: resolvedVersion,

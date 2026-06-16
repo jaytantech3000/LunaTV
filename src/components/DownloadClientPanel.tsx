@@ -26,6 +26,8 @@ type LocalServicePlatformKey =
   | 'linux-arm64'
   | 'win-x64';
 
+type LocalServiceInstallerPlatformKey = 'mac-arm64' | 'mac-x64';
+
 interface DesktopReleaseAsset {
   downloadPath: string;
   key: DesktopAssetKey;
@@ -45,6 +47,7 @@ interface DesktopReleasePayload {
 interface LocalServiceReleasePayload {
   configuredPlatforms: LocalServicePlatformKey[];
   displayName: string | null;
+  installerPlatforms: LocalServiceInstallerPlatformKey[];
   publishedAt: string | null;
   version: string;
 }
@@ -181,6 +184,50 @@ function detectRecommendedTargets(): {
   }
 
   return {};
+}
+
+function isLocalServiceInstallerPlatform(
+  value: LocalServicePlatformKey
+): value is LocalServiceInstallerPlatformKey {
+  return value === 'mac-arm64' || value === 'mac-x64';
+}
+
+function getLocalServiceDownloadConfig(
+  platform: LocalServicePlatformKey,
+  installerPlatforms: Set<LocalServiceInstallerPlatformKey>
+): {
+  ariaLabelSuffix: string;
+  description: string;
+  href: string;
+  label: string;
+} {
+  if (
+    isLocalServiceInstallerPlatform(platform) &&
+    installerPlatforms.has(platform)
+  ) {
+    return {
+      ariaLabelSuffix: '安装包下载',
+      description: '下载 macOS 安装包 (.pkg)，双击即可安装并自动启动',
+      href: `/api/client-download?kind=local-service-installer&platform=${platform}`,
+      label: '下载安装包',
+    };
+  }
+
+  if (platform === 'win-x64') {
+    return {
+      ariaLabelSuffix: '脚本下载',
+      description: '下载 PowerShell 脚本 (.ps1)',
+      href: `/api/local-service-script?platform=${platform}`,
+      label: '下载脚本',
+    };
+  }
+
+  return {
+    ariaLabelSuffix: '脚本下载',
+    description: '下载 shell 脚本 (.sh)',
+    href: `/api/local-service-script?platform=${platform}`,
+    label: '下载脚本',
+  };
 }
 
 export default function DownloadClientPanel({
@@ -328,6 +375,9 @@ export default function DownloadClientPanel({
   }
 
   const recommendedTargets = detectRecommendedTargets();
+  const localServiceInstallerPlatforms = new Set(
+    localServiceRelease?.installerPlatforms ?? []
+  );
   const desktopAssetMap = new Map(
     desktopRelease?.assets.map((asset) => [asset.key, asset]) || []
   );
@@ -526,8 +576,8 @@ export default function DownloadClientPanel({
                 </h4>
               </div>
               <p className='mt-1 text-sm text-gray-600 dark:text-gray-300'>
-                安装后视频流量走本机，不经过
-                Vercel。下载脚本后在终端运行即可自动安装并启动。
+                安装后视频流量走本机，不经过 Vercel。macOS
+                提供双击安装包，Windows / Linux 提供脚本安装。
               </p>
             </div>
 
@@ -535,7 +585,7 @@ export default function DownloadClientPanel({
               <div className='mb-3 rounded-lg border border-dashed border-gray-300 bg-white/80 px-4 py-3 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300'>
                 <div className='flex items-center gap-2'>
                   <RefreshCw className='h-4 w-4 animate-spin' />
-                  正在检测本地服务脚本可用性...
+                  正在检测本地服务安装文件可用性...
                 </div>
               </div>
             )}
@@ -580,7 +630,10 @@ export default function DownloadClientPanel({
                 const isUnavailable = status === 'unavailable';
                 const isRecommended =
                   recommendedTargets.localService === meta.key;
-                const href = `/api/local-service-script?platform=${meta.key}`;
+                const downloadConfig = getLocalServiceDownloadConfig(
+                  meta.key,
+                  localServiceInstallerPlatforms
+                );
 
                 return (
                   <div
@@ -608,24 +661,24 @@ export default function DownloadClientPanel({
                         )}
                       </div>
                       <div className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-                        {meta.key === 'win-x64'
-                          ? '下载 PowerShell 脚本 (.ps1)'
-                          : '下载 shell 脚本 (.sh)'}
+                        {downloadConfig.description}
                       </div>
                     </div>
                     <button
-                      aria-label={`${meta.label} 脚本下载`}
+                      aria-label={`${meta.label} ${downloadConfig.ariaLabelSuffix}`}
                       className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                         isUnavailable
                           ? 'cursor-not-allowed bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
                           : 'bg-emerald-600 text-white hover:bg-emerald-700'
                       }`}
                       disabled={isUnavailable}
-                      onClick={() => !isUnavailable && handleDownload(href)}
+                      onClick={() =>
+                        !isUnavailable && handleDownload(downloadConfig.href)
+                      }
                       type='button'
                     >
                       <Download className='h-4 w-4' />
-                      下载脚本
+                      {downloadConfig.label}
                     </button>
                   </div>
                 );

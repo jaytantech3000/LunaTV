@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import {
   isLocalServicePlatformKey,
+  type LocalServicePlatformKey,
   resolveLocalServiceBinaryUrl,
 } from '@/lib/client-download';
 
@@ -11,53 +12,20 @@ function jsonError(error: string, status: number): Response {
   return NextResponse.json({ error }, { status });
 }
 
-function resolveBaseUrl(request: NextRequest): string | null {
-  const candidate = process.env.SITE_BASE?.trim() || request.nextUrl.origin;
-
-  try {
-    const parsed = new URL(candidate);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return null;
-    }
-
-    const normalizedPath =
-      parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
-    return `${parsed.origin}${normalizedPath}`;
-  } catch {
-    return null;
-  }
-}
-
-function buildLocalServiceDownloadUrl(
-  request: NextRequest,
-  platform: string
-): string | null {
-  const baseUrl = resolveBaseUrl(request);
-  if (!baseUrl) {
-    return null;
-  }
-
-  const searchParams = new URLSearchParams({
-    kind: 'local-service',
-    platform,
-  });
-  return `${baseUrl}/api/client-download?${searchParams.toString()}`;
-}
-
 function buildScriptFileName(platform: string): string {
   return platform === 'win-x64'
     ? `lunatv-local-service-${platform}.ps1`
     : `lunatv-local-service-${platform}.sh`;
 }
 
-function buildScriptContent(platform: string, absoluteDownloadUrl: string): string {
+function buildScriptContent(platform: string, downloadUrl: string): string {
   if (platform === 'win-x64') {
     return [
       '$BinDir = Join-Path $env:USERPROFILE ".lunatv\\bin"',
       'New-Item -ItemType Directory -Force -Path $BinDir | Out-Null',
       '$Target = Join-Path $BinDir "lunatv-server.exe"',
       '',
-      `Invoke-WebRequest -UseBasicParsing "${absoluteDownloadUrl}" -OutFile $Target`,
+      `Invoke-WebRequest -UseBasicParsing "${downloadUrl}" -OutFile $Target`,
       'Start-Process -FilePath $Target',
       '',
       'Write-Host "LunaTV local service started."',
@@ -73,7 +41,7 @@ function buildScriptContent(platform: string, absoluteDownloadUrl: string): stri
     'BIN_DIR="${HOME}/.lunatv/bin"',
     'mkdir -p "${BIN_DIR}"',
     '',
-    `curl -fsSL "${absoluteDownloadUrl}" -o "\${BIN_DIR}/lunatv-server"`,
+    `curl -fsSL "${downloadUrl}" -o "\${BIN_DIR}/lunatv-server"`,
     'chmod +x "${BIN_DIR}/lunatv-server"',
     'nohup "${BIN_DIR}/lunatv-server" >/tmp/lunatv-server.log 2>&1 &',
     '',
@@ -85,7 +53,7 @@ function buildScriptContent(platform: string, absoluteDownloadUrl: string): stri
 
 function validatePlatform(platform: string | null): {
   errorResponse?: Response;
-  platform?: string;
+  platform?: LocalServicePlatformKey;
 } {
   if (!isLocalServicePlatformKey(platform)) {
     return {
@@ -106,7 +74,9 @@ async function handleRequest(
   request: NextRequest,
   method: 'GET' | 'HEAD'
 ): Promise<Response> {
-  const validation = validatePlatform(request.nextUrl.searchParams.get('platform'));
+  const validation = validatePlatform(
+    request.nextUrl.searchParams.get('platform')
+  );
   if (validation.errorResponse || !validation.platform) {
     return validation.errorResponse as Response;
   }
@@ -125,21 +95,15 @@ async function handleRequest(
     return new Response(null, { headers, status: 200 });
   }
 
-  const absoluteDownloadUrl = buildLocalServiceDownloadUrl(
-    request,
-    validation.platform
-  );
-  if (!absoluteDownloadUrl) {
-    return jsonError('Unable to resolve public site base URL', 503);
+  const downloadUrl = resolveLocalServiceBinaryUrl(validation.platform);
+  if (!downloadUrl) {
+    return jsonError('Local service binary is unavailable', 503);
   }
 
-  return new Response(
-    buildScriptContent(validation.platform, absoluteDownloadUrl),
-    {
-      headers,
-      status: 200,
-    }
-  );
+  return new Response(buildScriptContent(validation.platform, downloadUrl), {
+    headers,
+    status: 200,
+  });
 }
 
 export async function GET(request: NextRequest): Promise<Response> {

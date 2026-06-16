@@ -84,17 +84,24 @@ jobs:
 
   build-macos:
     needs:
+      - prepare-release
       - verify
     strategy:
       matrix:
         include:
           - asset_name: lunatv-server-mac-arm64
             os: macos-14
+            pkg_name: lunatv-local-service-mac-arm64.pkg
+            pkg_suffix: mac-arm64
             target: aarch64-apple-darwin
           - asset_name: lunatv-server-mac-x64
             os: macos-13
+            pkg_name: lunatv-local-service-mac-x64.pkg
+            pkg_suffix: mac-x64
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
     steps:
       - name: Checkout source code
         uses: actions/checkout@v6
@@ -107,17 +114,42 @@ jobs:
       - name: Build binary
         run: cargo build --locked --release --manifest-path crates/moontv-local-service/Cargo.toml --target ${{ matrix.target }}
 
-      - name: Package artifact
+      - name: Package artifacts
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
           cp "crates/moontv-local-service/target/${{ matrix.target }}/release/lunatv-server" "dist/${{ matrix.asset_name }}"
+          mkdir -p "pkg-root/Library/Application Support/LunaTV Local Service" "pkg-root/Library/LaunchDaemons" pkg-scripts
+          install -m 755 "crates/moontv-local-service/target/${{ matrix.target }}/release/lunatv-server" "pkg-root/Library/Application Support/LunaTV Local Service/lunatv-server"
+          install -m 644 config.example.json "pkg-root/Library/Application Support/LunaTV Local Service/config.json"
+          install -m 644 ".github/local-service/macos/io.qzz.lunatv.local-service.plist" "pkg-root/Library/LaunchDaemons/io.qzz.lunatv.local-service.plist"
+          install -m 755 ".github/local-service/macos/postinstall" "pkg-scripts/postinstall"
+
+          pkg_version="$RELEASE_TAG"
+          pkg_version="${pkg_version#local-service-}"
+          pkg_version="${pkg_version#nova-}"
+          pkg_version="${pkg_version#luna-}"
+          pkg_version="$(printf '%s' "$pkg_version" | tr -cs '0-9.' '.')"
+          pkg_version="${pkg_version#.}"
+          pkg_version="${pkg_version%.}"
+          if [[ -z "$pkg_version" ]]; then
+            pkg_version='1.0.0'
+          fi
+
+          pkgbuild \
+            --root pkg-root \
+            --identifier "io.qzz.lunatv.local-service.${{ matrix.pkg_suffix }}" \
+            --install-location / \
+            --scripts pkg-scripts \
+            --version "$pkg_version" \
+            "dist/${{ matrix.pkg_name }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: local-service-${{ matrix.asset_name }}
-          path: dist/${{ matrix.asset_name }}
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 

@@ -6,6 +6,7 @@ import {
   isClientDownloadSigningEnabled,
   listDesktopReleaseAssets,
   resolveLocalServiceBinaryUrl,
+  resolveLocalServiceInstallerUrl,
   selectLatestDesktopRelease,
   selectLatestVersionedLocalServiceRelease,
   signDesktopDownload,
@@ -278,6 +279,18 @@ describe('client-download helpers', () => {
     );
   });
 
+  it('derives stable GitHub release urls for mac local service installers', () => {
+    mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
+    mutableEnv.LOCAL_SERVICE_RELEASE_TAG = 'local-service-nova-latest';
+
+    expect(resolveLocalServiceInstallerUrl('mac-arm64')).toBe(
+      'https://github.com/demo/LunaTV/releases/download/local-service-nova-latest/lunatv-local-service-mac-arm64.pkg'
+    );
+    expect(resolveLocalServiceInstallerUrl('mac-x64')).toBe(
+      'https://github.com/demo/LunaTV/releases/download/local-service-nova-latest/lunatv-local-service-mac-x64.pkg'
+    );
+  });
+
   it('selects the newest versioned local service release behind a latest alias tag', () => {
     const release = selectLatestVersionedLocalServiceRelease(
       [
@@ -365,7 +378,15 @@ describe('client-download helpers', () => {
       new Response(
         JSON.stringify([
           {
-            assets: [],
+            assets: [
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-local-service-mac-arm64.pkg',
+                id: 11,
+                name: 'lunatv-local-service-mac-arm64.pkg',
+                size: 100,
+              },
+            ],
             id: 1,
             name: 'LunaTV Local Service (local-service-nova-2026-06-16.2)',
             prerelease: true,
@@ -373,7 +394,22 @@ describe('client-download helpers', () => {
             tag_name: 'local-service-nova-2026-06-16.2',
           },
           {
-            assets: [],
+            assets: [
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-local-service-mac-arm64.pkg',
+                id: 21,
+                name: 'lunatv-local-service-mac-arm64.pkg',
+                size: 100,
+              },
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-local-service-mac-x64.pkg',
+                id: 22,
+                name: 'lunatv-local-service-mac-x64.pkg',
+                size: 100,
+              },
+            ],
             id: 2,
             name: 'LunaTV Local Service (local-service-nova-2026-06-16.3)',
             prerelease: true,
@@ -381,7 +417,15 @@ describe('client-download helpers', () => {
             tag_name: 'local-service-nova-2026-06-16.3',
           },
           {
-            assets: [],
+            assets: [
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-local-service-mac-arm64.pkg',
+                id: 31,
+                name: 'lunatv-local-service-mac-arm64.pkg',
+                size: 100,
+              },
+            ],
             id: 3,
             name: 'LunaTV Local Service (nova latest)',
             prerelease: true,
@@ -407,6 +451,7 @@ describe('client-download helpers', () => {
         'win-x64',
       ],
       displayName: 'LunaTV Local Service (local-service-nova-2026-06-16.3)',
+      installerPlatforms: ['mac-arm64', 'mac-x64'],
       publishedAt: '2026-06-16T03:00:00.000Z',
       version: 'local-service-nova-2026-06-16.3',
     });

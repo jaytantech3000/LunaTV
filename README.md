@@ -406,7 +406,7 @@ v100.0.0 以上版本可配合 [Selene](https://github.com/MoonTechLab/Selene) �
 仓库内已补齐本地服务二进制发布链路：
 
 - Rust 服务源码位于 `crates/moontv-local-service`
-- 手动触发 `.github/workflows/local-service-release.yml` 可发布多平台二进制
+- 手动触发 `.github/workflows/local-service-release.yml` 可发布多平台二进制，并为 macOS 额外生成可双击安装的 `.pkg`
 - Web 端默认会从固定 GitHub Release tag `local-service-latest` 推导下载地址
 
 发布和环境变量细节见 `docs/local-service-release.md`

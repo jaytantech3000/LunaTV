@@ -69,6 +69,7 @@ describe('DownloadClientPanel', () => {
             configuredPlatforms: ['mac-arm64', 'mac-x64', 'linux-x64'],
             displayName:
               'LunaTV Local Service (local-service-nova-2026-06-16.3)',
+            installerPlatforms: ['mac-arm64', 'mac-x64'],
             publishedAt: '2026-06-16T03:00:00.000Z',
             version: 'local-service-nova-2026-06-16.3',
           })
@@ -85,7 +86,7 @@ describe('DownloadClientPanel', () => {
       screen.getByText('local-service-nova-2026-06-16.3')
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'macOS Apple Silicon 下载' })
+      screen.getByRole('button', { name: 'macOS Apple Silicon 安装包下载' })
     ).toBeEnabled();
     expect(
       screen.getByRole('button', { name: 'macOS Intel 下载' })
@@ -134,6 +135,7 @@ describe('DownloadClientPanel', () => {
             configuredPlatforms: ['mac-arm64', 'mac-x64', 'linux-x64'],
             displayName:
               'LunaTV Local Service (local-service-nova-2026-06-16.3)',
+            installerPlatforms: ['mac-arm64', 'mac-x64'],
             publishedAt: '2026-06-16T03:00:00.000Z',
             version: 'local-service-nova-2026-06-16.3',
           })

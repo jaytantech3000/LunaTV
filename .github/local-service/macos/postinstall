@@ -1,0 +1,24 @@
+#!/bin/bash
+set -euo pipefail
+
+SERVICE_LABEL="io.qzz.lunatv.local-service"
+SUPPORT_DIR="/Library/Application Support/LunaTV Local Service"
+DATA_DIR="${SUPPORT_DIR}/data"
+LOG_DIR="/Library/Logs/LunaTV Local Service"
+PLIST_PATH="/Library/LaunchDaemons/${SERVICE_LABEL}.plist"
+BINARY_PATH="${SUPPORT_DIR}/lunatv-server"
+
+mkdir -p "$SUPPORT_DIR" "$DATA_DIR" "$LOG_DIR"
+chmod 755 "$SUPPORT_DIR" "$DATA_DIR" "$LOG_DIR"
+chmod 755 "$BINARY_PATH"
+chmod 644 "$PLIST_PATH"
+touch "${LOG_DIR}/stdout.log" "${LOG_DIR}/stderr.log"
+chmod 644 "${LOG_DIR}/stdout.log" "${LOG_DIR}/stderr.log"
+
+if launchctl print "system/${SERVICE_LABEL}" >/dev/null 2>&1; then
+  launchctl bootout system "$PLIST_PATH" || true
+fi
+
+launchctl bootstrap system "$PLIST_PATH"
+launchctl enable "system/${SERVICE_LABEL}" || true
+launchctl kickstart -k "system/${SERVICE_LABEL}" || true

@@ -15,6 +15,7 @@ describe('/api/local-service-release', () => {
     (fetchLocalServiceReleaseSummary as jest.Mock).mockResolvedValue({
       configuredPlatforms: ['mac-arm64', 'win-x64'],
       displayName: 'LunaTV Local Service (local-service-nova-2026-06-16.3)',
+      installerPlatforms: ['mac-arm64'],
       publishedAt: '2026-06-16T03:00:00.000Z',
       version: 'local-service-nova-2026-06-16.3',
     });
@@ -26,6 +27,7 @@ describe('/api/local-service-release', () => {
     expect(payload).toEqual({
       configuredPlatforms: ['mac-arm64', 'win-x64'],
       displayName: 'LunaTV Local Service (local-service-nova-2026-06-16.3)',
+      installerPlatforms: ['mac-arm64'],
       publishedAt: '2026-06-16T03:00:00.000Z',
       version: 'local-service-nova-2026-06-16.3',
     });

@@ -16,7 +16,12 @@
 - `lunatv-server-linux-arm64`
 - `lunatv-server-win-x64.exe`
 
-脚本下载时会把这些资产保存为本机统一文件名：
+另外会额外产出 2 个 macOS 原生安装包：
+
+- `lunatv-local-service-mac-arm64.pkg`
+- `lunatv-local-service-mac-x64.pkg`
+
+脚本下载时会把原始二进制保存为本机统一文件名：
 
 - macOS / Linux：`lunatv-server`
 - Windows：`lunatv-server.exe`
@@ -37,8 +42,9 @@
 
 1. 先执行 `cargo test --locked`
 2. 构建 macOS / Linux / Windows 五个平台的二进制
-3. 创建或更新同名 GitHub Release
-4. 用 `--clobber` 覆盖旧资产，保证固定 tag 可重复发布
+3. 为 macOS 额外封装可双击安装的 `.pkg`
+4. 创建或更新同名 GitHub Release
+5. 用 `--clobber` 覆盖旧资产，保证固定 tag 可重复发布
 
 ### 2. `nova` 独立 prerelease
 
@@ -86,6 +92,11 @@ DESKTOP_RELEASE_REPO=your-org/LunaTV
 - `nova` 部署会自动跟随 `local-service-nova-latest`
 - `luna` 部署会自动跟随 `local-service-luna-latest`
 - 其他环境默认回退到 `local-service-latest`
+
+Web 下载面板策略：
+
+- macOS：优先下发 `.pkg` 安装包，下载后双击即可安装并自动启动本地服务
+- Windows / Linux：继续下发脚本，但脚本内会直连公开 release 资产，不再依赖站点登录态
 
 可选增强：
 
