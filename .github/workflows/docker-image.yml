@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    if: ${{ github.event.release.prerelease && !startsWith(github.event.release.tag_name, 'desktop-') }}
+    if: ${{ github.event.release.prerelease && !startsWith(github.event.release.tag_name, 'desktop-') && !startsWith(github.event.release.tag_name, 'local-service-') }}
     strategy:
       matrix:
         include:
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - build
-    if: ${{ github.event.release.prerelease && !startsWith(github.event.release.tag_name, 'desktop-') }}
+    if: ${{ github.event.release.prerelease && !startsWith(github.event.release.tag_name, 'desktop-') && !startsWith(github.event.release.tag_name, 'local-service-') }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@v8
@@ -118,7 +118,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - merge
-    if: ${{ always() && github.event.release.prerelease && !startsWith(github.event.release.tag_name, 'desktop-') }}
+    if: ${{ always() && github.event.release.prerelease && !startsWith(github.event.release.tag_name, 'desktop-') && !startsWith(github.event.release.tag_name, 'local-service-') }}
     steps:
       - name: Delete workflow runs
         uses: Mattraks/delete-workflow-runs@main

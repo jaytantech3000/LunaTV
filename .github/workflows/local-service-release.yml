@@ -1,6 +1,9 @@
 name: Build & Publish Local Service
 
 on:
+  push:
+    tags:
+      - 'local-service-*'
   workflow_dispatch:
     inputs:
       release_tag:
@@ -18,14 +21,44 @@ on:
         default: true
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.release_tag }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
   contents: write
 
 jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      release_name: ${{ steps.resolve.outputs.release_name }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+    steps:
+      - name: Resolve release metadata
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]]; then
+            release_tag='${{ inputs.release_tag }}'
+            release_name='${{ inputs.release_name }}'
+            prerelease='${{ inputs.prerelease }}'
+          else
+            release_tag='${{ github.ref_name }}'
+            release_name="LunaTV Local Service (${release_tag})"
+            prerelease='true'
+          fi
+
+          {
+            printf 'release_tag=%s\n' "$release_tag"
+            printf 'release_name=%s\n' "$release_name"
+            printf 'prerelease=%s\n' "$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
   verify:
+    needs:
+      - prepare-release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source code
@@ -148,12 +181,16 @@ jobs:
 
   publish:
     needs:
+      - prepare-release
       - build-macos
       - build-linux
       - build-windows
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
+      RELEASE_NAME: ${{ needs.prepare-release.outputs.release_name }}
+      RELEASE_PRERELEASE: ${{ needs.prepare-release.outputs.prerelease }}
+      RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
     steps:
       - name: Download built artifacts
         uses: actions/download-artifact@v8
@@ -166,10 +203,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag='${{ inputs.release_tag }}'
-          name='${{ inputs.release_name }}'
+          tag="$RELEASE_TAG"
+          name="$RELEASE_NAME"
           flags=()
-          if [[ '${{ inputs.prerelease }}' == 'true' ]]; then
+          if [[ "$RELEASE_PRERELEASE" == 'true' ]]; then
             flags+=(--prerelease)
           fi
 
@@ -183,4 +220,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release upload '${{ inputs.release_tag }}' dist/* --clobber
+          gh release upload "$RELEASE_TAG" dist/* --clobber
