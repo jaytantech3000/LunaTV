@@ -95,7 +95,7 @@ jobs:
             pkg_suffix: mac-arm64
             target: aarch64-apple-darwin
           - asset_name: lunatv-server-mac-x64
-            os: macos-13
+            os: macos-15-intel
             pkg_name: lunatv-local-service-mac-x64.pkg
             pkg_suffix: mac-x64
             target: x86_64-apple-darwin
