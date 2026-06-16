@@ -23,8 +23,10 @@
 - 🔍 **多源聚合搜索**：一次搜索立刻返回全源结果。
 - 📄 **丰富详情页**：支持剧集列表、演员、年份、简介等完整信息展示。
 - ▶️ **流畅在线播放**：集成 HLS.js & ArtPlayer。
+- 🎛️ **播放器增强设置**：支持音频保护、画面增强、在线播放缓冲模式切换，并对倍速插件干预给出提示。
 - ❤️ **收藏 + 继续观看**：支持 Kvrocks/Redis/Upstash 存储，多端同步进度。
 - 📱 **PWA**：离线缓存、安装到桌面/主屏，移动端原生体验。
+- 🧩 **客户端下载 + 本地服务加速**：可按平台下载桌面客户端和本地服务，并提供启用、停用、停止、卸载闭环。
 - 🌗 **响应式布局**：桌面侧边栏 + 移动底部导航，自适应各种屏幕尺寸。
 - 👿 **智能去广告**：自动跳过视频中的切片广告（实验性）。
 
@@ -407,7 +409,8 @@ v100.0.0 以上版本可配合 [Selene](https://github.com/MoonTechLab/Selene) �
 
 - Rust 服务源码位于 `crates/moontv-local-service`
 - 手动触发 `.github/workflows/local-service-release.yml` 可发布多平台二进制，并为 macOS 额外生成可双击安装的 `.pkg`
-- Web 端默认会从固定 GitHub Release tag `local-service-latest` 推导下载地址
+- Web 端“客户端下载”面板会按当前设备展示桌面版下载、本地服务安装包或脚本、停止脚本和卸载脚本
+- `nova` / `luna` 部署会自动匹配 `local-service-nova-latest` / `local-service-luna-latest`，其他环境回退 `local-service-latest`
 
 发布和环境变量细节见 `docs/local-service-release.md`
 

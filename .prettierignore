@@ -11,14 +11,25 @@
 # next.js
 .next
 /.next/
+/.next-build/
+/.next-web-sync/
+/.next-desktop/
 /out/
+/desktop-shell-dist/
+/.desktop-build-temp/
 
 # production
 /build
+/target
+**/target/
+/src-tauri/binaries/
+/.lunatv-desktop/
 
 # misc
 .DS_Store
 *.pem
+.history/
+/tmp/
 
 # debug
 npm-debug.log*
@@ -34,6 +45,20 @@ yarn-error.log*
 
 # vercel
 .vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# generated files
+src/lib/runtime.ts
+public/manifest.json
+public/sw.js
+public/sw.js.map
+public/workbox-*.js
+public/workbox-*.js.map
+public/worker-*.js
+public/fallback-*.js
 
 # changelog
 CHANGELOG.md

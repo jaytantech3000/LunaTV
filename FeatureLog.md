@@ -11,6 +11,82 @@
 
 ---
 
+## 2026-06-16 - 客户端下载、本地服务加速与播放器增强 v1
+
+- 分支：`nova`
+- 里程碑提交：`d6033ef`
+- 方案/说明文档：
+  - `dev-plan/2026-06-15-client-download-panel.md`
+  - `docs/local-service-release.md`
+
+### 目标
+
+- 在 Web 端提供统一的客户端下载入口，按平台下发桌面客户端和本地服务。
+- 打通本地服务的发布、安装、启停、卸载和页面内启用/恢复默认线路闭环。
+- 把播放器增强设置收敛为更易理解的本地设置，并补齐 HLS 缓冲优化与倍速风险提示。
+- 优化登录和进入管理面板时的过渡反馈，降低“无响应”感。
+
+### 核心实现
+
+- 新增客户端下载与发布解析链路：
+  - `src/components/DownloadClientPanel.tsx`
+  - `src/app/api/client-download/route.ts`
+  - `src/app/api/desktop-release/route.ts`
+  - `src/app/api/local-service-release/route.ts`
+  - `src/lib/client-download.ts`
+- 新增本地服务运行时与发布基础设施：
+  - `crates/moontv-local-service/*`
+  - `.github/workflows/local-service-release.yml`
+  - `src/app/api/local-service-script/route.ts`
+  - `src/lib/local-service-runtime.ts`
+- 新增本地服务状态入口与启停反馈：
+  - `src/components/LocalServiceStatusBanner.tsx`
+  - `src/components/Sidebar.tsx`
+  - `src/components/PageLayout.tsx`
+- 播放器增强设置与播放页联动重做：
+  - `src/lib/player-enhancements.ts`
+  - `src/lib/hls-playback-config.ts`
+  - `src/app/play/page.tsx`
+  - `src/components/UserMenu.tsx`
+- 登录和后台导航反馈优化：
+  - `src/app/login/*`
+  - `src/app/admin/*`
+  - `src/components/NavigationFeedbackProvider.tsx`
+
+### 本阶段已处理的问题
+
+- 用户菜单缺少统一的客户端下载入口，桌面版和本地服务下载链路分散。
+- 本地服务 release tag、仓库地址和分支通道需要手工配置，部署到 `nova` / `luna` 时容易错线。
+- HTTPS 页面访问本机 `127.0.0.1` 健康检查时缺少兼容处理，本地服务状态容易误判。
+- 本地服务启用后缺少“停用 / 检测 / 最小化 / 恢复默认”的完整反馈。
+- 播放增强设置分散，缓冲模式与倍速插件干预提示不够直观。
+- 登录提交和进入管理面板时缺少明确的过渡态。
+
+### 验证结论
+
+- `pnpm lint` 已通过。
+- `pnpm typecheck` 已通过。
+- `pnpm test` 已通过（46 / 46 suites，206 / 206 tests）。
+- `pnpm build` 已通过。
+- `cargo test --manifest-path crates/moontv-local-service/Cargo.toml` 已通过。
+- 关键自动化覆盖已补到：
+  - 下载面板 release 加载、缺失目标禁用与重试逻辑。
+  - 本地服务状态检测、启用、停用、恢复、最小化 / 展开。
+  - 本地服务 release 元数据和安装 / 停止 / 卸载脚本接口。
+  - 播放器增强偏好读取、缓冲模式切换和 HLS 参数映射。
+
+### 当前约束
+
+- 本地服务当前只对 macOS 提供原生 `.pkg` 安装包；Windows / Linux 仍以脚本安装、停止和卸载为主。
+- 页面侧“启用本机加速”只覆盖媒体代理地址，不会把整站 API 都切到本地服务。
+- 本地服务安装、启动和卸载的真实系统行为仍需要在目标平台手工验证。
+
+### 后续建议
+
+- 增加跨平台安装 / 停止 / 卸载和 HTTPS 私网探测的 E2E 或人工回归清单。
+- 继续拆分 `src/app/play/page.tsx`，把播放器会话恢复、设置面板和 HLS 初始化逻辑解耦。
+- 若后续要引入更多客户端形态，保持 `client-download` 与 `local-service-release` 的 tag / asset 约定不变。
+
 ## 2026-06-04 - 离线下载与离线播放 v1
 
 - 分支：`cache-and-download`

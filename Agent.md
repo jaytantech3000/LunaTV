@@ -1,22 +1,28 @@
 # LunaTV Agent Guide
 
-本文件面向在本仓库内工作的自动化 Agent 或开发者，目标是让改动尽快落到正确位置，并避免破坏在线播放、离线下载和配置管理。
+本文件面向在本仓库内工作的自动化 Agent 或开发者，目标是让改动尽快落到正确位置，并避免破坏在线播放、离线下载、本地服务加速和配置管理。
 
 新功能开发记录不要继续堆在这里，统一写入根目录的 `FeatureLog.md`。`Agent.md` 只保留相对稳定的项目指引、约束和回归要求。
 
 ## 项目概览
 
 - 技术栈：Next.js 14 App Router、React 18、TypeScript、Tailwind CSS、Zustand、ArtPlayer、HLS.js、next-pwa。
-- 项目定位：影视聚合播放应用，包含搜索、详情、在线播放、收藏/播放记录、管理后台，以及离线下载与离线播放。
+- 项目定位：影视聚合播放应用，包含搜索、详情、在线播放、收藏/播放记录、管理后台，以及离线下载与离线播放、本地服务加速和客户端下载入口。
 - 部署形态：生产环境默认 `standalone` 输出；本地生产预览使用 `.next-build`，避免污染 `next dev` 的 `.next` 目录。
 
 ## 关键目录
 
-- `src/app`: 页面与 API 路由。重点关注 `/play`、`/downloads`、`/api/proxy/vod/*`。
-- `src/components`: UI 组件。下载入口与下载管理主要在 `CurrentEpisodeDownloadControl.tsx`、`DownloadsClient.tsx`。
+- `src/app`: 页面与 API 路由。重点关注 `/play`、`/downloads`、`/api/client-download`、`/api/local-service-*`、`/api/proxy/vod/*`。
+- `src/components`: UI 组件。下载入口与下载管理主要在 `CurrentEpisodeDownloadControl.tsx`、`DownloadsClient.tsx`；客户端与本地服务入口主要在 `DownloadClientPanel.tsx`、`LocalServiceStatusBanner.tsx`。
 - `src/lib/download`: 离线下载链路核心，包括缓存、manifest 解析、资源索引、任务调度、播放辅助、Service Worker 适配。
+- `src/lib/client-download.ts`: 桌面版、本地服务 release 解析，tag/asset 推导和下载地址映射。
+- `src/lib/player-enhancements.ts`、`src/lib/hls-playback-config.ts`: 播放增强偏好、本地存储迁移与 HLS 缓冲策略。
+- `src/lib/local-service-runtime.ts`: 本地服务启用状态、runtime bootstrap 与媒体代理覆盖。
 - `src/stores/downloadStore.ts`: 下载任务和离线资源库的 Zustand 持久化状态。
 - `worker/index.ts`: 自定义 Service Worker，负责命中离线缓存并拦截 `/api/proxy/vod/*`。
+- `crates/moontv-local-service`: 本地服务 Rust 实现，负责本机 health、代理和离线资源索引接口。
+- `.github/workflows/local-service-release.yml`: 本地服务多平台构建与 release/tag alias 维护。
+- `docs/local-service-release.md`: 本地服务发布、环境变量和 tag 通道约定。
 - `scripts/start-standalone-preview.sh`: 本地离线播放验证使用的生产预览启动脚本。
 - `dev-plan/cache-and-download`: 离线下载方案和实施清单，涉及架构取舍时优先参考这里。
 
@@ -25,7 +31,11 @@
 - VOD 播放链路必须维持 same-origin 代理 URL。不要让 `/play`、优选测速、换源、离线播放直接回退到原始上游 m3u8。
 - 涉及播放地址归一化时，优先检查 `normalizeVodDetailForPlayback()` 和相关 helper，保证在线与离线都走同一套 URL 规范。
 - 离线播放依赖三层联动：Cache Storage、资源索引（IndexedDB）、Service Worker。只改其中一层通常会留下隐性故障。
-- `src/app/play/page.tsx` 耦合度高，包含在线/离线模式、播放器生命周期、集数切换、进度恢复、HLS 初始化。改动后必须做真实播放验证。
+- `src/app/play/page.tsx` 耦合度高，包含在线/离线模式、播放器生命周期、集数切换、进度恢复、HLS 初始化、缓冲模式切换和倍速插件干预提示。改动后必须做真实播放验证。
+- `src/lib/player-enhancements.ts` 的偏好结构会被 `UserMenu`、`/play`、`/live` 和播放器 runtime 共享。改 key、默认值或迁移逻辑时必须同步回归这些入口。
+- 本地服务启用逻辑只应该覆盖 `MEDIA_PROXY_BASE_URL`。不要把登录、管理后台或其他站点 API 误切到 `127.0.0.1:8787`。
+- `src/lib/client-download.ts`、`/api/client-download`、`/api/local-service-release`、`/api/local-service-script`、`.github/workflows/local-service-release.yml` 和 GitHub Release 资产命名是一套契约。改 tag 前缀、asset 名、平台 key 或 repo 推导顺序时要一起改。
+- HTTPS 页面到 `http://127.0.0.1:8787/health` 的检测依赖本地服务 health 路由返回 CORS / Private Network 相关响应头；改 `crates/moontv-local-service` 的 health 或代理响应时要把 Web 检测链路一起回归。
 - `next.config.js` 里明确把 `/api/proxy/vod/*` 排除在 next-pwa 的通用 API runtime caching 外，这条链路由自定义 worker 接管，不要随意改回去。
 - 视频源配置结构变更不是单点改动。若增加字段或修改行为，至少同步检查：
   - `src/lib/config.ts`
@@ -41,7 +51,9 @@
 - 类型检查：`pnpm typecheck`
 - 格式/静态检查：`pnpm lint`、`pnpm lint:strict`、`pnpm format:check`
 - 单元测试：`pnpm test`
+- 生产构建校验：`pnpm build`
 - 离线下载/离线播放验证：`pnpm preview:offline`
+- 本地服务测试：`cargo test --manifest-path crates/moontv-local-service/Cargo.toml`
 
 重要说明：
 
@@ -49,19 +61,25 @@
 - 本地若使用 Redis/Kvrocks 存储，先确保对应服务已启动，并且 `.env.local` 配置有效。
 - `preview:offline` 会先构建再启动 standalone 预览，真实行为更接近生产环境。
 
-## 离线下载改动的最低回归清单
+## 播放器 / 下载 / 本地服务改动的最低回归清单
 
-- 在线播放正常：打开影片、起播、切换集数、切换源。
+- 在线播放正常：打开影片、起播、切换集数、切换源；切换缓冲模式后播放器能重新连流并恢复播放。
+- 播放增强正常：音频保护、画面增强、缓冲模式可在用户菜单里切换；倍速插件干预提示不会卡住播放控件。
 - 下载正常：下载当前集、批量下载、暂停、继续、重试、取消、删除。
 - 下载页正常：进行中的任务顺序稳定，已下载内容不会因任务刷新而误操作或失去可点击状态。
+- 下载面板正常：从用户菜单打开“客户端下载”后能加载桌面版和本地服务版本；缺失平台禁用态正确；停止/卸载脚本可下载。
+- 本地服务状态正常：检测、启动、停用、恢复默认、最小化/展开、异常恢复都可用。
 - 离线播放正常：从 `/downloads` 点击“离线播放”进入播放页并起播。
 - 断网验证正常：离线播放开始后切断网络，已缓存内容仍能继续播放。
 - 播放进度正常：离线模式切换选集后可恢复对应分集进度。
 - 异常恢复正常：资源缺失、缓存损坏、下载中断后重试，不应长期卡在“排队中”或“加载中”。
+- 登录/后台反馈正常：登录提交有过渡态；管理员入口预取和加载反馈正常。
 
 ## 测试与产物约束
 
 - `src/lib/download/*.test.ts` 下已有一些下载链路的 Jest 测试；改动解析、URL 重写、排序、range 处理时优先补在这里。
+- 客户端下载与本地服务相关改动，优先补到 `src/lib/client-download.test.ts`、`src/components/DownloadClientPanel.test.tsx`、`src/components/LocalServiceStatusBanner.test.tsx`、`src/lib/local-service-runtime.test.ts`。
+- 播放增强和缓冲策略改动，优先补到 `src/lib/player-enhancements.test.ts`、`src/lib/hls-playback-config.test.ts`。
 - 浏览器自动化对离线链路很有价值，但不要把临时截图、日志和 `test-results/` 一起提交。
 - 若只做文档或说明性改动，可以不跑完整测试；若动到播放或下载逻辑，至少做一轮真实页面验证。
 
