@@ -1,6 +1,12 @@
 'use client';
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import React from 'react';
 
 const mockRouter = {
@@ -9,6 +15,7 @@ const mockRouter = {
   push: jest.fn(),
   replace: jest.fn(),
 };
+const mockBeginNavigation = jest.fn();
 
 jest.mock('next/navigation', () => ({
   useRouter: jest.fn(() => mockRouter),
@@ -74,7 +81,7 @@ jest.mock('@/lib/version_check', () => ({
     HAS_UPDATE: 'has_update',
     NO_UPDATE: 'no_update',
   },
-  checkForUpdates: jest.fn().mockResolvedValue('no_update'),
+  checkForUpdates: jest.fn(() => new Promise((_resolve) => undefined)),
 }));
 
 jest.mock('./VersionPanel', () => ({
@@ -89,16 +96,34 @@ jest.mock('./DownloadClientPanel', () => ({
 }));
 
 import { updatePlayerEnhancementPreference } from '@/lib/player-enhancements';
+jest.mock('./NavigationFeedbackProvider', () => ({
+  useNavigationFeedback: jest.fn(() => ({
+    beginNavigation: mockBeginNavigation,
+    pendingNavigation: null,
+  })),
+}));
 
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+
+import { useNavigationFeedback } from './NavigationFeedbackProvider';
 import { UserMenu } from './UserMenu';
 
 describe('UserMenu', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.useRealTimers();
     localStorage.clear();
     (
       window as Window & { RUNTIME_CONFIG?: Record<string, unknown> }
     ).RUNTIME_CONFIG = {};
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
+      role: 'user',
+      username: 'demo',
+    });
+    (useNavigationFeedback as jest.Mock).mockReturnValue({
+      beginNavigation: mockBeginNavigation,
+      pendingNavigation: null,
+    });
   });
 
   it('opens the client download panel and closes the menu entry list', async () => {
@@ -130,5 +155,62 @@ describe('UserMenu', () => {
       'enhanced'
     );
     expect(screen.getByText('当前：增强模式')).toBeInTheDocument();
+  });
+
+  it('prefetches and starts navigation feedback before opening admin panel', async () => {
+    jest.useFakeTimers();
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
+      role: 'owner',
+      username: 'demo',
+    });
+
+    render(<UserMenu />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: '管理面板' }));
+
+    expect(mockBeginNavigation).toHaveBeenCalledWith({
+      href: '/admin',
+      kind: 'nav',
+      label: '管理面板',
+    });
+    expect(mockRouter.prefetch).toHaveBeenCalledWith('/admin');
+    expect(
+      screen.queryByRole('button', { name: '管理面板' })
+    ).not.toBeInTheDocument();
+
+    act(() => {
+      jest.runOnlyPendingTimers();
+    });
+
+    await waitFor(() => {
+      expect(mockRouter.push).toHaveBeenCalledWith('/admin');
+    });
+  });
+
+  it('disables the admin action while opening the admin panel', async () => {
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
+      role: 'admin',
+      username: 'demo',
+    });
+    (useNavigationFeedback as jest.Mock).mockReturnValue({
+      beginNavigation: mockBeginNavigation,
+      pendingNavigation: {
+        href: '/admin',
+        kind: 'nav',
+        label: '管理面板',
+        startedAt: Date.now(),
+      },
+    });
+
+    render(<UserMenu />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+    const adminButton = await screen.findByRole('button', {
+      name: '正在打开管理面板...',
+    });
+    expect(adminButton).toBeDisabled();
+    expect(adminButton).toHaveAttribute('aria-busy', 'true');
   });
 });

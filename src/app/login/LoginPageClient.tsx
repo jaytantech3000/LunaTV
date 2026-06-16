@@ -5,6 +5,7 @@
 import { AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { startTransition, useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
@@ -20,6 +21,8 @@ function resolveRedirectPath(searchParams: ReturnType<typeof useSearchParams>) {
 
   return redirect;
 }
+
+type LoginPhase = 'idle' | 'verifying' | 'redirecting';
 
 function VersionDisplay() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
@@ -50,12 +53,13 @@ function VersionDisplay() {
       <span className='font-mono'>v{CURRENT_VERSION}</span>
       {!isChecking && updateStatus !== UpdateStatus.FETCH_FAILED && (
         <div
-          className={`flex items-center gap-1.5 ${updateStatus === UpdateStatus.HAS_UPDATE
-            ? 'text-yellow-600 dark:text-yellow-400'
-            : updateStatus === UpdateStatus.NO_UPDATE
+          className={`flex items-center gap-1.5 ${
+            updateStatus === UpdateStatus.HAS_UPDATE
+              ? 'text-yellow-600 dark:text-yellow-400'
+              : updateStatus === UpdateStatus.NO_UPDATE
               ? 'text-green-600 dark:text-green-400'
               : ''
-            }`}
+          }`}
         >
           {updateStatus === UpdateStatus.HAS_UPDATE && (
             <>
@@ -82,16 +86,20 @@ export function LoginPageClient() {
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [isRedirecting, setIsRedirecting] = useState(false);
+  const [loginPhase, setLoginPhase] = useState<LoginPhase>('idle');
   const [shouldAskUsername, setShouldAskUsername] = useState(false);
 
   const { siteName } = useSite();
+  const isVerifying = loginPhase === 'verifying';
+  const isRedirecting = loginPhase === 'redirecting';
+  const isBusy = loginPhase !== 'idle';
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const storageType = (window as any).RUNTIME_CONFIG?.STORAGE_TYPE;
-      setShouldAskUsername(storageType && storageType !== 'localstorage');
+      setShouldAskUsername(
+        Boolean(storageType && storageType !== 'localstorage')
+      );
     }
   }, []);
 
@@ -103,53 +111,81 @@ export function LoginPageClient() {
     e.preventDefault();
     setError(null);
 
-    if (!password || (shouldAskUsername && !username)) return;
+    const normalizedUsername = username.trim();
 
-    let shouldKeepTransitionState = false;
+    if (!password) {
+      setError('密码不能为空');
+      return;
+    }
+
+    if (shouldAskUsername && !normalizedUsername) {
+      setError('用户名不能为空');
+      return;
+    }
+
+    let shouldKeepBusyState = false;
 
     try {
-      setLoading(true);
+      setLoginPhase('verifying');
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           password,
-          ...(shouldAskUsername ? { username } : {}),
+          ...(shouldAskUsername ? { username: normalizedUsername } : {}),
         }),
       });
 
       if (res.ok) {
-        setIsRedirecting(true);
-        shouldKeepTransitionState = true;
-        startTransition(() => {
-          router.replace(redirectPath);
+        shouldKeepBusyState = true;
+        flushSync(() => {
+          setLoginPhase('redirecting');
         });
+
+        const navigate = () => {
+          startTransition(() => {
+            router.replace(redirectPath);
+          });
+        };
+
+        if (typeof window !== 'undefined' && window.requestAnimationFrame) {
+          window.requestAnimationFrame(() => {
+            navigate();
+          });
+        } else {
+          window.setTimeout(() => {
+            navigate();
+          }, 0);
+        }
+
         return;
-      } else if (res.status === 401) {
-        setError('密码错误');
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error ?? '服务器错误');
       }
+
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      setError(data?.error || (res.status >= 500 ? '服务器错误' : '登录失败'));
     } catch {
       setError('网络错误，请稍后重试');
     } finally {
-      if (!shouldKeepTransitionState) {
-        setLoading(false);
+      if (!shouldKeepBusyState) {
+        setLoginPhase('idle');
       }
     }
   };
 
   return (
     <div className='relative min-h-screen flex items-center justify-center px-4 overflow-hidden'>
-      {isRedirecting && (
+      {isBusy && (
         <div className='fixed inset-0 z-20 flex items-center justify-center bg-white/35 backdrop-blur-md dark:bg-black/45'>
           <div className='mx-4 flex max-w-[min(92vw,420px)] items-center gap-3 rounded-2xl border border-emerald-200/70 bg-white/88 px-5 py-4 text-sm font-medium text-emerald-800 shadow-2xl shadow-emerald-950/10 dark:border-emerald-900/40 dark:bg-zinc-900/88 dark:text-emerald-200'>
             <Loader2 className='h-5 w-5 shrink-0 animate-spin text-emerald-500 dark:text-emerald-300' />
             <div className='space-y-1'>
-              <p>登录成功</p>
+              <p>{isRedirecting ? '登录成功' : '正在验证身份'}</p>
               <p className='text-xs text-emerald-700/80 dark:text-emerald-200/80'>
-                正在进入内容页...
+                {isRedirecting
+                  ? '正在进入内容页...'
+                  : '请稍候，正在完成登录校验...'}
               </p>
             </div>
           </div>
@@ -173,7 +209,7 @@ export function LoginPageClient() {
                 id='username'
                 type='text'
                 autoComplete='username'
-                disabled={loading || isRedirecting}
+                disabled={isBusy}
                 className='block w-full rounded-lg border-0 py-3 px-4 text-gray-900 dark:text-gray-100 shadow-sm ring-1 ring-white/60 dark:ring-white/20 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-green-500 focus:outline-none sm:text-base bg-white/60 dark:bg-zinc-800/60 backdrop-blur'
                 placeholder='输入用户名'
                 value={username}
@@ -190,7 +226,7 @@ export function LoginPageClient() {
               id='password'
               type='password'
               autoComplete='current-password'
-              disabled={loading || isRedirecting}
+              disabled={isBusy}
               className='block w-full rounded-lg border-0 py-3 px-4 text-gray-900 dark:text-gray-100 shadow-sm ring-1 ring-white/60 dark:ring-white/20 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-green-500 focus:outline-none sm:text-base bg-white/60 dark:bg-zinc-800/60 backdrop-blur'
               placeholder='输入访问密码'
               value={password}
@@ -205,11 +241,15 @@ export function LoginPageClient() {
           <button
             type='submit'
             disabled={
-              !password || loading || isRedirecting || (shouldAskUsername && !username)
+              !password || isBusy || (shouldAskUsername && !username.trim())
             }
             className='inline-flex w-full justify-center rounded-lg bg-green-600 py-3 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:from-green-600 hover:to-blue-600 disabled:cursor-not-allowed disabled:opacity-50'
           >
-            {isRedirecting ? '正在进入...' : loading ? '登录中...' : '登录'}
+            {isRedirecting
+              ? '正在进入...'
+              : isVerifying
+              ? '正在验证...'
+              : '登录'}
           </button>
         </form>
       </div>
