@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import {
-  isLocalServicePlatformKey,
   type LocalServicePlatformKey,
+  isLocalServicePlatformKey,
   resolveLocalServiceBinaryUrl,
 } from '@/lib/client-download';
 
