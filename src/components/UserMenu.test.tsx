@@ -88,8 +88,9 @@ jest.mock('./DownloadClientPanel', () => ({
     isOpen ? <div>DownloadClientPanelMock</div> : null,
 }));
 
-import { UserMenu } from './UserMenu';
 import { updatePlayerEnhancementPreference } from '@/lib/player-enhancements';
+
+import { UserMenu } from './UserMenu';
 
 describe('UserMenu', () => {
   beforeEach(() => {

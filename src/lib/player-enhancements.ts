@@ -1,8 +1,8 @@
 import {
   AudioSpikeProtectionLevel,
-  normalizePlaybackBufferMode,
   normalizeAudioSpikeProtectionLevel,
   normalizeBooleanSetting,
+  normalizePlaybackBufferMode,
   normalizeVisualEnhancementLevel,
   PlaybackBufferMode,
   VisualEnhancementLevel,

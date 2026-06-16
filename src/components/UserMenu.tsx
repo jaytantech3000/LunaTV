@@ -24,8 +24,8 @@ import {
   AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS,
   AudioSpikeProtectionLevel,
   getPlaybackBufferModeLabel,
-  PlaybackBufferMode,
   PLAYBACK_BUFFER_MODE_OPTIONS,
+  PlaybackBufferMode,
   VISUAL_ENHANCEMENT_LEVEL_OPTIONS,
   VisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';

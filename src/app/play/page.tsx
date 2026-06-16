@@ -56,8 +56,8 @@ import {
   getAudioSpikeProtectionLevelLabel,
   getPlaybackBufferModeLabel,
   getVisualEnhancementLevelLabel,
-  PlaybackBufferMode,
   PLAYBACK_BUFFER_MODE_OPTIONS,
+  PlaybackBufferMode,
   VISUAL_ENHANCEMENT_LEVEL_OPTIONS,
   VisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
