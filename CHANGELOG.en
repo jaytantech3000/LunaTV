@@ -1,0 +1,397 @@
+## [100.1.3] - 2026-05-28
+
+### Fixed
+
+- Fix an issue where the homepage hot movie, hot series, and hot variety sections all went blank when the Bangumi API failed.
+- Route Bangumi calendar requests through the server to avoid `bgm.tv` CORS restrictions.
+
+## [100.1.2] - 2026-03-15
+
+### Changed
+
+- Remove the "Direct" and "Douban Official Premium CDN" options from the Douban image proxy, and automatically migrate historical data to the server proxy mode.
+
+## [100.1.1] - 2026-02-27
+
+### Changed
+
+- Use virtual scrolling on the search page to improve scrolling performance.
+
+## [100.1.0] - 2026-02-27
+
+### Added
+
+- Add an admin panel toggle to disable web live streaming.
+
+### Changed
+
+- Optimize the user data storage structure to speed up data access.
+- Store user passwords with salting.
+- Add automatic data migration.
+
+## [100.0.3] - 2025-10-27
+
+### Fixed
+
+- Fix a player controls display bug in WebKit.
+
+## [100.0.2] - 2025-10-23
+
+### Fixed
+
+- Fix an unauthorized access issue in `/api/search/resources`.
+
+## [100.0.1] - 2025-09-25
+
+### Fixed
+
+- Fix the incorrect `ADMIN_USERNAME` environment variable.
+- Fix a homepage crash caused by Bangumi items without images.
+
+## [100.0.0] - 2025-08-26
+
+### Added
+
+- Add support for the `SITE_BASE` environment variable to fix incorrect base URLs during m3u8 rewriting.
+
+### Changed
+
+- Remove authorization-related logic.
+- Remove code obfuscation.
+- Remove `melody-cdn-sharon`.
+
+## [4.3.0] - 2025-08-26
+
+### Added
+
+- Support adding IPTV channels to favorites.
+
+### Changed
+
+- Disable FLV live streaming and only support m3u8 live streaming.
+- Reduce memory usage when proxying TS segments.
+
+## [4.2.1] - 2025-08-26
+
+### Fixed
+
+- Fix an issue where live sources kept loading indefinitely after a load failure or after leaving the page.
+
+## [4.2.0] - 2025-08-26
+
+### Added
+
+- Support FLV live streams and processing live stream URLs resolved to mp4.
+- Add a proxy for live channel logos to avoid CORS issues.
+- Support scroll-based pagination for episode groups on the playback page.
+
+### Changed
+
+- Add loading-state UI to buttons in the admin page.
+
+### Fixed
+
+- Only deserialize m3u8 content in `/api/proxy/m3u8` to reduce memory and CPU usage.
+
+## [4.1.1] - 2025-08-25
+
+### Changed
+
+- Add support for `url-tvg` and multiple EPG URLs.
+
+### Fixed
+
+- Fix an issue where EPG deduplication logic did not account for dates.
+
+## [4.1.0] - 2025-08-24
+
+### Added
+
+- Parse built-in and custom EPG data from m3u files and add a today schedule list.
+
+### Changed
+
+- Refresh live source data concurrently.
+
+## [4.0.0] - 2025-08-24
+
+### Added
+
+- Add IPTV subscription and playback support.
+
+### Changed
+
+- Add Douban links to the video card mobile menu and right-click menu.
+- Make search suggestions respect adult-content filtering.
+
+## [3.2.1] - 2025-08-22
+
+### Changed
+
+- Add an adult-content filtering category.
+- Adjust the stacking order of the search suggestion panel.
+
+## [3.2.0] - 2025-08-22
+
+### Added
+
+- Support batch enable, disable, and delete actions in source management.
+- Support batch user group assignment in user management.
+- Add a "play in new tab" action to the video card right-click and long-press menu.
+
+### Changed
+
+- On mobile, keep only the play button when video cards enter the hover state.
+- Fine-tune the admin page UI and the favorite style in the video card right-click and long-press menu.
+
+### Fixed
+
+- Fix an issue where pressing Enter in the search bar automatically selected the first suggestion.
+
+## [3.1.2] - 2025-08-22
+
+### Fixed
+
+- Fix an issue where video cards could not be clicked on mobile.
+
+## [3.1.1] - 2025-08-21
+
+### Fixed
+
+- Fix an issue where clicking non-play buttons in the video card hover state still opened the playback page.
+
+## [3.1.0] - 2025-08-21
+
+### Added
+
+- Add user group management and per-group video source restrictions.
+- Add video source validity checks in the admin panel.
+- Add a one-click clear button to the search bar.
+
+### Changed
+
+- Relax the license heartbeat criteria for transient network failures.
+- Standardize admin panel dialogs on `createPortal`.
+- Allow `VideoCard` to respond to hover on mobile.
+- Keep the header pinned in the mobile layout and move the search button to the right side of the header.
+- Increase the search API timeout.
+
+### Fixed
+
+- Fix UI misalignment when Bangumi returns integer ratings without decimals.
+
+## [3.0.2] - 2025-08-20
+
+### Changed
+
+- Optimize the machine identifier generation logic.
+
+### Fixed
+
+- Fix the issue where Redis URLs did not support the `rediss` protocol.
+
+## [3.0.1] - 2025-08-20
+
+### Fixed
+
+- Fix an authorization initialization error.
+
+## [3.0.0] - 2025-08-20
+
+### Added
+
+- Harden anti-resale protection.
+- Support custom video source availability per user.
+
+### Changed
+
+- Open an action menu by right-clicking a video card.
+
+### Fixed
+
+- Filter out search results whose episode count is `0`.
+
+## [2.7.1] - 2025-08-17
+
+### Fixed
+
+- Fix an issue where the version panel allowed background scrolling on iOS.
+
+## [2.7.0] - 2025-08-17
+
+### Added
+
+- Add a mobile action panel to video cards to improve touch interaction.
+
+### Changed
+
+- Optimize episode title matching and display logic.
+
+### Fixed
+
+- Fix an issue where the settings panel and change-password panel still allowed dragging the background.
+
+## [2.6.0] - 2025-08-17
+
+### Added
+
+- Add a streaming search API and make it the default search endpoint to improve search UX.
+- Add an in-memory cache for source-site search results keyed by source, keyword, and page, with a 10-minute TTL.
+- Add a Douban CDN provided by `@JohnsonRan`.
+
+### Changed
+
+- Make search results default to an unsorted state instead of sorting by year.
+- Stop setting cache headers when the regular search API returns no results.
+- Remove the `cors-anywhere` mode from the Douban data source.
+
+### Fixed
+
+- Export the site owner password during data export so the original owner can still log in after migrating to a new account.
+- Optimize source information display on aggregate cards for mobile.
+
+## [2.4.1] - 2025-08-15
+
+### Fixed
+
+- Add self-checks for imported and database-loaded config files to prevent user state issues after changing `USERNAME`.
+
+## [2.4.0] - 2025-08-15
+
+### Added
+
+- Support Kvrocks storage as a persistent KV backend.
+
+### Fixed
+
+- Fix unstable search result ordering.
+- Update the in-memory admin config cache when importing data.
+
+## [2.3.0] - 2025-08-15
+
+### Added
+
+- Support full-site data import and export for the site owner.
+
+### Changed
+
+- Restrict config file operations to the site owner only.
+- Fine-tune the mobile styles of the search result filter panel.
+
+## [2.2.1] - 2025-08-14
+
+### Fixed
+
+- Fix an issue where the filter panel did not stay aligned while the page scrolled with the panel open.
+
+## [2.2.0] - 2025-08-14
+
+### Added
+
+- Support filtering search results by source, title, and year, and support sorting by year.
+- Show year information on search result video cards and source information on aggregate cards.
+
+### Fixed
+
+- Fix `/api/search/resources` returning empty results.
+- Fix the issue where Upstash instances could not edit custom categories.
+
+## [2.1.0] - 2025-08-13
+
+### Added
+
+- Support fetching config files through subscriptions.
+
+### Changed
+
+- Fine-tune some copy and UI.
+- Remove unused code.
+
+## [2.0.1] - 2025-08-13
+
+### Changed
+
+- Route version checks and changelog requests through GitHub.
+
+### Fixed
+
+- Fine-tune the admin panel styles.
+
+## [2.0.0] - 2025-08-13
+
+### Added
+
+- Support online configuration and editing of config files.
+- Add real-time suggestions to the search box on the search page.
+- Remove support for localstorage mode.
+
+### Changed
+
+- Change the delete button for play records to a trash icon to reduce ambiguity.
+
+### Fixed
+
+- Limit the maximum size of the settings panel to prevent it from overflowing the viewport.
+
+## [1.1.1] - 2025-08-12
+
+### Changed
+
+- Correct the CORS proxy URL provided by zwei.
+- Remove deprecated code.
+
+### Fixed
+
+- [Ops] Use the UTC+8 date for Docker workflow releases.
+
+## [1.1.0] - 2025-08-12
+
+### Added
+
+- Add a daily anime airing feature that shows the daily airing schedule.
+
+### Fixed
+
+- Fix the issue where the remote `CHANGELOG` could not extract change details.
+
+## [1.0.5] - 2025-08-12
+
+### Changed
+
+- Implement an automatic release workflow based on Git tags.
+
+## [1.0.4] - 2025-08-11
+
+### Added
+
+- Optimize the version management workflow for single-point modification.
+
+### Changed
+
+- Version numbers are now extracted automatically from `CHANGELOG`, so `VERSION.txt` no longer needs to be maintained manually.
+
+## [1.0.3] - 2025-08-11
+
+### Changed
+
+- Upgrade the player `Artplayer` to version `5.2.5`.
+
+## [1.0.2] - 2025-08-11
+
+### Changed
+
+- Restore numeric version comparison so an update is detected only when the latest version is greater than the local version.
+- [Ops] Automatically replace the version in `version.ts` with the version from `VERSION.txt`.
+
+## [1.0.1] - 2025-08-11
+
+### Fixed
+
+- Fix version checking so any mismatch with the latest version is treated as an update.
+
+## [1.0.0] - 2025-08-10
+
+### Added
+
+- Introduce a versioning scheme based on Semantic Versioning.
+- Add a version information panel that shows the local changelog and remote changelog.

@@ -1,21 +1,31 @@
-/* eslint-disable no-console,react-hooks/exhaustive-deps */
+/* eslint-disable no-console */
 
 'use client';
 
 import {
+  AlertCircle,
   Bug,
-  CheckCircle,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Download,
+  Globe2,
+  Loader2,
   Plus,
   RefreshCw,
   X,
 } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { changelog, ChangelogEntry } from '@/lib/changelog';
+import {
+  type ChangelogEntry,
+  type ChangelogLocale,
+  changelog,
+  getLocalizedChangelogItems,
+} from '@/lib/changelog';
+import { getChangelogFileUrl, getProjectPageUrl } from '@/lib/release-urls';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { CURRENT_VERSION } from '@/lib/version';
 import { compareVersions, UpdateStatus } from '@/lib/version_check';
@@ -33,23 +43,328 @@ interface RemoteChangelogEntry {
   fixed: string[];
 }
 
+type RemoteStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+const CHANGELOG_LOCALE_STORAGE_KEY = 'lunatv:version-panel:changelog-locale';
+
+const CHANGELOG_COPY: Record<
+  ChangelogLocale,
+  {
+    panelTitle: string;
+    currentBadge: string;
+    latestRemoteBadge: string;
+    closeButtonLabel: string;
+    addedTitle: string;
+    changedTitle: string;
+    fixedTitle: string;
+    remoteSectionTitle: string;
+    localSectionTitle: string;
+    showRemoteButton: string;
+    hideRemoteButton: string;
+    updateAvailableTitle: string;
+    updateAvailableDescription: (currentVersion: string, latestVersion: string) => string;
+    upToDateTitle: string;
+    upToDateDescription: (currentVersion: string) => string;
+    loadingTitle: string;
+    loadingDescription: string;
+    errorTitle: string;
+    errorDescription: string;
+    remoteEmptyDescription: string;
+    openRepositoryButton: string;
+  }
+> = {
+  'zh-CN': {
+    panelTitle: '版本信息',
+    currentBadge: '当前版本',
+    latestRemoteBadge: '远程最新',
+    closeButtonLabel: '关闭',
+    addedTitle: '新增功能',
+    changedTitle: '功能改进',
+    fixedTitle: '问题修复',
+    remoteSectionTitle: '远程更新内容',
+    localSectionTitle: '变更日志',
+    showRemoteButton: '查看更新内容',
+    hideRemoteButton: '收起',
+    updateAvailableTitle: '发现新版本',
+    updateAvailableDescription: (currentVersion, latestVersion) =>
+      `v${currentVersion} → v${latestVersion}`,
+    upToDateTitle: '当前为最新版本',
+    upToDateDescription: (currentVersion) => `已是最新版本 v${currentVersion}`,
+    loadingTitle: '正在检查远程版本',
+    loadingDescription: '请稍候，正在拉取最新版本和变更日志。',
+    errorTitle: '暂时无法获取远程版本信息',
+    errorDescription: '你仍然可以打开仓库查看最新发布和变更记录。',
+    remoteEmptyDescription: '当前没有额外的远程更新记录可展示。',
+    openRepositoryButton: '前往仓库',
+  },
+  en: {
+    panelTitle: 'Version Info',
+    currentBadge: 'Current',
+    latestRemoteBadge: 'Latest remote',
+    closeButtonLabel: 'Close',
+    addedTitle: 'Added',
+    changedTitle: 'Changed',
+    fixedTitle: 'Fixed',
+    remoteSectionTitle: 'Remote changes',
+    localSectionTitle: 'Changelog',
+    showRemoteButton: 'Show changes',
+    hideRemoteButton: 'Hide',
+    updateAvailableTitle: 'Update available',
+    updateAvailableDescription: (currentVersion, latestVersion) =>
+      `v${currentVersion} → v${latestVersion}`,
+    upToDateTitle: 'You are up to date',
+    upToDateDescription: (currentVersion) => `Current version: v${currentVersion}`,
+    loadingTitle: 'Checking remote version',
+    loadingDescription: 'Fetching the latest version and changelog...',
+    errorTitle: 'Unable to load remote version info',
+    errorDescription:
+      'You can still open the repository to view the latest releases and changes.',
+    remoteEmptyDescription: 'No additional remote changelog entries are available right now.',
+    openRepositoryButton: 'Open Repository',
+  },
+};
+
+const CHANGELOG_LOCALE_OPTIONS = [
+  { label: '中文', value: 'zh-CN' },
+  { label: 'English', value: 'en' },
+] as const;
+
+function readChangelogLocalePreference(): ChangelogLocale {
+  if (typeof window === 'undefined') {
+    return 'zh-CN';
+  }
+
+  return window.localStorage.getItem(CHANGELOG_LOCALE_STORAGE_KEY) === 'en'
+    ? 'en'
+    : 'zh-CN';
+}
+
+function persistChangelogLocalePreference(locale: ChangelogLocale) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(CHANGELOG_LOCALE_STORAGE_KEY, locale);
+}
+
+function resolveChangelogItems(
+  items: ChangelogEntry['added'] | RemoteChangelogEntry['added'],
+  locale: ChangelogLocale
+): string[] {
+  return Array.isArray(items)
+    ? items
+    : getLocalizedChangelogItems(items, locale);
+}
+
+function parseRemoteChangelog(content: string): RemoteChangelogEntry[] {
+  const lines = content.split('\n');
+  const entries: RemoteChangelogEntry[] = [];
+  let currentEntry: RemoteChangelogEntry | null = null;
+  let currentSection:
+    | keyof Pick<RemoteChangelogEntry, 'added' | 'changed' | 'fixed'>
+    | null = null;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const versionMatch = line.match(
+      /^## \[([0-9A-Za-z.-]+)\] - (\d{4}-\d{2}-\d{2})$/
+    );
+
+    if (versionMatch) {
+      if (currentEntry) {
+        entries.push(currentEntry);
+      }
+
+      currentEntry = {
+        version: versionMatch[1],
+        date: versionMatch[2],
+        added: [],
+        changed: [],
+        fixed: [],
+      };
+      currentSection = null;
+      continue;
+    }
+
+    if (!currentEntry) {
+      continue;
+    }
+
+    if (line === '### Added') {
+      currentSection = 'added';
+      continue;
+    }
+
+    if (line === '### Changed') {
+      currentSection = 'changed';
+      continue;
+    }
+
+    if (line === '### Fixed') {
+      currentSection = 'fixed';
+      continue;
+    }
+
+    if (line.startsWith('- ') && currentSection) {
+      currentEntry[currentSection].push(line.slice(2));
+    }
+  }
+
+  if (currentEntry) {
+    entries.push(currentEntry);
+  }
+
+  return entries;
+}
+
+function ChangeList({
+  items,
+  title,
+  icon,
+  dotClassName,
+  titleClassName,
+}: {
+  items: string[];
+  title: string;
+  icon: ReactNode;
+  dotClassName: string;
+  titleClassName: string;
+}) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <div>
+      <h5
+        className={`mb-2 flex items-center gap-1 text-sm font-medium ${titleClassName}`}
+      >
+        {icon}
+        {title}
+      </h5>
+      <ul className='space-y-1'>
+        {items.map((item, index) => (
+          <li
+            key={`${title}-${index}`}
+            className='flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300'
+          >
+            <span
+              className={`mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full ${dotClassName}`}
+            />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ChangelogCard({
+  entry,
+  locale,
+  copy,
+  currentVersion,
+  latestRemoteVersion,
+}: {
+  entry: ChangelogEntry | RemoteChangelogEntry;
+  locale: ChangelogLocale;
+  copy: (typeof CHANGELOG_COPY)['zh-CN'];
+  currentVersion: string;
+  latestRemoteVersion: string;
+}) {
+  const addedItems = resolveChangelogItems(entry.added, locale);
+  const changedItems = resolveChangelogItems(entry.changed, locale);
+  const fixedItems = resolveChangelogItems(entry.fixed, locale);
+
+  const isCurrentVersion = entry.version === currentVersion;
+  const isLatestRemoteVersion = entry.version === latestRemoteVersion;
+
+  return (
+    <div
+      className={`rounded-lg border p-4 ${
+        isCurrentVersion
+          ? 'border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/20'
+          : isLatestRemoteVersion
+          ? 'border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-900/20'
+          : 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/60'
+      }`}
+    >
+      <div className='mb-3 flex flex-col justify-between gap-2 sm:flex-row sm:items-center'>
+        <div className='flex flex-wrap items-center gap-2'>
+          <h4 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+            v{entry.version}
+          </h4>
+          {isCurrentVersion ? (
+            <span className='rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'>
+              {copy.currentBadge}
+            </span>
+          ) : null}
+          {isLatestRemoteVersion ? (
+            <span className='rounded-full bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'>
+              {copy.latestRemoteBadge}
+            </span>
+          ) : null}
+        </div>
+        <div className='text-sm text-gray-500 dark:text-gray-400'>{entry.date}</div>
+      </div>
+
+      <div className='space-y-3'>
+        <ChangeList
+          items={addedItems}
+          title={copy.addedTitle}
+          icon={<Plus className='h-4 w-4' />}
+          dotClassName='bg-green-500'
+          titleClassName='text-green-700 dark:text-green-400'
+        />
+        <ChangeList
+          items={changedItems}
+          title={copy.changedTitle}
+          icon={<RefreshCw className='h-4 w-4' />}
+          dotClassName='bg-blue-500'
+          titleClassName='text-blue-700 dark:text-blue-400'
+        />
+        <ChangeList
+          items={fixedItems}
+          title={copy.fixedTitle}
+          icon={<Bug className='h-4 w-4' />}
+          dotClassName='bg-purple-500'
+          titleClassName='text-purple-700 dark:text-purple-400'
+        />
+      </div>
+    </div>
+  );
+}
+
 export const VersionPanel: React.FC<VersionPanelProps> = ({
   isOpen,
   onClose,
 }) => {
   const [mounted, setMounted] = useState(false);
-  const [remoteChangelog, setRemoteChangelog] = useState<ChangelogEntry[]>([]);
-  const [hasUpdate, setIsHasUpdate] = useState(false);
-  const [latestVersion, setLatestVersion] = useState<string>('');
+  const [changelogLocale, setChangelogLocale] =
+    useState<ChangelogLocale>('zh-CN');
+  const [remoteStatus, setRemoteStatus] = useState<RemoteStatus>('idle');
+  const [remoteChangelog, setRemoteChangelog] = useState<RemoteChangelogEntry[]>(
+    []
+  );
   const [showRemoteContent, setShowRemoteContent] = useState(false);
+  const [hasUpdate, setHasUpdate] = useState(false);
+  const [latestVersion, setLatestVersion] = useState('');
+  const [projectPageUrl, setProjectPageUrl] = useState('');
 
-  // 确保组件已挂载
+  const copy = CHANGELOG_COPY[changelogLocale];
+  const localVersions = new Set(changelog.map((entry) => entry.version));
+  const remoteEntries = remoteChangelog.filter(
+    (entry) => !localVersions.has(entry.version)
+  );
+
   useEffect(() => {
     setMounted(true);
+    setChangelogLocale(readChangelogLocalePreference());
+    setProjectPageUrl(getProjectPageUrl());
+
     return () => setMounted(false);
   }, []);
 
-  // Body 滚动锁定 - 使用 overflow 方式避免布局问题
   useEffect(() => {
     if (isOpen) {
       return acquireScrollLock({
@@ -58,484 +373,340 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
     }
   }, [isOpen]);
 
-  // 获取远程变更日志
   useEffect(() => {
-    if (isOpen) {
-      fetchRemoteChangelog();
+    if (!isOpen) {
+      return;
     }
-  }, [isOpen]);
 
-  // 获取远程变更日志
-  const fetchRemoteChangelog = async () => {
-    try {
-      const response = await fetch(
-        'https://raw.githubusercontent.com/MoonTechLab/LunaTV/main/CHANGELOG'
-      );
-      if (response.ok) {
+    let cancelled = false;
+
+    const fetchRemoteChangelog = async () => {
+      setRemoteStatus('loading');
+
+      try {
+        const response = await fetch(getChangelogFileUrl(changelogLocale), {
+          cache: 'no-store',
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
         const content = await response.text();
-        const parsed = parseChangelog(content);
+        const parsed = parseRemoteChangelog(content);
+        const latestRemoteVersion = parsed[0]?.version || '';
+
+        if (cancelled) {
+          return;
+        }
+
         setRemoteChangelog(parsed);
-
-        // 检查是否有更新
-        if (parsed.length > 0) {
-          const latest = parsed[0];
-          setLatestVersion(latest.version);
-          setIsHasUpdate(
-            compareVersions(latest.version) === UpdateStatus.HAS_UPDATE
-          );
-        }
-      } else {
-        console.error(
-          '获取远程变更日志失败:',
-          response.status,
-          response.statusText
+        setLatestVersion(latestRemoteVersion);
+        setHasUpdate(
+          latestRemoteVersion
+            ? compareVersions(latestRemoteVersion) === UpdateStatus.HAS_UPDATE
+            : false
         );
+        setRemoteStatus('ready');
+      } catch (error) {
+        console.error('获取远程变更日志失败:', error);
+        if (cancelled) {
+          return;
+        }
+
+        setRemoteChangelog([]);
+        setLatestVersion('');
+        setHasUpdate(false);
+        setRemoteStatus('error');
       }
-    } catch (error) {
-      console.error('获取远程变更日志失败:', error);
-    }
+    };
+
+    void fetchRemoteChangelog();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [changelogLocale, isOpen]);
+
+  const handleLocaleChange = (locale: ChangelogLocale) => {
+    setChangelogLocale(locale);
+    persistChangelogLocalePreference(locale);
   };
 
-  // 解析变更日志格式
-  const parseChangelog = (content: string): RemoteChangelogEntry[] => {
-    const lines = content.split('\n');
-    const versions: RemoteChangelogEntry[] = [];
-    let currentVersion: RemoteChangelogEntry | null = null;
-    let currentSection: string | null = null;
-    let inVersionContent = false;
+  if (!mounted || !isOpen) {
+    return null;
+  }
 
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-
-      // 匹配版本行: ## [X.Y.Z] - YYYY-MM-DD
-      const versionMatch = trimmedLine.match(
-        /^## \[([\d.]+)\] - (\d{4}-\d{2}-\d{2})$/
-      );
-      if (versionMatch) {
-        if (currentVersion) {
-          versions.push(currentVersion);
-        }
-
-        currentVersion = {
-          version: versionMatch[1],
-          date: versionMatch[2],
-          added: [],
-          changed: [],
-          fixed: [],
-        };
-        currentSection = null;
-        inVersionContent = true;
-        continue;
-      }
-
-      // 如果遇到下一个版本或到达文件末尾，停止处理当前版本
-      if (inVersionContent && currentVersion) {
-        // 匹配章节标题
-        if (trimmedLine === '### Added') {
-          currentSection = 'added';
-          continue;
-        } else if (trimmedLine === '### Changed') {
-          currentSection = 'changed';
-          continue;
-        } else if (trimmedLine === '### Fixed') {
-          currentSection = 'fixed';
-          continue;
-        }
-
-        // 匹配条目: - 内容
-        if (trimmedLine.startsWith('- ') && currentSection) {
-          const entry = trimmedLine.substring(2);
-          if (currentSection === 'added') {
-            currentVersion.added.push(entry);
-          } else if (currentSection === 'changed') {
-            currentVersion.changed.push(entry);
-          } else if (currentSection === 'fixed') {
-            currentVersion.fixed.push(entry);
-          }
-        }
-      }
-    }
-
-    // 添加最后一个版本
-    if (currentVersion) {
-      versions.push(currentVersion);
-    }
-
-    return versions;
-  };
-
-  // 渲染变更日志条目
-  const renderChangelogEntry = (
-    entry: ChangelogEntry | RemoteChangelogEntry,
-    isCurrentVersion = false,
-    isRemote = false
-  ) => {
-    const isUpdate = isRemote && hasUpdate && entry.version === latestVersion;
-
-    return (
-      <div
-        key={entry.version}
-        className={`p-4 rounded-lg border ${
-          isCurrentVersion
-            ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
-            : isUpdate
-            ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
-            : 'bg-gray-50 dark:bg-gray-800/60 border-gray-200 dark:border-gray-700'
-        }`}
-      >
-        {/* 版本标题 */}
-        <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3'>
-          <div className='flex flex-wrap items-center gap-2'>
-            <h4 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
-              v{entry.version}
-            </h4>
-            {isCurrentVersion && (
-              <span className='px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 rounded-full'>
-                当前版本
-              </span>
-            )}
-            {isUpdate && (
-              <span className='px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300 rounded-full flex items-center gap-1'>
-                <Download className='w-3 h-3' />
-                可更新
-              </span>
-            )}
-          </div>
-          <div className='flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400'>
-            {entry.date}
+  const statusCard = (() => {
+    if (remoteStatus === 'loading' || remoteStatus === 'idle') {
+      return (
+        <div className='rounded-lg border border-blue-200 bg-gradient-to-r from-blue-50 to-sky-50 p-4 dark:border-blue-800 dark:from-blue-900/20 dark:to-sky-900/20'>
+          <div className='flex flex-col gap-3'>
+            <div className='flex items-center gap-3'>
+              <div className='flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-800/40'>
+                <Loader2 className='h-5 w-5 animate-spin text-blue-600 dark:text-blue-300' />
+              </div>
+              <div className='min-w-0 flex-1'>
+                <h4 className='text-sm font-semibold text-blue-800 dark:text-blue-200 sm:text-base'>
+                  {copy.loadingTitle}
+                </h4>
+                <p className='text-xs text-blue-700 dark:text-blue-300 sm:text-sm'>
+                  {copy.loadingDescription}
+                </p>
+              </div>
+            </div>
+            <a
+              href={projectPageUrl}
+              target='_blank'
+              rel='noopener noreferrer'
+              className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs text-white shadow-sm transition-colors hover:bg-blue-700 sm:text-sm'
+            >
+              <Globe2 className='h-4 w-4' />
+              {copy.openRepositoryButton}
+            </a>
           </div>
         </div>
+      );
+    }
 
-        {/* 变更内容 */}
-        <div className='space-y-3'>
-          {entry.added.length > 0 && (
-            <div>
-              <h5 className='text-sm font-medium text-green-700 dark:text-green-400 mb-2 flex items-center gap-1'>
-                <Plus className='w-4 h-4' />
-                新增功能
-              </h5>
-              <ul className='space-y-1'>
-                {entry.added.map((item, index) => (
-                  <li
-                    key={index}
-                    className='text-sm text-gray-700 dark:text-gray-300 flex items-start gap-2'
-                  >
-                    <span className='w-1.5 h-1.5 bg-green-500 rounded-full mt-2 flex-shrink-0'></span>
-                    {item}
-                  </li>
-                ))}
-              </ul>
+    if (remoteStatus === 'error') {
+      return (
+        <div className='rounded-lg border border-red-200 bg-gradient-to-r from-red-50 to-rose-50 p-4 dark:border-red-800 dark:from-red-900/20 dark:to-rose-900/20'>
+          <div className='flex flex-col gap-3'>
+            <div className='flex items-center gap-3'>
+              <div className='flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-800/40'>
+                <AlertCircle className='h-5 w-5 text-red-600 dark:text-red-300' />
+              </div>
+              <div className='min-w-0 flex-1'>
+                <h4 className='text-sm font-semibold text-red-800 dark:text-red-200 sm:text-base'>
+                  {copy.errorTitle}
+                </h4>
+                <p className='text-xs text-red-700 dark:text-red-300 sm:text-sm'>
+                  {copy.errorDescription}
+                </p>
+              </div>
             </div>
-          )}
+            <a
+              href={projectPageUrl}
+              target='_blank'
+              rel='noopener noreferrer'
+              className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-xs text-white shadow-sm transition-colors hover:bg-red-700 sm:text-sm'
+            >
+              <Globe2 className='h-4 w-4' />
+              {copy.openRepositoryButton}
+            </a>
+          </div>
+        </div>
+      );
+    }
 
-          {entry.changed.length > 0 && (
-            <div>
-              <h5 className='text-sm font-medium text-blue-700 dark:text-blue-400 mb-2 flex items-center gap-1'>
-                <RefreshCw className='w-4 h-4' />
-                功能改进
-              </h5>
-              <ul className='space-y-1'>
-                {entry.changed.map((item, index) => (
-                  <li
-                    key={index}
-                    className='text-sm text-gray-700 dark:text-gray-300 flex items-start gap-2'
-                  >
-                    <span className='w-1.5 h-1.5 bg-blue-500 rounded-full mt-2 flex-shrink-0'></span>
-                    {item}
-                  </li>
-                ))}
-              </ul>
+    if (hasUpdate && latestVersion) {
+      return (
+        <div className='rounded-lg border border-yellow-200 bg-gradient-to-r from-yellow-50 to-amber-50 p-4 dark:border-yellow-800 dark:from-yellow-900/20 dark:to-amber-900/20'>
+          <div className='flex flex-col gap-3'>
+            <div className='flex items-center gap-3'>
+              <div className='flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-yellow-100 dark:bg-yellow-800/40'>
+                <Download className='h-5 w-5 text-yellow-600 dark:text-yellow-400' />
+              </div>
+              <div className='min-w-0 flex-1'>
+                <h4 className='text-sm font-semibold text-yellow-800 dark:text-yellow-200 sm:text-base'>
+                  {copy.updateAvailableTitle}
+                </h4>
+                <p className='break-all text-xs text-yellow-700 dark:text-yellow-300 sm:text-sm'>
+                  {copy.updateAvailableDescription(CURRENT_VERSION, latestVersion)}
+                </p>
+              </div>
             </div>
-          )}
+            <a
+              href={projectPageUrl}
+              target='_blank'
+              rel='noopener noreferrer'
+              className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-yellow-600 px-3 py-2 text-xs text-white shadow-sm transition-colors hover:bg-yellow-700 sm:text-sm'
+            >
+              <Download className='h-4 w-4' />
+              {copy.openRepositoryButton}
+            </a>
+          </div>
+        </div>
+      );
+    }
 
-          {entry.fixed.length > 0 && (
-            <div>
-              <h5 className='text-sm font-medium text-purple-700 dark:text-purple-400 mb-2 flex items-center gap-1'>
-                <Bug className='w-4 h-4' />
-                问题修复
-              </h5>
-              <ul className='space-y-1'>
-                {entry.fixed.map((item, index) => (
-                  <li
-                    key={index}
-                    className='text-sm text-gray-700 dark:text-gray-300 flex items-start gap-2'
-                  >
-                    <span className='w-1.5 h-1.5 bg-purple-500 rounded-full mt-2 flex-shrink-0'></span>
-                    {item}
-                  </li>
-                ))}
-              </ul>
+    return (
+      <div className='rounded-lg border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 p-4 dark:border-green-800 dark:from-green-900/20 dark:to-emerald-900/20'>
+        <div className='flex flex-col gap-3'>
+          <div className='flex items-center gap-3'>
+            <div className='flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-800/40'>
+              <CheckCircle2 className='h-5 w-5 text-green-600 dark:text-green-400' />
             </div>
-          )}
+            <div className='min-w-0 flex-1'>
+              <h4 className='text-sm font-semibold text-green-800 dark:text-green-200 sm:text-base'>
+                {copy.upToDateTitle}
+              </h4>
+              <p className='break-all text-xs text-green-700 dark:text-green-300 sm:text-sm'>
+                {copy.upToDateDescription(CURRENT_VERSION)}
+              </p>
+            </div>
+          </div>
+          <a
+            href={projectPageUrl}
+            target='_blank'
+            rel='noopener noreferrer'
+            className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-xs text-white shadow-sm transition-colors hover:bg-green-700 sm:text-sm'
+          >
+            <CheckCircle2 className='h-4 w-4' />
+            {copy.openRepositoryButton}
+          </a>
         </div>
       </div>
     );
-  };
+  })();
 
-  // 版本面板内容
   const versionPanelContent = (
     <>
-      {/* 背景遮罩 */}
       <div
-        className='fixed inset-0 bg-black/50 backdrop-blur-sm z-[1000]'
+        className='fixed inset-0 z-[1000] bg-black/50 backdrop-blur-sm'
         onClick={onClose}
-        onTouchMove={(e) => {
-          // 只阻止滚动，允许其他触摸事件
-          e.preventDefault();
+        onTouchMove={(event) => {
+          event.preventDefault();
         }}
-        onWheel={(e) => {
-          // 阻止滚轮滚动
-          e.preventDefault();
+        onWheel={(event) => {
+          event.preventDefault();
         }}
         style={{
           touchAction: 'none',
         }}
       />
 
-      {/* 版本面板 */}
       <div
-        className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-xl max-h-[90vh] bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] overflow-hidden'
-        onTouchMove={(e) => {
-          // 允许版本面板内部滚动，阻止事件冒泡到外层
-          e.stopPropagation();
+        className='fixed left-1/2 top-1/2 z-[1001] max-h-[90vh] w-full max-w-xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl bg-white shadow-xl dark:bg-gray-900'
+        onTouchMove={(event) => {
+          event.stopPropagation();
         }}
         style={{
-          touchAction: 'auto', // 允许面板内的正常触摸操作
+          touchAction: 'auto',
         }}
       >
-        {/* 标题栏 */}
-        <div className='flex items-center justify-between p-3 sm:p-6 border-b border-gray-200 dark:border-gray-700'>
-          <div className='flex items-center gap-2 sm:gap-3'>
-            <h3 className='text-lg sm:text-xl font-bold text-gray-800 dark:text-gray-200'>
-              版本信息
-            </h3>
-            <div className='flex flex-wrap items-center gap-1 sm:gap-2'>
-              <span className='px-2 sm:px-3 py-1 text-xs sm:text-sm font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 rounded-full'>
-                v{CURRENT_VERSION}
-              </span>
-              {hasUpdate && (
-                <span className='px-2 sm:px-3 py-1 text-xs sm:text-sm font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300 rounded-full flex items-center gap-1'>
-                  <Download className='w-3 h-3 sm:w-4 sm:h-4' />
-                  <span className='hidden sm:inline'>有新版本可用</span>
-                  <span className='sm:hidden'>可更新</span>
+        <div className='border-b border-gray-200 p-3 dark:border-gray-700 sm:p-6'>
+          <div className='flex items-start justify-between gap-3'>
+            <div className='space-y-3'>
+              <div className='flex flex-wrap items-center gap-2 sm:gap-3'>
+                <h3 className='text-lg font-bold text-gray-800 dark:text-gray-200 sm:text-xl'>
+                  {copy.panelTitle}
+                </h3>
+                <span className='rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300 sm:px-3 sm:text-sm'>
+                  v{CURRENT_VERSION}
                 </span>
-              )}
+                {hasUpdate && latestVersion ? (
+                  <span className='flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300 sm:px-3 sm:text-sm'>
+                    <Download className='h-3 w-3 sm:h-4 sm:w-4' />
+                    <span className='hidden sm:inline'>{copy.updateAvailableTitle}</span>
+                    <span className='sm:hidden'>Update</span>
+                  </span>
+                ) : null}
+              </div>
+
+              <div className='inline-flex rounded-lg bg-gray-100 p-1 dark:bg-gray-800'>
+                {CHANGELOG_LOCALE_OPTIONS.map((option) => {
+                  const selected = option.value === changelogLocale;
+
+                  return (
+                    <button
+                      key={option.value}
+                      type='button'
+                      onClick={() => handleLocaleChange(option.value)}
+                      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                        selected
+                          ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100'
+                          : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
+
+            <button
+              onClick={onClose}
+              className='flex h-6 w-6 items-center justify-center rounded-full p-1 text-gray-500 transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 sm:h-8 sm:w-8'
+              aria-label={copy.closeButtonLabel}
+            >
+              <X className='h-full w-full' />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className='w-6 h-6 sm:w-8 sm:h-8 p-1 rounded-full flex items-center justify-center text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors'
-            aria-label='关闭'
-          >
-            <X className='w-full h-full' />
-          </button>
         </div>
 
-        {/* 内容区域 */}
-        <div className='p-3 sm:p-6 overflow-y-auto max-h-[calc(95vh-140px)] sm:max-h-[calc(90vh-120px)]'>
+        <div className='max-h-[calc(95vh-140px)] overflow-y-auto p-3 sm:max-h-[calc(90vh-120px)] sm:p-6'>
           <div className='space-y-3 sm:space-y-6'>
-            {/* 远程更新信息 */}
-            {hasUpdate && (
-              <div className='bg-gradient-to-r from-yellow-50 to-amber-50 dark:from-yellow-900/20 dark:to-amber-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 sm:p-4'>
-                <div className='flex flex-col gap-3'>
-                  <div className='flex items-center gap-2 sm:gap-3'>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 bg-yellow-100 dark:bg-yellow-800/40 rounded-full flex items-center justify-center flex-shrink-0'>
-                      <Download className='w-4 h-4 sm:w-5 sm:h-5 text-yellow-600 dark:text-yellow-400' />
-                    </div>
-                    <div className='min-w-0 flex-1'>
-                      <h4 className='text-sm sm:text-base font-semibold text-yellow-800 dark:text-yellow-200'>
-                        发现新版本
-                      </h4>
-                      <p className='text-xs sm:text-sm text-yellow-700 dark:text-yellow-300 break-all'>
-                        v{CURRENT_VERSION} → v{latestVersion}
-                      </p>
-                    </div>
-                  </div>
-                  <a
-                    href='https://github.com/MoonTechLab/LunaTV'
-                    target='_blank'
-                    rel='noopener noreferrer'
-                    className='inline-flex items-center justify-center gap-2 px-3 py-2 bg-yellow-600 hover:bg-yellow-700 text-white text-xs sm:text-sm rounded-lg transition-colors shadow-sm w-full'
-                  >
-                    <Download className='w-3 h-3 sm:w-4 sm:h-4' />
-                    前往仓库
-                  </a>
-                </div>
-              </div>
-            )}
+            {statusCard}
 
-            {/* 当前为最新版本信息 */}
-            {!hasUpdate && (
-              <div className='bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 border border-green-200 dark:border-green-800 rounded-lg p-3 sm:p-4'>
-                <div className='flex flex-col gap-3'>
-                  <div className='flex items-center gap-2 sm:gap-3'>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 bg-green-100 dark:bg-green-800/40 rounded-full flex items-center justify-center flex-shrink-0'>
-                      <CheckCircle className='w-4 h-4 sm:w-5 sm:h-5 text-green-600 dark:text-green-400' />
-                    </div>
-                    <div className='min-w-0 flex-1'>
-                      <h4 className='text-sm sm:text-base font-semibold text-green-800 dark:text-green-200'>
-                        当前为最新版本
-                      </h4>
-                      <p className='text-xs sm:text-sm text-green-700 dark:text-green-300 break-all'>
-                        已是最新版本 v{CURRENT_VERSION}
-                      </p>
-                    </div>
-                  </div>
-                  <a
-                    href='https://github.com/MoonTechLab/LunaTV'
-                    target='_blank'
-                    rel='noopener noreferrer'
-                    className='inline-flex items-center justify-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-xs sm:text-sm rounded-lg transition-colors shadow-sm w-full'
-                  >
-                    <CheckCircle className='w-3 h-3 sm:w-4 sm:h-4' />
-                    前往仓库
-                  </a>
-                </div>
-              </div>
-            )}
-
-            {/* 远程可更新内容 */}
-            {hasUpdate && (
+            {remoteStatus === 'ready' ? (
               <div className='space-y-4'>
-                <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-3'>
-                  <h4 className='text-lg font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2'>
-                    <Download className='w-5 h-5 text-yellow-500' />
-                    远程更新内容
+                <div className='flex flex-col justify-between gap-3 sm:flex-row sm:items-center'>
+                  <h4 className='flex items-center gap-2 text-lg font-semibold text-gray-800 dark:text-gray-200'>
+                    <Download className='h-5 w-5 text-yellow-500' />
+                    {copy.remoteSectionTitle}
                   </h4>
                   <button
-                    onClick={() => setShowRemoteContent(!showRemoteContent)}
-                    className='inline-flex items-center justify-center gap-2 px-3 py-1.5 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 dark:bg-yellow-800/30 dark:hover:bg-yellow-800/50 dark:text-yellow-200 rounded-lg transition-colors text-sm w-full sm:w-auto'
+                    type='button'
+                    onClick={() => setShowRemoteContent((previous) => !previous)}
+                    className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-yellow-100 px-3 py-1.5 text-sm text-yellow-800 transition-colors hover:bg-yellow-200 dark:bg-yellow-800/30 dark:text-yellow-200 dark:hover:bg-yellow-800/50 sm:w-auto'
+                    disabled={remoteEntries.length === 0}
                   >
                     {showRemoteContent ? (
                       <>
-                        <ChevronUp className='w-4 h-4' />
-                        收起
+                        <ChevronUp className='h-4 w-4' />
+                        {copy.hideRemoteButton}
                       </>
                     ) : (
                       <>
-                        <ChevronDown className='w-4 h-4' />
-                        查看更新内容
+                        <ChevronDown className='h-4 w-4' />
+                        {copy.showRemoteButton}
                       </>
                     )}
                   </button>
                 </div>
 
-                {showRemoteContent && remoteChangelog.length > 0 && (
-                  <div className='space-y-4'>
-                    {remoteChangelog
-                      .filter((entry) => {
-                        // 找到第一个本地版本，过滤掉本地已有的版本
-                        const localVersions = changelog.map(
-                          (local) => local.version
-                        );
-                        return !localVersions.includes(entry.version);
-                      })
-                      .map((entry, index) => (
-                        <div
-                          key={index}
-                          className={`p-4 rounded-lg border ${
-                            entry.version === latestVersion
-                              ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
-                              : 'bg-gray-50 dark:bg-gray-800/60 border-gray-200 dark:border-gray-700'
-                          }`}
-                        >
-                          <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3'>
-                            <div className='flex flex-wrap items-center gap-2'>
-                              <h4 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
-                                v{entry.version}
-                              </h4>
-                              {entry.version === latestVersion && (
-                                <span className='px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300 rounded-full flex items-center gap-1'>
-                                  远程最新
-                                </span>
-                              )}
-                            </div>
-                            <div className='flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400'>
-                              {entry.date}
-                            </div>
-                          </div>
-
-                          {entry.added && entry.added.length > 0 && (
-                            <div className='mb-3'>
-                              <h5 className='text-sm font-medium text-green-600 dark:text-green-400 mb-2 flex items-center gap-1'>
-                                <Plus className='w-4 h-4' />
-                                新增功能
-                              </h5>
-                              <ul className='space-y-1'>
-                                {entry.added.map((item, itemIndex) => (
-                                  <li
-                                    key={itemIndex}
-                                    className='text-sm text-gray-700 dark:text-gray-300 flex items-start gap-2'
-                                  >
-                                    <span className='w-1.5 h-1.5 bg-green-400 rounded-full mt-2 flex-shrink-0'></span>
-                                    {item}
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-
-                          {entry.changed && entry.changed.length > 0 && (
-                            <div className='mb-3'>
-                              <h5 className='text-sm font-medium text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-1'>
-                                <RefreshCw className='w-4 h-4' />
-                                功能改进
-                              </h5>
-                              <ul className='space-y-1'>
-                                {entry.changed.map((item, itemIndex) => (
-                                  <li
-                                    key={itemIndex}
-                                    className='text-sm text-gray-700 dark:text-gray-300 flex items-start gap-2'
-                                  >
-                                    <span className='w-1.5 h-1.5 bg-blue-400 rounded-full mt-2 flex-shrink-0'></span>
-                                    {item}
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-
-                          {entry.fixed && entry.fixed.length > 0 && (
-                            <div>
-                              <h5 className='text-sm font-medium text-purple-700 dark:text-purple-400 mb-2 flex items-center gap-1'>
-                                <Bug className='w-4 h-4' />
-                                问题修复
-                              </h5>
-                              <ul className='space-y-1'>
-                                {entry.fixed.map((item, itemIndex) => (
-                                  <li
-                                    key={itemIndex}
-                                    className='text-sm text-gray-700 dark:text-gray-300 flex items-start gap-2'
-                                  >
-                                    <span className='w-1.5 h-1.5 bg-purple-500 rounded-full mt-2 flex-shrink-0'></span>
-                                    {item}
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                        </div>
+                {showRemoteContent ? (
+                  remoteEntries.length > 0 ? (
+                    <div className='space-y-4'>
+                      {remoteEntries.map((entry) => (
+                        <ChangelogCard
+                          key={`${entry.version}-${entry.date}`}
+                          entry={entry}
+                          locale={changelogLocale}
+                          copy={copy}
+                          currentVersion={CURRENT_VERSION}
+                          latestRemoteVersion={latestVersion}
+                        />
                       ))}
-                  </div>
-                )}
+                    </div>
+                  ) : (
+                    <div className='rounded-lg border border-dashed border-gray-300 p-4 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400'>
+                      {copy.remoteEmptyDescription}
+                    </div>
+                  )
+                ) : null}
               </div>
-            )}
+            ) : null}
 
-            {/* 变更日志标题 */}
-            <div className='border-b border-gray-200 dark:border-gray-700 pb-4'>
-              <h4 className='text-lg font-semibold text-gray-800 dark:text-gray-200 pb-3 sm:pb-4'>
-                变更日志
+            <div className='border-b border-gray-200 pb-4 dark:border-gray-700'>
+              <h4 className='pb-3 text-lg font-semibold text-gray-800 dark:text-gray-200 sm:pb-4'>
+                {copy.localSectionTitle}
               </h4>
 
               <div className='space-y-4'>
-                {/* 本地变更日志 */}
-                {changelog.map((entry) =>
-                  renderChangelogEntry(
-                    entry,
-                    entry.version === CURRENT_VERSION,
-                    false
-                  )
-                )}
+                {changelog.map((entry) => (
+                  <ChangelogCard
+                    key={`${entry.version}-${entry.date}`}
+                    entry={entry}
+                    locale={changelogLocale}
+                    copy={copy}
+                    currentVersion={CURRENT_VERSION}
+                    latestRemoteVersion=''
+                  />
+                ))}
               </div>
             </div>
           </div>
@@ -543,9 +714,6 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
       </div>
     </>
   );
-
-  // 使用 Portal 渲染到 document.body
-  if (!mounted || !isOpen) return null;
 
   return createPortal(versionPanelContent, document.body);
 };

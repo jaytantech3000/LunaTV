@@ -11,6 +11,64 @@
 
 ---
 
+## 2026-06-16 - Web 版本信息面板双语化与版本检查增强 v1
+
+- 分支：`nova`
+- 方案来源：
+  - `desktop` 分支已有的双语版本面板与 semver 版本比较能力
+
+### 目标
+
+- 将桌面端已验证的版本信息展示体验中适合 Web 的部分同步到网页端。
+- 让版本面板支持中英文切换，并可分别读取对应语言的远程变更日志。
+- 把版本检查从字符串比较升级为 semver 比较，避免预发布版本和多位数字版本判断错误。
+- 将仓库地址、远程 changelog 分支和版本号文件分支改为可配置，方便 `nova` / `luna` 等环境复用。
+
+### 核心实现
+
+- 新增版本地址配置工具：
+  - `src/lib/release-urls.ts`
+- 新增 semver 解析与比较：
+  - `src/lib/semver.ts`
+  - `src/lib/version_check.ts`
+- 版本面板升级为双语和远程状态卡片：
+  - `src/components/VersionPanel.tsx`
+  - `src/app/login/LoginPageClient.tsx`
+- 新增英文 changelog，并将本地 changelog 生成链路改为双语：
+  - `CHANGELOG.en`
+  - `scripts/convert-changelog.js`
+  - `src/lib/changelog.ts`
+- 补齐针对性自动化测试：
+  - `src/components/VersionPanel.test.tsx`
+  - `src/lib/semver.test.ts`
+  - `src/lib/release-urls.test.ts`
+  - `src/lib/version_check.test.ts`
+
+### 本阶段已处理的问题
+
+- Web 端版本面板只能展示单语言内容，无法跟随用户需要切换中英文 changelog。
+- 版本面板和登录页中的仓库地址、远程 changelog 分支写死，不利于 `nova` / `luna` 环境切换。
+- 版本检查依赖简单字符串比较，对 `100.1.10`、`beta` / `prerelease` 版本的判断不可靠。
+- 本地 changelog 只有中文版本，无法在前端直接复用双语内容。
+
+### 验证结论
+
+- `node scripts/convert-changelog.js` 已通过。
+- `pnpm test -- src/lib/semver.test.ts src/lib/release-urls.test.ts src/lib/version_check.test.ts src/components/VersionPanel.test.tsx src/app/login/page.test.tsx src/components/UserMenu.test.tsx` 已通过。
+- `pnpm lint` 已通过。
+- `pnpm typecheck` 已通过。
+- `pnpm build` 已通过。
+
+### 当前约束
+
+- 本次只同步适合 Web 的版本展示与版本检查能力，不包含桌面端安装器、内置更新器或本地密码持久化逻辑。
+- `CHANGELOG.en` 目前只覆盖 Web 版本线，未纳入桌面端 `200.x` 发布记录。
+
+### 后续建议
+
+- 若后续继续维护多分支发布，保持 `CHANGELOG` / `CHANGELOG.en` 版本号和日期一一对应，避免生成链路回退到中文内容。
+- 若未来需要把 release 目标从 GitHub 扩展到其他分发源，优先继续沿用 `src/lib/release-urls.ts` 这一层统一收口。
+
 ## 2026-06-16 - 客户端下载、本地服务加速与播放器增强 v1
 
 - 分支：`nova`

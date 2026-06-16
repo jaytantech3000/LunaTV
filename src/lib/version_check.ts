@@ -2,7 +2,9 @@
 
 'use client';
 
-import { CURRENT_VERSION } from "@/lib/version";
+import { getVersionFileUrl } from '@/lib/release-urls';
+import { compareSemver } from '@/lib/semver';
+import { CURRENT_VERSION } from '@/lib/version';
 
 // 版本检查结果枚举
 export enum UpdateStatus {
@@ -11,35 +13,37 @@ export enum UpdateStatus {
   FETCH_FAILED = 'fetch_failed', // 获取失败
 }
 
-// 远程版本检查URL配置
-const VERSION_CHECK_URLS = [
-  'https://raw.githubusercontent.com/MoonTechLab/LunaTV/main/VERSION.txt',
-];
+const VERSION_CHECK_URLS = [getVersionFileUrl()];
 
 /**
  * 检查是否有新版本可用
  * @returns Promise<UpdateStatus> - 返回版本检查状态
  */
-export async function checkForUpdates(): Promise<UpdateStatus> {
+export async function checkForUpdates(
+  currentVersion = CURRENT_VERSION
+): Promise<UpdateStatus> {
   try {
-    // 尝试从主要URL获取版本信息
-    const primaryVersion = await fetchVersionFromUrl(VERSION_CHECK_URLS[0]);
-    if (primaryVersion) {
-      return compareVersions(primaryVersion);
+    const remoteVersion = await fetchLatestRemoteVersion();
+    if (!remoteVersion) {
+      return UpdateStatus.FETCH_FAILED;
     }
 
-    // 如果主要URL失败，尝试备用URL
-    const backupVersion = await fetchVersionFromUrl(VERSION_CHECK_URLS[1]);
-    if (backupVersion) {
-      return compareVersions(backupVersion);
-    }
-
-    // 如果两个URL都失败，返回获取失败状态
-    return UpdateStatus.FETCH_FAILED;
+    return compareVersions(remoteVersion, currentVersion);
   } catch (error) {
     console.error('版本检查失败:', error);
     return UpdateStatus.FETCH_FAILED;
   }
+}
+
+export async function fetchLatestRemoteVersion(): Promise<string | null> {
+  for (const url of VERSION_CHECK_URLS) {
+    const version = await fetchVersionFromUrl(url);
+    if (version) {
+      return version;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -50,9 +54,8 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
 async function fetchVersionFromUrl(url: string): Promise<string | null> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
+    const timeoutId = globalThis.setTimeout(() => controller.abort(), 5000);
 
-    // 添加时间戳参数以避免缓存
     const timestamp = Date.now();
     const urlWithTimestamp = url.includes('?')
       ? `${url}&_t=${timestamp}`
@@ -66,14 +69,14 @@ async function fetchVersionFromUrl(url: string): Promise<string | null> {
       },
     });
 
-    clearTimeout(timeoutId);
+    globalThis.clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      throw new Error(`HTTP ${response.status}`);
     }
 
-    const version = await response.text();
-    return version.trim();
+    const version = (await response.text()).trim();
+    return version || null;
   } catch (error) {
     console.warn(`从 ${url} 获取版本信息失败:`, error);
     return null;
@@ -85,63 +88,21 @@ async function fetchVersionFromUrl(url: string): Promise<string | null> {
  * @param remoteVersion - 远程版本号
  * @returns UpdateStatus - 返回版本比较结果
  */
-export function compareVersions(remoteVersion: string): UpdateStatus {
-  // 如果版本号相同，无需更新
-  if (remoteVersion === CURRENT_VERSION) {
+export function compareVersions(
+  remoteVersion: string,
+  currentVersion = CURRENT_VERSION
+): UpdateStatus {
+  if (remoteVersion === currentVersion) {
     return UpdateStatus.NO_UPDATE;
   }
 
   try {
-    // 解析版本号为数字数组 [X, Y, Z]
-    const currentParts = CURRENT_VERSION.split('.').map((part) => {
-      const num = parseInt(part, 10);
-      if (isNaN(num) || num < 0) {
-        throw new Error(`无效的版本号格式: ${CURRENT_VERSION}`);
-      }
-      return num;
-    });
-
-    const remoteParts = remoteVersion.split('.').map((part) => {
-      const num = parseInt(part, 10);
-      if (isNaN(num) || num < 0) {
-        throw new Error(`无效的版本号格式: ${remoteVersion}`);
-      }
-      return num;
-    });
-
-    // 标准化版本号到3个部分
-    const normalizeVersion = (parts: number[]) => {
-      if (parts.length >= 3) {
-        return parts.slice(0, 3); // 取前三个元素
-      } else {
-        // 不足3个的部分补0
-        const normalized = [...parts];
-        while (normalized.length < 3) {
-          normalized.push(0);
-        }
-        return normalized;
-      }
-    };
-
-    const normalizedCurrent = normalizeVersion(currentParts);
-    const normalizedRemote = normalizeVersion(remoteParts);
-
-    // 逐级比较版本号
-    for (let i = 0; i < 3; i++) {
-      if (normalizedRemote[i] > normalizedCurrent[i]) {
-        return UpdateStatus.HAS_UPDATE;
-      } else if (normalizedRemote[i] < normalizedCurrent[i]) {
-        return UpdateStatus.NO_UPDATE;
-      }
-      // 如果当前级别相等，继续比较下一级
-    }
-
-    // 所有级别都相等，无需更新
-    return UpdateStatus.NO_UPDATE;
+    return compareSemver(remoteVersion, currentVersion) > 0
+      ? UpdateStatus.HAS_UPDATE
+      : UpdateStatus.NO_UPDATE;
   } catch (error) {
     console.error('版本号比较失败:', error);
-    // 如果版本号格式无效，回退到字符串比较
-    return remoteVersion !== CURRENT_VERSION
+    return remoteVersion !== currentVersion
       ? UpdateStatus.HAS_UPDATE
       : UpdateStatus.NO_UPDATE;
   }

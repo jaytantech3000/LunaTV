@@ -383,6 +383,9 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | NEXT_PUBLIC_DOUBAN_IMAGE_PROXY      | 自定义豆瓣图片代理 URL                     | url prefix               | (空)                                                                                                                       |
 | NEXT_PUBLIC_DISABLE_YELLOW_FILTER   | 关闭色情内容过滤                           | true/false               | false                                                                                                                      |
 | NEXT_PUBLIC_FLUID_SEARCH            | 是否开启搜索接口流式输出                   | true/ false              | true                                                                                                                       |
+| NEXT_PUBLIC_RELEASE_REPOSITORY      | 版本面板和登录页跳转使用的 GitHub 仓库     | owner/repo               | MoonTechLab/LunaTV                                                                                                         |
+| NEXT_PUBLIC_RELEASE_BRANCH          | 远程变更日志使用的分支                     | 分支名                   | luna                                                                                                                       |
+| NEXT_PUBLIC_UPDATER_BRANCH          | 远程版本号文件使用的分支                   | 分支名                   | 跟随 NEXT_PUBLIC_RELEASE_BRANCH                                                                                             |
 
 NEXT_PUBLIC_DOUBAN_PROXY_TYPE 选项解释：
 
