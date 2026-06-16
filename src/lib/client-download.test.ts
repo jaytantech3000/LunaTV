@@ -21,23 +21,34 @@ function restoreEnvValue(key: string, value: string | undefined): void {
 
 describe('client-download helpers', () => {
   const originalEnv = {
+    CF_PAGES_BRANCH: mutableEnv.CF_PAGES_BRANCH,
     CLIENT_DOWNLOAD_SIGNING_SECRET: mutableEnv.CLIENT_DOWNLOAD_SIGNING_SECRET,
     DESKTOP_RELEASE_REPO: mutableEnv.DESKTOP_RELEASE_REPO,
+    GITHUB_REF_NAME: mutableEnv.GITHUB_REF_NAME,
     LOCAL_SERVICE_RELEASE_REPO: mutableEnv.LOCAL_SERVICE_RELEASE_REPO,
+    LOCAL_SERVICE_RELEASE_CHANNEL: mutableEnv.LOCAL_SERVICE_RELEASE_CHANNEL,
     LOCAL_SERVICE_RELEASE_TAG: mutableEnv.LOCAL_SERVICE_RELEASE_TAG,
     LOCAL_SERVICE_RELEASE_URL_MAC_ARM64:
       mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64,
+    RAILWAY_GIT_BRANCH: mutableEnv.RAILWAY_GIT_BRANCH,
+    VERCEL_GIT_COMMIT_REF: mutableEnv.VERCEL_GIT_COMMIT_REF,
   };
 
   afterEach(() => {
+    restoreEnvValue('CF_PAGES_BRANCH', originalEnv.CF_PAGES_BRANCH);
     restoreEnvValue(
       'CLIENT_DOWNLOAD_SIGNING_SECRET',
       originalEnv.CLIENT_DOWNLOAD_SIGNING_SECRET
     );
     restoreEnvValue('DESKTOP_RELEASE_REPO', originalEnv.DESKTOP_RELEASE_REPO);
+    restoreEnvValue('GITHUB_REF_NAME', originalEnv.GITHUB_REF_NAME);
     restoreEnvValue(
       'LOCAL_SERVICE_RELEASE_REPO',
       originalEnv.LOCAL_SERVICE_RELEASE_REPO
+    );
+    restoreEnvValue(
+      'LOCAL_SERVICE_RELEASE_CHANNEL',
+      originalEnv.LOCAL_SERVICE_RELEASE_CHANNEL
     );
     restoreEnvValue(
       'LOCAL_SERVICE_RELEASE_TAG',
@@ -47,6 +58,8 @@ describe('client-download helpers', () => {
       'LOCAL_SERVICE_RELEASE_URL_MAC_ARM64',
       originalEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64
     );
+    restoreEnvValue('RAILWAY_GIT_BRANCH', originalEnv.RAILWAY_GIT_BRANCH);
+    restoreEnvValue('VERCEL_GIT_COMMIT_REF', originalEnv.VERCEL_GIT_COMMIT_REF);
   });
 
   it('selects the newest prerelease that matches the desktop release line', () => {
@@ -217,6 +230,30 @@ describe('client-download helpers', () => {
 
     expect(resolveLocalServiceBinaryUrl('linux-x64')).toBe(
       'https://github.com/mirror/LunaTV-binaries/releases/download/local-service-v1/lunatv-server-linux-x64'
+    );
+  });
+
+  it('auto-selects nova local service latest tag from the deployment branch', () => {
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_TAG;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_CHANNEL;
+    mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
+    mutableEnv.VERCEL_GIT_COMMIT_REF = 'nova';
+
+    expect(resolveLocalServiceBinaryUrl('mac-x64')).toBe(
+      'https://github.com/demo/LunaTV/releases/download/local-service-nova-latest/lunatv-server-mac-x64'
+    );
+  });
+
+  it('allows explicit local service channel override when the deployment branch is unavailable', () => {
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_TAG;
+    delete mutableEnv.VERCEL_GIT_COMMIT_REF;
+    mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
+    mutableEnv.LOCAL_SERVICE_RELEASE_CHANNEL = 'luna';
+
+    expect(resolveLocalServiceBinaryUrl('linux-arm64')).toBe(
+      'https://github.com/demo/LunaTV/releases/download/local-service-luna-latest/lunatv-server-linux-arm64'
     );
   });
 });

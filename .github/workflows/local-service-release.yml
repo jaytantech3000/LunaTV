@@ -31,6 +31,8 @@ jobs:
   prepare-release:
     runs-on: ubuntu-latest
     outputs:
+      alias_release_name: ${{ steps.resolve.outputs.alias_release_name }}
+      alias_release_tag: ${{ steps.resolve.outputs.alias_release_tag }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
       release_name: ${{ steps.resolve.outputs.release_name }}
       release_tag: ${{ steps.resolve.outputs.release_tag }}
@@ -50,7 +52,17 @@ jobs:
             prerelease='true'
           fi
 
+          alias_release_tag=''
+          alias_release_name=''
+          if [[ "$release_tag" =~ ^local-service-(nova|luna)- ]]; then
+            channel="${BASH_REMATCH[1]}"
+            alias_release_tag="local-service-${channel}-latest"
+            alias_release_name="LunaTV Local Service (${channel} latest)"
+          fi
+
           {
+            printf 'alias_release_name=%s\n' "$alias_release_name"
+            printf 'alias_release_tag=%s\n' "$alias_release_tag"
             printf 'release_tag=%s\n' "$release_tag"
             printf 'release_name=%s\n' "$release_name"
             printf 'prerelease=%s\n' "$prerelease"
@@ -187,6 +199,8 @@ jobs:
       - build-windows
     runs-on: ubuntu-latest
     env:
+      ALIAS_RELEASE_NAME: ${{ needs.prepare-release.outputs.alias_release_name }}
+      ALIAS_RELEASE_TAG: ${{ needs.prepare-release.outputs.alias_release_tag }}
       GH_TOKEN: ${{ github.token }}
       RELEASE_NAME: ${{ needs.prepare-release.outputs.release_name }}
       RELEASE_PRERELEASE: ${{ needs.prepare-release.outputs.prerelease }}
@@ -216,8 +230,19 @@ jobs:
             gh release create "$tag" --title "$name" --notes "Automated LunaTV local service build." "${flags[@]}"
           fi
 
+          if [[ -n "$ALIAS_RELEASE_TAG" ]]; then
+            if gh release view "$ALIAS_RELEASE_TAG" >/dev/null 2>&1; then
+              gh release edit "$ALIAS_RELEASE_TAG" --title "$ALIAS_RELEASE_NAME" "${flags[@]}"
+            else
+              gh release create "$ALIAS_RELEASE_TAG" --title "$ALIAS_RELEASE_NAME" --notes "Automated LunaTV local service branch alias." "${flags[@]}"
+            fi
+          fi
+
       - name: Upload release assets
         shell: bash
         run: |
           set -euo pipefail
           gh release upload "$RELEASE_TAG" dist/* --clobber
+          if [[ -n "$ALIAS_RELEASE_TAG" ]]; then
+            gh release upload "$ALIAS_RELEASE_TAG" dist/* --clobber
+          fi

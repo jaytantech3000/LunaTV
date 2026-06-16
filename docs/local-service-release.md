@@ -53,6 +53,11 @@ git push origin local-service-nova-2026-06-16.1
 
 任何匹配 `local-service-*` 的 tag 都会自动触发 `Build & Publish Local Service`，并默认创建同名 prerelease。
 
+如果 tag 形如 `local-service-nova-*` 或 `local-service-luna-*`，工作流还会自动维护对应的滚动别名：
+
+- `local-service-nova-latest`
+- `local-service-luna-latest`
+
 推荐约定：
 
 - `local-service-nova-*`：`nova` 预发布验证
@@ -67,14 +72,25 @@ git push origin local-service-nova-2026-06-16.1
 
 ```env
 DESKTOP_RELEASE_REPO=your-org/LunaTV
-LOCAL_SERVICE_RELEASE_TAG=local-service-latest
 ```
+
+在 Vercel / Cloudflare Pages / Railway 这类会暴露部署分支的环境里，不需要每次手改 `LOCAL_SERVICE_RELEASE_TAG`：
+
+- `nova` 部署会自动跟随 `local-service-nova-latest`
+- `luna` 部署会自动跟随 `local-service-luna-latest`
+- 其他环境默认回退到 `local-service-latest`
 
 可选增强：
 
 ```env
+# 如果部署平台不会提供当前分支，可手工指定发布通道
+LOCAL_SERVICE_RELEASE_CHANNEL=nova
+
 # 如果本地服务二进制发布在单独仓库，用它覆盖桌面版仓库
 LOCAL_SERVICE_RELEASE_REPO=your-org/LunaTV-binaries
+
+# 只有在你明确要锁定某一个具体 tag 时才需要写这个
+LOCAL_SERVICE_RELEASE_TAG=local-service-nova-2026-06-16.1
 
 # 逐平台显式地址始终优先于自动推导
 LOCAL_SERVICE_RELEASE_URL_MAC_ARM64=
@@ -90,13 +106,13 @@ LOCAL_SERVICE_RELEASE_URL_WIN_X64=
 https://github.com/<repo>/releases/download/<tag>/<asset-name>
 ```
 
-默认 `<tag>` 是 `local-service-latest`，`<repo>` 优先取 `LOCAL_SERVICE_RELEASE_REPO`，否则回落到 `DESKTOP_RELEASE_REPO`。
+标签解析优先级：
 
-如果 `nova` 部署要跟随独立 prerelease，把它改成对应 tag，例如：
+1. `LOCAL_SERVICE_RELEASE_TAG`
+2. 自动分支通道或显式 `LOCAL_SERVICE_RELEASE_CHANNEL`
+3. 默认 `local-service-latest`
 
-```env
-LOCAL_SERVICE_RELEASE_TAG=local-service-nova-2026-06-16.1
-```
+`<repo>` 优先取 `LOCAL_SERVICE_RELEASE_REPO`，否则回落到 `DESKTOP_RELEASE_REPO`。
 
 ## 本地验证
 

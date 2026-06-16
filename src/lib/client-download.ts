@@ -65,6 +65,7 @@ const GITHUB_API_BASE = 'https://api.github.com';
 const GITHUB_API_TIMEOUT_MS = 10000;
 const DEFAULT_SIGNED_DOWNLOAD_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_LOCAL_SERVICE_RELEASE_TAG = 'local-service-latest';
+const LOCAL_SERVICE_RELEASE_CHANNELS = ['luna', 'nova'] as const;
 
 const DESKTOP_ASSET_RULES: DesktopAssetRule[] = [
   {
@@ -150,6 +151,39 @@ function isValidGitHubRepo(repo: string): boolean {
   return (
     repoParts.length === 2 && repoParts.every((part) => Boolean(part.trim()))
   );
+}
+
+function normalizeLocalServiceReleaseChannel(
+  value: string | null | undefined
+): (typeof LOCAL_SERVICE_RELEASE_CHANNELS)[number] | null {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  return (
+    LOCAL_SERVICE_RELEASE_CHANNELS.find((channel) => channel === normalized) ||
+    null
+  );
+}
+
+function getAutoLocalServiceReleaseChannel():
+  | (typeof LOCAL_SERVICE_RELEASE_CHANNELS)[number]
+  | null {
+  const explicitChannel = normalizeLocalServiceReleaseChannel(
+    process.env.LOCAL_SERVICE_RELEASE_CHANNEL
+  );
+  if (explicitChannel) {
+    return explicitChannel;
+  }
+
+  const deploymentBranch =
+    process.env.VERCEL_GIT_COMMIT_REF ||
+    process.env.CF_PAGES_BRANCH ||
+    process.env.RAILWAY_GIT_BRANCH ||
+    process.env.GITHUB_REF_NAME;
+
+  return normalizeLocalServiceReleaseChannel(deploymentBranch);
 }
 
 function getReleaseTimestamp(release: GitHubRelease): number {
@@ -288,8 +322,11 @@ function getLocalServiceReleaseConfig(): LocalServiceReleaseConfig | null {
   const repo =
     process.env.LOCAL_SERVICE_RELEASE_REPO?.trim() ||
     process.env.DESKTOP_RELEASE_REPO?.trim();
+  const explicitTag = process.env.LOCAL_SERVICE_RELEASE_TAG?.trim();
+  const autoChannel = getAutoLocalServiceReleaseChannel();
   const tag =
-    process.env.LOCAL_SERVICE_RELEASE_TAG?.trim() ||
+    explicitTag ||
+    (autoChannel ? `local-service-${autoChannel}-latest` : null) ||
     DEFAULT_LOCAL_SERVICE_RELEASE_TAG;
 
   if (!repo || !tag || !isValidGitHubRepo(repo)) {
