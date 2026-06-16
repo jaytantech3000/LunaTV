@@ -1,6 +1,7 @@
 /* eslint-disable no-console,@typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from 'next/server';
 
+import { buildAuthCookieOptions } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 
@@ -73,6 +74,7 @@ async function generateAuthCookie(
 }
 
 async function buildAuthenticatedResponse(
+  request: NextRequest,
   username: string,
   password: string,
   role: 'owner' | 'admin' | 'user',
@@ -92,13 +94,11 @@ async function buildAuthenticatedResponse(
   const expires = new Date();
   expires.setDate(expires.getDate() + 7);
 
-  response.cookies.set('auth', cookieValue, {
-    path: '/',
-    expires,
-    sameSite: 'lax',
-    httpOnly: false,
-    secure: false,
-  });
+  response.cookies.set(
+    'auth',
+    cookieValue,
+    buildAuthCookieOptions(request, expires)
+  );
 
   return response;
 }
@@ -117,11 +117,7 @@ export async function POST(req: NextRequest) {
 
         // 清除可能存在的认证cookie
         response.cookies.set('auth', '', {
-          path: '/',
-          expires: new Date(0),
-          sameSite: 'lax', // 改为 lax 以支持 PWA
-          httpOnly: false, // PWA 需要客户端可访问
-          secure: false, // 根据协议自动设置
+          ...buildAuthCookieOptions(req, new Date(0)),
         });
 
         return response;
@@ -140,6 +136,7 @@ export async function POST(req: NextRequest) {
       }
 
       return buildAuthenticatedResponse(
+        req,
         process.env.USERNAME || 'owner',
         password,
         'owner',
@@ -164,7 +161,12 @@ export async function POST(req: NextRequest) {
       normalizedUsername === process.env.USERNAME &&
       password === process.env.PASSWORD
     ) {
-      return buildAuthenticatedResponse(normalizedUsername, password, 'owner');
+      return buildAuthenticatedResponse(
+        req,
+        normalizedUsername,
+        password,
+        'owner'
+      );
     } else if (normalizedUsername === process.env.USERNAME) {
       return NextResponse.json({ error: '用户名或密码错误' }, { status: 401 });
     }
@@ -188,6 +190,7 @@ export async function POST(req: NextRequest) {
       }
 
       return buildAuthenticatedResponse(
+        req,
         normalizedUsername,
         password,
         user?.role || 'user'

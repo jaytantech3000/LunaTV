@@ -44,9 +44,19 @@ export async function GET(): Promise<Response> {
       version: release.name?.trim() || release.tag_name,
     });
 
-    response.headers.set('Cache-Control', 'public, max-age=300, s-maxage=300');
-    response.headers.set('CDN-Cache-Control', 'public, s-maxage=300');
-    response.headers.set('Vercel-CDN-Cache-Control', 'public, s-maxage=300');
+    if (signedAssets.length > 0) {
+      response.headers.set(
+        'Cache-Control',
+        'public, max-age=300, s-maxage=300'
+      );
+      response.headers.set('CDN-Cache-Control', 'public, s-maxage=300');
+      response.headers.set('Vercel-CDN-Cache-Control', 'public, s-maxage=300');
+    } else {
+      response.headers.set('Cache-Control', 'no-store');
+      response.headers.set('CDN-Cache-Control', 'no-store');
+      response.headers.set('Vercel-CDN-Cache-Control', 'no-store');
+    }
+
     return response;
   } catch (error) {
     return jsonError(

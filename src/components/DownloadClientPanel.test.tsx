@@ -21,12 +21,28 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 describe('DownloadClientPanel', () => {
   const originalFetch = global.fetch;
   const originalUserAgent = navigator.userAgent;
+  const originalUserAgentData = (
+    navigator as Navigator & { userAgentData?: unknown }
+  ).userAgentData;
 
   beforeEach(() => {
     jest.clearAllMocks();
     Object.defineProperty(window.navigator, 'userAgent', {
       configurable: true,
-      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) arm64',
+      value:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    });
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      configurable: true,
+      value: {
+        getHighEntropyValues: jest.fn().mockResolvedValue({
+          architecture: 'arm',
+          bitness: '64',
+          platform: 'macOS',
+        }),
+        platform: 'macOS',
+      },
     });
   });
 
@@ -35,6 +51,10 @@ describe('DownloadClientPanel', () => {
     Object.defineProperty(window.navigator, 'userAgent', {
       configurable: true,
       value: originalUserAgent,
+    });
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      configurable: true,
+      value: originalUserAgentData,
     });
   });
 

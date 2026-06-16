@@ -8,6 +8,7 @@ import { startTransition, useEffect, useState } from 'react';
 import { flushSync } from 'react-dom';
 
 import { getProjectPageUrl } from '@/lib/release-urls';
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
@@ -24,6 +25,35 @@ function resolveRedirectPath(searchParams: ReturnType<typeof useSearchParams>) {
 }
 
 type LoginPhase = 'idle' | 'verifying' | 'redirecting';
+
+const AUTH_COOKIE_POLL_INTERVAL_MS = 50;
+const AUTH_COOKIE_WAIT_TIMEOUT_MS = 1000;
+const REDIRECT_FALLBACK_TIMEOUT_MS = 4000;
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
+}
+
+async function waitForBrowserAuthCookie(
+  timeoutMs = AUTH_COOKIE_WAIT_TIMEOUT_MS
+): Promise<boolean> {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (getAuthInfoFromBrowserCookie()) {
+      return true;
+    }
+
+    await wait(AUTH_COOKIE_POLL_INTERVAL_MS);
+  }
+
+  return Boolean(getAuthInfoFromBrowserCookie());
+}
 
 function VersionDisplay() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
@@ -106,6 +136,21 @@ export function LoginPageClient() {
     router.prefetch(redirectPath);
   }, [redirectPath, router]);
 
+  useEffect(() => {
+    if (!isRedirecting) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setError('页面跳转超时，请刷新后重试');
+      setLoginPhase('idle');
+    }, REDIRECT_FALLBACK_TIMEOUT_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isRedirecting]);
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
@@ -136,6 +181,12 @@ export function LoginPageClient() {
       });
 
       if (res.ok) {
+        const authCookieReady = await waitForBrowserAuthCookie();
+        if (!authCookieReady) {
+          setError('登录状态未写入当前域名，请刷新后重试');
+          return;
+        }
+
         shouldKeepBusyState = true;
         flushSync(() => {
           setLoginPhase('redirecting');

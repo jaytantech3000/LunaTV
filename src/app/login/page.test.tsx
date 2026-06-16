@@ -50,6 +50,7 @@ describe('LoginPageClient', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    document.cookie = 'auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
     global.fetch = jest.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -69,6 +70,7 @@ describe('LoginPageClient', () => {
   });
 
   afterEach(() => {
+    document.cookie = 'auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
     global.fetch = originalFetch;
   });
 
@@ -87,6 +89,9 @@ describe('LoginPageClient', () => {
     expect(screen.getByRole('button', { name: '正在验证...' })).toBeDisabled();
 
     await act(async () => {
+      document.cookie = `auth=${encodeURIComponent(
+        JSON.stringify({ role: 'owner', username: 'owner' })
+      )}; path=/`;
       resolveLoginResponse?.(new Response(null, { status: 200 }));
     });
 
@@ -97,6 +102,30 @@ describe('LoginPageClient', () => {
     await waitFor(() => {
       expect(mockRouter.replace).toHaveBeenCalledWith('/downloads');
     });
+  });
+
+  it('shows a domain-sync error when login succeeds but the auth cookie is missing', async () => {
+    render(<LoginPageClient />);
+
+    fireEvent.change(screen.getByLabelText('密码'), {
+      target: { value: 'demo-password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '登录' }));
+
+    await act(async () => {
+      resolveLoginResponse?.(new Response(null, { status: 200 }));
+    });
+
+    expect(
+      await screen.findByText(
+        '登录状态未写入当前域名，请刷新后重试',
+        undefined,
+        {
+          timeout: 2000,
+        }
+      )
+    ).toBeInTheDocument();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
   });
 
   it('surfaces server-side 401 messages instead of always showing a password error', async () => {

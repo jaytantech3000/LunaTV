@@ -74,4 +74,24 @@ describe('/api/desktop-release', () => {
       error: 'Desktop release is temporarily unavailable',
     });
   });
+
+  it('does not cache empty asset lists', async () => {
+    (listDesktopReleaseAssets as jest.Mock).mockReturnValue({
+      assets: [],
+      missingAssetKeys: [
+        'mac-arm64',
+        'mac-x64',
+        'win-x64-setup',
+        'win-x64-portable',
+      ],
+    });
+
+    const response = await GET();
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.assets).toEqual([]);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(response.headers.get('Vercel-CDN-Cache-Control')).toBe('no-store');
+  });
 });

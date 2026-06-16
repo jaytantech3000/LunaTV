@@ -27,11 +27,18 @@ function restoreEnvValue(key: string, value: string | undefined): void {
   mutableEnv[key] = value;
 }
 
-function createJsonRequest(body: unknown): NextRequest {
-  return new NextRequest('http://localhost/api/login', {
+function createJsonRequest(
+  body: unknown,
+  options?: {
+    headers?: HeadersInit;
+    url?: string;
+  }
+): NextRequest {
+  return new NextRequest(options?.url || 'http://localhost/api/login', {
     body: JSON.stringify(body),
     headers: {
       'Content-Type': 'application/json',
+      ...(options?.headers || {}),
     },
     method: 'POST',
   });
@@ -84,6 +91,30 @@ describe('/api/login', () => {
       username: 'owner',
     });
     expect(response.headers.get('set-cookie')).toContain('auth=');
+  });
+
+  it('shares the auth cookie across hkcu subdomains for proxied https logins', async () => {
+    const response = await POST(
+      createJsonRequest(
+        {
+          password: 'secret',
+        },
+        {
+          headers: {
+            host: 'vcma.hkcu.qzz.io',
+            'x-forwarded-host': 'luna.hkcu.qzz.io',
+            'x-forwarded-proto': 'https',
+          },
+          url: 'https://vcma.hkcu.qzz.io/api/login',
+        }
+      )
+    );
+
+    const setCookie = response.headers.get('set-cookie');
+
+    expect(response.status).toBe(200);
+    expect(setCookie).toContain('Domain=hkcu.qzz.io');
+    expect(setCookie).toContain('Secure');
   });
 
   it('trims username before authenticating the owner account', async () => {

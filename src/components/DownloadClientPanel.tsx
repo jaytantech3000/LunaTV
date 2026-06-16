@@ -59,6 +59,25 @@ interface DownloadClientPanelProps {
 }
 
 type LocalServiceStatus = 'available' | 'unknown' | 'unavailable';
+type RecommendedTargets = {
+  desktop?: DesktopAssetKey;
+  localService?: LocalServicePlatformKey;
+};
+
+interface NavigatorUserAgentDataValues {
+  architecture?: string;
+  bitness?: string;
+  platform?: string;
+}
+
+interface NavigatorWithUserAgentData extends Navigator {
+  userAgentData?: {
+    getHighEntropyValues?: (
+      hints: Array<'architecture' | 'bitness' | 'platform'>
+    ) => Promise<NavigatorUserAgentDataValues>;
+    platform?: string;
+  };
+}
 
 const DESKTOP_ASSET_META: Array<{
   extensionLabel: string;
@@ -147,44 +166,117 @@ function formatPublishedAt(value: string | null): string {
   });
 }
 
-function detectRecommendedTargets(): {
-  desktop?: DesktopAssetKey;
-  localService?: LocalServicePlatformKey;
-} {
-  if (typeof navigator === 'undefined') {
-    return {};
+function isArmArchitecture(value: string | null | undefined): boolean {
+  const normalized = value?.trim().toLowerCase() || '';
+  return normalized.includes('arm') || normalized.includes('aarch');
+}
+
+function resolveRecommendedTargetsForPlatform(
+  platform: string,
+  prefersArmArchitecture: boolean
+): RecommendedTargets {
+  const normalizedPlatform = platform.toLowerCase();
+
+  if (normalizedPlatform.includes('mac')) {
+    return prefersArmArchitecture
+      ? {
+          desktop: 'mac-arm64',
+          localService: 'mac-arm64',
+        }
+      : {
+          desktop: 'mac-x64',
+          localService: 'mac-x64',
+        };
   }
 
-  const userAgent = navigator.userAgent.toLowerCase();
-
-  if (userAgent.includes('mac os x')) {
-    if (userAgent.includes('arm') || userAgent.includes('aarch64')) {
-      return {
-        desktop: 'mac-arm64',
-        localService: 'mac-arm64',
-      };
-    }
-
-    return {
-      desktop: 'mac-x64',
-      localService: 'mac-x64',
-    };
-  }
-
-  if (userAgent.includes('windows')) {
+  if (normalizedPlatform.includes('windows')) {
     return {
       desktop: 'win-x64-setup',
       localService: 'win-x64',
     };
   }
 
-  if (userAgent.includes('linux')) {
-    return userAgent.includes('arm') || userAgent.includes('aarch64')
+  if (normalizedPlatform.includes('linux')) {
+    return prefersArmArchitecture
       ? { localService: 'linux-arm64' }
       : { localService: 'linux-x64' };
   }
 
   return {};
+}
+
+function detectRecommendedTargetsFromUserAgent(
+  userAgent: string
+): RecommendedTargets {
+  const normalizedUserAgent = userAgent.toLowerCase();
+
+  if (normalizedUserAgent.includes('mac os x')) {
+    return isArmArchitecture(normalizedUserAgent)
+      ? {
+          desktop: 'mac-arm64',
+          localService: 'mac-arm64',
+        }
+      : {
+          desktop: 'mac-x64',
+          localService: 'mac-x64',
+        };
+  }
+
+  if (normalizedUserAgent.includes('windows')) {
+    return {
+      desktop: 'win-x64-setup',
+      localService: 'win-x64',
+    };
+  }
+
+  if (normalizedUserAgent.includes('linux')) {
+    return isArmArchitecture(normalizedUserAgent)
+      ? { localService: 'linux-arm64' }
+      : { localService: 'linux-x64' };
+  }
+
+  return {};
+}
+
+function detectRecommendedTargetsSync(): RecommendedTargets {
+  if (typeof navigator === 'undefined') {
+    return {};
+  }
+
+  return detectRecommendedTargetsFromUserAgent(navigator.userAgent);
+}
+
+async function detectRecommendedTargets(): Promise<RecommendedTargets> {
+  if (typeof navigator === 'undefined') {
+    return {};
+  }
+
+  const navigatorWithUserAgentData = navigator as NavigatorWithUserAgentData;
+  const userAgentData = navigatorWithUserAgentData.userAgentData;
+
+  if (userAgentData?.getHighEntropyValues) {
+    try {
+      const userAgentDataValues = await userAgentData.getHighEntropyValues([
+        'architecture',
+        'bitness',
+        'platform',
+      ]);
+      const platform =
+        userAgentDataValues.platform || userAgentData.platform || '';
+      const recommendedTargets = resolveRecommendedTargetsForPlatform(
+        platform,
+        isArmArchitecture(userAgentDataValues.architecture)
+      );
+
+      if (recommendedTargets.desktop || recommendedTargets.localService) {
+        return recommendedTargets;
+      }
+    } catch {
+      // Fall back to the legacy user-agent heuristic below.
+    }
+  }
+
+  return detectRecommendedTargetsSync();
 }
 
 function isLocalServiceInstallerPlatform(
@@ -238,7 +330,9 @@ function buildLocalServiceScriptHref(
   return `/api/local-service-script?platform=${platform}&action=${action}`;
 }
 
-function getLocalServiceMaintenanceActions(platform: LocalServicePlatformKey): Array<{
+function getLocalServiceMaintenanceActions(
+  platform: LocalServicePlatformKey
+): Array<{
   action: LocalServiceMaintenanceAction;
   ariaLabelSuffix: string;
   href: string;
@@ -278,11 +372,27 @@ export default function DownloadClientPanel({
     Record<LocalServicePlatformKey, LocalServiceStatus>
   >(createUnknownLocalServiceStatuses);
   const [mounted, setMounted] = useState(false);
+  const [recommendedTargets, setRecommendedTargets] =
+    useState<RecommendedTargets>({});
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     setMounted(true);
     return () => setMounted(false);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void detectRecommendedTargets().then((nextTargets) => {
+      if (!cancelled) {
+        setRecommendedTargets(nextTargets);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -404,7 +514,6 @@ export default function DownloadClientPanel({
     return null;
   }
 
-  const recommendedTargets = detectRecommendedTargets();
   const recommendedLocalServicePlatform = recommendedTargets.localService;
   const localServiceInstallerPlatforms = new Set(
     localServiceRelease?.installerPlatforms ?? []
@@ -672,7 +781,12 @@ export default function DownloadClientPanel({
                       recommendedLocalServicePlatform
                     ).map((item) => (
                       <button
-                        aria-label={`${LOCAL_SERVICE_META.find((meta) => meta.key === recommendedLocalServicePlatform)?.label || recommendedLocalServicePlatform} ${item.ariaLabelSuffix}`}
+                        aria-label={`${
+                          LOCAL_SERVICE_META.find(
+                            (meta) =>
+                              meta.key === recommendedLocalServicePlatform
+                          )?.label || recommendedLocalServicePlatform
+                        } ${item.ariaLabelSuffix}`}
                         className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                           item.action === 'uninstall'
                             ? 'border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:bg-amber-900/30'

@@ -1,5 +1,6 @@
 import {
   buildSignedDesktopDownloadPath,
+  fetchLatestDesktopRelease,
   fetchLocalServiceReleaseSummary,
   getDesktopAssetKeyForName,
   getDesktopReleaseConfig,
@@ -263,6 +264,70 @@ describe('client-download helpers', () => {
       repo: 'demo/LunaTV',
       tagPrefix: 'desktop-v',
       targetCommitish: undefined,
+    });
+  });
+
+  it('hydrates the selected desktop prerelease from the release detail endpoint', async () => {
+    mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
+    delete mutableEnv.DESKTOP_RELEASE_TAG_PREFIX;
+    delete mutableEnv.DESKTOP_RELEASE_TARGET_COMMITISH;
+
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            {
+              assets: [],
+              id: 39,
+              prerelease: true,
+              published_at: '2026-06-16T00:00:00.000Z',
+              tag_name: 'desktop-v200.0.0-beta.3',
+            },
+          ]),
+          {
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            status: 200,
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            assets: [
+              {
+                browser_download_url:
+                  'https://example.com/LunaTV.Desktop_200.0.0-beta.3_aarch64.dmg',
+                id: 401,
+                name: 'LunaTV.Desktop_200.0.0-beta.3_aarch64.dmg',
+                size: 1024,
+              },
+            ],
+            id: 39,
+            prerelease: true,
+            published_at: '2026-06-16T00:00:00.000Z',
+            tag_name: 'desktop-v200.0.0-beta.3',
+          }),
+          {
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            status: 200,
+          }
+        )
+      ) as typeof fetch;
+
+    await expect(fetchLatestDesktopRelease()).resolves.toMatchObject({
+      assets: [
+        expect.objectContaining({
+          id: 401,
+          name: 'LunaTV.Desktop_200.0.0-beta.3_aarch64.dmg',
+        }),
+      ],
+      id: 39,
+      tag_name: 'desktop-v200.0.0-beta.3',
     });
   });
 

@@ -677,7 +677,24 @@ export async function fetchLatestDesktopRelease(): Promise<GitHubRelease | null>
   }
 
   const releases = await fetchDesktopReleaseList();
-  return selectLatestDesktopRelease(releases, config);
+  const latestRelease = selectLatestDesktopRelease(releases, config);
+  if (!latestRelease) {
+    return null;
+  }
+
+  try {
+    const hydratedRelease = await fetchDesktopReleaseById(latestRelease.id);
+    if (
+      hydratedRelease &&
+      matchesDesktopReleaseConfig(hydratedRelease, config)
+    ) {
+      return hydratedRelease;
+    }
+  } catch {
+    // Fall back to the list payload when the detail endpoint is unavailable.
+  }
+
+  return latestRelease;
 }
 
 export async function fetchDesktopReleaseById(
