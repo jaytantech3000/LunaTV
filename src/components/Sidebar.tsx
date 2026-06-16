@@ -29,6 +29,7 @@ import {
 } from 'react';
 import { flushSync } from 'react-dom';
 
+import { LocalServiceStatusSidebarPill } from './LocalServiceStatusBanner';
 import {
   isModifiedNavigationEvent,
   useNavigationFeedback,
@@ -331,8 +332,10 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
               </button>
             </div>
 
+            <LocalServiceStatusSidebarPill isCollapsed={isCollapsed} />
+
             {/* 首页和搜索导航 */}
-            <nav className='px-2 mt-4 space-y-1'>
+            <nav className='px-2 mt-3 space-y-1'>
               <Link
                 href='/'
                 prefetch
