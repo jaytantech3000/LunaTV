@@ -16,7 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import {
@@ -336,23 +336,49 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
     useState<ChangelogLocale>('zh-CN');
   const [showRemoteContent, setShowRemoteContent] = useState(false);
   const updateState = useAppUpdateState();
+  const updatePhaseRef = useRef(updateState.phase);
   const changelogCopy = CHANGELOG_COPY[changelogLocale];
   const isDesktopTarget = getRuntimeConfig().APP_TARGET === 'desktop';
   const isDesktopUpdaterAvailable =
     updateState.canUseDesktopUpdater &&
     updateState.source === 'desktop-updater';
+  const isAutoDownloadInProgress =
+    isDesktopUpdaterAvailable &&
+    updateState.autoDownloadEnabled &&
+    updateState.phase === 'downloading';
+  const hasAutoDownloadedUpdate =
+    isDesktopUpdaterAvailable &&
+    updateState.autoDownloadEnabled &&
+    updateState.phase === 'downloaded';
+  const isAutoInstallingUpdate =
+    isDesktopUpdaterAvailable &&
+    updateState.autoDownloadEnabled &&
+    updateState.phase === 'installing';
   const latestKnownVersion =
     updateState.latestVersion || remoteChangelog[0]?.version || CURRENT_VERSION;
   const localVersions = changelog.map((entry) => entry.version);
   const remoteOnlyEntries = remoteChangelog.filter(
     (entry) => !localVersions.includes(entry.version)
   );
+  const autoDownloadDescription = isAutoDownloadInProgress
+    ? '正在自动下载最新版本，完成后可直接点击上方安装。'
+    : isAutoInstallingUpdate
+    ? '正在安装更新，应用即将自动重启。'
+    : hasAutoDownloadedUpdate
+    ? '更新包已自动下载完成，点击上方安装即可。'
+    : isDesktopUpdaterAvailable
+    ? '启动后发现新版本时自动下载，安装仍需你手动确认。'
+    : '当前桌面构建尚未配置应用内更新源。';
 
   useEffect(() => {
     setMounted(true);
     setChangelogLocale(readChangelogLocalePreference());
     return () => setMounted(false);
   }, []);
+
+  useEffect(() => {
+    updatePhaseRef.current = updateState.phase;
+  }, [updateState.phase]);
 
   useEffect(() => {
     if (isOpen) {
@@ -364,6 +390,14 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
 
   useEffect(() => {
     if (!isOpen) {
+      return;
+    }
+
+    if (
+      updatePhaseRef.current === 'downloading' ||
+      updatePhaseRef.current === 'downloaded' ||
+      updatePhaseRef.current === 'installing'
+    ) {
       return;
     }
 
@@ -500,6 +534,11 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                         ? '正在检查更新'
                         : updateState.phase === 'downloading'
                         ? '正在下载更新包'
+                        : updateState.phase === 'installing'
+                        ? '正在安装更新'
+                        : updateState.phase === 'downloaded' &&
+                          updateState.errorMessage
+                        ? '安装失败，可重试'
                         : updateState.phase === 'downloaded'
                         ? '更新包已就绪'
                         : updateState.updateStatus === UpdateStatus.HAS_UPDATE
@@ -651,10 +690,33 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     自动下载更新包
                   </h4>
                   <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-                    {isDesktopUpdaterAvailable
-                      ? '启动后发现新版本时自动下载，安装仍需你手动确认。'
-                      : '当前桌面构建尚未配置应用内更新源。'}
+                    {autoDownloadDescription}
                   </p>
+                  {isAutoDownloadInProgress ? (
+                    <div className='mt-3 space-y-2'>
+                      <div className='h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-800'>
+                        <div
+                          className='h-full rounded-full bg-emerald-500 transition-[width]'
+                          style={{
+                            width: `${updateState.progressPercent ?? 0}%`,
+                          }}
+                        />
+                      </div>
+                      <div className='flex items-center justify-between text-[11px] text-gray-500 dark:text-gray-400'>
+                        <span>
+                          {updateState.progressPercent !== null
+                            ? `自动下载中 ${updateState.progressPercent}%`
+                            : '自动下载中'}
+                        </span>
+                        <span>
+                          {formatBytes(updateState.downloadedBytes)}
+                          {updateState.totalBytes
+                            ? ` / ${formatBytes(updateState.totalBytes)}`
+                            : ''}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
                 <label
                   className={`flex items-center ${

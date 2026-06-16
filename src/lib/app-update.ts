@@ -76,6 +76,7 @@ type DesktopUpdaterHandle = {
 let state: AppUpdateState = createInitialState();
 const listeners = new Set<AppUpdateListener>();
 let pendingUpdate: DesktopUpdaterHandle | null = null;
+let downloadedUpdate: DesktopUpdaterHandle | null = null;
 let backgroundCheckStarted = false;
 let checkPromise: Promise<AppUpdateState> | null = null;
 let downloadPromise: Promise<AppUpdateState> | null = null;
@@ -146,14 +147,47 @@ function persistAutoDownloadPreference(enabled: boolean) {
   }
 }
 
+function closeUpdateHandle(update: DesktopUpdaterHandle | null) {
+  if (!update?.close) {
+    return;
+  }
+
+  void update.close().catch(() => {
+    // Ignore updater resource cleanup failures.
+  });
+}
+
 function clearPendingUpdate() {
   const currentUpdate = pendingUpdate;
   pendingUpdate = null;
-  if (currentUpdate?.close) {
-    void currentUpdate.close().catch(() => {
-      // Ignore updater resource cleanup failures.
-    });
+  if (currentUpdate === downloadedUpdate) {
+    return;
   }
+
+  closeUpdateHandle(currentUpdate);
+}
+
+function setDownloadedUpdate(nextUpdate: DesktopUpdaterHandle | null) {
+  if (downloadedUpdate === nextUpdate) {
+    return;
+  }
+
+  const previousUpdate = downloadedUpdate;
+  downloadedUpdate = nextUpdate;
+
+  if (previousUpdate === pendingUpdate) {
+    return;
+  }
+
+  closeUpdateHandle(previousUpdate);
+}
+
+function isDownloadedUpdateReady(version?: string | null) {
+  if (!downloadedUpdate) {
+    return false;
+  }
+
+  return !version || downloadedUpdate.version === version;
 }
 
 function getFriendlyDesktopUpdaterError(error: unknown) {
@@ -268,14 +302,16 @@ async function checkDesktopUpdates(allowAutoDownload: boolean) {
 
   const nextUpdate = await check();
   clearPendingUpdate();
+  const autoDownloadEnabled = readAutoDownloadPreference();
 
   if (!nextUpdate) {
+    setDownloadedUpdate(null);
     patchState({
       phase: 'up_to_date',
       source: 'desktop-updater',
       updateStatus: UpdateStatus.NO_UPDATE,
       latestVersion: CURRENT_VERSION,
-      autoDownloadEnabled: readAutoDownloadPreference(),
+      autoDownloadEnabled,
       canUseDesktopUpdater: true,
       canCheck: true,
       canDownload: false,
@@ -296,13 +332,44 @@ async function checkDesktopUpdates(allowAutoDownload: boolean) {
     return state;
   }
 
+  if (isDownloadedUpdateReady(nextUpdate.version)) {
+    patchState({
+      phase: 'downloaded',
+      source: 'desktop-updater',
+      updateStatus: UpdateStatus.HAS_UPDATE,
+      latestVersion: nextUpdate.version,
+      autoDownloadEnabled,
+      canUseDesktopUpdater: true,
+      canCheck: true,
+      canDownload: false,
+      canInstall: true,
+      isChecking: false,
+      isDownloading: false,
+      isInstalling: false,
+      isBusy: false,
+      progressPercent: state.progressPercent ?? 100,
+      downloadedBytes: state.downloadedBytes,
+      totalBytes: state.totalBytes,
+      publishedAt: nextUpdate.date || downloadedUpdate?.date || null,
+      releaseNotes:
+        nextUpdate.body?.trim() || downloadedUpdate?.body?.trim() || null,
+      statusMessage: autoDownloadEnabled
+        ? '更新包已自动下载，点击安装即可静默安装并自动重启。'
+        : '更新包已下载，点击后将静默安装并自动重启。',
+      errorMessage: null,
+    });
+
+    return state;
+  }
+
+  setDownloadedUpdate(null);
   pendingUpdate = nextUpdate;
   patchState({
     phase: 'available',
     source: 'desktop-updater',
     updateStatus: UpdateStatus.HAS_UPDATE,
     latestVersion: nextUpdate.version,
-    autoDownloadEnabled: readAutoDownloadPreference(),
+    autoDownloadEnabled,
     canUseDesktopUpdater: true,
     canCheck: true,
     canDownload: true,
@@ -344,6 +411,15 @@ export async function checkForAppUpdates(options?: {
   force?: boolean;
   allowAutoDownload?: boolean;
 }) {
+  if (state.phase === 'downloading' && downloadPromise) {
+    return downloadPromise;
+  }
+
+  if (state.phase === 'installing' && installPromise) {
+    await installPromise;
+    return state;
+  }
+
   if (checkPromise && !options?.force) {
     return checkPromise;
   }
@@ -395,11 +471,19 @@ export async function downloadLatestVersion() {
   }
 
   const nextPromise = (async () => {
+    if (state.phase === 'downloaded' && downloadedUpdate) {
+      return state;
+    }
+
     if (!pendingUpdate) {
       await checkForAppUpdates({
         force: true,
         allowAutoDownload: false,
       });
+    }
+
+    if (state.phase === 'downloaded' && downloadedUpdate) {
+      return state;
     }
 
     if (!pendingUpdate || !state.canUseDesktopUpdater) {
@@ -419,12 +503,13 @@ export async function downloadLatestVersion() {
 
     let downloadedBytes = 0;
     let totalBytes: number | null = null;
+    const updateToDownload = pendingUpdate;
 
     patchState({
       phase: 'downloading',
       source: 'desktop-updater',
       updateStatus: UpdateStatus.HAS_UPDATE,
-      latestVersion: pendingUpdate.version,
+      latestVersion: updateToDownload.version,
       canUseDesktopUpdater: true,
       canCheck: true,
       canDownload: false,
@@ -441,7 +526,7 @@ export async function downloadLatestVersion() {
     });
 
     try {
-      await pendingUpdate.download((event: DesktopDownloadEvent) => {
+      await updateToDownload.download((event: DesktopDownloadEvent) => {
         switch (event.event) {
           case 'Started':
             totalBytes = event.data.contentLength ?? null;
@@ -473,6 +558,11 @@ export async function downloadLatestVersion() {
         }
       });
 
+      setDownloadedUpdate(updateToDownload);
+      if (pendingUpdate === updateToDownload) {
+        pendingUpdate = null;
+      }
+
       patchState({
         phase: 'downloaded',
         canCheck: true,
@@ -485,7 +575,11 @@ export async function downloadLatestVersion() {
         progressPercent: totalBytes ? 100 : state.progressPercent,
         downloadedBytes,
         totalBytes,
-        statusMessage: '更新包已下载，点击后将静默安装并自动重启。',
+        publishedAt: updateToDownload.date || state.publishedAt,
+        releaseNotes: updateToDownload.body?.trim() || state.releaseNotes,
+        statusMessage: readAutoDownloadPreference()
+          ? '更新包已自动下载，点击安装即可静默安装并自动重启。'
+          : '更新包已下载，点击后将静默安装并自动重启。',
         errorMessage: null,
       });
     } catch (error) {
@@ -528,7 +622,9 @@ export async function installDownloadedUpdate() {
   }
 
   const nextPromise = (async () => {
-    if (!pendingUpdate || state.phase !== 'downloaded') {
+    const updateToInstall = downloadedUpdate;
+
+    if (!updateToInstall || state.phase !== 'downloaded') {
       patchState({
         phase: 'error',
         canInstall: false,
@@ -556,10 +652,11 @@ export async function installDownloadedUpdate() {
     });
 
     try {
-      await pendingUpdate.install();
+      await updateToInstall.install();
       const { relaunch } = await import('@tauri-apps/plugin-process');
       await relaunch();
     } catch (error) {
+      setDownloadedUpdate(updateToInstall);
       patchState({
         phase: 'downloaded',
         canCheck: true,
