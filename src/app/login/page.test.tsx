@@ -38,7 +38,7 @@ jest.mock('@/lib/version_check', () => ({
   checkForUpdates: jest.fn().mockResolvedValue('no_update'),
 }));
 
-import { LoginPageClient } from './page';
+import { LoginPageClient } from './LoginPageClient';
 
 describe('LoginPageClient', () => {
   const originalFetch = global.fetch;

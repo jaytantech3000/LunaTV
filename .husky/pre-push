@@ -1,0 +1,9 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+set -e
+
+echo "Running pre-push checks..."
+pnpm lint:strict
+pnpm typecheck
+pnpm exec jest --runInBand

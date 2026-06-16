@@ -2,8 +2,6 @@ jest.mock('@/lib/config', () => ({
   getConfig: jest.fn(),
 }));
 
-import type { NextRequest } from 'next/server';
-
 import type { AdminConfig } from '@/lib/admin.types';
 import { getConfig } from '@/lib/config';
 import type { SearchResult } from '@/lib/types';
@@ -13,7 +11,20 @@ import {
   shouldUseServerSideEpisodeProxy,
 } from './episode-rewriter';
 
-type MockRequest = Pick<NextRequest, 'headers' | 'nextUrl'>;
+type EpisodeRewriterRequest = Parameters<
+  typeof shouldUseServerSideEpisodeProxy
+>[1];
+
+type MockRequest = {
+  headers: {
+    get(name: string): string | null;
+  };
+  nextUrl: {
+    searchParams: URLSearchParams;
+    origin: string;
+    protocol: string;
+  };
+};
 
 function makeRequest(
   adfilter?: string,
@@ -43,15 +54,15 @@ function makeRequest(
     headers: {
       get: (name: string) => {
         const normalized = name.toLowerCase();
-        if (normalized === 'user-agent') return options.userAgent;
+        if (normalized === 'user-agent') return options.userAgent ?? null;
         if (normalized === 'host') return options.host || 'localhost:3000';
-        if (normalized === 'x-forwarded-proto') return options.protocol;
-        return undefined;
+        if (normalized === 'x-forwarded-proto') return options.protocol ?? null;
+        return null;
       },
     },
   };
 
-  return request as unknown as NextRequest;
+  return request as unknown as EpisodeRewriterRequest;
 }
 
 function createResult(overrides: Partial<SearchResult> = {}): SearchResult {
