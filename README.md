@@ -403,6 +403,14 @@ NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE 选项解释：
 
 v100.0.0 以上版本可配合 [Selene](https://github.com/MoonTechLab/Selene) 使用，移动端体验更加友好，数据完全同步
 
+仓库内已补齐本地服务二进制发布链路：
+
+- Rust 服务源码位于 `crates/moontv-local-service`
+- 手动触发 `.github/workflows/local-service-release.yml` 可发布多平台二进制
+- Web 端默认会从固定 GitHub Release tag `local-service-latest` 推导下载地址
+
+发布和环境变量细节见 `docs/local-service-release.md`
+
 ## AndroidTV 使用
 
 目前该项目可以配合 [OrionTV](https://github.com/zimplexing/OrionTV) 在 Android TV 上使用，可以直接作为 OrionTV 后端

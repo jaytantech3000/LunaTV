@@ -1,0 +1,186 @@
+name: Build & Publish Local Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: GitHub Release tag to create or update.
+        required: true
+        default: local-service-latest
+      release_name:
+        description: GitHub Release display name.
+        required: true
+        default: LunaTV Local Service
+      prerelease:
+        description: Mark the GitHub Release as a prerelease.
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.release_tag }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run local service tests
+        run: cargo test --manifest-path crates/moontv-local-service/Cargo.toml --locked
+
+  build-macos:
+    needs:
+      - verify
+    strategy:
+      matrix:
+        include:
+          - asset_name: lunatv-server-mac-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+          - asset_name: lunatv-server-mac-x64
+            os: macos-13
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build binary
+        run: cargo build --locked --release --manifest-path crates/moontv-local-service/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "crates/moontv-local-service/target/${{ matrix.target }}/release/lunatv-server" "dist/${{ matrix.asset_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-service-${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+          if-no-files-found: error
+          retention-days: 7
+
+  build-linux:
+    needs:
+      - verify
+    strategy:
+      matrix:
+        include:
+          - asset_name: lunatv-server-linux-x64
+            target: x86_64-unknown-linux-musl
+          - asset_name: lunatv-server-linux-arm64
+            target: aarch64-unknown-linux-musl
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        run: cargo install cross --locked
+
+      - name: Build binary
+        run: cross build --locked --release --manifest-path crates/moontv-local-service/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "crates/moontv-local-service/target/${{ matrix.target }}/release/lunatv-server" "dist/${{ matrix.asset_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-service-${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    needs:
+      - verify
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build binary
+        run: cargo build --locked --release --manifest-path crates/moontv-local-service/Cargo.toml --target x86_64-pc-windows-msvc
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "crates/moontv-local-service/target/x86_64-pc-windows-msvc/release/lunatv-server.exe" "dist/lunatv-server-win-x64.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-service-lunatv-server-win-x64.exe
+          path: dist/lunatv-server-win-x64.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs:
+      - build-macos
+      - build-linux
+      - build-windows
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download built artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: local-service-*
+          merge-multiple: true
+
+      - name: Create or update release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ inputs.release_tag }}'
+          name='${{ inputs.release_name }}'
+          flags=()
+          if [[ '${{ inputs.prerelease }}' == 'true' ]]; then
+            flags+=(--prerelease)
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$name" "${flags[@]}"
+          else
+            gh release create "$tag" --title "$name" --notes "Automated LunaTV local service build." "${flags[@]}"
+          fi
+
+      - name: Upload release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload '${{ inputs.release_tag }}' dist/* --clobber

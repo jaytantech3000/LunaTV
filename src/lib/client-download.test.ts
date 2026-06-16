@@ -10,18 +10,43 @@ import {
 
 const mutableEnv = process.env as Record<string, string | undefined>;
 
+function restoreEnvValue(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete mutableEnv[key];
+    return;
+  }
+
+  mutableEnv[key] = value;
+}
+
 describe('client-download helpers', () => {
   const originalEnv = {
     CLIENT_DOWNLOAD_SIGNING_SECRET: mutableEnv.CLIENT_DOWNLOAD_SIGNING_SECRET,
+    DESKTOP_RELEASE_REPO: mutableEnv.DESKTOP_RELEASE_REPO,
+    LOCAL_SERVICE_RELEASE_REPO: mutableEnv.LOCAL_SERVICE_RELEASE_REPO,
+    LOCAL_SERVICE_RELEASE_TAG: mutableEnv.LOCAL_SERVICE_RELEASE_TAG,
     LOCAL_SERVICE_RELEASE_URL_MAC_ARM64:
       mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64,
   };
 
   afterEach(() => {
-    mutableEnv.CLIENT_DOWNLOAD_SIGNING_SECRET =
-      originalEnv.CLIENT_DOWNLOAD_SIGNING_SECRET;
-    mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64 =
-      originalEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64;
+    restoreEnvValue(
+      'CLIENT_DOWNLOAD_SIGNING_SECRET',
+      originalEnv.CLIENT_DOWNLOAD_SIGNING_SECRET
+    );
+    restoreEnvValue('DESKTOP_RELEASE_REPO', originalEnv.DESKTOP_RELEASE_REPO);
+    restoreEnvValue(
+      'LOCAL_SERVICE_RELEASE_REPO',
+      originalEnv.LOCAL_SERVICE_RELEASE_REPO
+    );
+    restoreEnvValue(
+      'LOCAL_SERVICE_RELEASE_TAG',
+      originalEnv.LOCAL_SERVICE_RELEASE_TAG
+    );
+    restoreEnvValue(
+      'LOCAL_SERVICE_RELEASE_URL_MAC_ARM64',
+      originalEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64
+    );
   });
 
   it('selects the newest prerelease that matches the desktop release line', () => {
@@ -55,11 +80,40 @@ describe('client-download helpers', () => {
       {
         repo: 'demo/LunaTV',
         tagPrefix: 'desktop-v',
-        targetCommitish: 'desktop',
       }
     );
 
     expect(release?.id).toBe(2);
+  });
+
+  it('can further narrow releases with an explicit target commitish filter', () => {
+    const release = selectLatestDesktopRelease(
+      [
+        {
+          assets: [],
+          id: 1,
+          prerelease: true,
+          published_at: '2026-06-11T00:00:00.000Z',
+          tag_name: 'desktop-v0.2.0',
+          target_commitish: 'desktop-sha-a',
+        },
+        {
+          assets: [],
+          id: 2,
+          prerelease: true,
+          published_at: '2026-06-12T00:00:00.000Z',
+          tag_name: 'desktop-v0.3.0',
+          target_commitish: 'desktop-sha-b',
+        },
+      ],
+      {
+        repo: 'demo/LunaTV',
+        tagPrefix: 'desktop-v',
+        targetCommitish: 'desktop-sha-a',
+      }
+    );
+
+    expect(release?.id).toBe(1);
   });
 
   it('maps desktop assets and reports missing required targets', () => {
@@ -133,10 +187,36 @@ describe('client-download helpers', () => {
   it('reads local service platform mappings from environment variables', () => {
     mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64 =
       'https://example.com/lunatv-server';
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_REPO;
+    delete mutableEnv.DESKTOP_RELEASE_REPO;
 
     expect(resolveLocalServiceBinaryUrl('mac-arm64')).toBe(
       'https://example.com/lunatv-server'
     );
     expect(resolveLocalServiceBinaryUrl('mac-x64')).toBeNull();
+  });
+
+  it('derives stable GitHub release urls for local service binaries', () => {
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64;
+    mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
+    mutableEnv.LOCAL_SERVICE_RELEASE_TAG = 'local-service-latest';
+
+    expect(resolveLocalServiceBinaryUrl('mac-arm64')).toBe(
+      'https://github.com/demo/LunaTV/releases/download/local-service-latest/lunatv-server-mac-arm64'
+    );
+    expect(resolveLocalServiceBinaryUrl('win-x64')).toBe(
+      'https://github.com/demo/LunaTV/releases/download/local-service-latest/lunatv-server-win-x64.exe'
+    );
+  });
+
+  it('prefers an explicit local service release repo when provided', () => {
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64;
+    mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
+    mutableEnv.LOCAL_SERVICE_RELEASE_REPO = 'mirror/LunaTV-binaries';
+    mutableEnv.LOCAL_SERVICE_RELEASE_TAG = 'local-service-v1';
+
+    expect(resolveLocalServiceBinaryUrl('linux-x64')).toBe(
+      'https://github.com/mirror/LunaTV-binaries/releases/download/local-service-v1/lunatv-server-linux-x64'
+    );
   });
 });

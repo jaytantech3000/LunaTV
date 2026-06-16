@@ -376,27 +376,31 @@ const handleOpenDownloadPanel = () => {
 
 ### 桌面发布线
 
-| 变量名 | 必填 | 说明 |
-| --- | --- | --- |
-| `SITE_BASE` | 建议 | 脚本中生成绝对下载地址时优先使用的站点根地址 |
-| `DESKTOP_RELEASE_REPO` | 是 | GitHub 仓库，例如 `jaytantech3000/LunaTV` |
-| `DESKTOP_RELEASE_TARGET_COMMITISH` | 是 | 桌面发布线，例如 `desktop` |
-| `DESKTOP_RELEASE_TAG_PREFIX` | 否 | 若配置则进一步限定 tag 前缀 |
-| `CLIENT_DOWNLOAD_SIGNING_SECRET` | 是 | 下载签名密钥 |
+| 变量名                             | 必填 | 说明                                         |
+| ---------------------------------- | ---- | -------------------------------------------- |
+| `SITE_BASE`                        | 建议 | 脚本中生成绝对下载地址时优先使用的站点根地址 |
+| `DESKTOP_RELEASE_REPO`             | 是   | GitHub 仓库，例如 `jaytantech3000/LunaTV`    |
+| `DESKTOP_RELEASE_TARGET_COMMITISH` | 否   | 若配置则额外限定 `target_commitish`          |
+| `DESKTOP_RELEASE_TAG_PREFIX`       | 否   | 若配置则进一步限定 tag 前缀                  |
+| `CLIENT_DOWNLOAD_SIGNING_SECRET`   | 是   | 下载签名密钥                                 |
 
 ### 本地服务二进制映射
 
-| 变量名 | 必填 | 说明 |
-| --- | --- | --- |
-| `LOCAL_SERVICE_RELEASE_URL_MAC_ARM64` | 否 | macOS Apple Silicon 二进制地址 |
-| `LOCAL_SERVICE_RELEASE_URL_MAC_X64` | 否 | macOS Intel 二进制地址 |
-| `LOCAL_SERVICE_RELEASE_URL_LINUX_X64` | 否 | Linux x64 二进制地址 |
-| `LOCAL_SERVICE_RELEASE_URL_LINUX_ARM64` | 否 | Linux ARM64 二进制地址 |
-| `LOCAL_SERVICE_RELEASE_URL_WIN_X64` | 否 | Windows x64 二进制地址 |
+| 变量名                                  | 必填 | 说明                                                          |
+| --------------------------------------- | ---- | ------------------------------------------------------------- |
+| `LOCAL_SERVICE_RELEASE_REPO`            | 否   | 本地服务二进制发布仓库；未配置时回退到 `DESKTOP_RELEASE_REPO` |
+| `LOCAL_SERVICE_RELEASE_TAG`             | 否   | 固定 release tag，默认 `local-service-latest`                 |
+| `LOCAL_SERVICE_RELEASE_URL_MAC_ARM64`   | 否   | macOS Apple Silicon 二进制直链，优先级高于自动推导            |
+| `LOCAL_SERVICE_RELEASE_URL_MAC_X64`     | 否   | macOS Intel 二进制直链，优先级高于自动推导                    |
+| `LOCAL_SERVICE_RELEASE_URL_LINUX_X64`   | 否   | Linux x64 二进制直链，优先级高于自动推导                      |
+| `LOCAL_SERVICE_RELEASE_URL_LINUX_ARM64` | 否   | Linux ARM64 二进制直链，优先级高于自动推导                    |
+| `LOCAL_SERVICE_RELEASE_URL_WIN_X64`     | 否   | Windows x64 二进制直链，优先级高于自动推导                    |
 
 说明：
 
-- 某个平台未配置时，不返回占位脚本，直接 `503`
+- 显式逐平台 URL 未配置时，按固定规则推导：
+  `https://github.com/<repo>/releases/download/<tag>/<asset-name>`
+- 当自动推导和显式 URL 都不存在时，不返回占位脚本，直接 `503`
 - 前端看到该平台未配置时应禁用按钮并提示“暂未开放”
 
 ---
@@ -435,13 +439,13 @@ const handleOpenDownloadPanel = () => {
 
 ## 关键复用
 
-| 现有模式 | 文件 | 用途 |
-| --- | --- | --- |
-| Portal 弹窗结构 | `src/components/VersionPanel.tsx` | 弹窗容器、关闭交互、滚动锁定 |
-| URL 校验与重定向安全 | `src/lib/proxy-security.ts` | 复用 `validateProxyTargetUrl` / `fetchWithValidatedRedirects` |
-| 流式代理头透传 | `src/app/api/proxy/m3u8-asset/route.ts` | `Content-Length` / `Range` / `Content-Disposition` 处理 |
-| fetch 超时模式 | `src/lib/douban.ts` | `AbortController` + timeout |
-| API Route 结构 | `src/app/api/server-config/route.ts` | `NextResponse` 返回模式 |
+| 现有模式             | 文件                                    | 用途                                                          |
+| -------------------- | --------------------------------------- | ------------------------------------------------------------- |
+| Portal 弹窗结构      | `src/components/VersionPanel.tsx`       | 弹窗容器、关闭交互、滚动锁定                                  |
+| URL 校验与重定向安全 | `src/lib/proxy-security.ts`             | 复用 `validateProxyTargetUrl` / `fetchWithValidatedRedirects` |
+| 流式代理头透传       | `src/app/api/proxy/m3u8-asset/route.ts` | `Content-Length` / `Range` / `Content-Disposition` 处理       |
+| fetch 超时模式       | `src/lib/douban.ts`                     | `AbortController` + timeout                                   |
+| API Route 结构       | `src/app/api/server-config/route.ts`    | `NextResponse` 返回模式                                       |
 
 ---
 
@@ -459,11 +463,13 @@ const handleOpenDownloadPanel = () => {
 ### API 测试
 
 2. `src/app/api/desktop-release/route.test.ts`
+
    - 返回签名下载地址
    - 缺失部分资产时返回 `missingAssetKeys`
    - 找不到匹配 release 时返回 `503`
 
 3. `src/app/api/client-download/route.test.ts`
+
    - desktop 参数签名有效时可下载
    - 签名失效或过期返回 `403`
    - local-service 平台未配置返回 `503`
@@ -479,6 +485,7 @@ const handleOpenDownloadPanel = () => {
 ### 组件测试
 
 5. `src/components/DownloadClientPanel.test.tsx`
+
    - 打开时请求桌面发布信息
    - loading / error / success 三态切换正确
    - 推荐平台按钮高亮正确

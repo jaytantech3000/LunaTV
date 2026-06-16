@@ -35,13 +35,18 @@ export interface GitHubRelease {
 export interface DesktopReleaseConfig {
   repo: string;
   tagPrefix?: string;
-  targetCommitish: string;
+  targetCommitish?: string;
 }
 
 export interface DesktopReleaseAssetInfo {
   asset: GitHubReleaseAsset;
   key: DesktopAssetKey;
   label: string;
+}
+
+interface LocalServiceReleaseConfig {
+  repo: string;
+  tag: string;
 }
 
 interface DesktopAssetRule {
@@ -59,6 +64,7 @@ interface DesktopDownloadSignatureInput {
 const GITHUB_API_BASE = 'https://api.github.com';
 const GITHUB_API_TIMEOUT_MS = 10000;
 const DEFAULT_SIGNED_DOWNLOAD_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_LOCAL_SERVICE_RELEASE_TAG = 'local-service-latest';
 
 const DESKTOP_ASSET_RULES: DesktopAssetRule[] = [
   {
@@ -99,6 +105,17 @@ const LOCAL_SERVICE_URL_ENV_MAP: Record<LocalServicePlatformKey, string> = {
   'win-x64': 'LOCAL_SERVICE_RELEASE_URL_WIN_X64',
 };
 
+const LOCAL_SERVICE_RELEASE_ASSET_NAMES: Record<
+  LocalServicePlatformKey,
+  string
+> = {
+  'linux-arm64': 'lunatv-server-linux-arm64',
+  'linux-x64': 'lunatv-server-linux-x64',
+  'mac-arm64': 'lunatv-server-mac-arm64',
+  'mac-x64': 'lunatv-server-mac-x64',
+  'win-x64': 'lunatv-server-win-x64.exe',
+};
+
 function getClientDownloadSigningSecret(): string | null {
   const explicit = process.env.CLIENT_DOWNLOAD_SIGNING_SECRET?.trim();
   if (explicit) {
@@ -126,6 +143,13 @@ function buildDesktopDownloadSignaturePayload(
 
 function normalizeAssetName(name: string): string {
   return name.trim().toLowerCase();
+}
+
+function isValidGitHubRepo(repo: string): boolean {
+  const repoParts = repo.split('/');
+  return (
+    repoParts.length === 2 && repoParts.every((part) => Boolean(part.trim()))
+  );
 }
 
 function getReleaseTimestamp(release: GitHubRelease): number {
@@ -171,19 +195,18 @@ export function getDesktopReleaseConfig(): DesktopReleaseConfig | null {
   const targetCommitish = process.env.DESKTOP_RELEASE_TARGET_COMMITISH?.trim();
   const tagPrefix = process.env.DESKTOP_RELEASE_TAG_PREFIX?.trim();
 
-  if (!repo || !targetCommitish) {
+  if (!repo || (!targetCommitish && !tagPrefix)) {
     return null;
   }
 
-  const repoParts = repo.split('/');
-  if (repoParts.length !== 2 || repoParts.some((part) => !part.trim())) {
+  if (!isValidGitHubRepo(repo)) {
     return null;
   }
 
   return {
     repo,
     tagPrefix: tagPrefix || undefined,
-    targetCommitish,
+    targetCommitish: targetCommitish || undefined,
   };
 }
 
@@ -195,15 +218,15 @@ export function matchesDesktopReleaseConfig(
     return false;
   }
 
-  if ((release.target_commitish || '').trim() !== config.targetCommitish) {
-    return false;
-  }
-
   if (config.tagPrefix && !release.tag_name.startsWith(config.tagPrefix)) {
     return false;
   }
 
-  return true;
+  if (config.targetCommitish) {
+    return (release.target_commitish || '').trim() === config.targetCommitish;
+  }
+
+  return Boolean(config.tagPrefix);
 }
 
 export function selectLatestDesktopRelease(
@@ -212,12 +235,16 @@ export function selectLatestDesktopRelease(
 ): GitHubRelease | null {
   const matchingReleases = releases
     .filter((release) => matchesDesktopReleaseConfig(release, config))
-    .sort((left, right) => getReleaseTimestamp(right) - getReleaseTimestamp(left));
+    .sort(
+      (left, right) => getReleaseTimestamp(right) - getReleaseTimestamp(left)
+    );
 
   return matchingReleases[0] || null;
 }
 
-export function getDesktopAssetKeyForName(name: string): DesktopAssetKey | null {
+export function getDesktopAssetKeyForName(
+  name: string
+): DesktopAssetKey | null {
   const normalizedName = normalizeAssetName(name);
   const rule = DESKTOP_ASSET_RULES.find((candidate) =>
     candidate.matcher(normalizedName)
@@ -257,6 +284,33 @@ export function listDesktopReleaseAssets(release: GitHubRelease): {
   return { assets, missingAssetKeys };
 }
 
+function getLocalServiceReleaseConfig(): LocalServiceReleaseConfig | null {
+  const repo =
+    process.env.LOCAL_SERVICE_RELEASE_REPO?.trim() ||
+    process.env.DESKTOP_RELEASE_REPO?.trim();
+  const tag =
+    process.env.LOCAL_SERVICE_RELEASE_TAG?.trim() ||
+    DEFAULT_LOCAL_SERVICE_RELEASE_TAG;
+
+  if (!repo || !tag || !isValidGitHubRepo(repo)) {
+    return null;
+  }
+
+  return { repo, tag };
+}
+
+function buildLocalServiceReleaseAssetUrl(
+  platform: LocalServicePlatformKey,
+  config: LocalServiceReleaseConfig
+): string {
+  const assetName = LOCAL_SERVICE_RELEASE_ASSET_NAMES[platform];
+  return `https://github.com/${
+    config.repo
+  }/releases/download/${encodeURIComponent(config.tag)}/${encodeURIComponent(
+    assetName
+  )}`;
+}
+
 export function isLocalServicePlatformKey(
   value: string | null | undefined
 ): value is LocalServicePlatformKey {
@@ -278,13 +332,22 @@ export function resolveLocalServiceBinaryUrl(
 ): string | null {
   const envKey = LOCAL_SERVICE_URL_ENV_MAP[platform];
   const value = process.env[envKey]?.trim();
-  return value || null;
+  if (value) {
+    return value;
+  }
+
+  const releaseConfig = getLocalServiceReleaseConfig();
+  if (!releaseConfig) {
+    return null;
+  }
+
+  return buildLocalServiceReleaseAssetUrl(platform, releaseConfig);
 }
 
 export function getConfiguredLocalServicePlatforms(): LocalServicePlatformKey[] {
-  return (Object.keys(LOCAL_SERVICE_URL_ENV_MAP) as LocalServicePlatformKey[]).filter(
-    (platform) => Boolean(resolveLocalServiceBinaryUrl(platform))
-  );
+  return (
+    Object.keys(LOCAL_SERVICE_URL_ENV_MAP) as LocalServicePlatformKey[]
+  ).filter((platform) => Boolean(resolveLocalServiceBinaryUrl(platform)));
 }
 
 export function signDesktopDownload(
@@ -332,7 +395,8 @@ export function buildSignedDesktopDownloadPath(input: {
   ttlMs?: number;
 }): string | null {
   const expires =
-    input.expires ?? Date.now() + (input.ttlMs ?? DEFAULT_SIGNED_DOWNLOAD_TTL_MS);
+    input.expires ??
+    Date.now() + (input.ttlMs ?? DEFAULT_SIGNED_DOWNLOAD_TTL_MS);
   const signature = signDesktopDownload({
     assetId: input.assetId,
     expires,
