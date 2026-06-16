@@ -232,6 +232,17 @@ fn change_desktop_password(
     change_desktop_password_impl(&app, username, new_password).map_err(|error| error.to_string())
 }
 
+fn normalize_compile_time_value(value: Option<&'static str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn compile_time_updater_pubkey() -> Option<String> {
+    normalize_compile_time_value(option_env!("LUNATV_UPDATER_PUBKEY"))
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -244,7 +255,15 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .manage(DesktopRuntimeState::default())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            let mut updater_builder = tauri_plugin_updater::Builder::new();
+
+            if let Some(pubkey) = compile_time_updater_pubkey() {
+                updater_builder = updater_builder.pubkey(pubkey);
+            }
+
+            app.handle().plugin(updater_builder.build())?;
             spawn_local_service_start(app.handle().clone());
             Ok(())
         })

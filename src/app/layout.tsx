@@ -11,6 +11,7 @@ import {
 } from '@/lib/runtime/public-config';
 
 import DesktopRuntimeSync from '@/components/DesktopRuntimeSync';
+import DesktopUpdateBootstrap from '@/components/DesktopUpdateBootstrap';
 
 import { GlobalErrorIndicator } from '../components/GlobalErrorIndicator';
 import { SiteProvider } from '../components/SiteProvider';
@@ -226,6 +227,7 @@ export default async function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
+          <DesktopUpdateBootstrap />
           <DesktopRuntimeSync />
           <SiteProvider
             siteName={siteName}

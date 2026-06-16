@@ -1,4 +1,4 @@
-name: Build Desktop App
+name: Build Desktop App (Internal)
 
 on:
   workflow_dispatch:
@@ -8,9 +8,6 @@ on:
         required: false
         type: boolean
         default: false
-  release:
-    types:
-      - published
 
 concurrency:
   group: desktop-build-${{ github.workflow }}-${{ github.ref }}
@@ -43,6 +40,8 @@ jobs:
       HUSKY: 0
       CARGO_TERM_COLOR: always
       NEXT_TELEMETRY_DISABLED: 1
+      LUNATV_RELEASE_REPOSITORY: ${{ github.repository }}
+      NEXT_PUBLIC_RELEASE_REPOSITORY: ${{ github.repository }}
 
     steps:
       - name: Checkout source
@@ -71,6 +70,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Sync updater endpoint
+        run: pnpm desktop:sync:updater-config
 
       # Signing and notarization are intentionally left out for now.
       # This workflow produces unsigned artifacts for internal testing.

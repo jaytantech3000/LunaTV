@@ -1,0 +1,49 @@
+const DEFAULT_RELEASE_REPOSITORY = 'jaytantech3000/LunaTV';
+const DEFAULT_RELEASE_BRANCH = 'main';
+
+function readNextPublicEnvValue(name: string) {
+  const value = process.env[name]?.trim();
+  return value ? value : null;
+}
+
+export function getReleaseRepository() {
+  return (
+    readNextPublicEnvValue('NEXT_PUBLIC_RELEASE_REPOSITORY') ||
+    DEFAULT_RELEASE_REPOSITORY
+  );
+}
+
+export function getReleaseBranch() {
+  return (
+    readNextPublicEnvValue('NEXT_PUBLIC_RELEASE_BRANCH') ||
+    DEFAULT_RELEASE_BRANCH
+  );
+}
+
+export function getProjectPageUrl(repository = getReleaseRepository()) {
+  return `https://github.com/${repository}`;
+}
+
+export function getReleasePageUrl(repository = getReleaseRepository()) {
+  return `${getProjectPageUrl(repository)}/releases`;
+}
+
+export function getVersionFileUrl(
+  repository = getReleaseRepository(),
+  branch = getReleaseBranch()
+) {
+  return `https://raw.githubusercontent.com/${repository}/${branch}/VERSION.txt`;
+}
+
+export function getChangelogFileUrl(
+  repository = getReleaseRepository(),
+  branch = getReleaseBranch()
+) {
+  return `https://raw.githubusercontent.com/${repository}/${branch}/CHANGELOG`;
+}
+
+export function getLatestUpdaterManifestUrl(
+  repository = getReleaseRepository()
+) {
+  return `${getReleasePageUrl(repository)}/latest/download/latest.json`;
+}

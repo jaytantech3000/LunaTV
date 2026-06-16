@@ -1,0 +1,107 @@
+name: Release Desktop App
+
+on:
+  release:
+    types:
+      - published
+
+concurrency:
+  group: desktop-release-${{ github.event.release.id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish_release:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Intel
+            runner: macos-15-intel
+            args: --target x86_64-apple-darwin
+          - name: macOS Apple Silicon
+            runner: macos-15
+            args: --target aarch64-apple-darwin
+          - name: Windows x64
+            runner: windows-2022
+            args: --bundles nsis --config src-tauri/tauri.windows.ci.conf.json
+
+    env:
+      CI: true
+      HUSKY: 0
+      CARGO_TERM_COLOR: always
+      NEXT_TELEMETRY_DISABLED: 1
+      LUNATV_RELEASE_REPOSITORY: ${{ github.repository }}
+      NEXT_PUBLIC_RELEASE_REPOSITORY: ${{ github.repository }}
+      APPLE_SIGNING_IDENTITY: '-'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.14.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate updater signing secret
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "Missing TAURI_SIGNING_PRIVATE_KEY secret"
+            exit 1
+          fi
+
+      - name: Sync updater endpoint
+        run: pnpm desktop:sync:updater-config
+
+      - name: Prepare Windows desktop frontend
+        if: runner.os == 'Windows'
+        run: pnpm desktop:build:frontend
+
+      - name: Prepare Windows desktop sidecar
+        if: runner.os == 'Windows'
+        run: pnpm desktop:prepare:sidecar:release
+
+      - name: Build and upload release assets
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: .
+          releaseId: ${{ github.event.release.id }}
+          tagName: ${{ github.event.release.tag_name }}
+          releaseDraft: false
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          updaterJsonPreferNsis: true
+          tauriScript: pnpm exec tauri
+          args: ${{ matrix.args }}

@@ -16,6 +16,7 @@ import {
   applyDesktopProfileSyncStatus,
   getDesktopProfileSyncStatus,
 } from '@/lib/desktop/profile-sync';
+import { getProjectPageUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -56,9 +57,7 @@ function VersionDisplay() {
 
   return (
     <button
-      onClick={() =>
-        window.open('https://github.com/MoonTechLab/LunaTV', '_blank')
-      }
+      onClick={() => window.open(getProjectPageUrl(), '_blank')}
       className='absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 text-xs text-gray-500 transition-colors dark:text-gray-400'
     >
       <span className='font-mono'>v{CURRENT_VERSION}</span>

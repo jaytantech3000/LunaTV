@@ -18,6 +18,7 @@
 /desktop-shell-dist/
 /.desktop-build-temp/
 /.desktop-release/
+/.tauri-updater/
 
 # production
 /build

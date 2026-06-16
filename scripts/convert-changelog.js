@@ -164,6 +164,75 @@ function updateVersionTs(version) {
   }
 }
 
+function updateJsonVersion(filePath, version, label) {
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const document = JSON.parse(content);
+    document.version = version;
+    fs.writeFileSync(
+      filePath,
+      `${JSON.stringify(document, null, 2)}\n`,
+      'utf8'
+    );
+    console.log(`Updated ${label}: ${version}`);
+  } catch (error) {
+    console.error(`Failed to update ${label}:`, error.message);
+    process.exit(1);
+  }
+}
+
+function updateWorkspaceCargoVersion(version) {
+  const cargoTomlPath = path.join(process.cwd(), 'Cargo.toml');
+  try {
+    const content = fs.readFileSync(cargoTomlPath, 'utf8');
+    const eol = content.includes('\r\n') ? '\r\n' : '\n';
+    const lines = content.split(/\r?\n/);
+    let inWorkspacePackage = false;
+    let updated = false;
+
+    const updatedLines = lines.map((line) => {
+      const trimmedLine = line.trim();
+
+      if (/^\[.*\]$/.test(trimmedLine)) {
+        inWorkspacePackage = trimmedLine === '[workspace.package]';
+        return line;
+      }
+
+      if (inWorkspacePackage && /^\s*version\s*=\s*"/.test(line) && !updated) {
+        updated = true;
+        return line.replace(/(\s*version\s*=\s*")[^"]+(".*)/, `$1${version}$2`);
+      }
+
+      return line;
+    });
+
+    if (!updated) {
+      throw new Error('Could not find [workspace.package] version field');
+    }
+
+    fs.writeFileSync(cargoTomlPath, updatedLines.join(eol), 'utf8');
+    console.log(`Updated Cargo.toml(workspace): ${version}`);
+  } catch (error) {
+    console.error(`Failed to update Cargo.toml(workspace):`, error.message);
+    process.exit(1);
+  }
+}
+
+function syncRuntimeVersion(version) {
+  updateVersionTs(version);
+  updateJsonVersion(
+    path.join(process.cwd(), 'package.json'),
+    version,
+    'package.json'
+  );
+  updateJsonVersion(
+    path.join(process.cwd(), 'src-tauri/tauri.conf.json'),
+    version,
+    'src-tauri/tauri.conf.json'
+  );
+  updateWorkspaceCargoVersion(version);
+}
+
 function main() {
   try {
     const changelogPath = path.join(process.cwd(), 'CHANGELOG');
@@ -199,7 +268,7 @@ function main() {
     const versionTxtPath = path.join(process.cwd(), 'VERSION.txt');
     const versionFromFile = fs.readFileSync(versionTxtPath, 'utf8').trim();
     console.log(`📄 VERSION.txt 版本: ${versionFromFile}`);
-    updateVersionTs(versionFromFile);
+    syncRuntimeVersion(versionFromFile);
 
     // 检查是否在 GitHub Actions 环境中运行
     const isGitHubActions = process.env.GITHUB_ACTIONS === 'true';
@@ -208,7 +277,7 @@ function main() {
       // 在 GitHub Actions 中，更新 VERSION.txt 为 CHANGELOG 最新版本
       console.log('正在更新 VERSION.txt...');
       updateVersionFile(latestVersion);
-      updateVersionTs(latestVersion);
+      syncRuntimeVersion(latestVersion);
     }
 
     console.log(`✅ 成功生成 ${outputPath}`);
