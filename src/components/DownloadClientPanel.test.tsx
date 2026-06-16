@@ -1,6 +1,12 @@
 'use client';
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import React from 'react';
 
 jest.mock('@/lib/scroll-lock', () => ({
@@ -21,9 +27,10 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 describe('DownloadClientPanel', () => {
   const originalFetch = global.fetch;
   const originalUserAgent = navigator.userAgent;
-  const originalUserAgentData = (
-    navigator as Navigator & { userAgentData?: unknown }
-  ).userAgentData;
+  const originalUserAgentDataDescriptor = Object.getOwnPropertyDescriptor(
+    window.navigator,
+    'userAgentData'
+  );
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -52,10 +59,17 @@ describe('DownloadClientPanel', () => {
       configurable: true,
       value: originalUserAgent,
     });
-    Object.defineProperty(window.navigator, 'userAgentData', {
-      configurable: true,
-      value: originalUserAgentData,
-    });
+
+    if (originalUserAgentDataDescriptor) {
+      Object.defineProperty(
+        window.navigator,
+        'userAgentData',
+        originalUserAgentDataDescriptor
+      );
+    } else {
+      delete (window.navigator as Navigator & { userAgentData?: unknown })
+        .userAgentData;
+    }
   });
 
   it('loads desktop release data and disables unavailable targets', async () => {
@@ -180,5 +194,98 @@ describe('DownloadClientPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
 
     expect(await screen.findByText('Desktop Internal #40')).toBeInTheDocument();
+  });
+
+  it('detects Apple Silicon from userAgentData when the Mac user agent is reduced', async () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+    });
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      configurable: true,
+      value: {
+        platform: 'macOS',
+        getHighEntropyValues: jest.fn().mockResolvedValue({
+          architecture: 'arm',
+          bitness: '64',
+          platform: 'macOS',
+        }),
+      },
+    });
+
+    global.fetch = jest.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === '/api/desktop-release') {
+        return Promise.resolve(
+          jsonResponse({
+            assets: [
+              {
+                downloadPath:
+                  '/api/client-download?kind=desktop&releaseId=39&assetId=401&expires=1&sig=demo',
+                key: 'mac-arm64',
+                label: 'macOS Apple Silicon',
+                name: 'LunaTV-aarch64.dmg',
+                size: 1024 * 1024,
+              },
+              {
+                downloadPath:
+                  '/api/client-download?kind=desktop&releaseId=39&assetId=402&expires=1&sig=demo',
+                key: 'mac-x64',
+                label: 'macOS Intel',
+                name: 'LunaTV-x64.dmg',
+                size: 1024 * 1024,
+              },
+            ],
+            missingAssetKeys: ['win-x64-setup', 'win-x64-portable'],
+            publishedAt: '2026-06-15T00:00:00.000Z',
+            releaseId: 39,
+            version: 'Desktop Internal #39',
+          })
+        );
+      }
+
+      if (url === '/api/local-service-release') {
+        return Promise.resolve(
+          jsonResponse({
+            configuredPlatforms: ['mac-arm64', 'mac-x64'],
+            displayName:
+              'LunaTV Local Service (local-service-nova-2026-06-16.3)',
+            installerPlatforms: ['mac-arm64', 'mac-x64'],
+            publishedAt: '2026-06-16T03:00:00.000Z',
+            version: 'local-service-nova-2026-06-16.3',
+          })
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    }) as typeof fetch;
+
+    render(<DownloadClientPanel isOpen onClose={jest.fn()} />);
+
+    expect(await screen.findByText('Desktop Internal #39')).toBeInTheDocument();
+
+    await waitFor(() => {
+      const desktopArmRow = screen.getByRole('button', {
+        name: 'macOS Apple Silicon 下载',
+      }).parentElement as HTMLElement;
+      const desktopIntelRow = screen.getByRole('button', {
+        name: 'macOS Intel 下载',
+      }).parentElement as HTMLElement;
+      const localServiceArmRow = screen.getByRole('button', {
+        name: 'macOS Apple Silicon 安装包下载',
+      }).parentElement as HTMLElement;
+      const localServiceIntelRow = screen.getByRole('button', {
+        name: 'macOS Intel 安装包下载',
+      }).parentElement as HTMLElement;
+
+      expect(within(desktopArmRow).getByText('当前设备')).toBeInTheDocument();
+      expect(within(desktopIntelRow).queryByText('当前设备')).toBeNull();
+      expect(
+        within(localServiceArmRow).getByText('当前设备')
+      ).toBeInTheDocument();
+      expect(within(localServiceIntelRow).queryByText('当前设备')).toBeNull();
+    });
   });
 });

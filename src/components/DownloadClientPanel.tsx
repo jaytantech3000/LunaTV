@@ -28,6 +28,27 @@ type LocalServicePlatformKey =
 
 type LocalServiceInstallerPlatformKey = 'mac-arm64' | 'mac-x64';
 type LocalServiceMaintenanceAction = 'stop' | 'uninstall';
+type MacArchitecture = 'arm64' | 'x64';
+type RecommendedTargets = {
+  desktop?: DesktopAssetKey;
+  localService?: LocalServicePlatformKey;
+};
+
+interface NavigatorUserAgentDataValues {
+  architecture?: string;
+  bitness?: string;
+  platform?: string;
+}
+
+interface NavigatorWithUserAgentData extends Navigator {
+  userAgentData?: {
+    architecture?: string;
+    getHighEntropyValues?: (
+      hints: Array<'architecture' | 'bitness' | 'platform'>
+    ) => Promise<NavigatorUserAgentDataValues>;
+    platform?: string;
+  };
+}
 
 interface DesktopReleaseAsset {
   downloadPath: string;
@@ -59,25 +80,6 @@ interface DownloadClientPanelProps {
 }
 
 type LocalServiceStatus = 'available' | 'unknown' | 'unavailable';
-type RecommendedTargets = {
-  desktop?: DesktopAssetKey;
-  localService?: LocalServicePlatformKey;
-};
-
-interface NavigatorUserAgentDataValues {
-  architecture?: string;
-  bitness?: string;
-  platform?: string;
-}
-
-interface NavigatorWithUserAgentData extends Navigator {
-  userAgentData?: {
-    getHighEntropyValues?: (
-      hints: Array<'architecture' | 'bitness' | 'platform'>
-    ) => Promise<NavigatorUserAgentDataValues>;
-    platform?: string;
-  };
-}
 
 const DESKTOP_ASSET_META: Array<{
   extensionLabel: string;
@@ -166,117 +168,229 @@ function formatPublishedAt(value: string | null): string {
   });
 }
 
-function isArmArchitecture(value: string | null | undefined): boolean {
-  const normalized = value?.trim().toLowerCase() || '';
-  return normalized.includes('arm') || normalized.includes('aarch');
-}
-
-function resolveRecommendedTargetsForPlatform(
-  platform: string,
-  prefersArmArchitecture: boolean
+function createMacRecommendedTargets(
+  architecture: MacArchitecture
 ): RecommendedTargets {
-  const normalizedPlatform = platform.toLowerCase();
-
-  if (normalizedPlatform.includes('mac')) {
-    return prefersArmArchitecture
-      ? {
-          desktop: 'mac-arm64',
-          localService: 'mac-arm64',
-        }
-      : {
-          desktop: 'mac-x64',
-          localService: 'mac-x64',
-        };
-  }
-
-  if (normalizedPlatform.includes('windows')) {
-    return {
-      desktop: 'win-x64-setup',
-      localService: 'win-x64',
-    };
-  }
-
-  if (normalizedPlatform.includes('linux')) {
-    return prefersArmArchitecture
-      ? { localService: 'linux-arm64' }
-      : { localService: 'linux-x64' };
-  }
-
-  return {};
+  return architecture === 'arm64'
+    ? {
+        desktop: 'mac-arm64',
+        localService: 'mac-arm64',
+      }
+    : {
+        desktop: 'mac-x64',
+        localService: 'mac-x64',
+      };
 }
 
-function detectRecommendedTargetsFromUserAgent(
+function parseArchitectureToken(
+  value: string | null | undefined
+): MacArchitecture | null {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (
+    normalized.includes('arm64') ||
+    normalized.includes('aarch64') ||
+    normalized === 'arm'
+  ) {
+    return 'arm64';
+  }
+
+  if (
+    normalized.includes('x86') ||
+    normalized.includes('x64') ||
+    normalized.includes('amd64') ||
+    normalized.includes('intel')
+  ) {
+    return 'x64';
+  }
+
+  return null;
+}
+
+function parseMacArchitectureFromUserAgent(
   userAgent: string
-): RecommendedTargets {
-  const normalizedUserAgent = userAgent.toLowerCase();
+): MacArchitecture | null {
+  const normalized = userAgent.toLowerCase();
 
-  if (normalizedUserAgent.includes('mac os x')) {
-    return isArmArchitecture(normalizedUserAgent)
-      ? {
-          desktop: 'mac-arm64',
-          localService: 'mac-arm64',
-        }
-      : {
-          desktop: 'mac-x64',
-          localService: 'mac-x64',
-        };
+  if (
+    normalized.includes('arm64') ||
+    normalized.includes('aarch64') ||
+    normalized.includes(' arm')
+  ) {
+    return 'arm64';
   }
 
-  if (normalizedUserAgent.includes('windows')) {
+  if (normalized.includes('x86_64') || normalized.includes('amd64')) {
+    return 'x64';
+  }
+
+  return null;
+}
+
+function getNavigatorUAData(): NavigatorWithUserAgentData['userAgentData'] | null {
+  if (typeof navigator === 'undefined') {
+    return null;
+  }
+
+  return (
+    (navigator as NavigatorWithUserAgentData).userAgentData || null
+  );
+}
+
+function detectRecommendedTargetsSync(): {
+  needsMacRefinement: boolean;
+  targets: RecommendedTargets;
+} {
+  if (typeof navigator === 'undefined') {
     return {
-      desktop: 'win-x64-setup',
-      localService: 'win-x64',
+      needsMacRefinement: false,
+      targets: {},
     };
   }
 
-  if (normalizedUserAgent.includes('linux')) {
-    return isArmArchitecture(normalizedUserAgent)
-      ? { localService: 'linux-arm64' }
-      : { localService: 'linux-x64' };
+  const userAgent = navigator.userAgent.toLowerCase();
+
+  if (userAgent.includes('mac os x')) {
+    const macArchitecture =
+      parseMacArchitectureFromUserAgent(userAgent) ||
+      parseArchitectureToken(getNavigatorUAData()?.architecture);
+
+    return {
+      needsMacRefinement: !macArchitecture,
+      targets: macArchitecture
+        ? createMacRecommendedTargets(macArchitecture)
+        : {},
+    };
   }
 
-  return {};
+  if (userAgent.includes('windows')) {
+    return {
+      needsMacRefinement: false,
+      targets: {
+        desktop: 'win-x64-setup',
+        localService: 'win-x64',
+      },
+    };
+  }
+
+  if (userAgent.includes('linux')) {
+    return {
+      needsMacRefinement: false,
+      targets:
+        userAgent.includes('arm') || userAgent.includes('aarch64')
+          ? { localService: 'linux-arm64' }
+          : { localService: 'linux-x64' },
+    };
+  }
+
+  return {
+    needsMacRefinement: false,
+    targets: {},
+  };
 }
 
-function detectRecommendedTargetsSync(): RecommendedTargets {
-  if (typeof navigator === 'undefined') {
-    return {};
+async function detectMacArchitectureFromUserAgentData(): Promise<
+  MacArchitecture | null
+> {
+  const userAgentData = getNavigatorUAData();
+  if (!userAgentData) {
+    return null;
   }
 
-  return detectRecommendedTargetsFromUserAgent(navigator.userAgent);
+  const platform = userAgentData.platform?.toLowerCase();
+  if (platform && !platform.includes('mac')) {
+    return null;
+  }
+
+  const directArchitecture = parseArchitectureToken(userAgentData.architecture);
+  if (directArchitecture) {
+    return directArchitecture;
+  }
+
+  if (typeof userAgentData.getHighEntropyValues !== 'function') {
+    return null;
+  }
+
+  try {
+    const values = await userAgentData.getHighEntropyValues([
+      'architecture',
+      'bitness',
+      'platform',
+    ]);
+    const highEntropyPlatform =
+      typeof values.platform === 'string'
+        ? values.platform.toLowerCase()
+        : null;
+
+    if (highEntropyPlatform && !highEntropyPlatform.includes('mac')) {
+      return null;
+    }
+
+    return parseArchitectureToken(
+      typeof values.architecture === 'string' ? values.architecture : null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function detectMacArchitectureFromWebGl(): MacArchitecture | null {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+
+  try {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('webgl2') || canvas.getContext('webgl');
+
+    if (!context) {
+      return null;
+    }
+
+    const rendererInfo = context.getExtension('WEBGL_debug_renderer_info');
+    const rawRenderer = rendererInfo
+      ? context.getParameter(rendererInfo.UNMASKED_RENDERER_WEBGL)
+      : context.getParameter(context.RENDERER);
+    const renderer =
+      typeof rawRenderer === 'string' ? rawRenderer.toLowerCase() : '';
+
+    if (
+      renderer.includes('apple') ||
+      /(?:^|[^a-z0-9])m[1-9](?:[^a-z0-9]|$)/.test(renderer)
+    ) {
+      return 'arm64';
+    }
+
+    if (
+      renderer.includes('intel') ||
+      renderer.includes('amd') ||
+      renderer.includes('radeon') ||
+      renderer.includes('nvidia') ||
+      renderer.includes('geforce')
+    ) {
+      return 'x64';
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 async function detectRecommendedTargets(): Promise<RecommendedTargets> {
-  if (typeof navigator === 'undefined') {
-    return {};
+  const syncDetection = detectRecommendedTargetsSync();
+  if (!syncDetection.needsMacRefinement) {
+    return syncDetection.targets;
   }
 
-  const navigatorWithUserAgentData = navigator as NavigatorWithUserAgentData;
-  const userAgentData = navigatorWithUserAgentData.userAgentData;
+  const macArchitecture =
+    (await detectMacArchitectureFromUserAgentData()) ||
+    detectMacArchitectureFromWebGl();
 
-  if (userAgentData?.getHighEntropyValues) {
-    try {
-      const userAgentDataValues = await userAgentData.getHighEntropyValues([
-        'architecture',
-        'bitness',
-        'platform',
-      ]);
-      const platform =
-        userAgentDataValues.platform || userAgentData.platform || '';
-      const recommendedTargets = resolveRecommendedTargetsForPlatform(
-        platform,
-        isArmArchitecture(userAgentDataValues.architecture)
-      );
-
-      if (recommendedTargets.desktop || recommendedTargets.localService) {
-        return recommendedTargets;
-      }
-    } catch {
-      // Fall back to the legacy user-agent heuristic below.
-    }
-  }
-
-  return detectRecommendedTargetsSync();
+  return createMacRecommendedTargets(macArchitecture || 'x64');
 }
 
 function isLocalServiceInstallerPlatform(
@@ -373,7 +487,7 @@ export default function DownloadClientPanel({
   >(createUnknownLocalServiceStatuses);
   const [mounted, setMounted] = useState(false);
   const [recommendedTargets, setRecommendedTargets] =
-    useState<RecommendedTargets>({});
+    useState<RecommendedTargets>(() => detectRecommendedTargetsSync().targets);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -384,9 +498,9 @@ export default function DownloadClientPanel({
   useEffect(() => {
     let cancelled = false;
 
-    void detectRecommendedTargets().then((nextTargets) => {
+    void detectRecommendedTargets().then((targets) => {
       if (!cancelled) {
-        setRecommendedTargets(nextTargets);
+        setRecommendedTargets(targets);
       }
     });
 
