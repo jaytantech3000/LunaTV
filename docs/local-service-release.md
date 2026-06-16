@@ -97,6 +97,21 @@ Web 下载面板策略：
 
 - macOS：优先下发 `.pkg` 安装包，下载后双击即可安装并自动启动本地服务
 - Windows / Linux：继续下发脚本，但脚本内会直连公开 release 资产，不再依赖站点登录态
+- 下载面板额外提供当前设备对应的“停止脚本”和“卸载脚本”
+
+## 停用与卸载
+
+日常“回退默认线路”和“停止/卸载本地服务”是两件事：
+
+- 回退默认线路：在 Web 页面顶部的本地服务提示里点击 `停用`，页面刷新后即可切回站点默认代理；这不会删除本机安装文件。
+- 停止本地服务：在下载面板里下载当前设备对应的“停止脚本”，执行后会关闭本地服务进程。
+- 卸载本地服务：在下载面板里下载当前设备对应的“卸载脚本”，执行后会删除本地服务文件并关闭进程。
+
+各平台卸载范围：
+
+- macOS：移除 `/Library/Application Support/LunaTV Local Service`、`/Library/LaunchDaemons/io.qzz.lunatv.local-service.plist`、`/Library/Logs/LunaTV Local Service`，并清理旧脚本模式下可能遗留的 `~/.lunatv`。因为会写入 `/Library`，执行时会请求管理员授权。
+- Linux：移除 `~/.lunatv`，并停止 `~/.lunatv/bin/lunatv-server`。
+- Windows：移除 `%USERPROFILE%\\.lunatv`，并停止 `lunatv-server.exe` 进程。
 
 可选增强：
 

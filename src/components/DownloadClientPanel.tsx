@@ -27,6 +27,7 @@ type LocalServicePlatformKey =
   | 'win-x64';
 
 type LocalServiceInstallerPlatformKey = 'mac-arm64' | 'mac-x64';
+type LocalServiceMaintenanceAction = 'stop' | 'uninstall';
 
 interface DesktopReleaseAsset {
   downloadPath: string;
@@ -230,6 +231,35 @@ function getLocalServiceDownloadConfig(
   };
 }
 
+function buildLocalServiceScriptHref(
+  platform: LocalServicePlatformKey,
+  action: LocalServiceMaintenanceAction
+): string {
+  return `/api/local-service-script?platform=${platform}&action=${action}`;
+}
+
+function getLocalServiceMaintenanceActions(platform: LocalServicePlatformKey): Array<{
+  action: LocalServiceMaintenanceAction;
+  ariaLabelSuffix: string;
+  href: string;
+  label: string;
+}> {
+  return [
+    {
+      action: 'stop',
+      ariaLabelSuffix: '停止脚本下载',
+      href: buildLocalServiceScriptHref(platform, 'stop'),
+      label: '下载停止脚本',
+    },
+    {
+      action: 'uninstall',
+      ariaLabelSuffix: '卸载脚本下载',
+      href: buildLocalServiceScriptHref(platform, 'uninstall'),
+      label: '下载卸载脚本',
+    },
+  ];
+}
+
 export default function DownloadClientPanel({
   isOpen,
   onClose,
@@ -375,6 +405,7 @@ export default function DownloadClientPanel({
   }
 
   const recommendedTargets = detectRecommendedTargets();
+  const recommendedLocalServicePlatform = recommendedTargets.localService;
   const localServiceInstallerPlatforms = new Set(
     localServiceRelease?.installerPlatforms ?? []
   );
@@ -619,6 +650,42 @@ export default function DownloadClientPanel({
                   </div>
                   <div className='mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100'>
                     {formatPublishedAt(localServiceRelease.publishedAt)}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {recommendedLocalServicePlatform && (
+              <div className='mb-4 rounded-lg border border-emerald-200/80 bg-white/90 p-4 dark:border-emerald-900/40 dark:bg-gray-900/40'>
+                <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+                  <div>
+                    <div className='text-sm font-semibold text-gray-900 dark:text-gray-100'>
+                      管理当前设备上的本地服务
+                    </div>
+                    <div className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                      页面内可直接停用加速回退默认线路；如果还想停止进程或彻底移除安装，可下载下面的管理脚本。macOS
+                      卸载会请求管理员授权。
+                    </div>
+                  </div>
+                  <div className='flex flex-wrap gap-2'>
+                    {getLocalServiceMaintenanceActions(
+                      recommendedLocalServicePlatform
+                    ).map((item) => (
+                      <button
+                        aria-label={`${LOCAL_SERVICE_META.find((meta) => meta.key === recommendedLocalServicePlatform)?.label || recommendedLocalServicePlatform} ${item.ariaLabelSuffix}`}
+                        className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                          item.action === 'uninstall'
+                            ? 'border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:bg-amber-900/30'
+                            : 'border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-200 dark:hover:bg-gray-800/60'
+                        }`}
+                        key={item.action}
+                        onClick={() => handleDownload(item.href)}
+                        type='button'
+                      >
+                        <Download className='h-4 w-4' />
+                        {item.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
               </div>

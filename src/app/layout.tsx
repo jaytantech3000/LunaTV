@@ -8,6 +8,7 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 
 import { getConfig } from '@/lib/config';
+import { buildRuntimeConfigBootstrapScript } from '@/lib/local-service-runtime';
 import {
   normalizeAudioSpikeProtectionLevel,
   normalizeBooleanSetting,
@@ -138,6 +139,8 @@ export default async function RootLayout({
     CUSTOM_CATEGORIES: customCategories,
     FLUID_SEARCH: fluidSearch,
     ENABLE_WEB_LIVE: enableWebLive,
+    API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || '',
+    MEDIA_PROXY_BASE_URL: process.env.NEXT_PUBLIC_MEDIA_PROXY_BASE_URL || '',
     PLAYER_AUDIO_SPIKE_PROTECTION: playerAudioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: playerAudioSpikeProtectionLevel,
     PLAYER_AUDIO_DYNAMIC_PROTECTION: playerAudioDynamicProtection,
@@ -158,7 +161,7 @@ export default async function RootLayout({
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `window.RUNTIME_CONFIG = ${JSON.stringify(runtimeConfig)};`,
+            __html: buildRuntimeConfigBootstrapScript(runtimeConfig),
           }}
         />
       </head>

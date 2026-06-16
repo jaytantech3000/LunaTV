@@ -1,7 +1,9 @@
 'use client';
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
+
+import { LOCAL_SERVICE_ACCELERATION_STORAGE_KEY } from '@/lib/local-service-runtime';
 
 import { LocalServiceStatusBanner } from './LocalServiceStatusBanner';
 
@@ -20,13 +22,14 @@ describe('LocalServiceStatusBanner', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.RUNTIME_CONFIG = {};
+    window.localStorage.clear();
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
   });
 
-  it('renders a persistent banner when the local service is online', async () => {
+  it('renders a compact activation popover when the local service is online', async () => {
     global.fetch = jest.fn(() =>
       Promise.resolve(
         jsonResponse({
@@ -39,22 +42,98 @@ describe('LocalServiceStatusBanner', () => {
 
     render(<LocalServiceStatusBanner />);
 
-    expect(await screen.findByText('检测到本地服务在线')).toBeInTheDocument();
+    expect(await screen.findByText('本地服务已就绪')).toBeInTheDocument();
+    expect(screen.getByText('127.0.0.1:8787')).toBeInTheDocument();
     expect(
-      screen.getByText('http://127.0.0.1:8787 · 端口 8787')
+      screen.getByRole('button', { name: '启用加速' })
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: '刷新启用加速' })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: '重新检测' })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新检测' })).toBeInTheDocument();
   });
 
-  it('collapses to a simpler status when local acceleration is already active', async () => {
+  it('shows activation feedback and stores the media proxy override before reload', async () => {
+    jest.useFakeTimers();
+
+    try {
+      global.fetch = jest.fn(() =>
+        Promise.resolve(
+          jsonResponse({
+            base_url: 'http://127.0.0.1:8787',
+            port: 8787,
+            status: 'ok',
+          })
+        )
+      ) as typeof fetch;
+
+      render(<LocalServiceStatusBanner />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '启用加速' }));
+
+      expect(
+        screen.getByRole('button', { name: '正在切换...' })
+      ).toBeDisabled();
+      expect(
+        window.localStorage.getItem(LOCAL_SERVICE_ACCELERATION_STORAGE_KEY)
+      ).toBe('http://127.0.0.1:8787');
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows checking feedback while re-detecting the local service', async () => {
+    let resolveSecondProbe: ((value: Response) => void) | undefined;
+
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          base_url: 'http://127.0.0.1:8787',
+          port: 8787,
+          status: 'ok',
+        })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveSecondProbe = resolve;
+          })
+      ) as typeof fetch;
+
+    render(<LocalServiceStatusBanner />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '重新检测' }));
+
+    expect(
+      await screen.findByRole('button', { name: '检测中...' })
+    ).toBeDisabled();
+
+    if (!resolveSecondProbe) {
+      throw new Error('expected second probe to be pending');
+    }
+
+    resolveSecondProbe(
+      jsonResponse({
+        base_url: 'http://127.0.0.1:8787',
+        port: 8787,
+        status: 'ok',
+      })
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: '重新检测' })
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('collapses to a compact pill when local acceleration is already active', async () => {
     window.RUNTIME_CONFIG = {
-      API_BASE_URL: 'http://127.0.0.1:8787',
+      MEDIA_PROXY_BASE_URL: 'http://127.0.0.1:8787',
     };
+    window.localStorage.setItem(
+      LOCAL_SERVICE_ACCELERATION_STORAGE_KEY,
+      'http://127.0.0.1:8787'
+    );
     global.fetch = jest.fn(() =>
       Promise.resolve(
         jsonResponse({
@@ -68,13 +147,68 @@ describe('LocalServiceStatusBanner', () => {
     render(<LocalServiceStatusBanner />);
 
     expect(await screen.findByText('本机加速已启用')).toBeInTheDocument();
-    expect(screen.getByText('当前页已走本机加速')).toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: '刷新启用加速' })
+      screen.queryByRole('button', { name: '启用加速' })
     ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '停用' })).toBeInTheDocument();
   });
 
-  it('stays hidden when the local service health endpoint is unavailable', async () => {
+  it('allows disabling local acceleration from the active pill', async () => {
+    jest.useFakeTimers();
+
+    try {
+      window.RUNTIME_CONFIG = {
+        MEDIA_PROXY_BASE_URL: 'http://127.0.0.1:8787',
+      };
+      window.localStorage.setItem(
+        LOCAL_SERVICE_ACCELERATION_STORAGE_KEY,
+        'http://127.0.0.1:8787'
+      );
+      global.fetch = jest.fn(() =>
+        Promise.resolve(
+          jsonResponse({
+            base_url: 'http://127.0.0.1:8787',
+            port: 8787,
+            status: 'ok',
+          })
+        )
+      ) as typeof fetch;
+
+      render(<LocalServiceStatusBanner />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '停用' }));
+
+      expect(
+        screen.getByRole('button', { name: '停用中...' })
+      ).toBeDisabled();
+      expect(
+        window.localStorage.getItem(LOCAL_SERVICE_ACCELERATION_STORAGE_KEY)
+      ).toBeNull();
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows a recovery popover when a persisted local override exists but the service is unavailable', async () => {
+    window.localStorage.setItem(
+      LOCAL_SERVICE_ACCELERATION_STORAGE_KEY,
+      'http://127.0.0.1:8787'
+    );
+    global.fetch = jest.fn(() =>
+      Promise.reject(new Error('offline'))
+    ) as typeof fetch;
+
+    render(<LocalServiceStatusBanner />);
+
+    expect(await screen.findByText('本机加速暂不可用')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '恢复默认' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新检测' })).toBeInTheDocument();
+  });
+
+  it('stays hidden when the health endpoint is unavailable and no override is active', async () => {
     global.fetch = jest.fn(() =>
       Promise.reject(new Error('offline'))
     ) as typeof fetch;
@@ -91,7 +225,7 @@ describe('LocalServiceStatusBanner', () => {
       );
     });
 
-    expect(screen.queryByText('本地服务已连接')).not.toBeInTheDocument();
-    expect(screen.queryByText('检测到本地服务在线')).not.toBeInTheDocument();
+    expect(screen.queryByText('本地服务已就绪')).not.toBeInTheDocument();
+    expect(screen.queryByText('本机加速暂不可用')).not.toBeInTheDocument();
   });
 });

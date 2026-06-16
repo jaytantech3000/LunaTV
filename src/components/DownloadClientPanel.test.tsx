@@ -89,6 +89,12 @@ describe('DownloadClientPanel', () => {
       screen.getByRole('button', { name: 'macOS Apple Silicon 安装包下载' })
     ).toBeEnabled();
     expect(
+      screen.getByRole('button', { name: 'macOS Apple Silicon 停止脚本下载' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'macOS Apple Silicon 卸载脚本下载' })
+    ).toBeInTheDocument();
+    expect(
       screen.getByRole('button', { name: 'macOS Intel 下载' })
     ).toBeDisabled();
     expect(
