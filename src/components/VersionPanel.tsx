@@ -622,7 +622,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                       ) : (
                         <Download className='h-4 w-4' />
                       )}
-                      安装并重启
+                      静默安装并重启
                     </button>
                   ) : null}
 

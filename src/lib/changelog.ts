@@ -44,11 +44,13 @@ export const changelog: ChangelogEntry[] = [
         '桌面版版本号现在从独立的 200.x 版本线开始。',
         '桌面版更新发现现改为使用独立的更新清单分支。',
         '桌面版预发布构建现在使用 semver 预发布后缀，例如 `200.0.0-beta.1`。',
+        'Windows 桌面版更新在确认安装后将静默安装并自动重启。',
       ],
       en: [
         'Desktop versioning now starts from an independent 200.x line.',
         'Desktop updater discovery now uses a dedicated updater manifest branch.',
         'Desktop prerelease builds now follow semver prerelease suffixes such as `200.0.0-beta.1`.',
+        'Windows desktop updates now install quietly and restart automatically after confirmation.',
       ],
     },
     fixed: {

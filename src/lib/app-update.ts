@@ -485,7 +485,7 @@ export async function downloadLatestVersion() {
         progressPercent: totalBytes ? 100 : state.progressPercent,
         downloadedBytes,
         totalBytes,
-        statusMessage: '更新包已下载，可立即安装并重启。',
+        statusMessage: '更新包已下载，点击后将静默安装并自动重启。',
         errorMessage: null,
       });
     } catch (error) {
@@ -551,7 +551,7 @@ export async function installDownloadedUpdate() {
       isDownloading: false,
       isInstalling: true,
       isBusy: true,
-      statusMessage: '正在安装更新并准备重启...',
+      statusMessage: '正在静默安装更新并准备自动重启...',
       errorMessage: null,
     });
 

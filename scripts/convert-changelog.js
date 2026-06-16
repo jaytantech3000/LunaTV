@@ -87,7 +87,7 @@ function parseChangelog(content) {
 }
 
 function escapeTypeScriptString(value) {
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 function renderEntries(entries, emptyComment) {
@@ -96,8 +96,8 @@ function renderEntries(entries, emptyComment) {
   }
 
   return entries
-    .map((entry) => `        "${escapeTypeScriptString(entry)}"`)
-    .join(',\n');
+    .map((entry) => `        '${escapeTypeScriptString(entry)}',`)
+    .join('\n');
 }
 
 function pairLocalizedVersions(zhVersions, enVersions) {
@@ -130,15 +130,15 @@ function generateTypeScript(zhChangelogData, enChangelogData) {
   )
     .map((version) => {
       return `  {
-    version: "${version.version}",
-    date: "${version.date}",
+    version: '${version.version}',
+    date: '${version.date}',
     added: {
       zhCN: [
 ${renderEntries(version.zhCN.added, '// 无新增内容')}
       ],
       en: [
 ${renderEntries(version.en.added, '// No added entries')}
-      ]
+      ],
     },
     changed: {
       zhCN: [
@@ -146,7 +146,7 @@ ${renderEntries(version.zhCN.changed, '// 无变更内容')}
       ],
       en: [
 ${renderEntries(version.en.changed, '// No changed entries')}
-      ]
+      ],
     },
     fixed: {
       zhCN: [
@@ -154,8 +154,8 @@ ${renderEntries(version.zhCN.fixed, '// 无修复内容')}
       ],
       en: [
 ${renderEntries(version.en.fixed, '// No fixed entries')}
-      ]
-    }
+      ],
+    },
   }`;
     })
     .join(',\n');

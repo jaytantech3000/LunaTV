@@ -5,6 +5,7 @@
 - Desktop versioning now starts from an independent 200.x line.
 - Desktop updater discovery now uses a dedicated updater manifest branch.
 - Desktop prerelease builds now follow semver prerelease suffixes such as `200.0.0-beta.1`.
+- Windows desktop updates now install quietly and restart automatically after confirmation.
 
 ### Fixed
 
