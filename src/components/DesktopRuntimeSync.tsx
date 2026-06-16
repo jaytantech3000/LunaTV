@@ -2,7 +2,11 @@
 
 import { useEffect } from 'react';
 
-import { ensureDesktopAuthSession } from '@/lib/desktop/auth-session';
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import {
+  buildLoginPath,
+  ensureDesktopAuthSession,
+} from '@/lib/desktop/auth-session';
 import {
   applyDesktopProfileSyncStatus,
   getDesktopProfileSyncStatus,
@@ -18,6 +22,27 @@ import { apiFetch } from '@/lib/transport/api-client';
 
 const INITIAL_REFRESH_MAX_ATTEMPTS = 10;
 const INITIAL_REFRESH_RETRY_DELAY_MS = 1500;
+
+function redirectDesktopLoginIfNeeded() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const authInfo = getAuthInfoFromBrowserCookie();
+  if (authInfo?.username) {
+    return;
+  }
+
+  const currentPath = `${window.location.pathname}${window.location.search}`;
+  if (
+    window.location.pathname === '/login' ||
+    window.location.pathname === '/warning'
+  ) {
+    return;
+  }
+
+  window.location.replace(buildLoginPath(currentPath));
+}
 
 async function refreshDesktopRuntimeConfig() {
   const response = await apiFetch('/runtime/public-config', {
@@ -43,6 +68,7 @@ async function refreshDesktopRuntimeConfig() {
     await ensureDesktopAuthSession();
   }
 
+  redirectDesktopLoginIfNeeded();
   window.dispatchEvent(new Event(DESKTOP_RUNTIME_UPDATED_EVENT));
 }
 

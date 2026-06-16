@@ -28,6 +28,7 @@ import {
   logoutDesktopSession,
 } from '@/lib/desktop/auth-session';
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
+import { changeDesktopPassword } from '@/lib/desktop/tauri-client';
 import { purgeOfflineDownloads } from '@/lib/download/session';
 import {
   getDefaultFluidSearchSetting,
@@ -75,6 +76,8 @@ export const UserMenu: React.FC = () => {
     useState(false);
   const [desktopAuthRequired, setDesktopAuthRequired] = useState(false);
   const [desktopAuthUsername, setDesktopAuthUsername] = useState('');
+  const [desktopOwnerPasswordConfigured, setDesktopOwnerPasswordConfigured] =
+    useState(false);
   const [supportsFluidSearch, setSupportsFluidSearch] = useState(true);
   const [mounted, setMounted] = useState(false);
 
@@ -146,6 +149,7 @@ export const UserMenu: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [passwordError, setPasswordError] = useState('');
+  const [passwordNotice, setPasswordNotice] = useState('');
 
   // 版本检查相关状态
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
@@ -190,6 +194,7 @@ export const UserMenu: React.FC = () => {
       if (!isDesktop || profileSyncEnabled) {
         setDesktopAuthRequired(false);
         setDesktopAuthUsername('');
+        setDesktopOwnerPasswordConfigured(false);
         return;
       }
 
@@ -201,6 +206,9 @@ export const UserMenu: React.FC = () => {
 
         setDesktopAuthRequired(authRequirement.passwordRequired);
         setDesktopAuthUsername(authRequirement.username);
+        setDesktopOwnerPasswordConfigured(
+          authRequirement.ownerPasswordConfigured
+        );
       } catch (_) {
         if (!active) {
           return;
@@ -208,6 +216,7 @@ export const UserMenu: React.FC = () => {
 
         setDesktopAuthRequired(false);
         setDesktopAuthUsername('');
+        setDesktopOwnerPasswordConfigured(false);
       }
     };
 
@@ -432,6 +441,14 @@ export const UserMenu: React.FC = () => {
     setIsOpen(false);
   };
 
+  const openChangePasswordDialog = (notice = '') => {
+    setIsChangePasswordOpen(true);
+    setNewPassword('');
+    setConfirmPassword('');
+    setPasswordError('');
+    setPasswordNotice(notice);
+  };
+
   const handleLogin = () => {
     setIsOpen(false);
     const currentPath =
@@ -441,8 +458,22 @@ export const UserMenu: React.FC = () => {
     router.push(buildLoginPath(currentPath));
   };
 
-  const handleLogout = async () => {
+  const handleLogout = async (options?: {
+    skipPasswordSetupCheck?: boolean;
+  }) => {
     setIsOpen(false);
+    const logoutRedirectPath = isDesktopTarget ? buildLoginPath('/') : '/';
+    const shouldRequireOwnerPasswordSetup =
+      !options?.skipPasswordSetupCheck &&
+      isDesktopTarget &&
+      !desktopProfileSyncEnabled &&
+      authInfo?.role === 'owner' &&
+      !desktopOwnerPasswordConfigured;
+
+    if (shouldRequireOwnerPasswordSetup) {
+      openChangePasswordDialog('请先为站长设置密码，再退出当前账号。');
+      return;
+    }
 
     try {
       await purgeOfflineDownloads();
@@ -451,8 +482,10 @@ export const UserMenu: React.FC = () => {
     }
 
     if (isDesktopTarget && !desktopProfileSyncEnabled) {
-      logoutDesktopSession();
-      window.location.href = '/';
+      logoutDesktopSession({
+        rememberLoggedOut: true,
+      });
+      window.location.href = logoutRedirectPath;
       return;
     }
 
@@ -467,9 +500,11 @@ export const UserMenu: React.FC = () => {
 
     if (isDesktopTarget) {
       logoutDesktopSession();
+      window.location.href = logoutRedirectPath;
+      return;
     }
 
-    window.location.href = '/';
+    window.location.href = logoutRedirectPath;
   };
 
   const handleAdminPanel = () => {
@@ -485,10 +520,7 @@ export const UserMenu: React.FC = () => {
 
   const handleChangePassword = () => {
     setIsOpen(false);
-    setIsChangePasswordOpen(true);
-    setNewPassword('');
-    setConfirmPassword('');
-    setPasswordError('');
+    openChangePasswordDialog();
   };
 
   const handleCloseChangePassword = () => {
@@ -496,18 +528,20 @@ export const UserMenu: React.FC = () => {
     setNewPassword('');
     setConfirmPassword('');
     setPasswordError('');
+    setPasswordNotice('');
   };
 
-  const handleSubmitChangePassword = async () => {
+  const submitPasswordChange = async () => {
     setPasswordError('');
+    const normalizedNewPassword = newPassword.trim();
+    const normalizedConfirmPassword = confirmPassword.trim();
 
-    // 验证密码
-    if (!newPassword) {
-      setPasswordError('新密码不得为空');
+    if (!normalizedNewPassword) {
+      setPasswordError('新密码不能为空');
       return;
     }
 
-    if (newPassword !== confirmPassword) {
+    if (normalizedNewPassword !== normalizedConfirmPassword) {
       setPasswordError('两次输入的密码不一致');
       return;
     }
@@ -515,32 +549,53 @@ export const UserMenu: React.FC = () => {
     setPasswordLoading(true);
 
     try {
-      const response = await apiFetch('/change-password', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          newPassword,
-        }),
-      });
+      if (isDesktopTarget && !desktopProfileSyncEnabled) {
+        if (!authInfo?.username) {
+          setPasswordError('当前未登录，无法修改密码');
+          return;
+        }
 
-      const data = await response.json();
+        const nextAuthStatus = await changeDesktopPassword(
+          authInfo.username,
+          normalizedNewPassword
+        );
+        setDesktopAuthRequired(nextAuthStatus.passwordRequired);
+        setDesktopAuthUsername(nextAuthStatus.username);
+        setDesktopOwnerPasswordConfigured(
+          nextAuthStatus.ownerPasswordConfigured
+        );
+      } else {
+        const response = await apiFetch('/change-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            newPassword: normalizedNewPassword,
+          }),
+        });
 
-      if (!response.ok) {
-        setPasswordError(data.error || '修改密码失败');
-        return;
+        const data = await response.json();
+
+        if (!response.ok) {
+          setPasswordError(data.error || '修改密码失败');
+          return;
+        }
       }
 
-      // 修改成功，关闭弹窗并登出
       setIsChangePasswordOpen(false);
-      await handleLogout();
-    } catch (error) {
+      setPasswordNotice('');
+      await handleLogout({
+        skipPasswordSetupCheck: true,
+      });
+    } catch (_) {
       setPasswordError('网络错误，请稍后重试');
     } finally {
       setPasswordLoading(false);
     }
   };
+
+  const handleSubmitChangePassword = async () => submitPasswordChange();
 
   const handleSettings = () => {
     setIsOpen(false);
@@ -722,6 +777,7 @@ export const UserMenu: React.FC = () => {
 
   // 检查是否显示管理面板按钮
   const isAuthenticated = Boolean(authInfo?.username);
+  const isDesktopLocalAuthMode = isDesktopTarget && !desktopProfileSyncEnabled;
   const showAdminPanel = isDesktopTarget
     ? isAuthenticated &&
       (authInfo?.role === 'owner' || authInfo?.role === 'admin')
@@ -731,12 +787,9 @@ export const UserMenu: React.FC = () => {
   // 检查是否显示修改密码按钮
   const showChangePassword =
     isAuthenticated &&
-    authInfo?.role !== 'owner' &&
-    storageType !== 'localstorage';
+    (isDesktopLocalAuthMode || storageType !== 'localstorage');
   const showLoginAction = !isAuthenticated;
-  const showLogoutAction =
-    isAuthenticated &&
-    (!isDesktopTarget || desktopProfileSyncEnabled || desktopAuthRequired);
+  const showLogoutAction = isAuthenticated;
 
   // 角色中文映射
   const getRoleText = (role?: string) => {
@@ -856,7 +909,7 @@ export const UserMenu: React.FC = () => {
 
           {showLogoutAction ? (
             <button
-              onClick={handleLogout}
+              onClick={() => void handleLogout()}
               className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm'
             >
               <LogOut className='w-4 h-4' />
@@ -1473,6 +1526,12 @@ export const UserMenu: React.FC = () => {
           </div>
 
           {/* 表单 */}
+          {passwordNotice ? (
+            <div className='mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-200'>
+              {passwordNotice}
+            </div>
+          ) : null}
+
           <div className='space-y-4'>
             {/* 新密码输入 */}
             <div>

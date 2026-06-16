@@ -295,6 +295,11 @@ export default function DesktopSettingsSection({
                 `profile_sync.api_base_url` 指向 Web
                 后端；未配置时保持纯本地模式。
               </p>
+              <p className='mt-2 text-xs text-gray-500 dark:text-gray-400'>
+                首次安装且 `owner` 未设置密码时会直接进入应用。若忘记密码，
+                可编辑上方 `Config Path` 对应配置文件，将 `auth.password`
+                清空后重新打开应用。
+              </p>
             </div>
             <div className='grid gap-2 sm:grid-cols-2'>
               <div className='rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'>

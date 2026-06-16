@@ -99,3 +99,13 @@ export function desktopLogin(
     password,
   });
 }
+
+export function changeDesktopPassword(
+  username: string,
+  newPassword: string
+): Promise<DesktopAuthStatus> {
+  return invokeDesktopCommand<DesktopAuthStatus>('change_desktop_password', {
+    username,
+    newPassword,
+  });
+}

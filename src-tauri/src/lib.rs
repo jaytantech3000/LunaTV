@@ -20,6 +20,7 @@ const LOCAL_SERVICE_BINARY_NAME: &str = "moontv-local-service";
 const LOCAL_SERVICE_CONFIG_FILE_NAME: &str = "desktop.config.json";
 const LOCAL_SERVICE_DB_FILE_NAME: &str = "moontv-desktop.sqlite3";
 const ADMIN_PERSISTENCE_FILE_NAME: &str = "desktop-admin-state.json";
+const DEFAULT_DESKTOP_OWNER_USERNAME: &str = "owner";
 const LOCAL_SERVICE_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCAL_SERVICE_STARTUP_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 #[cfg(target_os = "windows")]
@@ -171,13 +172,7 @@ fn write_app_config(
 
 #[tauri::command]
 fn get_desktop_auth_status(app: AppHandle) -> Result<DesktopAuthStatus, String> {
-    let auth_config = resolve_desktop_auth_config(&app).map_err(|error| error.to_string())?;
-    Ok(DesktopAuthStatus {
-        username: auth_config.username,
-        password_required: auth_config.password.is_some() || !auth_config.local_users.is_empty(),
-        multi_user: !auth_config.local_users.is_empty(),
-        owner_password_configured: auth_config.password.is_some(),
-    })
+    get_desktop_auth_status_impl(&app).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -228,6 +223,15 @@ fn desktop_login(
     })
 }
 
+#[tauri::command]
+fn change_desktop_password(
+    app: AppHandle,
+    username: String,
+    new_password: String,
+) -> Result<DesktopAuthStatus, String> {
+    change_desktop_password_impl(&app, username, new_password).map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -252,6 +256,7 @@ pub fn run() {
             write_app_config,
             get_desktop_auth_status,
             desktop_login,
+            change_desktop_password,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build LunaTV desktop shell");
@@ -539,7 +544,7 @@ async fn local_service_is_healthy(base_url: &str) -> bool {
 
 fn ensure_desktop_config_file(config_path: &Path) -> Result<()> {
     if config_path.exists() {
-        return Ok(());
+        return ensure_default_desktop_owner_auth(config_path);
     }
 
     if let Some(parent_dir) = config_path.parent() {
@@ -548,7 +553,9 @@ fn ensure_desktop_config_file(config_path: &Path) -> Result<()> {
     }
 
     fs::write(config_path, DEFAULT_DESKTOP_CONFIG)
-        .with_context(|| format!("failed to write {}", config_path.display()))
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+
+    ensure_default_desktop_owner_auth(config_path)
 }
 
 fn read_desktop_app_config_value(app: &AppHandle) -> Result<serde_json::Value> {
@@ -560,12 +567,124 @@ fn read_desktop_app_config_value(app: &AppHandle) -> Result<serde_json::Value> {
         .with_context(|| format!("failed to parse {}", paths.config_path.display()))
 }
 
+fn ensure_default_desktop_owner_auth(config_path: &Path) -> Result<()> {
+    let contents = fs::read_to_string(config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let mut config_value = serde_json::from_str::<serde_json::Value>(&contents)
+        .with_context(|| format!("failed to parse {}", config_path.display()))?;
+
+    if ensure_default_desktop_owner_auth_value(&mut config_value) {
+        let contents = serde_json::to_string_pretty(&config_value)
+            .context("failed to serialize desktop config")?;
+        fs::write(config_path, contents)
+            .with_context(|| format!("failed to write {}", config_path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn ensure_default_desktop_owner_auth_value(config_value: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+
+    if !config_value.is_object() {
+        *config_value = serde_json::Value::Object(serde_json::Map::new());
+        changed = true;
+    }
+
+    let Some(root) = config_value.as_object_mut() else {
+        return changed;
+    };
+
+    let auth_entry = root
+        .entry("auth".to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    if !auth_entry.is_object() {
+        *auth_entry = serde_json::Value::Object(serde_json::Map::new());
+        changed = true;
+    }
+
+    let Some(auth_object) = auth_entry.as_object_mut() else {
+        return changed;
+    };
+
+    let configured_username = auth_object
+        .get("username")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    if configured_username.is_none() {
+        auth_object.insert(
+            "username".to_string(),
+            serde_json::Value::String(DEFAULT_DESKTOP_OWNER_USERNAME.to_string()),
+        );
+        changed = true;
+    }
+
+    changed
+}
+
+fn get_desktop_auth_status_impl(app: &AppHandle) -> Result<DesktopAuthStatus> {
+    let auth_config = resolve_desktop_auth_config(app)?;
+    Ok(DesktopAuthStatus {
+        username: auth_config.username,
+        password_required: auth_config.password.is_some() || !auth_config.local_users.is_empty(),
+        multi_user: !auth_config.local_users.is_empty(),
+        owner_password_configured: auth_config.password.is_some(),
+    })
+}
+
+fn change_desktop_password_impl(
+    app: &AppHandle,
+    username: String,
+    new_password: String,
+) -> Result<DesktopAuthStatus> {
+    let target_username = normalize_required_string(username, "用户名不能为空")?;
+    let normalized_password = normalize_required_string(new_password, "新密码不能为空")?;
+    let auth_config = resolve_desktop_auth_config(app)?;
+
+    if target_username == auth_config.username {
+        let paths = resolve_runtime_paths(app)?;
+        ensure_desktop_config_file(&paths.config_path)?;
+
+        let mut config_value = read_desktop_app_config_value(app)?;
+        set_desktop_owner_password_value(
+            &mut config_value,
+            auth_config.username.as_str(),
+            normalized_password.as_str(),
+        );
+        write_json_value_file(&paths.config_path, &config_value)?;
+
+        return get_desktop_auth_status_impl(app);
+    }
+
+    let user_exists = auth_config
+        .local_users
+        .iter()
+        .any(|user| user.username == target_username);
+
+    if !user_exists {
+        anyhow::bail!("用户不存在");
+    }
+
+    let mut persistence_value = read_desktop_admin_persistence_value(app)?;
+    set_desktop_local_user_password_value(
+        &mut persistence_value,
+        target_username.as_str(),
+        normalized_password.as_str(),
+    );
+    write_desktop_admin_persistence_value(app, &persistence_value)?;
+
+    get_desktop_auth_status_impl(app)
+}
+
 fn resolve_desktop_auth_config(app: &AppHandle) -> Result<ResolvedDesktopAuthConfig> {
     let config_value = read_desktop_app_config_value(app)?;
     let config_document =
         serde_json::from_value::<DesktopAppConfigDocument>(config_value).unwrap_or_default();
     let username = normalize_optional_string(config_document.auth.username)
-        .unwrap_or_else(|| "owner".to_string());
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
     let password = normalize_optional_string(config_document.auth.password);
     let persistence = read_desktop_admin_persistence_document(app).unwrap_or_default();
     let local_users = persistence
@@ -600,7 +719,7 @@ fn read_desktop_admin_persistence_document(
     app: &AppHandle,
 ) -> Result<DesktopAdminPersistenceDocument> {
     let paths = resolve_runtime_paths(app)?;
-    let path = paths.data_dir.join(ADMIN_PERSISTENCE_FILE_NAME);
+    let path = paths.admin_persistence_path();
 
     if !path.exists() {
         return Ok(DesktopAdminPersistenceDocument::default());
@@ -609,6 +728,113 @@ fn read_desktop_admin_persistence_document(
     let contents =
         fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&contents).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn read_desktop_admin_persistence_value(app: &AppHandle) -> Result<serde_json::Value> {
+    let paths = resolve_runtime_paths(app)?;
+    let path = paths.admin_persistence_path();
+
+    if !path.exists() {
+        return Ok(serde_json::Value::Object(serde_json::Map::new()));
+    }
+
+    read_json_value_file(&path)
+}
+
+fn write_desktop_admin_persistence_value(
+    app: &AppHandle,
+    persistence_value: &serde_json::Value,
+) -> Result<()> {
+    let paths = resolve_runtime_paths(app)?;
+    write_json_value_file(&paths.admin_persistence_path(), persistence_value)
+}
+
+fn read_json_value_file(path: &Path) -> Result<serde_json::Value> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&contents).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn write_json_value_file(path: &Path, value: &serde_json::Value) -> Result<()> {
+    if let Some(parent_dir) = path.parent() {
+        fs::create_dir_all(parent_dir)
+            .with_context(|| format!("failed to create {}", parent_dir.display()))?;
+    }
+
+    let contents = serde_json::to_string_pretty(value)
+        .with_context(|| format!("failed to serialize {}", path.display()))?;
+    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn set_desktop_owner_password_value(
+    config_value: &mut serde_json::Value,
+    owner_username: &str,
+    new_password: &str,
+) {
+    if !config_value.is_object() {
+        *config_value = serde_json::Value::Object(serde_json::Map::new());
+    }
+
+    let root = config_value
+        .as_object_mut()
+        .expect("config root should be an object after normalization");
+    let auth_entry = root
+        .entry("auth".to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+
+    if !auth_entry.is_object() {
+        *auth_entry = serde_json::Value::Object(serde_json::Map::new());
+    }
+
+    let auth_object = auth_entry
+        .as_object_mut()
+        .expect("auth entry should be an object after normalization");
+
+    let current_username = auth_object
+        .get("username")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if current_username.is_none() {
+        auth_object.insert(
+            "username".to_string(),
+            serde_json::Value::String(owner_username.to_string()),
+        );
+    }
+
+    auth_object.insert(
+        "password".to_string(),
+        serde_json::Value::String(new_password.to_string()),
+    );
+}
+
+fn set_desktop_local_user_password_value(
+    persistence_value: &mut serde_json::Value,
+    username: &str,
+    new_password: &str,
+) {
+    if !persistence_value.is_object() {
+        *persistence_value = serde_json::Value::Object(serde_json::Map::new());
+    }
+
+    let root = persistence_value
+        .as_object_mut()
+        .expect("desktop admin persistence root should be an object after normalization");
+    let passwords_entry = root
+        .entry("userPasswords".to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+
+    if !passwords_entry.is_object() {
+        *passwords_entry = serde_json::Value::Object(serde_json::Map::new());
+    }
+
+    let passwords_object = passwords_entry
+        .as_object_mut()
+        .expect("userPasswords should be an object after normalization");
+    passwords_object.insert(
+        username.to_string(),
+        serde_json::Value::String(new_password.to_string()),
+    );
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -620,6 +846,15 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
             Some(normalized)
         }
     })
+}
+
+fn normalize_required_string(value: String, error_message: &str) -> Result<String> {
+    let normalized = value.trim().to_string();
+    if normalized.is_empty() {
+        anyhow::bail!("{}", error_message);
+    }
+
+    Ok(normalized)
 }
 
 fn resolve_sidecar_binary_path(app: &AppHandle) -> Result<PathBuf> {
@@ -719,4 +954,123 @@ struct RuntimePaths {
     config_path: PathBuf,
     data_dir: PathBuf,
     sqlite_path: PathBuf,
+}
+
+impl RuntimePaths {
+    fn admin_persistence_path(&self) -> PathBuf {
+        self.data_dir.join(ADMIN_PERSISTENCE_FILE_NAME)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DEFAULT_DESKTOP_OWNER_USERNAME, ensure_default_desktop_owner_auth_value,
+        set_desktop_local_user_password_value, set_desktop_owner_password_value,
+    };
+
+    #[test]
+    fn injects_default_owner_username_without_forcing_password() {
+        let mut config_value = serde_json::json!({});
+
+        let changed = ensure_default_desktop_owner_auth_value(&mut config_value);
+
+        assert!(changed);
+        assert_eq!(
+            config_value["auth"]["username"],
+            serde_json::Value::String(DEFAULT_DESKTOP_OWNER_USERNAME.to_string())
+        );
+        assert!(config_value["auth"].get("password").is_none());
+    }
+
+    #[test]
+    fn keeps_empty_owner_password_for_first_login() {
+        let mut config_value = serde_json::json!({
+            "auth": {
+                "username": DEFAULT_DESKTOP_OWNER_USERNAME,
+                "password": ""
+            }
+        });
+
+        let changed = ensure_default_desktop_owner_auth_value(&mut config_value);
+
+        assert!(!changed);
+        assert_eq!(
+            config_value["auth"]["password"],
+            serde_json::Value::String(String::new())
+        );
+    }
+
+    #[test]
+    fn keeps_custom_username_without_forcing_owner_password() {
+        let mut config_value = serde_json::json!({
+            "auth": {
+                "username": "alice",
+                "password": ""
+            }
+        });
+
+        let changed = ensure_default_desktop_owner_auth_value(&mut config_value);
+
+        assert!(!changed);
+        assert_eq!(
+            config_value["auth"]["password"],
+            serde_json::Value::String(String::new())
+        );
+    }
+
+    #[test]
+    fn updates_owner_password_without_dropping_other_config_fields() {
+        let mut config_value = serde_json::json!({
+            "auth": {
+                "username": "owner",
+                "password": ""
+            },
+            "profile_sync": {
+                "api_base_url": "http://127.0.0.1:8787"
+            }
+        });
+
+        set_desktop_owner_password_value(&mut config_value, "owner", "new-pass");
+
+        assert_eq!(
+            config_value["auth"]["password"],
+            serde_json::Value::String("new-pass".to_string())
+        );
+        assert_eq!(
+            config_value["profile_sync"]["api_base_url"],
+            serde_json::Value::String("http://127.0.0.1:8787".to_string())
+        );
+    }
+
+    #[test]
+    fn updates_local_user_password_map_without_dropping_other_persistence_fields() {
+        let mut persistence_value = serde_json::json!({
+            "config": {
+                "UserConfig": {
+                    "Users": [
+                        {
+                            "username": "alice",
+                            "role": "user",
+                            "banned": false
+                        }
+                    ]
+                }
+            },
+            "userPasswords": {
+                "alice": "old-pass"
+            }
+        });
+
+        set_desktop_local_user_password_value(&mut persistence_value, "alice", "new-pass");
+
+        assert_eq!(
+            persistence_value["userPasswords"]["alice"],
+            serde_json::Value::String("new-pass".to_string())
+        );
+        assert_eq!(
+            persistence_value["config"]["UserConfig"]["Users"][0]["username"],
+            serde_json::Value::String("alice".to_string())
+        );
+    }
 }
