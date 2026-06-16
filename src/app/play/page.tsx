@@ -4,7 +4,7 @@
 
 import Artplayer from 'artplayer';
 import Hls from 'hls.js';
-import { Heart } from 'lucide-react';
+import { AlertTriangle, Heart, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -103,6 +103,8 @@ interface PendingPlayerReloadState {
 }
 
 const EPISODE_PROGRESS_STORAGE_KEY = 'moontv-episode-progress-v1';
+const PLAYBACK_RATE_INTERFERENCE_MONITOR_WINDOW_MS = 1800;
+const PLAYBACK_RATE_INTERFERENCE_MONITOR_INTERVAL_MS = 250;
 
 function buildEpisodeProgressStorageKey(
   source: string,
@@ -598,6 +600,16 @@ function PlayPageClient() {
   const lastVolumeRef = useRef<number>(0.7);
   // 上次使用的播放速率，默认 1.0
   const lastPlaybackRateRef = useRef<number>(1.0);
+  const [playbackRateSettingValue, setPlaybackRateSettingValue] =
+    useState<number>(1.0);
+  const playbackRateInterferenceRequestRef = useRef<{
+    expectedRate: number;
+    expiresAt: number;
+  } | null>(null);
+  const playbackRateInterferenceTimerRef = useRef<number | null>(null);
+  const playbackRateInterferenceDismissedRef = useRef(false);
+  const [playbackRateInterferenceNotice, setPlaybackRateInterferenceNotice] =
+    useState<string | null>(null);
 
   // 换源相关状态
   const [availableSources, setAvailableSources] = useState<SearchResult[]>([]);
@@ -731,6 +743,103 @@ function PlayPageClient() {
     }
   };
 
+  const clearPlaybackRateInterferenceMonitor = () => {
+    if (playbackRateInterferenceTimerRef.current !== null) {
+      window.clearTimeout(playbackRateInterferenceTimerRef.current);
+      playbackRateInterferenceTimerRef.current = null;
+    }
+  };
+
+  const dismissPlaybackRateInterferenceNotice = () => {
+    playbackRateInterferenceRequestRef.current = null;
+    clearPlaybackRateInterferenceMonitor();
+    playbackRateInterferenceDismissedRef.current = true;
+    setPlaybackRateInterferenceNotice(null);
+  };
+
+  const showPlaybackRateInterferenceNotice = (
+    expectedRate: number,
+    actualRate: number
+  ) => {
+    if (playbackRateInterferenceDismissedRef.current) {
+      return;
+    }
+
+    const message = `检测到浏览器倍速插件正在接管本站播放速度。期望 ${getPlaybackRateLabel(
+      expectedRate
+    )}，实际 ${getPlaybackRateLabel(
+      actualRate
+    )}。若使用 Global Speed，请将本站改为“点击时启用”或移出站点规则。`;
+
+    setPlaybackRateInterferenceNotice(message);
+  };
+
+  const evaluatePlaybackRateInterference = (actualRate?: number) => {
+    const pendingRequest = playbackRateInterferenceRequestRef.current;
+
+    if (!pendingRequest) {
+      return;
+    }
+
+    const resolvedRate = actualRate ?? artPlayerRef.current?.playbackRate;
+
+    if (typeof resolvedRate !== 'number' || !Number.isFinite(resolvedRate)) {
+      return;
+    }
+
+    if (Math.abs(resolvedRate - pendingRequest.expectedRate) > 0.01) {
+      playbackRateInterferenceRequestRef.current = null;
+      clearPlaybackRateInterferenceMonitor();
+      showPlaybackRateInterferenceNotice(
+        pendingRequest.expectedRate,
+        resolvedRate
+      );
+      return;
+    }
+
+    if (Date.now() >= pendingRequest.expiresAt) {
+      playbackRateInterferenceRequestRef.current = null;
+      clearPlaybackRateInterferenceMonitor();
+      setPlaybackRateInterferenceNotice(null);
+    }
+  };
+
+  const schedulePlaybackRateInterferenceMonitor = () => {
+    clearPlaybackRateInterferenceMonitor();
+
+    const tick = () => {
+      const pendingRequest = playbackRateInterferenceRequestRef.current;
+
+      if (!pendingRequest) {
+        clearPlaybackRateInterferenceMonitor();
+        return;
+      }
+
+      evaluatePlaybackRateInterference();
+
+      if (!playbackRateInterferenceRequestRef.current) {
+        return;
+      }
+
+      playbackRateInterferenceTimerRef.current = window.setTimeout(
+        tick,
+        PLAYBACK_RATE_INTERFERENCE_MONITOR_INTERVAL_MS
+      );
+    };
+
+    playbackRateInterferenceTimerRef.current = window.setTimeout(
+      tick,
+      PLAYBACK_RATE_INTERFERENCE_MONITOR_INTERVAL_MS
+    );
+  };
+
+  const syncTrackedPlaybackRate = (value: number) => {
+    lastPlaybackRateRef.current = value;
+    setPlaybackRateSettingValue((currentValue) =>
+      Math.abs(currentValue - value) < 0.01 ? currentValue : value
+    );
+  };
+
   const capturePendingPlayerReloadState = () => {
     if (!artPlayerRef.current) {
       pendingPlayerReloadStateRef.current = null;
@@ -743,7 +852,7 @@ function PlayPageClient() {
       artPlayerRef.current.playbackRate ?? lastPlaybackRateRef.current;
 
     lastVolumeRef.current = volume;
-    lastPlaybackRateRef.current = playbackRate;
+    syncTrackedPlaybackRate(playbackRate);
     resumeTimeRef.current = currentTime > 0 ? currentTime : null;
     pendingPlayerReloadStateRef.current = {
       resumeTime: currentTime > 0 ? currentTime : null,
@@ -856,6 +965,8 @@ function PlayPageClient() {
     enhancementManagerRef.current?.dispose();
     enhancementManagerRef.current = null;
     setAudioEnhancementStatus(null);
+    playbackRateInterferenceRequestRef.current = null;
+    clearPlaybackRateInterferenceMonitor();
 
     if (artPlayerRef.current) {
       try {
@@ -1047,8 +1158,148 @@ function PlayPageClient() {
     return `当前${getPlaybackBufferModeLabel(value)}`;
   };
 
+  const handlePlaybackRateChange = (value: number) => {
+    syncTrackedPlaybackRate(value);
+    playbackRateInterferenceDismissedRef.current = false;
+    setPlaybackRateInterferenceNotice(null);
+
+    if (!artPlayerRef.current) {
+      playbackRateInterferenceRequestRef.current = null;
+      clearPlaybackRateInterferenceMonitor();
+      return getPlaybackRateLabel(value);
+    }
+
+    playbackRateInterferenceRequestRef.current = {
+      expectedRate: value,
+      expiresAt: Date.now() + PLAYBACK_RATE_INTERFERENCE_MONITOR_WINDOW_MS,
+    };
+    schedulePlaybackRateInterferenceMonitor();
+    artPlayerRef.current.playbackRate = value;
+
+    return getPlaybackRateLabel(value);
+  };
+
+  const getCompactPlaybackBufferModeLabel = (value: PlaybackBufferMode) =>
+    getPlaybackBufferModeLabel(value).replace(/模式$/, '');
+
+  const PLAYBACK_RATE_COMMON_OPTIONS = [1, 1.5, 2] as const;
+
   const getPlaybackRateLabel = (value: number) =>
     Math.abs(value - 1) < 0.01 ? '正常' : `${value}x`;
+
+  const prepareInlineSettingTooltip = (
+    item: any,
+    options?: {
+      disableItemClick?: boolean;
+      hideRightIcon?: boolean;
+      cursor?: string;
+    }
+  ) => {
+    const {
+      disableItemClick = true,
+      hideRightIcon = true,
+      cursor = 'default',
+    } = options ?? {};
+
+    if (disableItemClick && item.$events?.length) {
+      item.$events.forEach((event: any) => {
+        artPlayerRef.current?.events?.remove?.(event);
+      });
+      item.$events.length = 0;
+    }
+
+    const tooltip = item.$tooltip as HTMLDivElement | undefined;
+    const itemElement = item.$item as HTMLDivElement | undefined;
+
+    if (!tooltip || !itemElement) {
+      return null;
+    }
+
+    const rightIcon = itemElement.querySelector(
+      '.art-setting-item-right-icon'
+    ) as HTMLDivElement | null;
+
+    itemElement.style.cursor = cursor;
+    tooltip.innerHTML = '';
+    tooltip.style.display = 'flex';
+    tooltip.style.alignItems = 'center';
+    tooltip.style.justifyContent = 'flex-end';
+    tooltip.style.overflow = 'visible';
+    tooltip.style.flex = '1';
+    tooltip.style.minWidth = '0';
+    tooltip.style.marginLeft = '12px';
+    if (rightIcon) {
+      rightIcon.style.display = hideRightIcon ? 'none' : '';
+    }
+
+    return tooltip;
+  };
+
+  const applySegmentedButtonState = (
+    button: HTMLButtonElement,
+    selected: boolean,
+    hasLeftDivider: boolean
+  ) => {
+    button.style.borderLeft = hasLeftDivider
+      ? '1px solid rgba(255, 255, 255, 0.14)'
+      : 'none';
+    button.style.background = selected
+      ? 'rgba(34, 197, 94, 0.22)'
+      : 'rgba(255, 255, 255, 0.04)';
+    button.style.color = selected ? '#f0fdf4' : 'rgba(255, 255, 255, 0.76)';
+    button.style.fontWeight = selected ? '600' : '500';
+  };
+
+  const createSegmentedButtonGroup = () => {
+    const buttonGroup = document.createElement('div');
+
+    buttonGroup.style.display = 'inline-flex';
+    buttonGroup.style.alignItems = 'stretch';
+    buttonGroup.style.justifyContent = 'flex-end';
+    buttonGroup.style.overflow = 'hidden';
+    buttonGroup.style.borderRadius = '10px';
+    buttonGroup.style.border = '1px solid rgba(255, 255, 255, 0.18)';
+    buttonGroup.style.background = 'rgba(255, 255, 255, 0.03)';
+    buttonGroup.style.pointerEvents = 'auto';
+    buttonGroup.style.flexWrap = 'nowrap';
+
+    return buttonGroup;
+  };
+
+  const createSegmentedButton = ({
+    label,
+    selected,
+    hasLeftDivider,
+    onClick,
+  }: {
+    label: string;
+    selected: boolean;
+    hasLeftDivider: boolean;
+    onClick: (event: MouseEvent) => void;
+  }) => {
+    const button = document.createElement('button');
+
+    button.type = 'button';
+    button.textContent = label;
+    button.style.padding = '4px 10px';
+    button.style.border = 'none';
+    button.style.outline = 'none';
+    button.style.boxShadow = 'none';
+    button.style.fontSize = '12px';
+    button.style.lineHeight = '1.2';
+    button.style.whiteSpace = 'nowrap';
+    button.style.cursor = 'pointer';
+    button.style.transition =
+      'background-color 0.2s ease, color 0.2s ease, font-weight 0.2s ease';
+    applySegmentedButtonState(button, selected, hasLeftDivider);
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick(event);
+    });
+
+    return button;
+  };
 
   const createAdBlockSetting = () => ({
     name: '去广告',
@@ -1079,70 +1330,154 @@ function PlayPageClient() {
   const createAudioSpikeProtectionSetting = () => ({
     name: '音量突增保护',
     html: '音量突增保护',
-    tooltip: getAudioSpikeProtectionLevelLabel(audioSpikeProtectionLevel),
-    selector: AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => ({
-      value: option.value,
-      name: `audio-spike-protection-${option.value}`,
-      default: option.value === audioSpikeProtectionLevel,
-      html: option.label,
-    })),
-    onSelect: function (item: any) {
-      return handleAudioSpikeProtectionLevelChange(item.value);
+    tooltip: '',
+    onClick: function () {
+      return '';
+    },
+    mounted: function (_panel: HTMLDivElement, item: any) {
+      const tooltip = prepareInlineSettingTooltip(item);
+
+      if (!tooltip) {
+        return;
+      }
+
+      const buttonGroup = createSegmentedButtonGroup();
+
+      AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.forEach((option, index) => {
+        const button = createSegmentedButton({
+          label: option.label,
+          selected: option.value === audioSpikeProtectionLevel,
+          hasLeftDivider: index > 0,
+          onClick: () => {
+            handleAudioSpikeProtectionLevelChange(option.value);
+          },
+        });
+
+        buttonGroup.appendChild(button);
+      });
+
+      tooltip.appendChild(buttonGroup);
     },
   });
 
   const createPlaybackBufferSetting = () => ({
     name: '缓冲优化',
     html: '缓冲优化',
-    tooltip: getPlaybackBufferModeLabel(playbackBufferMode),
-    selector: PLAYBACK_BUFFER_MODE_OPTIONS.map((option) => ({
-      value: option.value,
-      name: `playback-buffer-mode-${option.value}`,
-      default: option.value === playbackBufferMode,
-      html: option.label,
-    })),
-    onSelect: function (item: any) {
-      return handlePlaybackBufferModeChange(item.value);
+    tooltip: '',
+    onClick: function () {
+      return '';
+    },
+    mounted: function (_panel: HTMLDivElement, item: any) {
+      const tooltip = prepareInlineSettingTooltip(item);
+
+      if (!tooltip) {
+        return;
+      }
+
+      const buttonGroup = createSegmentedButtonGroup();
+
+      PLAYBACK_BUFFER_MODE_OPTIONS.forEach((option, index) => {
+        const button = createSegmentedButton({
+          label: getCompactPlaybackBufferModeLabel(option.value),
+          selected: option.value === playbackBufferMode,
+          hasLeftDivider: index > 0,
+          onClick: () => {
+            handlePlaybackBufferModeChange(option.value);
+          },
+        });
+
+        buttonGroup.appendChild(button);
+      });
+
+      tooltip.appendChild(buttonGroup);
     },
   });
 
   const createPlaybackRateSetting = () => ({
     name: '播放速度',
     html: '播放速度',
-    tooltip: getPlaybackRateLabel(lastPlaybackRateRef.current),
+    tooltip: '',
     selector: Artplayer.PLAYBACK_RATE.map((option) => ({
       value: option,
       name: `player-playback-rate-${option}`,
-      default: Math.abs(option - lastPlaybackRateRef.current) < 0.01,
+      default: Math.abs(option - playbackRateSettingValue) < 0.01,
       html: getPlaybackRateLabel(option),
     })),
     onSelect: function (item: any) {
       const nextRate = Number(item.value);
+      const label = handlePlaybackRateChange(nextRate);
 
-      lastPlaybackRateRef.current = nextRate;
-      if (artPlayerRef.current) {
-        artPlayerRef.current.playbackRate = nextRate;
+      setTimeout(() => {
+        artPlayerRef.current?.setting?.update?.(createPlaybackRateSetting());
+      }, 0);
+
+      return label;
+    },
+    mounted: function (this: any, _panel: HTMLDivElement, item: any) {
+      const tooltip = prepareInlineSettingTooltip(item, {
+        disableItemClick: false,
+        hideRightIcon: false,
+        cursor: 'pointer',
+      });
+
+      if (!tooltip) {
+        return;
       }
 
-      return getPlaybackRateLabel(nextRate);
-    },
-    mounted: function (this: any) {
-      const syncPlaybackRateSetting = () => {
-        const currentRate =
-          artPlayerRef.current?.playbackRate ?? lastPlaybackRateRef.current;
-        const matchedRate =
-          Artplayer.PLAYBACK_RATE.find(
-            (option) => Math.abs(option - currentRate) < 0.01
-          ) ?? 1;
-        const target = this.setting.find(`player-playback-rate-${matchedRate}`);
+      tooltip.style.marginRight = '8px';
 
-        if (target) {
-          this.setting.check(target);
-        }
+      const buttonGroup = createSegmentedButtonGroup();
+      const rateButtons = new Map<number, HTMLButtonElement>();
+      const moreButton = createSegmentedButton({
+        label: '更多',
+        selected: false,
+        hasLeftDivider: true,
+        onClick: () => {
+          if (item.selector?.length) {
+            this.setting.render(item.selector);
+          }
+        },
+      });
+      const syncPlaybackRateSetting = () => {
+        const currentRate = playbackRateSettingValue;
+        const matchedRate = PLAYBACK_RATE_COMMON_OPTIONS.find(
+          (option) => Math.abs(option - currentRate) < 0.01
+        );
+
+        PLAYBACK_RATE_COMMON_OPTIONS.forEach((option, index) => {
+          const button = rateButtons.get(option);
+
+          if (button) {
+            applySegmentedButtonState(
+              button,
+              option === matchedRate,
+              index > 0
+            );
+          }
+        });
+        applySegmentedButtonState(moreButton, matchedRate === undefined, true);
       };
 
+      PLAYBACK_RATE_COMMON_OPTIONS.forEach((option, index) => {
+        const button = createSegmentedButton({
+          label: getPlaybackRateLabel(option),
+          selected: Math.abs(option - playbackRateSettingValue) < 0.01,
+          hasLeftDivider: index > 0,
+          onClick: () => {
+            const nextRate = option;
+
+            handlePlaybackRateChange(nextRate);
+            syncPlaybackRateSetting();
+          },
+        });
+
+        rateButtons.set(option, button);
+        buttonGroup.appendChild(button);
+      });
+
+      buttonGroup.appendChild(moreButton);
+      tooltip.appendChild(buttonGroup);
       syncPlaybackRateSetting();
-      this.on('video:ratechange', syncPlaybackRateSetting);
     },
   });
 
@@ -1169,15 +1504,33 @@ function PlayPageClient() {
   const createVisualEnhancementSetting = () => ({
     name: '去磨皮修正',
     html: '去磨皮修正',
-    tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
-    selector: VISUAL_ENHANCEMENT_LEVEL_OPTIONS.map((option) => ({
-      value: option.value,
-      name: `visual-enhancement-${option.value}`,
-      default: option.value === visualEnhancementLevel,
-      html: option.label,
-    })),
-    onSelect: function (item: any) {
-      return handleVisualEnhancementLevelChange(item.value);
+    tooltip: '',
+    onClick: function () {
+      return '';
+    },
+    mounted: function (_panel: HTMLDivElement, item: any) {
+      const tooltip = prepareInlineSettingTooltip(item);
+
+      if (!tooltip) {
+        return;
+      }
+
+      const buttonGroup = createSegmentedButtonGroup();
+
+      VISUAL_ENHANCEMENT_LEVEL_OPTIONS.forEach((option, index) => {
+        const button = createSegmentedButton({
+          label: option.label,
+          selected: option.value === visualEnhancementLevel,
+          hasLeftDivider: index > 0,
+          onClick: () => {
+            handleVisualEnhancementLevelChange(option.value);
+          },
+        });
+
+        buttonGroup.appendChild(button);
+      });
+
+      tooltip.appendChild(buttonGroup);
     },
   });
 
@@ -1255,6 +1608,7 @@ function PlayPageClient() {
   const createPlaybackSettingsGroup = () => ({
     name: 'player-playback-settings-group',
     html: '播放设置',
+    width: 320,
     selector: [
       createAdBlockSetting(),
       createPlaybackBufferSetting(),
@@ -1265,6 +1619,7 @@ function PlayPageClient() {
   const createEnhancementSettingsGroup = () => ({
     name: 'player-enhancement-settings-group',
     html: '音画增强',
+    width: 320,
     selector: [
       createAudioSpikeProtectionSetting(),
       createAudioDynamicProtectionSetting(),
@@ -1291,6 +1646,7 @@ function PlayPageClient() {
 
     artPlayerRef.current.setting.update(createAudioSpikeProtectionSetting());
     artPlayerRef.current.setting.update(createPlaybackBufferSetting());
+    artPlayerRef.current.setting.update(createPlaybackRateSetting());
     artPlayerRef.current.setting.update(createAudioDynamicProtectionSetting());
     artPlayerRef.current.setting.update(createAudioFixedCeilingSetting());
     artPlayerRef.current.setting.update(createVisualEnhancementSetting());
@@ -1298,6 +1654,7 @@ function PlayPageClient() {
     audioDynamicProtectionEnabled,
     audioFixedCeilingEnabled,
     audioSpikeProtectionLevel,
+    playbackRateSettingValue,
     playbackBufferMode,
     visualEnhancementLevel,
   ]);
@@ -3117,7 +3474,9 @@ function PlayPageClient() {
         lastVolumeRef.current = artPlayerRef.current.volume;
       });
       artPlayerRef.current.on('video:ratechange', () => {
-        lastPlaybackRateRef.current = artPlayerRef.current.playbackRate;
+        const nextRate = artPlayerRef.current.playbackRate;
+        syncTrackedPlaybackRate(nextRate);
+        evaluatePlaybackRateInterference(nextRate);
       });
 
       artPlayerRef.current.on('video:loadedmetadata', () => {
@@ -3530,6 +3889,37 @@ function PlayPageClient() {
                 ref={artRef}
                 className='relative h-full w-full overflow-hidden rounded-xl bg-black shadow-lg'
               ></div>
+              {playbackRateInterferenceNotice && (
+                <div className='pointer-events-none absolute top-3 left-3 z-[65] max-w-[calc(100%-1.5rem)] sm:max-w-md'>
+                  <div
+                    role='status'
+                    aria-live='polite'
+                    className='pointer-events-auto rounded-2xl border border-amber-300/25 bg-black/75 text-[11px] text-amber-50 shadow-lg backdrop-blur-sm'
+                  >
+                    <div className='flex items-start gap-3 px-3 py-2.5'>
+                      <span className='mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-400/15 text-amber-200'>
+                        <AlertTriangle className='h-3.5 w-3.5' />
+                      </span>
+                      <div className='min-w-0 flex-1'>
+                        <p className='font-medium text-amber-100'>
+                          播放速度可能被浏览器插件接管
+                        </p>
+                        <p className='mt-1 leading-5 text-amber-50/85'>
+                          {playbackRateInterferenceNotice}
+                        </p>
+                      </div>
+                      <button
+                        type='button'
+                        onClick={dismissPlaybackRateInterferenceNotice}
+                        aria-label='关闭倍速插件干预提示'
+                        className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-white/10 text-white/70 transition-colors hover:bg-white/10 hover:text-white'
+                      >
+                        <X className='h-3.5 w-3.5' />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               <PlayerEnhancementStatusOverlay status={audioEnhancementStatus} />
 
               {/* 换源加载蒙层 */}
