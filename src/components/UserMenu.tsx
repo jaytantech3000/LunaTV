@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ExternalLink,
   KeyRound,
+  Loader2,
   LogIn,
   LogOut,
   Settings,
@@ -15,8 +16,8 @@ import {
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { createPortal, flushSync } from 'react-dom';
 
 import {
   BROWSER_AUTH_UPDATED_EVENT,
@@ -55,6 +56,7 @@ import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
 import DesktopSettingsSection from './DesktopSettingsSection';
+import { useNavigationFeedback } from './NavigationFeedbackProvider';
 import { VersionPanel } from './VersionPanel';
 
 interface AuthInfo {
@@ -64,6 +66,7 @@ interface AuthInfo {
 
 export const UserMenu: React.FC = () => {
   const router = useRouter();
+  const { beginNavigation, pendingNavigation } = useNavigationFeedback();
   const [isOpen, setIsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
@@ -398,6 +401,13 @@ export const UserMenu: React.FC = () => {
     checkUpdate();
   }, []);
 
+  const prefetchRoute = useCallback(
+    (href: string) => {
+      router.prefetch(href);
+    },
+    [router]
+  );
+
   // 点击外部区域关闭下拉框
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -508,14 +518,26 @@ export const UserMenu: React.FC = () => {
   };
 
   const handleAdminPanel = () => {
-    setIsOpen(false);
-
-    if (isDesktopTarget) {
-      router.push('/admin');
+    if (
+      pendingNavigation?.kind === 'nav' &&
+      pendingNavigation.href === '/admin'
+    ) {
+      setIsOpen(false);
       return;
     }
 
-    router.push('/admin');
+    flushSync(() => {
+      setIsOpen(false);
+      beginNavigation({
+        href: '/admin',
+        kind: 'nav',
+        label: '管理面板',
+      });
+    });
+    prefetchRoute('/admin');
+    window.setTimeout(() => {
+      router.push('/admin');
+    }, 0);
   };
 
   const handleChangePassword = () => {
@@ -775,6 +797,9 @@ export const UserMenu: React.FC = () => {
     }
   };
 
+  const isOpeningAdmin =
+    pendingNavigation?.kind === 'nav' && pendingNavigation.href === '/admin';
+
   // 检查是否显示管理面板按钮
   const isAuthenticated = Boolean(authInfo?.username);
   const isDesktopLocalAuthMode = isDesktopTarget && !desktopProfileSyncEnabled;
@@ -790,6 +815,47 @@ export const UserMenu: React.FC = () => {
     (isDesktopLocalAuthMode || storageType !== 'localstorage');
   const showLoginAction = !isAuthenticated;
   const showLogoutAction = isAuthenticated;
+
+  useEffect(() => {
+    if (!isOpen || !showAdminPanel) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      prefetchRoute('/admin');
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isOpen, prefetchRoute, showAdminPanel]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !showAdminPanel) {
+      return;
+    }
+
+    const requestIdleCallbackFn = window.requestIdleCallback?.bind(window);
+    const cancelIdleCallbackFn = window.cancelIdleCallback?.bind(window);
+
+    if (requestIdleCallbackFn && cancelIdleCallbackFn) {
+      const idleCallbackId = requestIdleCallbackFn(() => {
+        prefetchRoute('/admin');
+      });
+
+      return () => {
+        cancelIdleCallbackFn(idleCallbackId);
+      };
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      prefetchRoute('/admin');
+    }, 1200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [prefetchRoute, showAdminPanel]);
 
   // 角色中文映射
   const getRoleText = (role?: string) => {
@@ -875,10 +941,22 @@ export const UserMenu: React.FC = () => {
           {showAdminPanel && (
             <button
               onClick={handleAdminPanel}
-              className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm'
+              onPointerDown={() => prefetchRoute('/admin')}
+              onMouseEnter={() => prefetchRoute('/admin')}
+              onFocus={() => prefetchRoute('/admin')}
+              disabled={isOpeningAdmin}
+              aria-busy={isOpeningAdmin}
+              className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm disabled:cursor-progress disabled:opacity-80'
             >
-              <Shield className='w-4 h-4 text-gray-500 dark:text-gray-400' />
-              <span className='font-medium'>管理面板</span>
+              <div className='relative flex h-4 w-4 items-center justify-center'>
+                <Shield className='h-4 w-4 text-gray-500 dark:text-gray-400' />
+                {isOpeningAdmin ? (
+                  <Loader2 className='absolute -right-1.5 -top-1.5 h-3 w-3 animate-spin text-emerald-500 dark:text-emerald-400' />
+                ) : null}
+              </div>
+              <span className='font-medium'>
+                {isOpeningAdmin ? '正在打开管理面板...' : '管理面板'}
+              </span>
             </button>
           )}
 
