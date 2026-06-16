@@ -1,0 +1,7 @@
+{
+  "desktopVersion": "200.0.0",
+  "upstreamVersion": "100.1.3",
+  "releaseRepository": "jaytantech3000/LunaTV",
+  "releaseBranch": "desktop",
+  "updaterBranch": "desktop-updater"
+}

@@ -71,6 +71,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Sync desktop version
+        run: node scripts/sync-desktop-version.mjs
+
       - name: Sync updater endpoint
         run: pnpm desktop:sync:updater-config
 
@@ -124,6 +127,9 @@ jobs:
         with:
           node-version: 20
           package-manager-cache: false
+
+      - name: Sync desktop version
+        run: node scripts/sync-desktop-version.mjs
 
       - name: Download build artifacts
         run: gh run download ${{ github.run_id }} --dir .desktop-release/artifacts

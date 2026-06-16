@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 
 import { getVersionFileUrl } from '@/lib/release-urls';
+import { compareSemver } from '@/lib/semver';
 import { CURRENT_VERSION } from '@/lib/version';
 
 export enum UpdateStatus {
@@ -78,40 +79,13 @@ export function compareVersions(
   }
 
   try {
-    const currentParts = normalizeVersionParts(currentVersion);
-    const remoteParts = normalizeVersionParts(remoteVersion);
-
-    for (let index = 0; index < 3; index += 1) {
-      if (remoteParts[index] > currentParts[index]) {
-        return UpdateStatus.HAS_UPDATE;
-      }
-
-      if (remoteParts[index] < currentParts[index]) {
-        return UpdateStatus.NO_UPDATE;
-      }
-    }
-
-    return UpdateStatus.NO_UPDATE;
+    return compareSemver(remoteVersion, currentVersion) > 0
+      ? UpdateStatus.HAS_UPDATE
+      : UpdateStatus.NO_UPDATE;
   } catch (error) {
     console.error('Version comparison failed:', error);
     return remoteVersion !== currentVersion
       ? UpdateStatus.HAS_UPDATE
       : UpdateStatus.NO_UPDATE;
   }
-}
-
-function normalizeVersionParts(version: string): number[] {
-  const parts = version.split('.').map((part) => {
-    const value = Number.parseInt(part, 10);
-    if (Number.isNaN(value) || value < 0) {
-      throw new Error(`Invalid version: ${version}`);
-    }
-    return value;
-  });
-
-  while (parts.length < 3) {
-    parts.push(0);
-  }
-
-  return parts.slice(0, 3);
 }

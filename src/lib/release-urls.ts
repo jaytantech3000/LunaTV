@@ -1,5 +1,12 @@
-const DEFAULT_RELEASE_REPOSITORY = 'jaytantech3000/LunaTV';
-const DEFAULT_RELEASE_BRANCH = 'main';
+import {
+  DESKTOP_RELEASE_BRANCH,
+  DESKTOP_RELEASE_REPOSITORY,
+  DESKTOP_UPDATER_BRANCH,
+} from '@/lib/desktop-release';
+
+const DEFAULT_RELEASE_REPOSITORY = DESKTOP_RELEASE_REPOSITORY;
+const DEFAULT_RELEASE_BRANCH = DESKTOP_RELEASE_BRANCH;
+const DEFAULT_UPDATER_BRANCH = DESKTOP_UPDATER_BRANCH;
 
 function readNextPublicEnvValue(name: string) {
   const value = process.env[name]?.trim();
@@ -20,6 +27,13 @@ export function getReleaseBranch() {
   );
 }
 
+export function getUpdaterBranch() {
+  return (
+    readNextPublicEnvValue('NEXT_PUBLIC_UPDATER_BRANCH') ||
+    DEFAULT_UPDATER_BRANCH
+  );
+}
+
 export function getProjectPageUrl(repository = getReleaseRepository()) {
   return `https://github.com/${repository}`;
 }
@@ -30,7 +44,7 @@ export function getReleasePageUrl(repository = getReleaseRepository()) {
 
 export function getVersionFileUrl(
   repository = getReleaseRepository(),
-  branch = getReleaseBranch()
+  branch = getUpdaterBranch()
 ) {
   return `https://raw.githubusercontent.com/${repository}/${branch}/VERSION.txt`;
 }
@@ -43,7 +57,8 @@ export function getChangelogFileUrl(
 }
 
 export function getLatestUpdaterManifestUrl(
-  repository = getReleaseRepository()
+  repository = getReleaseRepository(),
+  branch = getUpdaterBranch()
 ) {
-  return `${getReleasePageUrl(repository)}/latest/download/latest.json`;
+  return `https://raw.githubusercontent.com/${repository}/${branch}/latest.json`;
 }

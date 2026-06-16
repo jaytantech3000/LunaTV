@@ -175,11 +175,11 @@ function getFriendlyDesktopUpdaterError(error: unknown) {
     normalized.includes('updater') ||
     normalized.includes('configuration')
   ) {
-    return '当前桌面构建未配置应用内更新源。';
+    return '当前版本暂不支持应用内更新。';
   }
 
   if (normalized.includes('tls') || normalized.includes('https')) {
-    return '更新源连接失败，请检查更新地址或 HTTPS 配置。';
+    return '更新源连接失败，请稍后重试。';
   }
 
   return '检查更新失败，请稍后重试。';
@@ -221,6 +221,9 @@ function buildRemoteState(
 
   const updateStatus = compareVersions(remoteVersion, CURRENT_VERSION);
   const hasUpdate = updateStatus === UpdateStatus.HAS_UPDATE;
+  const fallbackStatusMessage = hasUpdate
+    ? desktopUpdaterErrorMessage || '发现新版本，请打开发布页下载。'
+    : '当前已是最新版本。';
 
   return {
     phase: hasUpdate ? ('available' as const) : ('up_to_date' as const),
@@ -235,10 +238,8 @@ function buildRemoteState(
     progressPercent: null,
     downloadedBytes: 0,
     totalBytes: null,
-    statusMessage: hasUpdate
-      ? desktopUpdaterErrorMessage || '发现新版本，但当前环境不支持应用内下载。'
-      : '当前已是最新版本。',
-    errorMessage: desktopUpdaterErrorMessage || null,
+    statusMessage: fallbackStatusMessage,
+    errorMessage: hasUpdate ? desktopUpdaterErrorMessage || null : null,
   };
 }
 

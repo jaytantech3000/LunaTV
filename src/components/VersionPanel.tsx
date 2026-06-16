@@ -26,6 +26,7 @@ import {
   setAutoDownloadEnabled,
 } from '@/lib/app-update';
 import { type ChangelogEntry, changelog } from '@/lib/changelog';
+import { DESKTOP_UPSTREAM_VERSION } from '@/lib/desktop-release';
 import { getChangelogFileUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
@@ -50,7 +51,9 @@ function parseRemoteChangelog(content: string): RemoteChangelogEntry[] {
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
-    const versionMatch = line.match(/^## \[([\d.]+)\] - (\d{4}-\d{2}-\d{2})$/);
+    const versionMatch = line.match(
+      /^## \[([0-9A-Za-z.-]+)\] - (\d{4}-\d{2}-\d{2})$/
+    );
 
     if (versionMatch) {
       if (currentEntry) {
@@ -320,10 +323,13 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
         style={{ touchAction: 'auto' }}
       >
         <div className='flex items-center justify-between border-b border-gray-200 p-3 sm:p-6 dark:border-gray-700'>
-          <div className='flex items-center gap-3'>
+          <div className='flex flex-wrap items-center gap-3'>
             <h3 className='text-lg font-bold text-gray-800 dark:text-gray-200 sm:text-xl'>
               版本信息
             </h3>
+            <p className='text-xs text-gray-500 dark:text-gray-400'>
+              上游基线 v{DESKTOP_UPSTREAM_VERSION}
+            </p>
             <span className='rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300 sm:px-3 sm:text-sm'>
               v{CURRENT_VERSION}
             </span>
@@ -391,6 +397,9 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                         {updateState.statusMessage}
                       </p>
                     ) : null}
+                    <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                      上游基线：v{DESKTOP_UPSTREAM_VERSION}
+                    </p>
                     {updateState.publishedAt ? (
                       <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
                         发布日期：{updateState.publishedAt}

@@ -3,27 +3,37 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-const DEFAULT_RELEASE_REPOSITORY = 'jaytantech3000/LunaTV';
+import { readDesktopReleaseMetadata } from './desktop-release-utils.mjs';
 
 function readEnvValue(name) {
   const value = process.env[name]?.trim();
   return value ? value : null;
 }
 
-function getReleaseRepository() {
+function getReleaseRepository(metadata) {
   return (
     readEnvValue('LUNATV_RELEASE_REPOSITORY') ||
     readEnvValue('NEXT_PUBLIC_RELEASE_REPOSITORY') ||
     readEnvValue('GITHUB_REPOSITORY') ||
-    DEFAULT_RELEASE_REPOSITORY
+    metadata.releaseRepository
+  );
+}
+
+function getUpdaterBranch(metadata) {
+  return (
+    readEnvValue('LUNATV_UPDATER_BRANCH') ||
+    readEnvValue('NEXT_PUBLIC_UPDATER_BRANCH') ||
+    metadata.updaterBranch
   );
 }
 
 async function main() {
   const projectRoot = process.cwd();
   const configPath = path.join(projectRoot, 'src-tauri', 'tauri.conf.json');
-  const repository = getReleaseRepository();
-  const endpoint = `https://github.com/${repository}/releases/latest/download/latest.json`;
+  const metadata = await readDesktopReleaseMetadata(projectRoot);
+  const repository = getReleaseRepository(metadata);
+  const updaterBranch = getUpdaterBranch(metadata);
+  const endpoint = `https://raw.githubusercontent.com/${repository}/${updaterBranch}/latest.json`;
   const content = await fs.readFile(configPath, 'utf8');
   const config = JSON.parse(content);
 

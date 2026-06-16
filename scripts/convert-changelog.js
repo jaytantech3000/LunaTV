@@ -17,7 +17,7 @@ function parseChangelog(content) {
 
     // 匹配版本行: ## [X.Y.Z] - YYYY-MM-DD
     const versionMatch = trimmedLine.match(
-      /^## \[([\d.]+)\] - (\d{4}-\d{2}-\d{2})$/
+      /^## \[([0-9A-Za-z.-]+)\] - (\d{4}-\d{2}-\d{2})$/
     );
     if (versionMatch) {
       if (currentVersion) {

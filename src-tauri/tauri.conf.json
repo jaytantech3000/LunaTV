@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LunaTV Desktop",
-  "version": "100.1.3",
+  "version": "200.0.0",
   "identifier": "com.lunatv.desktop",
   "build": {
     "beforeDevCommand": "pnpm desktop:dev:bootstrap",
@@ -28,7 +28,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/jaytantech3000/LunaTV/releases/latest/download/latest.json"
+        "https://raw.githubusercontent.com/jaytantech3000/LunaTV/desktop-updater/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE0RTE5RUU4MkRCMUI3OTIKUldTU3Q3RXQ2SjdocE40NUg4OWdQOFdyNjBPalI1RkNldDQyelNLNmVxcVRsaytVZkpha0xkRmgK",
       "windows": {
