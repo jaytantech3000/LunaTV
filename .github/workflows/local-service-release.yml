@@ -234,6 +234,7 @@ jobs:
       ALIAS_RELEASE_NAME: ${{ needs.prepare-release.outputs.alias_release_name }}
       ALIAS_RELEASE_TAG: ${{ needs.prepare-release.outputs.alias_release_tag }}
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       RELEASE_NAME: ${{ needs.prepare-release.outputs.release_name }}
       RELEASE_PRERELEASE: ${{ needs.prepare-release.outputs.prerelease }}
       RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
