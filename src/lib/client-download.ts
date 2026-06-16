@@ -44,6 +44,13 @@ export interface DesktopReleaseAssetInfo {
   label: string;
 }
 
+export interface LocalServiceReleaseSummary {
+  configuredPlatforms: LocalServicePlatformKey[];
+  displayName: string | null;
+  publishedAt: string | null;
+  version: string;
+}
+
 interface LocalServiceReleaseConfig {
   repo: string;
   tag: string;
@@ -212,6 +219,24 @@ function getAutoLocalServiceReleaseChannel():
   return normalizeLocalServiceReleaseChannel(deploymentBranch);
 }
 
+function getConfiguredLocalServiceReleaseTag(options?: {
+  includeDefaultTag?: boolean;
+}): string | null {
+  const explicitTag = process.env.LOCAL_SERVICE_RELEASE_TAG?.trim();
+  if (explicitTag) {
+    return explicitTag;
+  }
+
+  const autoChannel = getAutoLocalServiceReleaseChannel();
+  if (autoChannel) {
+    return `local-service-${autoChannel}-latest`;
+  }
+
+  return options?.includeDefaultTag === false
+    ? null
+    : DEFAULT_LOCAL_SERVICE_RELEASE_TAG;
+}
+
 function getReleaseTimestamp(release: GitHubRelease): number {
   const source = release.published_at || release.created_at;
   if (!source) {
@@ -352,18 +377,47 @@ function getLocalServiceReleaseConfig(): LocalServiceReleaseConfig | null {
     process.env.LOCAL_SERVICE_RELEASE_REPO?.trim() ||
     process.env.DESKTOP_RELEASE_REPO?.trim() ||
     deriveGitHubRepoFromEnv();
-  const explicitTag = process.env.LOCAL_SERVICE_RELEASE_TAG?.trim();
-  const autoChannel = getAutoLocalServiceReleaseChannel();
-  const tag =
-    explicitTag ||
-    (autoChannel ? `local-service-${autoChannel}-latest` : null) ||
-    DEFAULT_LOCAL_SERVICE_RELEASE_TAG;
+  const tag = getConfiguredLocalServiceReleaseTag();
 
   if (!repo || !tag || !isValidGitHubRepo(repo)) {
     return null;
   }
 
   return { repo, tag };
+}
+
+function getLocalServiceVersionedTagPrefix(
+  configuredTag: string
+): string | null {
+  if (configuredTag === DEFAULT_LOCAL_SERVICE_RELEASE_TAG) {
+    return 'local-service-';
+  }
+
+  const aliasMatch = configuredTag.match(
+    /^(local-service-(?:nova|luna)-)latest$/
+  );
+  return aliasMatch ? aliasMatch[1] : null;
+}
+
+export function selectLatestVersionedLocalServiceRelease(
+  releases: GitHubRelease[],
+  configuredTag: string
+): GitHubRelease | null {
+  const prefix = getLocalServiceVersionedTagPrefix(configuredTag);
+  if (!prefix) {
+    return null;
+  }
+
+  return (
+    releases
+      .filter((release) => {
+        const tagName = release.tag_name.trim();
+        return tagName.startsWith(prefix) && !tagName.endsWith('latest');
+      })
+      .sort(
+        (left, right) => getReleaseTimestamp(right) - getReleaseTimestamp(left)
+      )[0] || null
+  );
 }
 
 function buildLocalServiceReleaseAssetUrl(
@@ -415,6 +469,66 @@ export function getConfiguredLocalServicePlatforms(): LocalServicePlatformKey[] 
   return (
     Object.keys(LOCAL_SERVICE_URL_ENV_MAP) as LocalServicePlatformKey[]
   ).filter((platform) => Boolean(resolveLocalServiceBinaryUrl(platform)));
+}
+
+async function fetchGitHubReleaseByTag(
+  repo: string,
+  tag: string
+): Promise<GitHubRelease | null> {
+  return fetchGitHubJson<GitHubRelease>(
+    `/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`
+  );
+}
+
+export async function fetchLocalServiceReleaseSummary(): Promise<LocalServiceReleaseSummary | null> {
+  const configuredPlatforms = getConfiguredLocalServicePlatforms();
+  const releaseConfig = getLocalServiceReleaseConfig();
+  const fallbackVersion =
+    getConfiguredLocalServiceReleaseTag({ includeDefaultTag: false }) ||
+    (configuredPlatforms.length > 0 ? '自定义直链' : null);
+
+  if (!releaseConfig && !fallbackVersion) {
+    return null;
+  }
+
+  let resolvedRelease: GitHubRelease | null = null;
+
+  if (releaseConfig) {
+    try {
+      const releaseList = await fetchGitHubJson<GitHubRelease[]>(
+        `/repos/${releaseConfig.repo}/releases`
+      );
+      if (Array.isArray(releaseList)) {
+        resolvedRelease = selectLatestVersionedLocalServiceRelease(
+          releaseList,
+          releaseConfig.tag
+        );
+      }
+
+      if (!resolvedRelease) {
+        resolvedRelease = await fetchGitHubReleaseByTag(
+          releaseConfig.repo,
+          releaseConfig.tag
+        );
+      }
+    } catch {
+      resolvedRelease = null;
+    }
+  }
+
+  const resolvedVersion =
+    resolvedRelease?.tag_name ||
+    fallbackVersion ||
+    releaseConfig?.tag ||
+    '未配置';
+
+  return {
+    configuredPlatforms,
+    displayName: resolvedRelease?.name?.trim() || null,
+    publishedAt:
+      resolvedRelease?.published_at || resolvedRelease?.created_at || null,
+    version: resolvedVersion,
+  };
 }
 
 export function signDesktopDownload(

@@ -42,6 +42,13 @@ interface DesktopReleasePayload {
   version: string;
 }
 
+interface LocalServiceReleasePayload {
+  configuredPlatforms: LocalServicePlatformKey[];
+  displayName: string | null;
+  publishedAt: string | null;
+  version: string;
+}
+
 interface DownloadClientPanelProps {
   isOpen: boolean;
   onClose: () => void;
@@ -114,7 +121,9 @@ function formatFileSize(size: number): string {
     unitIndex += 1;
   }
 
-  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+  return `${
+    value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)
+  } ${units[unitIndex]}`;
 }
 
 function formatPublishedAt(value: string | null): string {
@@ -182,8 +191,12 @@ export default function DownloadClientPanel({
   const [desktopLoading, setDesktopLoading] = useState(false);
   const [desktopRelease, setDesktopRelease] =
     useState<DesktopReleasePayload | null>(null);
-  const [localServiceError, setLocalServiceError] = useState<string | null>(null);
+  const [localServiceError, setLocalServiceError] = useState<string | null>(
+    null
+  );
   const [localServiceLoading, setLocalServiceLoading] = useState(false);
+  const [localServiceRelease, setLocalServiceRelease] =
+    useState<LocalServiceReleasePayload | null>(null);
   const [localServiceStatuses, setLocalServiceStatuses] = useState<
     Record<LocalServicePlatformKey, LocalServiceStatus>
   >(createUnknownLocalServiceStatuses);
@@ -216,6 +229,7 @@ export default function DownloadClientPanel({
     setDesktopError(null);
     setLocalServiceLoading(true);
     setLocalServiceError(null);
+    setLocalServiceRelease(null);
     setLocalServiceStatuses(createUnknownLocalServiceStatuses());
 
     const loadDesktopRelease = async () => {
@@ -252,64 +266,48 @@ export default function DownloadClientPanel({
       }
     };
 
-    const probeLocalServiceAvailability = async () => {
-      const probeResults = await Promise.allSettled(
-        LOCAL_SERVICE_META.map(async ({ key }) => {
-          const response = await fetch(
-            `/api/local-service-script?platform=${key}`,
-            {
-              cache: 'no-store',
-              method: 'HEAD',
-              signal: controller.signal,
-            }
-          );
+    const loadLocalServiceRelease = async () => {
+      const response = await fetch('/api/local-service-release', {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null);
 
-          let status: LocalServiceStatus = 'unknown';
-          if (response.ok) {
-            status = 'available';
-          } else if (response.status === 503 || response.status === 400) {
-            status = 'unavailable';
-          }
-
-          return { key, status };
-        })
-      );
+      if (!response.ok) {
+        throw new Error(payload?.error || '本地服务信息加载失败');
+      }
 
       if (cancelled || controller.signal.aborted) {
         return;
       }
 
+      const releasePayload = payload as LocalServiceReleasePayload;
+      const availablePlatforms = new Set(releasePayload.configuredPlatforms);
       const nextStatuses = createUnknownLocalServiceStatuses();
-      let hasProbeFailure = false;
 
-      for (const result of probeResults) {
-        if (result.status === 'fulfilled') {
-          nextStatuses[result.value.key] = result.value.status;
-          continue;
-        }
+      LOCAL_SERVICE_META.forEach(({ key }) => {
+        nextStatuses[key] = availablePlatforms.has(key)
+          ? 'available'
+          : 'unavailable';
+      });
 
-        hasProbeFailure = true;
-      }
-
+      setLocalServiceRelease(releasePayload);
       setLocalServiceStatuses(nextStatuses);
-      setLocalServiceError(
-        hasProbeFailure
-          ? '本地服务可用性检测未完成，仍可尝试直接下载脚本。'
-          : null
-      );
+      setLocalServiceError(null);
     };
 
     void loadDesktopRelease();
-    void probeLocalServiceAvailability()
+    void loadLocalServiceRelease()
       .catch((error) => {
         if (cancelled || controller.signal.aborted) {
           return;
         }
 
+        setLocalServiceRelease(null);
         setLocalServiceError(
           error instanceof Error
             ? error.message
-            : '本地服务可用性检测失败，仍可尝试直接下载脚本。'
+            : '本地服务信息加载失败，仍可尝试直接下载脚本。'
         );
       })
       .finally(() => {
@@ -461,7 +459,8 @@ export default function DownloadClientPanel({
                 <div className='space-y-3'>
                   {DESKTOP_ASSET_META.map((meta) => {
                     const asset = desktopAssetMap.get(meta.key);
-                    const isRecommended = recommendedTargets.desktop === meta.key;
+                    const isRecommended =
+                      recommendedTargets.desktop === meta.key;
 
                     return (
                       <div
@@ -489,7 +488,9 @@ export default function DownloadClientPanel({
                             )}
                           </div>
                           <div className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-                            {asset ? `${asset.name} · ${formatFileSize(asset.size)}` : '该平台安装包当前不可用'}
+                            {asset
+                              ? `${asset.name} · ${formatFileSize(asset.size)}`
+                              : '该平台安装包当前不可用'}
                           </div>
                         </div>
                         <button
@@ -500,7 +501,9 @@ export default function DownloadClientPanel({
                               : 'cursor-not-allowed bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
                           }`}
                           disabled={!asset}
-                          onClick={() => asset && handleDownload(asset.downloadPath)}
+                          onClick={() =>
+                            asset && handleDownload(asset.downloadPath)
+                          }
                           type='button'
                         >
                           <Download className='h-4 w-4' />
@@ -523,7 +526,8 @@ export default function DownloadClientPanel({
                 </h4>
               </div>
               <p className='mt-1 text-sm text-gray-600 dark:text-gray-300'>
-                安装后视频流量走本机，不经过 Vercel。下载脚本后在终端运行即可自动安装并启动。
+                安装后视频流量走本机，不经过
+                Vercel。下载脚本后在终端运行即可自动安装并启动。
               </p>
             </div>
 
@@ -542,11 +546,40 @@ export default function DownloadClientPanel({
               </div>
             )}
 
+            {!localServiceLoading && localServiceRelease && (
+              <div className='mb-4 grid gap-3 rounded-lg bg-white/90 p-4 dark:bg-gray-900/40 sm:grid-cols-2'>
+                <div>
+                  <div className='text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400'>
+                    版本号
+                  </div>
+                  <div className='mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100'>
+                    {localServiceRelease.version}
+                  </div>
+                  {localServiceRelease.displayName &&
+                    localServiceRelease.displayName !==
+                      localServiceRelease.version && (
+                      <div className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                        {localServiceRelease.displayName}
+                      </div>
+                    )}
+                </div>
+                <div>
+                  <div className='text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400'>
+                    发布时间
+                  </div>
+                  <div className='mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100'>
+                    {formatPublishedAt(localServiceRelease.publishedAt)}
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className='space-y-3'>
               {LOCAL_SERVICE_META.map((meta) => {
                 const status = localServiceStatuses[meta.key];
                 const isUnavailable = status === 'unavailable';
-                const isRecommended = recommendedTargets.localService === meta.key;
+                const isRecommended =
+                  recommendedTargets.localService === meta.key;
                 const href = `/api/local-service-script?platform=${meta.key}`;
 
                 return (

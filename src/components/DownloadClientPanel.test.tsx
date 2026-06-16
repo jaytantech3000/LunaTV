@@ -39,9 +39,8 @@ describe('DownloadClientPanel', () => {
   });
 
   it('loads desktop release data and disables unavailable targets', async () => {
-    global.fetch = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    global.fetch = jest.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      const method = init?.method || 'GET';
 
       if (url === '/api/desktop-release') {
         return Promise.resolve(
@@ -56,11 +55,7 @@ describe('DownloadClientPanel', () => {
                 size: 1024 * 1024,
               },
             ],
-            missingAssetKeys: [
-              'mac-x64',
-              'win-x64-setup',
-              'win-x64-portable',
-            ],
+            missingAssetKeys: ['mac-x64', 'win-x64-setup', 'win-x64-portable'],
             publishedAt: '2026-06-15T00:00:00.000Z',
             releaseId: 39,
             version: 'Desktop Internal #39',
@@ -68,8 +63,16 @@ describe('DownloadClientPanel', () => {
         );
       }
 
-      if (method === 'HEAD' && url.includes('platform=mac-arm64')) {
-        return Promise.resolve(new Response(null, { status: 200 }));
+      if (url === '/api/local-service-release') {
+        return Promise.resolve(
+          jsonResponse({
+            configuredPlatforms: ['mac-arm64', 'mac-x64', 'linux-x64'],
+            displayName:
+              'LunaTV Local Service (local-service-nova-2026-06-16.3)',
+            publishedAt: '2026-06-16T03:00:00.000Z',
+            version: 'local-service-nova-2026-06-16.3',
+          })
+        );
       }
 
       return Promise.resolve(new Response(null, { status: 503 }));
@@ -78,6 +81,9 @@ describe('DownloadClientPanel', () => {
     render(<DownloadClientPanel isOpen onClose={jest.fn()} />);
 
     expect(await screen.findByText('Desktop Internal #39')).toBeInTheDocument();
+    expect(
+      screen.getByText('local-service-nova-2026-06-16.3')
+    ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'macOS Apple Silicon 下载' })
     ).toBeEnabled();
@@ -92,9 +98,8 @@ describe('DownloadClientPanel', () => {
   it('shows a retry path when desktop release loading fails', async () => {
     let desktopCalls = 0;
 
-    global.fetch = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    global.fetch = jest.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      const method = init?.method || 'GET';
 
       if (url === '/api/desktop-release') {
         desktopCalls += 1;
@@ -123,8 +128,16 @@ describe('DownloadClientPanel', () => {
         );
       }
 
-      if (method === 'HEAD') {
-        return Promise.resolve(new Response(null, { status: 200 }));
+      if (url === '/api/local-service-release') {
+        return Promise.resolve(
+          jsonResponse({
+            configuredPlatforms: ['mac-arm64', 'mac-x64', 'linux-x64'],
+            displayName:
+              'LunaTV Local Service (local-service-nova-2026-06-16.3)',
+            publishedAt: '2026-06-16T03:00:00.000Z',
+            version: 'local-service-nova-2026-06-16.3',
+          })
+        );
       }
 
       return Promise.resolve(new Response(null, { status: 404 }));

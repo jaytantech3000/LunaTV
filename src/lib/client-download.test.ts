@@ -1,11 +1,13 @@
 import {
   buildSignedDesktopDownloadPath,
+  fetchLocalServiceReleaseSummary,
   getDesktopAssetKeyForName,
   getDesktopReleaseConfig,
   isClientDownloadSigningEnabled,
   listDesktopReleaseAssets,
   resolveLocalServiceBinaryUrl,
   selectLatestDesktopRelease,
+  selectLatestVersionedLocalServiceRelease,
   signDesktopDownload,
   verifySignedDesktopDownload,
 } from './client-download';
@@ -22,6 +24,7 @@ function restoreEnvValue(key: string, value: string | undefined): void {
 }
 
 describe('client-download helpers', () => {
+  const originalFetch = global.fetch;
   const originalEnv = {
     CF_PAGES_BRANCH: mutableEnv.CF_PAGES_BRANCH,
     CLIENT_DOWNLOAD_SIGNING_SECRET: mutableEnv.CLIENT_DOWNLOAD_SIGNING_SECRET,
@@ -44,6 +47,7 @@ describe('client-download helpers', () => {
   };
 
   afterEach(() => {
+    global.fetch = originalFetch;
     restoreEnvValue('CF_PAGES_BRANCH', originalEnv.CF_PAGES_BRANCH);
     restoreEnvValue(
       'CLIENT_DOWNLOAD_SIGNING_SECRET',
@@ -274,6 +278,37 @@ describe('client-download helpers', () => {
     );
   });
 
+  it('selects the newest versioned local service release behind a latest alias tag', () => {
+    const release = selectLatestVersionedLocalServiceRelease(
+      [
+        {
+          assets: [],
+          id: 1,
+          prerelease: true,
+          published_at: '2026-06-15T00:00:00.000Z',
+          tag_name: 'local-service-nova-2026-06-15.1',
+        },
+        {
+          assets: [],
+          id: 2,
+          prerelease: true,
+          published_at: '2026-06-16T00:00:00.000Z',
+          tag_name: 'local-service-nova-2026-06-16.3',
+        },
+        {
+          assets: [],
+          id: 3,
+          prerelease: true,
+          published_at: '2026-06-17T00:00:00.000Z',
+          tag_name: 'local-service-nova-latest',
+        },
+      ],
+      'local-service-nova-latest'
+    );
+
+    expect(release?.tag_name).toBe('local-service-nova-2026-06-16.3');
+  });
+
   it('prefers an explicit local service release repo when provided', () => {
     delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64;
     mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
@@ -321,5 +356,59 @@ describe('client-download helpers', () => {
     expect(resolveLocalServiceBinaryUrl('win-x64')).toBe(
       'https://github.com/demo/LunaTV/releases/download/local-service-nova-latest/lunatv-server-win-x64.exe'
     );
+  });
+
+  it('fetches local service release summary with the resolved version tag', async () => {
+    mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
+    mutableEnv.VERCEL_GIT_COMMIT_REF = 'nova';
+    global.fetch = jest.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            assets: [],
+            id: 1,
+            name: 'LunaTV Local Service (local-service-nova-2026-06-16.2)',
+            prerelease: true,
+            published_at: '2026-06-16T00:00:00.000Z',
+            tag_name: 'local-service-nova-2026-06-16.2',
+          },
+          {
+            assets: [],
+            id: 2,
+            name: 'LunaTV Local Service (local-service-nova-2026-06-16.3)',
+            prerelease: true,
+            published_at: '2026-06-16T03:00:00.000Z',
+            tag_name: 'local-service-nova-2026-06-16.3',
+          },
+          {
+            assets: [],
+            id: 3,
+            name: 'LunaTV Local Service (nova latest)',
+            prerelease: true,
+            published_at: '2026-06-16T03:10:00.000Z',
+            tag_name: 'local-service-nova-latest',
+          },
+        ]),
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          status: 200,
+        }
+      )
+    ) as typeof fetch;
+
+    await expect(fetchLocalServiceReleaseSummary()).resolves.toEqual({
+      configuredPlatforms: [
+        'linux-arm64',
+        'linux-x64',
+        'mac-arm64',
+        'mac-x64',
+        'win-x64',
+      ],
+      displayName: 'LunaTV Local Service (local-service-nova-2026-06-16.3)',
+      publishedAt: '2026-06-16T03:00:00.000Z',
+      version: 'local-service-nova-2026-06-16.3',
+    });
   });
 });
