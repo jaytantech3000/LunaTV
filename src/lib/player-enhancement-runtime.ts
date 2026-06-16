@@ -303,7 +303,7 @@ function sumFrequencyBandEnergy(
     return 0;
   }
 
-  const binWidth = (sampleRate / 2) / buffer.length;
+  const binWidth = sampleRate / 2 / buffer.length;
   let energy = 0;
 
   for (let index = 1; index < buffer.length; index += 1) {
@@ -360,9 +360,7 @@ function calculatePercentile(
   }
 
   const mix = position - lowerIndex;
-  return (
-    sortedValues[lowerIndex] * (1 - mix) + sortedValues[upperIndex] * mix
-  );
+  return sortedValues[lowerIndex] * (1 - mix) + sortedValues[upperIndex] * mix;
 }
 
 export function evaluateDialoguePresence({
@@ -409,7 +407,12 @@ function detectDialoguePresence(
   rmsDb: number,
   peakDb: number
 ): AudioDialoguePresenceResult {
-  const bassEnergy = sumFrequencyBandEnergy(frequencyBuffer, sampleRate, 30, 220);
+  const bassEnergy = sumFrequencyBandEnergy(
+    frequencyBuffer,
+    sampleRate,
+    30,
+    220
+  );
   const speechEnergy = sumFrequencyBandEnergy(
     frequencyBuffer,
     sampleRate,
@@ -460,18 +463,11 @@ export function analyzeAudioSpikeProtectionFrame({
   const qualifiesForBaseline =
     dialogueCandidate && rmsDb >= config.baselineGateDb;
   const nextBaselineHistory = qualifiesForBaseline
-    ? appendBaselineSample(
-        baselineHistory,
-        rmsDb,
-        config.baselineHistoryFrames
-      )
+    ? appendBaselineSample(baselineHistory, rmsDb, config.baselineHistoryFrames)
     : [...baselineHistory];
   const nextBaselineDb =
     nextBaselineHistory.length >= config.baselineMinFrames
-      ? calculatePercentile(
-          nextBaselineHistory,
-          config.baselinePercentile
-        )
+      ? calculatePercentile(nextBaselineHistory, config.baselinePercentile)
       : baselineDb;
   const referenceBaselineDb = nextBaselineDb;
   const dynamicTriggerMarginDb = dialogueCandidate
@@ -928,8 +924,7 @@ class AudioSpikeProtectionController {
     }
 
     this.level = preferences.audioSpikeProtectionLevel;
-    this.dynamicProtectionEnabled =
-      preferences.audioDynamicProtectionEnabled;
+    this.dynamicProtectionEnabled = preferences.audioDynamicProtectionEnabled;
     this.fixedCeilingEnabled = preferences.audioFixedCeilingEnabled;
     this.video.removeEventListener('play', this.handlePlay);
     this.video.removeEventListener('loadeddata', this.handleLoadedData);
@@ -1735,6 +1730,7 @@ export class PlayerEnhancementManager {
     audioDynamicProtectionEnabled: false,
     audioFixedCeilingEnabled: false,
     visualEnhancementLevel: 'off',
+    playbackBufferMode: 'standard',
   };
 
   constructor(options: PlayerEnhancementManagerOptions = {}) {

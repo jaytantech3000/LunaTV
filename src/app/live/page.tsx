@@ -779,6 +779,7 @@ function LivePageClient() {
       audioSpikeProtectionLevel,
       audioDynamicProtectionEnabled,
       audioFixedCeilingEnabled,
+      playbackBufferMode: 'standard',
       visualEnhancementLevel,
     });
   };

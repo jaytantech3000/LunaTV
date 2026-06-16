@@ -17,6 +17,7 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: false,
       audioFixedCeilingEnabled: false,
       visualEnhancementLevel: 'off',
+      playbackBufferMode: 'standard',
     });
   });
 
@@ -33,6 +34,7 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: false,
       audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'light',
+      playbackBufferMode: 'standard',
     });
 
     expect(
@@ -47,6 +49,7 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: false,
       audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'light',
+      playbackBufferMode: 'standard',
     });
   });
 
@@ -61,6 +64,7 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: true,
       audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'off',
+      playbackBufferMode: 'standard',
     });
   });
 
@@ -69,6 +73,7 @@ describe('player enhancement preferences', () => {
     window.localStorage.setItem('playerAudioDynamicProtectionEnabled', 'false');
     window.localStorage.setItem('playerAudioFixedCeilingEnabled', 'true');
     window.localStorage.setItem('playerVisualEnhancementLevel', 'strong');
+    window.localStorage.setItem('playerPlaybackBufferMode', 'max');
 
     expect(
       readPlayerEnhancementPreferences({
@@ -80,6 +85,7 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: false,
       audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'strong',
+      playbackBufferMode: 'max',
     });
   });
 
@@ -97,6 +103,7 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: false,
       audioFixedCeilingEnabled: false,
       visualEnhancementLevel: 'off',
+      playbackBufferMode: 'standard',
     });
     expect(window.localStorage.getItem('playerAudioSpikeProtectionLevel')).toBe(
       'off'
@@ -124,6 +131,7 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: true,
       audioFixedCeilingEnabled: true,
       visualEnhancementLevel: 'off',
+      playbackBufferMode: 'standard',
     });
   });
 
@@ -137,6 +145,7 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: false,
       audioFixedCeilingEnabled: false,
       visualEnhancementLevel: 'off',
+      playbackBufferMode: 'standard',
     });
     expect(window.localStorage.getItem('playerAudioSpikeProtectionLevel')).toBe(
       'off'
@@ -161,6 +170,7 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: false,
       audioFixedCeilingEnabled: false,
       visualEnhancementLevel: 'light',
+      playbackBufferMode: 'standard',
     });
     expect(window.localStorage.getItem('playerAudioSpikeProtectionLevel')).toBe(
       'strong'
@@ -187,10 +197,33 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: true,
       audioFixedCeilingEnabled: false,
       visualEnhancementLevel: 'off',
+      playbackBufferMode: 'standard',
     });
     expect(
       window.localStorage.getItem('playerAudioDynamicProtectionEnabled')
     ).toBe('true');
+  });
+
+  it('updates playback buffer mode independently', () => {
+    const preferences = updatePlayerEnhancementPreference(
+      'playbackBufferMode',
+      'enhanced',
+      {
+        PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: 'off',
+        PLAYER_VISUAL_ENHANCEMENT_LEVEL: 'off',
+      }
+    );
+
+    expect(preferences).toEqual({
+      audioSpikeProtectionLevel: 'off',
+      audioDynamicProtectionEnabled: false,
+      audioFixedCeilingEnabled: false,
+      visualEnhancementLevel: 'off',
+      playbackBufferMode: 'enhanced',
+    });
+    expect(window.localStorage.getItem('playerPlaybackBufferMode')).toBe(
+      'enhanced'
+    );
   });
 
   it('resets both preferences back to runtime defaults', () => {
@@ -198,6 +231,7 @@ describe('player enhancement preferences', () => {
     window.localStorage.setItem('playerAudioDynamicProtectionEnabled', 'false');
     window.localStorage.setItem('playerAudioFixedCeilingEnabled', 'false');
     window.localStorage.setItem('playerVisualEnhancementLevel', 'strong');
+    window.localStorage.setItem('playerPlaybackBufferMode', 'max');
 
     const preferences = resetPlayerEnhancementPreferences({
       PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: 'off',
@@ -211,6 +245,7 @@ describe('player enhancement preferences', () => {
       audioDynamicProtectionEnabled: true,
       audioFixedCeilingEnabled: false,
       visualEnhancementLevel: 'standard',
+      playbackBufferMode: 'standard',
     });
     expect(window.localStorage.getItem('playerAudioSpikeProtectionLevel')).toBe(
       'off'
@@ -222,6 +257,9 @@ describe('player enhancement preferences', () => {
       'false'
     );
     expect(window.localStorage.getItem('playerVisualEnhancementLevel')).toBe(
+      'standard'
+    );
+    expect(window.localStorage.getItem('playerPlaybackBufferMode')).toBe(
       'standard'
     );
   });

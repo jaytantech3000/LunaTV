@@ -1,8 +1,10 @@
 import {
   AudioSpikeProtectionLevel,
+  normalizePlaybackBufferMode,
   normalizeAudioSpikeProtectionLevel,
   normalizeBooleanSetting,
   normalizeVisualEnhancementLevel,
+  PlaybackBufferMode,
   VisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
 import { AppRuntimeConfig, getRuntimeConfig } from '@/lib/runtime-config';
@@ -12,13 +14,15 @@ export interface PlayerEnhancementPreferences {
   audioDynamicProtectionEnabled: boolean;
   audioFixedCeilingEnabled: boolean;
   visualEnhancementLevel: VisualEnhancementLevel;
+  playbackBufferMode: PlaybackBufferMode;
 }
 
 export type PlayerEnhancementPreferenceKey =
   | 'audioSpikeProtectionLevel'
   | 'audioDynamicProtectionEnabled'
   | 'audioFixedCeilingEnabled'
-  | 'visualEnhancementLevel';
+  | 'visualEnhancementLevel'
+  | 'playbackBufferMode';
 
 export type PlayerEnhancementPreferenceValue =
   PlayerEnhancementPreferences[PlayerEnhancementPreferenceKey];
@@ -32,6 +36,7 @@ const PLAYER_AUDIO_DYNAMIC_PROTECTION_STORAGE_KEY =
   'playerAudioDynamicProtectionEnabled';
 const PLAYER_AUDIO_FIXED_CEILING_STORAGE_KEY = 'playerAudioFixedCeilingEnabled';
 const PLAYER_VISUAL_ENHANCEMENT_STORAGE_KEY = 'playerVisualEnhancementLevel';
+const PLAYER_PLAYBACK_BUFFER_MODE_STORAGE_KEY = 'playerPlaybackBufferMode';
 const PLAYER_AUDIO_DEFAULTS_MIGRATION_STORAGE_KEY =
   'playerAudioDefaultsMigratedV2';
 
@@ -166,6 +171,10 @@ function getDefaultVisualEnhancementLevel(
   );
 }
 
+function getDefaultPlaybackBufferMode(): PlaybackBufferMode {
+  return 'standard';
+}
+
 function getDefaultAudioDynamicProtectionEnabled(
   runtimeConfig: AppRuntimeConfig,
   audioSpikeProtectionLevel = getDefaultAudioSpikeProtectionLevel(runtimeConfig)
@@ -215,6 +224,7 @@ export function getDefaultPlayerEnhancementPreferences(
       audioSpikeProtectionLevel
     ),
     visualEnhancementLevel: getDefaultVisualEnhancementLevel(runtimeConfig),
+    playbackBufferMode: getDefaultPlaybackBufferMode(),
   };
 }
 
@@ -228,6 +238,8 @@ function getStorageKey(key: PlayerEnhancementPreferenceKey): string {
       return PLAYER_AUDIO_FIXED_CEILING_STORAGE_KEY;
     case 'visualEnhancementLevel':
       return PLAYER_VISUAL_ENHANCEMENT_STORAGE_KEY;
+    case 'playbackBufferMode':
+      return PLAYER_PLAYBACK_BUFFER_MODE_STORAGE_KEY;
     default:
       return PLAYER_AUDIO_SPIKE_PROTECTION_STORAGE_KEY;
   }
@@ -270,6 +282,19 @@ function readStoredVisualEnhancementLevel(
     window.localStorage.getItem(LEGACY_PLAYER_VISUAL_ENHANCEMENT_STORAGE_KEY);
 
   return normalizeVisualEnhancementLevel(value, fallbackValue);
+}
+
+function readStoredPlaybackBufferMode(
+  fallbackValue: PlaybackBufferMode
+): PlaybackBufferMode {
+  if (typeof window === 'undefined') {
+    return fallbackValue;
+  }
+
+  return normalizePlaybackBufferMode(
+    window.localStorage.getItem(PLAYER_PLAYBACK_BUFFER_MODE_STORAGE_KEY),
+    fallbackValue
+  );
 }
 
 function readStoredBooleanPreference(
@@ -319,6 +344,9 @@ export function readPlayerEnhancementPreferences(
     ),
     visualEnhancementLevel: readStoredVisualEnhancementLevel(
       defaults.visualEnhancementLevel
+    ),
+    playbackBufferMode: readStoredPlaybackBufferMode(
+      defaults.playbackBufferMode
     ),
   };
 }
@@ -382,6 +410,10 @@ export function resetPlayerEnhancementPreferences(
     window.localStorage.setItem(
       PLAYER_VISUAL_ENHANCEMENT_STORAGE_KEY,
       defaults.visualEnhancementLevel
+    );
+    window.localStorage.setItem(
+      PLAYER_PLAYBACK_BUFFER_MODE_STORAGE_KEY,
+      defaults.playbackBufferMode
     );
   }
 

@@ -41,6 +41,7 @@ import { hasExplicitExclusiveByteRange } from '@/lib/download/range';
 import { sanitizeVodManifestContent } from '@/lib/download/sanitize-manifest';
 import { ensureOfflineServiceWorkerReady } from '@/lib/download/service-worker';
 import { buildDownloadContentId } from '@/lib/download/types';
+import { getHlsPlaybackConfig } from '@/lib/hls-playback-config';
 import {
   preferBestPlaybackSource,
   searchPlaybackSources,
@@ -53,7 +54,10 @@ import {
   AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS,
   AudioSpikeProtectionLevel,
   getAudioSpikeProtectionLevelLabel,
+  getPlaybackBufferModeLabel,
   getVisualEnhancementLevelLabel,
+  PlaybackBufferMode,
+  PLAYBACK_BUFFER_MODE_OPTIONS,
   VISUAL_ENHANCEMENT_LEVEL_OPTIONS,
   VisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
@@ -89,6 +93,13 @@ interface WakeLockSentinel {
   release(): Promise<void>;
   addEventListener(type: 'release', listener: () => void): void;
   removeEventListener(type: 'release', listener: () => void): void;
+}
+
+interface PendingPlayerReloadState {
+  resumeTime: number | null;
+  volume: number;
+  playbackRate: number;
+  wasPaused: boolean;
 }
 
 const EPISODE_PROGRESS_STORAGE_KEY = 'moontv-episode-progress-v1';
@@ -468,6 +479,15 @@ function PlayPageClient() {
       return readPlayerEnhancementPreferences(getRuntimeConfig())
         .visualEnhancementLevel;
     });
+  const [playbackBufferMode, setPlaybackBufferMode] =
+    useState<PlaybackBufferMode>(() => {
+      if (typeof window === 'undefined') {
+        return 'standard';
+      }
+
+      return readPlayerEnhancementPreferences(getRuntimeConfig())
+        .playbackBufferMode;
+    });
   const [audioEnhancementStatus, setAudioEnhancementStatus] =
     useState<AudioSpikeProtectionStatus | null>(null);
   useEffect(() => {
@@ -483,6 +503,7 @@ function PlayPageClient() {
       );
       setAudioFixedCeilingEnabled(preferences.audioFixedCeilingEnabled);
       setVisualEnhancementLevel(preferences.visualEnhancementLevel);
+      setPlaybackBufferMode(preferences.playbackBufferMode);
     };
 
     window.addEventListener(
@@ -628,7 +649,14 @@ function PlayPageClient() {
   const playerSessionRef = useRef<{
     isOfflineMode: boolean;
     playbackType: string;
+    playbackBufferMode: PlaybackBufferMode;
+    videoUrl: string;
   } | null>(null);
+  const pendingPlayerReloadStateRef = useRef<PendingPlayerReloadState | null>(
+    null
+  );
+  const previousPlaybackBufferModeRef = useRef<PlaybackBufferMode | null>(null);
+  const [playerReloadVersion, setPlayerReloadVersion] = useState(0);
   const artRef = useRef<HTMLDivElement | null>(null);
   const enhancementManagerRef = useRef<PlayerEnhancementManager | null>(null);
   const initStartedRef = useRef(false);
@@ -703,6 +731,69 @@ function PlayPageClient() {
     }
   };
 
+  const capturePendingPlayerReloadState = () => {
+    if (!artPlayerRef.current) {
+      pendingPlayerReloadStateRef.current = null;
+      return;
+    }
+
+    const currentTime = artPlayerRef.current.currentTime || 0;
+    const volume = artPlayerRef.current.volume ?? lastVolumeRef.current;
+    const playbackRate =
+      artPlayerRef.current.playbackRate ?? lastPlaybackRateRef.current;
+
+    lastVolumeRef.current = volume;
+    lastPlaybackRateRef.current = playbackRate;
+    resumeTimeRef.current = currentTime > 0 ? currentTime : null;
+    pendingPlayerReloadStateRef.current = {
+      resumeTime: currentTime > 0 ? currentTime : null,
+      volume,
+      playbackRate,
+      wasPaused: Boolean(artPlayerRef.current.paused),
+    };
+  };
+
+  useEffect(() => {
+    if (previousPlaybackBufferModeRef.current === null) {
+      previousPlaybackBufferModeRef.current = playbackBufferMode;
+      return;
+    }
+
+    if (previousPlaybackBufferModeRef.current === playbackBufferMode) {
+      return;
+    }
+
+    previousPlaybackBufferModeRef.current = playbackBufferMode;
+
+    const player = artPlayerRef.current;
+    const session = playerSessionRef.current;
+    const video = player?.video as HTMLVideoElement | undefined;
+    const isWebkit =
+      typeof window !== 'undefined' &&
+      typeof (window as any).webkitConvertPointFromNodeToPage === 'function';
+    const shouldReloadCurrentHlsSession = Boolean(
+      player &&
+        session &&
+        !isOfflineMode &&
+        !session.isOfflineMode &&
+        session.playbackType === 'm3u8' &&
+        (video?.hls || !isWebkit)
+    );
+
+    if (!shouldReloadCurrentHlsSession) {
+      return;
+    }
+
+    capturePendingPlayerReloadState();
+    setVideoLoadingStage('sourceChanging');
+    setPlayerRecoveryNotice('正在应用新的缓冲策略并重新连接播放源。');
+    setIsVideoLoading(true);
+    setError((currentError) =>
+      isTransientPlaybackBootstrapError(currentError) ? null : currentError
+    );
+    setPlayerReloadVersion((currentVersion) => currentVersion + 1);
+  }, [isOfflineMode, playbackBufferMode]);
+
   const syncPlayerEnhancements = () => {
     const video = artPlayerRef.current?.video as HTMLVideoElement | undefined;
     const host = artRef.current;
@@ -729,6 +820,7 @@ function PlayPageClient() {
       audioSpikeProtectionLevel,
       audioDynamicProtectionEnabled,
       audioFixedCeilingEnabled,
+      playbackBufferMode,
       visualEnhancementLevel,
     });
   };
@@ -949,61 +1041,264 @@ function PlayPageClient() {
       : `当前${getVisualEnhancementLevelLabel(value)}`;
   };
 
+  const handlePlaybackBufferModeChange = (value: PlaybackBufferMode) => {
+    setPlaybackBufferMode(value);
+    updatePlayerEnhancementPreference('playbackBufferMode', value);
+    return `当前${getPlaybackBufferModeLabel(value)}`;
+  };
+
+  const getPlaybackRateLabel = (value: number) =>
+    Math.abs(value - 1) < 0.01 ? '正常' : `${value}x`;
+
+  const createAdBlockSetting = () => ({
+    name: '去广告',
+    html: '去广告',
+    icon: '<text x="50%" y="50%" font-size="20" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#ffffff">AD</text>',
+    tooltip: blockAdEnabled ? '已开启' : '已关闭',
+    onClick() {
+      const newVal = !blockAdEnabled;
+      try {
+        localStorage.setItem('enable_blockad', String(newVal));
+        if (artPlayerRef.current) {
+          resumeTimeRef.current = artPlayerRef.current.currentTime;
+          if (artPlayerRef.current.video && artPlayerRef.current.video.hls) {
+            artPlayerRef.current.video.hls.destroy();
+          }
+          artPlayerRef.current.destroy();
+          artPlayerRef.current = null;
+          playerSessionRef.current = null;
+        }
+        setBlockAdEnabled(newVal);
+      } catch (_) {
+        // ignore
+      }
+      return newVal ? '当前开启' : '当前关闭';
+    },
+  });
+
+  const createAudioSpikeProtectionSetting = () => ({
+    name: '音量突增保护',
+    html: '音量突增保护',
+    tooltip: getAudioSpikeProtectionLevelLabel(audioSpikeProtectionLevel),
+    selector: AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => ({
+      value: option.value,
+      name: `audio-spike-protection-${option.value}`,
+      default: option.value === audioSpikeProtectionLevel,
+      html: option.label,
+    })),
+    onSelect: function (item: any) {
+      return handleAudioSpikeProtectionLevelChange(item.value);
+    },
+  });
+
+  const createPlaybackBufferSetting = () => ({
+    name: '缓冲优化',
+    html: '缓冲优化',
+    tooltip: getPlaybackBufferModeLabel(playbackBufferMode),
+    selector: PLAYBACK_BUFFER_MODE_OPTIONS.map((option) => ({
+      value: option.value,
+      name: `playback-buffer-mode-${option.value}`,
+      default: option.value === playbackBufferMode,
+      html: option.label,
+    })),
+    onSelect: function (item: any) {
+      return handlePlaybackBufferModeChange(item.value);
+    },
+  });
+
+  const createPlaybackRateSetting = () => ({
+    name: '播放速度',
+    html: '播放速度',
+    tooltip: getPlaybackRateLabel(lastPlaybackRateRef.current),
+    selector: Artplayer.PLAYBACK_RATE.map((option) => ({
+      value: option,
+      name: `player-playback-rate-${option}`,
+      default: Math.abs(option - lastPlaybackRateRef.current) < 0.01,
+      html: getPlaybackRateLabel(option),
+    })),
+    onSelect: function (item: any) {
+      const nextRate = Number(item.value);
+
+      lastPlaybackRateRef.current = nextRate;
+      if (artPlayerRef.current) {
+        artPlayerRef.current.playbackRate = nextRate;
+      }
+
+      return getPlaybackRateLabel(nextRate);
+    },
+    mounted: function (this: any) {
+      const syncPlaybackRateSetting = () => {
+        const currentRate =
+          artPlayerRef.current?.playbackRate ?? lastPlaybackRateRef.current;
+        const matchedRate =
+          Artplayer.PLAYBACK_RATE.find(
+            (option) => Math.abs(option - currentRate) < 0.01
+          ) ?? 1;
+        const target = this.setting.find(`player-playback-rate-${matchedRate}`);
+
+        if (target) {
+          this.setting.check(target);
+        }
+      };
+
+      syncPlaybackRateSetting();
+      this.on('video:ratechange', syncPlaybackRateSetting);
+    },
+  });
+
+  const createAudioDynamicProtectionSetting = () => ({
+    name: '动态保护',
+    html: '动态保护',
+    tooltip: audioDynamicProtectionEnabled ? '当前开启' : '当前关闭',
+    switch: audioDynamicProtectionEnabled,
+    onSwitch: function (item: any) {
+      return handleAudioDynamicProtectionToggle(!item.switch);
+    },
+  });
+
+  const createAudioFixedCeilingSetting = () => ({
+    name: '固定峰值上限',
+    html: '固定峰值上限',
+    tooltip: audioFixedCeilingEnabled ? '当前开启' : '当前关闭',
+    switch: audioFixedCeilingEnabled,
+    onSwitch: function (item: any) {
+      return handleAudioFixedCeilingToggle(!item.switch);
+    },
+  });
+
+  const createVisualEnhancementSetting = () => ({
+    name: '去磨皮修正',
+    html: '去磨皮修正',
+    tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
+    selector: VISUAL_ENHANCEMENT_LEVEL_OPTIONS.map((option) => ({
+      value: option.value,
+      name: `visual-enhancement-${option.value}`,
+      default: option.value === visualEnhancementLevel,
+      html: option.label,
+    })),
+    onSelect: function (item: any) {
+      return handleVisualEnhancementLevelChange(item.value);
+    },
+  });
+
+  const createSkipToggleSetting = () => ({
+    name: '跳过片头片尾',
+    html: '跳过片头片尾',
+    switch: skipConfigRef.current.enable,
+    onSwitch: function (item: any) {
+      const newConfig = {
+        ...skipConfigRef.current,
+        enable: !item.switch,
+      };
+      handleSkipConfigChange(newConfig);
+      return !item.switch;
+    },
+  });
+
+  const createSkipDeleteSetting = () => ({
+    name: '删除跳过配置',
+    html: '删除跳过配置',
+    onClick: function () {
+      handleSkipConfigChange({
+        enable: false,
+        intro_time: 0,
+        outro_time: 0,
+      });
+      return '';
+    },
+  });
+
+  const createSkipIntroSetting = () => ({
+    name: '设置片头',
+    html: '设置片头',
+    icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="5" cy="12" r="2" fill="#ffffff"/><path d="M9 12L17 12" stroke="#ffffff" stroke-width="2"/><path d="M17 6L17 18" stroke="#ffffff" stroke-width="2"/></svg>',
+    tooltip:
+      skipConfigRef.current.intro_time === 0
+        ? '设置片头时间'
+        : `${formatTime(skipConfigRef.current.intro_time)}`,
+    onClick: function () {
+      const currentTime = artPlayerRef.current?.currentTime || 0;
+      if (currentTime > 0) {
+        const newConfig = {
+          ...skipConfigRef.current,
+          intro_time: currentTime,
+        };
+        handleSkipConfigChange(newConfig);
+        return `${formatTime(currentTime)}`;
+      }
+    },
+  });
+
+  const createSkipOutroSetting = () => ({
+    name: '设置片尾',
+    html: '设置片尾',
+    icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 6L7 18" stroke="#ffffff" stroke-width="2"/><path d="M7 12L15 12" stroke="#ffffff" stroke-width="2"/><circle cx="19" cy="12" r="2" fill="#ffffff"/></svg>',
+    tooltip:
+      skipConfigRef.current.outro_time >= 0
+        ? '设置片尾时间'
+        : `-${formatTime(-skipConfigRef.current.outro_time)}`,
+    onClick: function () {
+      const outroTime =
+        -(artPlayerRef.current?.duration - artPlayerRef.current?.currentTime) ||
+        0;
+      if (outroTime < 0) {
+        const newConfig = {
+          ...skipConfigRef.current,
+          outro_time: outroTime,
+        };
+        handleSkipConfigChange(newConfig);
+        return `-${formatTime(-outroTime)}`;
+      }
+    },
+  });
+
+  const createPlaybackSettingsGroup = () => ({
+    name: 'player-playback-settings-group',
+    html: '播放设置',
+    selector: [
+      createAdBlockSetting(),
+      createPlaybackBufferSetting(),
+      createPlaybackRateSetting(),
+    ],
+  });
+
+  const createEnhancementSettingsGroup = () => ({
+    name: 'player-enhancement-settings-group',
+    html: '音画增强',
+    selector: [
+      createAudioSpikeProtectionSetting(),
+      createAudioDynamicProtectionSetting(),
+      createAudioFixedCeilingSetting(),
+      createVisualEnhancementSetting(),
+    ],
+  });
+
+  const createSkipSettingsGroup = () => ({
+    name: 'player-skip-settings-group',
+    html: '片头片尾',
+    selector: [
+      createSkipToggleSetting(),
+      createSkipDeleteSetting(),
+      createSkipIntroSetting(),
+      createSkipOutroSetting(),
+    ],
+  });
+
   useEffect(() => {
     if (!artPlayerRef.current?.setting?.update) {
       return;
     }
 
-    artPlayerRef.current.setting.update({
-      name: '音量突增保护',
-      html: '音量突增保护',
-      tooltip: getAudioSpikeProtectionLevelLabel(audioSpikeProtectionLevel),
-      selector: AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => ({
-        value: option.value,
-        name: `audio-spike-protection-${option.value}`,
-        default: option.value === audioSpikeProtectionLevel,
-        html: option.label,
-      })),
-      onSelect: function (item: any) {
-        return handleAudioSpikeProtectionLevelChange(item.value);
-      },
-    });
-    artPlayerRef.current.setting.update({
-      name: '动态保护',
-      html: '动态保护',
-      tooltip: audioDynamicProtectionEnabled ? '当前开启' : '当前关闭',
-      switch: audioDynamicProtectionEnabled,
-      onSwitch: function (item: any) {
-        return handleAudioDynamicProtectionToggle(!item.switch);
-      },
-    });
-    artPlayerRef.current.setting.update({
-      name: '固定峰值上限',
-      html: '固定峰值上限',
-      tooltip: audioFixedCeilingEnabled ? '当前开启' : '当前关闭',
-      switch: audioFixedCeilingEnabled,
-      onSwitch: function (item: any) {
-        return handleAudioFixedCeilingToggle(!item.switch);
-      },
-    });
-    artPlayerRef.current.setting.update({
-      name: '去磨皮修正',
-      html: '去磨皮修正',
-      tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
-      selector: VISUAL_ENHANCEMENT_LEVEL_OPTIONS.map((option) => ({
-        value: option.value,
-        name: `visual-enhancement-${option.value}`,
-        default: option.value === visualEnhancementLevel,
-        html: option.label,
-      })),
-      onSelect: function (item: any) {
-        return handleVisualEnhancementLevelChange(item.value);
-      },
-    });
+    artPlayerRef.current.setting.update(createAudioSpikeProtectionSetting());
+    artPlayerRef.current.setting.update(createPlaybackBufferSetting());
+    artPlayerRef.current.setting.update(createAudioDynamicProtectionSetting());
+    artPlayerRef.current.setting.update(createAudioFixedCeilingSetting());
+    artPlayerRef.current.setting.update(createVisualEnhancementSetting());
   }, [
     audioDynamicProtectionEnabled,
     audioFixedCeilingEnabled,
     audioSpikeProtectionLevel,
+    playbackBufferMode,
     visualEnhancementLevel,
   ]);
 
@@ -2504,22 +2799,47 @@ function PlayPageClient() {
     console.log(videoUrl);
 
     const playbackType = getPlaybackType(videoUrl);
-    setIsVideoLoading(true);
-    setPlayerRecoveryNotice(null);
+    const hlsPlaybackConfig = getHlsPlaybackConfig({
+      mode: playbackBufferMode,
+      isOfflineMode,
+    });
+    const shouldAutoplayOnInit =
+      pendingPlayerReloadStateRef.current?.wasPaused !== true;
 
     // 检测是否为WebKit浏览器
     const isWebkit =
       typeof window !== 'undefined' &&
       typeof (window as any).webkitConvertPointFromNodeToPage === 'function';
+    const isSamePlaybackRequest =
+      playerSessionRef.current?.videoUrl === videoUrl &&
+      playerSessionRef.current?.isOfflineMode === isOfflineMode &&
+      playerSessionRef.current?.playbackType === playbackType;
+    const shouldApplyBufferModeToCurrentRequest =
+      !isOfflineMode && playbackType === 'm3u8';
+    const hasPendingPlayerReload = pendingPlayerReloadStateRef.current !== null;
+    const shouldReuseExistingPlayerWithoutReload =
+      isSamePlaybackRequest &&
+      (!shouldApplyBufferModeToCurrentRequest ||
+        playerSessionRef.current?.playbackBufferMode === playbackBufferMode) &&
+      !hasPendingPlayerReload;
 
     // 非 WebKit 且播放模式未切换时，复用现有播放器减少重建成本
     const canReuseExistingPlayer =
       !isWebkit &&
       artPlayerRef.current &&
       playerSessionRef.current?.isOfflineMode === isOfflineMode &&
-      playerSessionRef.current?.playbackType === playbackType;
+      playerSessionRef.current?.playbackType === playbackType &&
+      !hasPendingPlayerReload;
 
     if (canReuseExistingPlayer) {
+      if (shouldReuseExistingPlayerWithoutReload) {
+        syncPlayerEnhancements();
+        markVideoReady();
+        return;
+      }
+
+      setIsVideoLoading(true);
+      setPlayerRecoveryNotice(null);
       artPlayerRef.current.option.type = playbackType;
       artPlayerRef.current.switch = videoUrl;
       artPlayerRef.current.title = `${videoTitle} - 第${
@@ -2529,6 +2849,8 @@ function PlayPageClient() {
       playerSessionRef.current = {
         isOfflineMode,
         playbackType,
+        playbackBufferMode,
+        videoUrl,
       };
       if (artPlayerRef.current?.video && playbackType !== 'm3u8') {
         ensureVideoSource(
@@ -2541,6 +2863,10 @@ function PlayPageClient() {
     }
 
     // WebKit浏览器或首次创建：销毁之前的播放器实例并创建新的
+    setIsVideoLoading(true);
+    if (!hasPendingPlayerReload) {
+      setPlayerRecoveryNotice(null);
+    }
     if (artPlayerRef.current) {
       cleanupPlayer();
     }
@@ -2555,10 +2881,10 @@ function PlayPageClient() {
         container: artRef.current,
         url: videoUrl,
         poster: videoCover,
-        volume: 0.7,
+        volume: lastVolumeRef.current,
         isLive: false,
         muted: false,
-        autoplay: true,
+        autoplay: shouldAutoplayOnInit,
         pip: true,
         autoSize: false,
         autoMini: false,
@@ -2566,7 +2892,7 @@ function PlayPageClient() {
         setting: true,
         loop: false,
         flip: false,
-        playbackRate: true,
+        playbackRate: false,
         aspectRatio: false,
         fullscreen: true,
         fullscreenWeb: true,
@@ -2618,7 +2944,9 @@ function PlayPageClient() {
                   ensureVideoSource(video, url);
                   video.src = url;
                   video.load();
-                  void video.play().catch(() => undefined);
+                  if (shouldAutoplayOnInit) {
+                    void video.play().catch(() => undefined);
+                  }
                   if (!isOfflineMode) {
                     markVideoReady();
                   }
@@ -2637,12 +2965,12 @@ function PlayPageClient() {
             const hlsConfig: Record<string, any> = {
               debug: false, // 关闭日志
               enableWorker: !isOfflineMode, // 离线场景优先稳定性，减少 Worker 变量
-              lowLatencyMode: !isOfflineMode, // 离线场景不需要 LL-HLS，避免请求 part/preload 资源
+              lowLatencyMode: hlsPlaybackConfig.lowLatencyMode,
 
               /* 缓冲/内存相关 */
-              maxBufferLength: 30, // 前向缓冲最大 30s，过大容易导致高延迟
-              backBufferLength: 30, // 仅保留 30s 已播放内容，避免内存占用
-              maxBufferSize: 60 * 1000 * 1000, // 约 60MB，超出后触发清理
+              maxBufferLength: hlsPlaybackConfig.maxBufferLength,
+              backBufferLength: hlsPlaybackConfig.backBufferLength,
+              maxBufferSize: hlsPlaybackConfig.maxBufferSize,
               loader: CustomHlsJsLoader,
             };
 
@@ -2658,7 +2986,9 @@ function PlayPageClient() {
             });
 
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
-              void video.play().catch(() => undefined);
+              if (shouldAutoplayOnInit) {
+                void video.play().catch(() => undefined);
+              }
               if (!isOfflineMode) {
                 markVideoReady();
               }
@@ -2715,149 +3045,9 @@ function PlayPageClient() {
             '<img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MCIgaGVpZ2h0PSI1MCIgdmlld0JveD0iMCAwIDUwIDUwIj48cGF0aCBkPSJNMjUuMjUxIDYuNDYxYy0xMC4zMTggMC0xOC42ODMgOC4zNjUtMTguNjgzIDE4LjY4M2g0LjA2OGMwLTguMDcgNi41NDUtMTQuNjE1IDE0LjYxNS0xNC42MTVWNi40NjF6IiBmaWxsPSIjMDA5Njg4Ij48YW5pbWF0ZVRyYW5zZm9ybSBhdHRyaWJ1dGVOYW1lPSJ0cmFuc2Zvcm0iIGF0dHJpYnV0ZVR5cGU9IlhNTCIgZHVyPSIxcyIgZnJvbT0iMCAyNSAyNSIgcmVwZWF0Q291bnQ9ImluZGVmaW5pdGUiIHRvPSIzNjAgMjUgMjUiIHR5cGU9InJvdGF0ZSIvPjwvcGF0aD48L3N2Zz4=">',
         },
         settings: [
-          {
-            html: '去广告',
-            icon: '<text x="50%" y="50%" font-size="20" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#ffffff">AD</text>',
-            tooltip: blockAdEnabled ? '已开启' : '已关闭',
-            onClick() {
-              const newVal = !blockAdEnabled;
-              try {
-                localStorage.setItem('enable_blockad', String(newVal));
-                if (artPlayerRef.current) {
-                  resumeTimeRef.current = artPlayerRef.current.currentTime;
-                  if (
-                    artPlayerRef.current.video &&
-                    artPlayerRef.current.video.hls
-                  ) {
-                    artPlayerRef.current.video.hls.destroy();
-                  }
-                  artPlayerRef.current.destroy();
-                  artPlayerRef.current = null;
-                  playerSessionRef.current = null;
-                }
-                setBlockAdEnabled(newVal);
-              } catch (_) {
-                // ignore
-              }
-              return newVal ? '当前开启' : '当前关闭';
-            },
-          },
-          {
-            name: '音量突增保护',
-            html: '音量突增保护',
-            tooltip: getAudioSpikeProtectionLevelLabel(
-              audioSpikeProtectionLevel
-            ),
-            selector: AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS.map((option) => ({
-              value: option.value,
-              name: `audio-spike-protection-${option.value}`,
-              default: option.value === audioSpikeProtectionLevel,
-              html: option.label,
-            })),
-            onSelect: function (item) {
-              return handleAudioSpikeProtectionLevelChange(item.value);
-            },
-          },
-          {
-            name: '动态保护',
-            html: '动态保护',
-            tooltip: audioDynamicProtectionEnabled ? '当前开启' : '当前关闭',
-            switch: audioDynamicProtectionEnabled,
-            onSwitch: function (item) {
-              return handleAudioDynamicProtectionToggle(!item.switch);
-            },
-          },
-          {
-            name: '固定峰值上限',
-            html: '固定峰值上限',
-            tooltip: audioFixedCeilingEnabled ? '当前开启' : '当前关闭',
-            switch: audioFixedCeilingEnabled,
-            onSwitch: function (item) {
-              return handleAudioFixedCeilingToggle(!item.switch);
-            },
-          },
-          {
-            name: '去磨皮修正',
-            html: '去磨皮修正',
-            tooltip: getVisualEnhancementLevelLabel(visualEnhancementLevel),
-            selector: VISUAL_ENHANCEMENT_LEVEL_OPTIONS.map((option) => ({
-              value: option.value,
-              name: `visual-enhancement-${option.value}`,
-              default: option.value === visualEnhancementLevel,
-              html: option.label,
-            })),
-            onSelect: function (item) {
-              return handleVisualEnhancementLevelChange(item.value);
-            },
-          },
-          {
-            name: '跳过片头片尾',
-            html: '跳过片头片尾',
-            switch: skipConfigRef.current.enable,
-            onSwitch: function (item) {
-              const newConfig = {
-                ...skipConfigRef.current,
-                enable: !item.switch,
-              };
-              handleSkipConfigChange(newConfig);
-              return !item.switch;
-            },
-          },
-          {
-            html: '删除跳过配置',
-            onClick: function () {
-              handleSkipConfigChange({
-                enable: false,
-                intro_time: 0,
-                outro_time: 0,
-              });
-              return '';
-            },
-          },
-          {
-            name: '设置片头',
-            html: '设置片头',
-            icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="5" cy="12" r="2" fill="#ffffff"/><path d="M9 12L17 12" stroke="#ffffff" stroke-width="2"/><path d="M17 6L17 18" stroke="#ffffff" stroke-width="2"/></svg>',
-            tooltip:
-              skipConfigRef.current.intro_time === 0
-                ? '设置片头时间'
-                : `${formatTime(skipConfigRef.current.intro_time)}`,
-            onClick: function () {
-              const currentTime = artPlayerRef.current?.currentTime || 0;
-              if (currentTime > 0) {
-                const newConfig = {
-                  ...skipConfigRef.current,
-                  intro_time: currentTime,
-                };
-                handleSkipConfigChange(newConfig);
-                return `${formatTime(currentTime)}`;
-              }
-            },
-          },
-          {
-            name: '设置片尾',
-            html: '设置片尾',
-            icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 6L7 18" stroke="#ffffff" stroke-width="2"/><path d="M7 12L15 12" stroke="#ffffff" stroke-width="2"/><circle cx="19" cy="12" r="2" fill="#ffffff"/></svg>',
-            tooltip:
-              skipConfigRef.current.outro_time >= 0
-                ? '设置片尾时间'
-                : `-${formatTime(-skipConfigRef.current.outro_time)}`,
-            onClick: function () {
-              const outroTime =
-                -(
-                  artPlayerRef.current?.duration -
-                  artPlayerRef.current?.currentTime
-                ) || 0;
-              if (outroTime < 0) {
-                const newConfig = {
-                  ...skipConfigRef.current,
-                  outro_time: outroTime,
-                };
-                handleSkipConfigChange(newConfig);
-                return `-${formatTime(-outroTime)}`;
-              }
-            },
-          },
+          createPlaybackSettingsGroup(),
+          createEnhancementSettingsGroup(),
+          createSkipSettingsGroup(),
         ],
         // 控制栏配置
         controls: [
@@ -2875,6 +3065,8 @@ function PlayPageClient() {
       playerSessionRef.current = {
         isOfflineMode,
         playbackType,
+        playbackBufferMode,
+        videoUrl,
       };
       syncPlayerEnhancements();
 
@@ -2938,6 +3130,7 @@ function PlayPageClient() {
       // 监听视频可播放事件，这时恢复播放进度更可靠
       artPlayerRef.current.on('video:canplay', () => {
         syncPlayerEnhancements();
+        const pendingPlayerReloadState = pendingPlayerReloadStateRef.current;
         // 若存在需要恢复的播放进度，则跳转
         if (resumeTimeRef.current && resumeTimeRef.current > 0) {
           try {
@@ -2968,7 +3161,11 @@ function PlayPageClient() {
           ) {
             artPlayerRef.current.playbackRate = lastPlaybackRateRef.current;
           }
+          if (pendingPlayerReloadState?.wasPaused) {
+            artPlayerRef.current.pause();
+          }
           artPlayerRef.current.notice.show = '';
+          pendingPlayerReloadStateRef.current = null;
         }, 0);
 
         // 隐藏换源加载状态
@@ -3089,6 +3286,7 @@ function PlayPageClient() {
       }
     } catch (err) {
       console.error('创建播放器失败:', err);
+      pendingPlayerReloadStateRef.current = null;
       setIsVideoLoading(false);
       setError('播放器初始化失败');
     }
@@ -3100,7 +3298,15 @@ function PlayPageClient() {
 
       removeVideoEventListeners?.();
     };
-  }, [Artplayer, Hls, videoUrl, loading, blockAdEnabled, isOfflineMode]);
+  }, [
+    Artplayer,
+    Hls,
+    videoUrl,
+    loading,
+    blockAdEnabled,
+    isOfflineMode,
+    playerReloadVersion,
+  ]);
 
   useEffect(() => {
     syncPlayerEnhancements();

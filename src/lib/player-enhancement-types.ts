@@ -12,9 +12,12 @@ export const VISUAL_ENHANCEMENT_LEVELS = [
   'strong',
 ] as const;
 
+export const PLAYBACK_BUFFER_MODES = ['standard', 'enhanced', 'max'] as const;
+
 export type AudioSpikeProtectionLevel =
   (typeof AUDIO_SPIKE_PROTECTION_LEVELS)[number];
 export type VisualEnhancementLevel = (typeof VISUAL_ENHANCEMENT_LEVELS)[number];
+export type PlaybackBufferMode = (typeof PLAYBACK_BUFFER_MODES)[number];
 
 export interface PlayerEnhancementLevelOption<T extends string> {
   value: T;
@@ -35,6 +38,13 @@ export const VISUAL_ENHANCEMENT_LEVEL_OPTIONS: PlayerEnhancementLevelOption<Visu
     { value: 'light', label: '轻度' },
     { value: 'standard', label: '标准' },
     { value: 'strong', label: '强力' },
+  ];
+
+export const PLAYBACK_BUFFER_MODE_OPTIONS: PlayerEnhancementLevelOption<PlaybackBufferMode>[] =
+  [
+    { value: 'standard', label: '默认模式' },
+    { value: 'enhanced', label: '增强模式' },
+    { value: 'max', label: '强力模式' },
   ];
 
 const TRUE_VALUES = new Set(['true', '1', 'on', 'yes']);
@@ -147,6 +157,12 @@ export function isVisualEnhancementLevel(
   return VISUAL_ENHANCEMENT_LEVELS.includes(value as VisualEnhancementLevel);
 }
 
+export function isPlaybackBufferMode(
+  value: unknown
+): value is PlaybackBufferMode {
+  return PLAYBACK_BUFFER_MODES.includes(value as PlaybackBufferMode);
+}
+
 export function normalizeAudioSpikeProtectionLevel(
   value: unknown,
   fallbackValue: AudioSpikeProtectionLevel = 'off'
@@ -171,6 +187,20 @@ export function normalizeVisualEnhancementLevel(
   );
 }
 
+export function normalizePlaybackBufferMode(
+  value: unknown,
+  fallbackValue: PlaybackBufferMode = 'standard'
+): PlaybackBufferMode {
+  if (typeof value !== 'string') {
+    return fallbackValue;
+  }
+
+  const normalizedValue = value.trim().toLowerCase();
+  return isPlaybackBufferMode(normalizedValue)
+    ? normalizedValue
+    : fallbackValue;
+}
+
 export function getAudioSpikeProtectionLevelLabel(
   level: AudioSpikeProtectionLevel
 ): string {
@@ -187,5 +217,12 @@ export function getVisualEnhancementLevelLabel(
   return (
     VISUAL_ENHANCEMENT_LEVEL_OPTIONS.find((option) => option.value === level)
       ?.label || '关闭'
+  );
+}
+
+export function getPlaybackBufferModeLabel(mode: PlaybackBufferMode): string {
+  return (
+    PLAYBACK_BUFFER_MODE_OPTIONS.find((option) => option.value === mode)
+      ?.label || '默认模式'
   );
 }

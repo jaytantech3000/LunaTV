@@ -23,6 +23,9 @@ import { purgeOfflineDownloads } from '@/lib/download/session';
 import {
   AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS,
   AudioSpikeProtectionLevel,
+  getPlaybackBufferModeLabel,
+  PlaybackBufferMode,
+  PLAYBACK_BUFFER_MODE_OPTIONS,
   VISUAL_ENHANCEMENT_LEVEL_OPTIONS,
   VisualEnhancementLevel,
 } from '@/lib/player-enhancement-types';
@@ -79,6 +82,8 @@ export const UserMenu: React.FC = () => {
     useState(false);
   const [visualEnhancementLevel, setVisualEnhancementLevel] =
     useState<VisualEnhancementLevel>('off');
+  const [playbackBufferMode, setPlaybackBufferMode] =
+    useState<PlaybackBufferMode>('standard');
   const [doubanDataSource, setDoubanDataSource] = useState(
     'cmliussss-cdn-tencent'
   );
@@ -226,6 +231,7 @@ export const UserMenu: React.FC = () => {
       );
       setAudioFixedCeilingEnabled(preferences.audioFixedCeilingEnabled);
       setVisualEnhancementLevel(preferences.visualEnhancementLevel);
+      setPlaybackBufferMode(preferences.playbackBufferMode);
     }
   }, []);
 
@@ -242,6 +248,7 @@ export const UserMenu: React.FC = () => {
       );
       setAudioFixedCeilingEnabled(preferences.audioFixedCeilingEnabled);
       setVisualEnhancementLevel(preferences.visualEnhancementLevel);
+      setPlaybackBufferMode(preferences.playbackBufferMode);
     };
 
     syncPlayerEnhancementPreferences();
@@ -472,6 +479,11 @@ export const UserMenu: React.FC = () => {
     updatePlayerEnhancementPreference('visualEnhancementLevel', value);
   };
 
+  const handlePlaybackBufferModeChange = (value: PlaybackBufferMode) => {
+    setPlaybackBufferMode(value);
+    updatePlayerEnhancementPreference('playbackBufferMode', value);
+  };
+
   const handleDoubanDataSourceChange = (value: string) => {
     setDoubanDataSource(value);
     if (typeof window !== 'undefined') {
@@ -551,6 +563,7 @@ export const UserMenu: React.FC = () => {
     setVisualEnhancementLevel(
       defaultEnhancementPreferences.visualEnhancementLevel
     );
+    setPlaybackBufferMode(defaultEnhancementPreferences.playbackBufferMode);
     setDoubanProxyUrl(defaultDoubanProxy);
     setDoubanDataSource(defaultDoubanProxyType);
     setDoubanImageProxyType(defaultDoubanImageProxyType);
@@ -1038,6 +1051,42 @@ export const UserMenu: React.FC = () => {
                   <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
                 </div>
               </label>
+            </div>
+
+            <div className='flex items-center justify-between'>
+              <div className='flex-1'>
+                <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                  在线播放缓冲优化
+                </h4>
+                <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                  弱网时可切到更大缓冲，起播会略慢但更抗卡顿
+                </p>
+                <div className='mt-2 flex flex-wrap gap-2'>
+                  {PLAYBACK_BUFFER_MODE_OPTIONS.map((option) => {
+                    const selected = playbackBufferMode === option.value;
+
+                    return (
+                      <button
+                        key={option.value}
+                        type='button'
+                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                          selected
+                            ? 'border-green-500 bg-green-500 text-white'
+                            : 'border-gray-300 bg-white text-gray-600 hover:border-green-400 hover:text-green-600 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-green-500 dark:hover:text-green-300'
+                        }`}
+                        onClick={() =>
+                          handlePlaybackBufferModeChange(option.value)
+                        }
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className='mt-2 text-xs text-gray-500 dark:text-gray-400'>
+                  当前：{getPlaybackBufferModeLabel(playbackBufferMode)}
+                </p>
+              </div>
             </div>
 
             <div className='flex items-center justify-between'>

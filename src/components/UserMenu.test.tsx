@@ -27,6 +27,17 @@ jest.mock('@/lib/download/session', () => ({
 
 jest.mock('@/lib/player-enhancement-types', () => ({
   AUDIO_SPIKE_PROTECTION_LEVEL_OPTIONS: [],
+  PLAYBACK_BUFFER_MODE_OPTIONS: [
+    { value: 'standard', label: '默认模式' },
+    { value: 'enhanced', label: '增强模式' },
+    { value: 'max', label: '强力模式' },
+  ],
+  getPlaybackBufferModeLabel: (value: string) =>
+    ({
+      standard: '默认模式',
+      enhanced: '增强模式',
+      max: '强力模式',
+    }[value] || '默认模式'),
   VISUAL_ENHANCEMENT_LEVEL_OPTIONS: [],
 }));
 
@@ -36,12 +47,14 @@ jest.mock('@/lib/player-enhancements', () => ({
     audioDynamicProtectionEnabled: false,
     audioFixedCeilingEnabled: false,
     audioSpikeProtectionLevel: 'off',
+    playbackBufferMode: 'standard',
     visualEnhancementLevel: 'off',
   })),
   resetPlayerEnhancementPreferences: jest.fn(() => ({
     audioDynamicProtectionEnabled: false,
     audioFixedCeilingEnabled: false,
     audioSpikeProtectionLevel: 'off',
+    playbackBufferMode: 'standard',
     visualEnhancementLevel: 'off',
   })),
   updatePlayerEnhancementPreference: jest.fn(),
@@ -76,13 +89,15 @@ jest.mock('./DownloadClientPanel', () => ({
 }));
 
 import { UserMenu } from './UserMenu';
+import { updatePlayerEnhancementPreference } from '@/lib/player-enhancements';
 
 describe('UserMenu', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     localStorage.clear();
-    (window as Window & { RUNTIME_CONFIG?: Record<string, unknown> }).RUNTIME_CONFIG =
-      {};
+    (
+      window as Window & { RUNTIME_CONFIG?: Record<string, unknown> }
+    ).RUNTIME_CONFIG = {};
   });
 
   it('opens the client download panel and closes the menu entry list', async () => {
@@ -91,9 +106,28 @@ describe('UserMenu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
     fireEvent.click(await screen.findByRole('button', { name: '客户端下载' }));
 
-    expect(await screen.findByText('DownloadClientPanelMock')).toBeInTheDocument();
+    expect(
+      await screen.findByText('DownloadClientPanelMock')
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: '客户端下载' })
     ).not.toBeInTheDocument();
+  });
+
+  it('updates playback buffer mode from the settings panel', async () => {
+    const mockUpdatePlayerEnhancementPreference =
+      updatePlayerEnhancementPreference as jest.Mock;
+
+    render(<UserMenu />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: '设置' }));
+    fireEvent.click(await screen.findByRole('button', { name: '增强模式' }));
+
+    expect(mockUpdatePlayerEnhancementPreference).toHaveBeenCalledWith(
+      'playbackBufferMode',
+      'enhanced'
+    );
+    expect(screen.getByText('当前：增强模式')).toBeInTheDocument();
   });
 });
