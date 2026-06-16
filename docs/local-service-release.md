@@ -71,10 +71,17 @@ git push origin local-service-nova-2026-06-16.1
 推荐最小配置：
 
 ```env
+# 只有当部署平台不能自动暴露 Git 仓库信息时才需要手工指定
 DESKTOP_RELEASE_REPO=your-org/LunaTV
 ```
 
-在 Vercel / Cloudflare Pages / Railway 这类会暴露部署分支的环境里，不需要每次手改 `LOCAL_SERVICE_RELEASE_TAG`：
+在 Vercel 这类会暴露 Git 仓库和部署分支的环境里，下载面板现在可以自动推导：
+
+- 仓库：优先 `DESKTOP_RELEASE_REPO` / `LOCAL_SERVICE_RELEASE_REPO`，否则自动尝试 `GITHUB_REPOSITORY` 或 `VERCEL_GIT_REPO_OWNER` + `VERCEL_GIT_REPO_SLUG`
+- 桌面版 prerelease 线：未显式配置时默认匹配 `desktop-v*`
+- 本地服务通道：按当前部署分支自动切到 `nova` / `luna`
+
+所以一般不需要每次手改 `LOCAL_SERVICE_RELEASE_TAG`：
 
 - `nova` 部署会自动跟随 `local-service-nova-latest`
 - `luna` 部署会自动跟随 `local-service-luna-latest`
@@ -88,6 +95,12 @@ LOCAL_SERVICE_RELEASE_CHANNEL=nova
 
 # 如果本地服务二进制发布在单独仓库，用它覆盖桌面版仓库
 LOCAL_SERVICE_RELEASE_REPO=your-org/LunaTV-binaries
+
+# 如果桌面版 prerelease 不是 desktop-v* 这一条线，可显式覆盖
+DESKTOP_RELEASE_TAG_PREFIX=desktop-v
+
+# 如果你要进一步收窄到某个 target_commitish，也可以显式指定
+DESKTOP_RELEASE_TARGET_COMMITISH=desktop
 
 # 只有在你明确要锁定某一个具体 tag 时才需要写这个
 LOCAL_SERVICE_RELEASE_TAG=local-service-nova-2026-06-16.1
@@ -106,13 +119,18 @@ LOCAL_SERVICE_RELEASE_URL_WIN_X64=
 https://github.com/<repo>/releases/download/<tag>/<asset-name>
 ```
 
-标签解析优先级：
+本地服务标签解析优先级：
 
 1. `LOCAL_SERVICE_RELEASE_TAG`
 2. 自动分支通道或显式 `LOCAL_SERVICE_RELEASE_CHANNEL`
 3. 默认 `local-service-latest`
 
-`<repo>` 优先取 `LOCAL_SERVICE_RELEASE_REPO`，否则回落到 `DESKTOP_RELEASE_REPO`。
+`<repo>` 优先级：
+
+1. `LOCAL_SERVICE_RELEASE_REPO`
+2. `DESKTOP_RELEASE_REPO`
+3. `GITHUB_REPOSITORY`
+4. `VERCEL_GIT_REPO_OWNER` + `VERCEL_GIT_REPO_SLUG`
 
 ## 本地验证
 

@@ -63,6 +63,7 @@ interface DesktopDownloadSignatureInput {
 
 const GITHUB_API_BASE = 'https://api.github.com';
 const GITHUB_API_TIMEOUT_MS = 10000;
+const DEFAULT_DESKTOP_RELEASE_TAG_PREFIX = 'desktop-v';
 const DEFAULT_SIGNED_DOWNLOAD_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_LOCAL_SERVICE_RELEASE_TAG = 'local-service-latest';
 const LOCAL_SERVICE_RELEASE_CHANNELS = ['luna', 'nova'] as const;
@@ -153,6 +154,27 @@ function isValidGitHubRepo(repo: string): boolean {
   );
 }
 
+function deriveGitHubRepoFromEnv(): string | null {
+  const directCandidates = [process.env.GITHUB_REPOSITORY];
+  for (const candidate of directCandidates) {
+    const normalized = candidate?.trim();
+    if (normalized && isValidGitHubRepo(normalized)) {
+      return normalized;
+    }
+  }
+
+  const owner = process.env.VERCEL_GIT_REPO_OWNER?.trim();
+  const slug = process.env.VERCEL_GIT_REPO_SLUG?.trim();
+  if (owner && slug) {
+    const repo = `${owner}/${slug}`;
+    if (isValidGitHubRepo(repo)) {
+      return repo;
+    }
+  }
+
+  return null;
+}
+
 function normalizeLocalServiceReleaseChannel(
   value: string | null | undefined
 ): (typeof LOCAL_SERVICE_RELEASE_CHANNELS)[number] | null {
@@ -225,9 +247,12 @@ async function fetchGitHubJson<T>(pathname: string): Promise<T | null> {
 }
 
 export function getDesktopReleaseConfig(): DesktopReleaseConfig | null {
-  const repo = process.env.DESKTOP_RELEASE_REPO?.trim();
+  const repo =
+    process.env.DESKTOP_RELEASE_REPO?.trim() || deriveGitHubRepoFromEnv();
   const targetCommitish = process.env.DESKTOP_RELEASE_TARGET_COMMITISH?.trim();
-  const tagPrefix = process.env.DESKTOP_RELEASE_TAG_PREFIX?.trim();
+  const tagPrefix =
+    process.env.DESKTOP_RELEASE_TAG_PREFIX?.trim() ||
+    (!targetCommitish ? DEFAULT_DESKTOP_RELEASE_TAG_PREFIX : undefined);
 
   if (!repo || (!targetCommitish && !tagPrefix)) {
     return null;
@@ -321,7 +346,8 @@ export function listDesktopReleaseAssets(release: GitHubRelease): {
 function getLocalServiceReleaseConfig(): LocalServiceReleaseConfig | null {
   const repo =
     process.env.LOCAL_SERVICE_RELEASE_REPO?.trim() ||
-    process.env.DESKTOP_RELEASE_REPO?.trim();
+    process.env.DESKTOP_RELEASE_REPO?.trim() ||
+    deriveGitHubRepoFromEnv();
   const explicitTag = process.env.LOCAL_SERVICE_RELEASE_TAG?.trim();
   const autoChannel = getAutoLocalServiceReleaseChannel();
   const tag =

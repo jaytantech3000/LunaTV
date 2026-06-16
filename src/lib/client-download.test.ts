@@ -1,6 +1,7 @@
 import {
   buildSignedDesktopDownloadPath,
   getDesktopAssetKeyForName,
+  getDesktopReleaseConfig,
   listDesktopReleaseAssets,
   resolveLocalServiceBinaryUrl,
   selectLatestDesktopRelease,
@@ -24,7 +25,11 @@ describe('client-download helpers', () => {
     CF_PAGES_BRANCH: mutableEnv.CF_PAGES_BRANCH,
     CLIENT_DOWNLOAD_SIGNING_SECRET: mutableEnv.CLIENT_DOWNLOAD_SIGNING_SECRET,
     DESKTOP_RELEASE_REPO: mutableEnv.DESKTOP_RELEASE_REPO,
+    DESKTOP_RELEASE_TAG_PREFIX: mutableEnv.DESKTOP_RELEASE_TAG_PREFIX,
+    DESKTOP_RELEASE_TARGET_COMMITISH:
+      mutableEnv.DESKTOP_RELEASE_TARGET_COMMITISH,
     GITHUB_REF_NAME: mutableEnv.GITHUB_REF_NAME,
+    GITHUB_REPOSITORY: mutableEnv.GITHUB_REPOSITORY,
     LOCAL_SERVICE_RELEASE_REPO: mutableEnv.LOCAL_SERVICE_RELEASE_REPO,
     LOCAL_SERVICE_RELEASE_CHANNEL: mutableEnv.LOCAL_SERVICE_RELEASE_CHANNEL,
     LOCAL_SERVICE_RELEASE_TAG: mutableEnv.LOCAL_SERVICE_RELEASE_TAG,
@@ -32,6 +37,8 @@ describe('client-download helpers', () => {
       mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64,
     RAILWAY_GIT_BRANCH: mutableEnv.RAILWAY_GIT_BRANCH,
     VERCEL_GIT_COMMIT_REF: mutableEnv.VERCEL_GIT_COMMIT_REF,
+    VERCEL_GIT_REPO_OWNER: mutableEnv.VERCEL_GIT_REPO_OWNER,
+    VERCEL_GIT_REPO_SLUG: mutableEnv.VERCEL_GIT_REPO_SLUG,
   };
 
   afterEach(() => {
@@ -41,7 +48,16 @@ describe('client-download helpers', () => {
       originalEnv.CLIENT_DOWNLOAD_SIGNING_SECRET
     );
     restoreEnvValue('DESKTOP_RELEASE_REPO', originalEnv.DESKTOP_RELEASE_REPO);
+    restoreEnvValue(
+      'DESKTOP_RELEASE_TAG_PREFIX',
+      originalEnv.DESKTOP_RELEASE_TAG_PREFIX
+    );
+    restoreEnvValue(
+      'DESKTOP_RELEASE_TARGET_COMMITISH',
+      originalEnv.DESKTOP_RELEASE_TARGET_COMMITISH
+    );
     restoreEnvValue('GITHUB_REF_NAME', originalEnv.GITHUB_REF_NAME);
+    restoreEnvValue('GITHUB_REPOSITORY', originalEnv.GITHUB_REPOSITORY);
     restoreEnvValue(
       'LOCAL_SERVICE_RELEASE_REPO',
       originalEnv.LOCAL_SERVICE_RELEASE_REPO
@@ -60,6 +76,8 @@ describe('client-download helpers', () => {
     );
     restoreEnvValue('RAILWAY_GIT_BRANCH', originalEnv.RAILWAY_GIT_BRANCH);
     restoreEnvValue('VERCEL_GIT_COMMIT_REF', originalEnv.VERCEL_GIT_COMMIT_REF);
+    restoreEnvValue('VERCEL_GIT_REPO_OWNER', originalEnv.VERCEL_GIT_REPO_OWNER);
+    restoreEnvValue('VERCEL_GIT_REPO_SLUG', originalEnv.VERCEL_GIT_REPO_SLUG);
   });
 
   it('selects the newest prerelease that matches the desktop release line', () => {
@@ -202,11 +220,29 @@ describe('client-download helpers', () => {
       'https://example.com/lunatv-server';
     delete mutableEnv.LOCAL_SERVICE_RELEASE_REPO;
     delete mutableEnv.DESKTOP_RELEASE_REPO;
+    delete mutableEnv.GITHUB_REPOSITORY;
+    delete mutableEnv.VERCEL_GIT_REPO_OWNER;
+    delete mutableEnv.VERCEL_GIT_REPO_SLUG;
 
     expect(resolveLocalServiceBinaryUrl('mac-arm64')).toBe(
       'https://example.com/lunatv-server'
     );
     expect(resolveLocalServiceBinaryUrl('mac-x64')).toBeNull();
+  });
+
+  it('defaults desktop releases to the current deployment repo and desktop tag line', () => {
+    delete mutableEnv.DESKTOP_RELEASE_REPO;
+    delete mutableEnv.DESKTOP_RELEASE_TAG_PREFIX;
+    delete mutableEnv.DESKTOP_RELEASE_TARGET_COMMITISH;
+    delete mutableEnv.GITHUB_REPOSITORY;
+    mutableEnv.VERCEL_GIT_REPO_OWNER = 'demo';
+    mutableEnv.VERCEL_GIT_REPO_SLUG = 'LunaTV';
+
+    expect(getDesktopReleaseConfig()).toEqual({
+      repo: 'demo/LunaTV',
+      tagPrefix: 'desktop-v',
+      targetCommitish: undefined,
+    });
   });
 
   it('derives stable GitHub release urls for local service binaries', () => {
@@ -254,6 +290,20 @@ describe('client-download helpers', () => {
 
     expect(resolveLocalServiceBinaryUrl('linux-arm64')).toBe(
       'https://github.com/demo/LunaTV/releases/download/local-service-luna-latest/lunatv-server-linux-arm64'
+    );
+  });
+
+  it('derives local service repo from deployment metadata when explicit repo config is absent', () => {
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_TAG;
+    delete mutableEnv.DESKTOP_RELEASE_REPO;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_REPO;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_CHANNEL;
+    mutableEnv.GITHUB_REPOSITORY = 'demo/LunaTV';
+    mutableEnv.VERCEL_GIT_COMMIT_REF = 'nova';
+
+    expect(resolveLocalServiceBinaryUrl('win-x64')).toBe(
+      'https://github.com/demo/LunaTV/releases/download/local-service-nova-latest/lunatv-server-win-x64.exe'
     );
   });
 });
