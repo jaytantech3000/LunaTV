@@ -997,6 +997,10 @@ fn default_cors_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert("access-control-allow-origin", HeaderValue::from_static("*"));
     headers.insert(
+        "access-control-allow-private-network",
+        HeaderValue::from_static("true"),
+    );
+    headers.insert(
         "access-control-allow-methods",
         HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"),
     );
@@ -1333,5 +1337,61 @@ mod tests {
             serde_json::from_str(&response_text(response).await).unwrap();
         assert_eq!(payload["siteName"], "LunaTV");
         assert_eq!(payload["customCategories"][0]["query"], "热门");
+    }
+
+    #[tokio::test]
+    async fn exposes_private_network_cors_headers_on_health_routes() {
+        let (app, _temp_dir) = test_app().await;
+
+        let options_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/health")
+                    .header("origin", "https://nova.hkcu.qzz.io")
+                    .header("access-control-request-method", "GET")
+                    .header("access-control-request-private-network", "true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(options_response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            options_response
+                .headers()
+                .get("access-control-allow-private-network")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+        assert_eq!(
+            options_response
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("*")
+        );
+
+        let get_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header("origin", "https://nova.hkcu.qzz.io")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(get_response.status(), StatusCode::OK);
+        assert_eq!(
+            get_response
+                .headers()
+                .get("access-control-allow-private-network")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
     }
 }
