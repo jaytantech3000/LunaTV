@@ -7,8 +7,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { startTransition, useEffect, useState } from 'react';
 import { flushSync } from 'react-dom';
 
-import { getProjectPageUrl } from '@/lib/release-urls';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { getProjectPageUrl } from '@/lib/release-urls';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
