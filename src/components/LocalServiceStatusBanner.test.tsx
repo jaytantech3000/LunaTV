@@ -242,7 +242,7 @@ describe('LocalServiceStatusSidebarPill', () => {
 
     await renderWithStatus(<LocalServiceStatusSidebarPill />);
 
-    expect(await screen.findByText('本地服务')).toBeInTheDocument();
+    expect(await screen.findByText('检测到本地服务')).toBeInTheDocument();
     expect(screen.getByText('127.0.0.1:8787')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '启动' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '检测' })).toBeInTheDocument();
@@ -268,7 +268,7 @@ describe('LocalServiceStatusSidebarPill', () => {
 
     await renderWithStatus(<LocalServiceStatusSidebarPill />);
 
-    expect(await screen.findByText('本机加速')).toBeInTheDocument();
+    expect(await screen.findByText('本地服务启动')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '停用' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '启动' })).not.toBeInTheDocument();
   });
@@ -290,7 +290,7 @@ describe('LocalServiceStatusSidebarPill', () => {
 
     await renderWithStatus(<LocalServiceStatusSidebarPill />);
 
-    expect(await screen.findByText('本机加速')).toBeInTheDocument();
+    expect(await screen.findByText('本地服务启动')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '停用' })).toBeInTheDocument();
     expect(
       screen.queryByText('本机加速暂不可用')

@@ -368,7 +368,7 @@ export function LocalServiceStatusBanner() {
           />
           <Zap className='h-3.5 w-3.5' />
           <span className='whitespace-nowrap text-xs font-semibold'>
-            本机加速
+            本地服务启动
           </span>
           <button
             className='inline-flex h-6 items-center justify-center rounded-full border border-green-500/20 bg-green-500/10 px-2 text-[11px] font-medium text-green-700 transition-colors hover:bg-green-500/15 disabled:cursor-not-allowed disabled:opacity-60 dark:border-green-400/15 dark:bg-green-500/10 dark:text-green-100 dark:hover:bg-green-500/15'
@@ -555,7 +555,7 @@ export function LocalServiceStatusSidebarPill({
           <button
             aria-label={
               isActive
-                ? '本机加速已启用'
+                ? '本地服务启动'
                 : isOffline
                   ? '本机加速暂不可用'
                   : '本地服务已就绪'
@@ -613,7 +613,7 @@ export function LocalServiceStatusSidebarPill({
               <ServerCog className='h-3.5 w-3.5 shrink-0' />
             )}
             <span className='min-w-0 flex-1 truncate text-[12px] font-semibold'>
-              {isOffline ? '本机加速异常' : '本地服务'}
+              {isOffline ? '本机加速异常' : '检测到本地服务'}
             </span>
             {badgeLabel ? (
               <span
@@ -628,9 +628,9 @@ export function LocalServiceStatusSidebarPill({
               </span>
             ) : null}
           </div>
-          <div className='mt-2 flex items-center gap-1.5'>
+          <div className='mt-2 grid grid-cols-2 gap-1.5'>
             <button
-              className={`inline-flex h-6 items-center justify-center gap-1.5 rounded-full border px-2 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+              className={`inline-flex h-6 w-full items-center justify-center gap-1.5 rounded-full border px-2 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                 isOffline
                   ? 'border-amber-300/25 bg-white/65 text-amber-700 hover:bg-white dark:border-white/10 dark:bg-white/5 dark:text-amber-100 dark:hover:bg-white/10'
                   : 'border-green-500/20 bg-white/70 text-green-700 hover:bg-white dark:border-white/10 dark:bg-white/5 dark:text-green-100 dark:hover:bg-white/10'
@@ -646,7 +646,7 @@ export function LocalServiceStatusSidebarPill({
             </button>
             {isOffline ? (
               <button
-                className='inline-flex h-6 items-center justify-center gap-1.5 rounded-full bg-amber-500 px-2 text-[11px] font-semibold text-[#201304] shadow-sm shadow-amber-950/10 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-amber-500/70'
+                className='inline-flex h-6 w-full items-center justify-center gap-1.5 rounded-full bg-amber-500 px-2 text-[11px] font-semibold text-[#201304] shadow-sm shadow-amber-950/10 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-amber-500/70'
                 disabled={isResetting || isActivating}
                 onClick={restoreDefault}
                 type='button'
@@ -656,7 +656,7 @@ export function LocalServiceStatusSidebarPill({
               </button>
             ) : (
               <button
-                className='inline-flex h-6 items-center justify-center gap-1.5 rounded-full bg-green-600 px-2 text-[11px] font-semibold text-white shadow-sm shadow-green-950/10 transition-colors hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-green-700/70'
+                className='inline-flex h-6 w-full items-center justify-center gap-1.5 rounded-full bg-green-600 px-2 text-[11px] font-semibold text-white shadow-sm shadow-green-950/10 transition-colors hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-green-700/70'
                 disabled={isActivating || isResetting}
                 onClick={activate}
                 type='button'
@@ -684,7 +684,7 @@ export function LocalServiceStatusSidebarPill({
         />
         <Zap className='h-3.5 w-3.5 shrink-0' />
         <span className='min-w-0 flex-1 truncate text-[12px] font-semibold'>
-          本机加速
+          本地服务启动
         </span>
         <button
           className='inline-flex h-6 items-center justify-center rounded-full border border-green-500/20 bg-white/70 px-2 text-[11px] font-medium text-green-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 dark:border-green-400/15 dark:bg-white/5 dark:text-green-100 dark:hover:bg-white/10'
