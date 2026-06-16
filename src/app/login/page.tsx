@@ -2,15 +2,24 @@
 
 'use client';
 
-import { AlertCircle, CheckCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useState } from 'react';
+import { startTransition, Suspense, useEffect, useState } from 'react';
 
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
 import { useSite } from '@/components/SiteProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
+
+function resolveRedirectPath(searchParams: ReturnType<typeof useSearchParams>) {
+  const redirect = searchParams.get('redirect') || '/';
+  if (!redirect.startsWith('/') || redirect.startsWith('//')) {
+    return '/';
+  }
+
+  return redirect;
+}
 
 // 版本显示组件
 function VersionDisplay() {
@@ -67,13 +76,15 @@ function VersionDisplay() {
   );
 }
 
-function LoginPageClient() {
+export function LoginPageClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const redirectPath = resolveRedirectPath(searchParams);
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const [shouldAskUsername, setShouldAskUsername] = useState(false);
 
   const { siteName } = useSite();
@@ -86,11 +97,17 @@ function LoginPageClient() {
     }
   }, []);
 
+  useEffect(() => {
+    router.prefetch(redirectPath);
+  }, [redirectPath, router]);
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
 
     if (!password || (shouldAskUsername && !username)) return;
+
+    let shouldKeepTransitionState = false;
 
     try {
       setLoading(true);
@@ -104,8 +121,12 @@ function LoginPageClient() {
       });
 
       if (res.ok) {
-        const redirect = searchParams.get('redirect') || '/';
-        router.replace(redirect);
+        setIsRedirecting(true);
+        shouldKeepTransitionState = true;
+        startTransition(() => {
+          router.replace(redirectPath);
+        });
+        return;
       } else if (res.status === 401) {
         setError('密码错误');
       } else {
@@ -115,14 +136,28 @@ function LoginPageClient() {
     } catch (error) {
       setError('网络错误，请稍后重试');
     } finally {
-      setLoading(false);
+      if (!shouldKeepTransitionState) {
+        setLoading(false);
+      }
     }
   };
 
-
-
   return (
     <div className='relative min-h-screen flex items-center justify-center px-4 overflow-hidden'>
+      {isRedirecting && (
+        <div className='fixed inset-0 z-20 flex items-center justify-center bg-white/35 backdrop-blur-md dark:bg-black/45'>
+          <div className='mx-4 flex max-w-[min(92vw,420px)] items-center gap-3 rounded-2xl border border-emerald-200/70 bg-white/88 px-5 py-4 text-sm font-medium text-emerald-800 shadow-2xl shadow-emerald-950/10 dark:border-emerald-900/40 dark:bg-zinc-900/88 dark:text-emerald-200'>
+            <Loader2 className='h-5 w-5 shrink-0 animate-spin text-emerald-500 dark:text-emerald-300' />
+            <div className='space-y-1'>
+              <p>登录成功</p>
+              <p className='text-xs text-emerald-700/80 dark:text-emerald-200/80'>
+                正在进入内容页...
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className='absolute top-4 right-4'>
         <ThemeToggle />
       </div>
@@ -140,6 +175,7 @@ function LoginPageClient() {
                 id='username'
                 type='text'
                 autoComplete='username'
+                disabled={loading || isRedirecting}
                 className='block w-full rounded-lg border-0 py-3 px-4 text-gray-900 dark:text-gray-100 shadow-sm ring-1 ring-white/60 dark:ring-white/20 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-green-500 focus:outline-none sm:text-base bg-white/60 dark:bg-zinc-800/60 backdrop-blur'
                 placeholder='输入用户名'
                 value={username}
@@ -156,6 +192,7 @@ function LoginPageClient() {
               id='password'
               type='password'
               autoComplete='current-password'
+              disabled={loading || isRedirecting}
               className='block w-full rounded-lg border-0 py-3 px-4 text-gray-900 dark:text-gray-100 shadow-sm ring-1 ring-white/60 dark:ring-white/20 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-green-500 focus:outline-none sm:text-base bg-white/60 dark:bg-zinc-800/60 backdrop-blur'
               placeholder='输入访问密码'
               value={password}
@@ -171,11 +208,11 @@ function LoginPageClient() {
           <button
             type='submit'
             disabled={
-              !password || loading || (shouldAskUsername && !username)
+              !password || loading || isRedirecting || (shouldAskUsername && !username)
             }
             className='inline-flex w-full justify-center rounded-lg bg-green-600 py-3 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:from-green-600 hover:to-blue-600 disabled:cursor-not-allowed disabled:opacity-50'
           >
-            {loading ? '登录中...' : '登录'}
+            {isRedirecting ? '正在进入...' : loading ? '登录中...' : '登录'}
           </button>
         </form>
       </div>
