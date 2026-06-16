@@ -50,10 +50,12 @@ export function getVersionFileUrl(
 }
 
 export function getChangelogFileUrl(
+  locale: 'zh-CN' | 'en' = 'zh-CN',
   repository = getReleaseRepository(),
   branch = getReleaseBranch()
 ) {
-  return `https://raw.githubusercontent.com/${repository}/${branch}/CHANGELOG`;
+  const changelogFile = locale === 'en' ? 'CHANGELOG.en' : 'CHANGELOG';
+  return `https://raw.githubusercontent.com/${repository}/${branch}/${changelogFile}`;
 }
 
 export function getLatestUpdaterManifestUrl(

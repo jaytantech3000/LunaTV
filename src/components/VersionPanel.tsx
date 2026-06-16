@@ -25,7 +25,12 @@ import {
   installDownloadedUpdate,
   setAutoDownloadEnabled,
 } from '@/lib/app-update';
-import { type ChangelogEntry, changelog } from '@/lib/changelog';
+import {
+  type ChangelogEntry,
+  type ChangelogLocale,
+  changelog,
+  getLocalizedChangelogItems,
+} from '@/lib/changelog';
 import { DESKTOP_UPSTREAM_VERSION } from '@/lib/desktop-release';
 import { getChangelogFileUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
@@ -34,12 +39,98 @@ import { useAppUpdateState } from '@/lib/use-app-update';
 import { CURRENT_VERSION } from '@/lib/version';
 import { UpdateStatus } from '@/lib/version_check';
 
+import CapsuleSwitch from '@/components/CapsuleSwitch';
+
 interface VersionPanelProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type RemoteChangelogEntry = ChangelogEntry;
+interface RemoteChangelogEntry {
+  version: string;
+  date: string;
+  added: string[];
+  changed: string[];
+  fixed: string[];
+}
+
+const CHANGELOG_LOCALE_STORAGE_KEY = 'lunatv:version-panel:changelog-locale';
+
+const CHANGELOG_COPY: Record<
+  ChangelogLocale,
+  {
+    currentBadge: string;
+    latestRemoteBadge: string;
+    addedTitle: string;
+    changedTitle: string;
+    fixedTitle: string;
+    remoteSectionTitle: string;
+    localSectionTitle: string;
+    showRemoteButton: string;
+    hideRemoteButton: string;
+  }
+> = {
+  'zh-CN': {
+    currentBadge: '当前版本',
+    latestRemoteBadge: '远程最新',
+    addedTitle: '新增功能',
+    changedTitle: '功能改进',
+    fixedTitle: '问题修复',
+    remoteSectionTitle: '远程更新内容',
+    localSectionTitle: '变更日志',
+    showRemoteButton: '查看更新内容',
+    hideRemoteButton: '收起',
+  },
+  en: {
+    currentBadge: 'Current',
+    latestRemoteBadge: 'Latest remote',
+    addedTitle: 'Added',
+    changedTitle: 'Changed',
+    fixedTitle: 'Fixed',
+    remoteSectionTitle: 'Remote changes',
+    localSectionTitle: 'Changelog',
+    showRemoteButton: 'Show changes',
+    hideRemoteButton: 'Hide',
+  },
+};
+
+const CHANGELOG_LOCALE_OPTIONS = [
+  {
+    label: '中文',
+    value: 'zh-CN',
+  },
+  {
+    label: 'English',
+    value: 'en',
+  },
+] as const;
+
+function readChangelogLocalePreference(): ChangelogLocale {
+  if (typeof window === 'undefined') {
+    return 'zh-CN';
+  }
+
+  return window.localStorage.getItem(CHANGELOG_LOCALE_STORAGE_KEY) === 'en'
+    ? 'en'
+    : 'zh-CN';
+}
+
+function persistChangelogLocalePreference(locale: ChangelogLocale) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(CHANGELOG_LOCALE_STORAGE_KEY, locale);
+}
+
+function resolveChangelogItems(
+  items: ChangelogEntry['added'] | RemoteChangelogEntry['added'],
+  locale: ChangelogLocale
+) {
+  return Array.isArray(items)
+    ? items
+    : getLocalizedChangelogItems(items, locale);
+}
 
 function parseRemoteChangelog(content: string): RemoteChangelogEntry[] {
   const lines = content.split('\n');
@@ -165,11 +256,13 @@ function ChangeList({
 
 function renderChangelogEntry(
   entry: ChangelogEntry | RemoteChangelogEntry,
+  locale: ChangelogLocale,
   options?: {
     isCurrentVersion?: boolean;
     isLatestRemote?: boolean;
   }
 ) {
+  const changelogCopy = CHANGELOG_COPY[locale];
   const isCurrentVersion = options?.isCurrentVersion === true;
   const isLatestRemote = options?.isLatestRemote === true;
   const containerClassName = isCurrentVersion
@@ -177,6 +270,9 @@ function renderChangelogEntry(
     : isLatestRemote
     ? 'border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20'
     : 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/60';
+  const addedItems = resolveChangelogItems(entry.added, locale);
+  const changedItems = resolveChangelogItems(entry.changed, locale);
+  const fixedItems = resolveChangelogItems(entry.fixed, locale);
 
   return (
     <div
@@ -190,12 +286,12 @@ function renderChangelogEntry(
           </h4>
           {isCurrentVersion ? (
             <span className='rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'>
-              当前版本
+              {changelogCopy.currentBadge}
             </span>
           ) : null}
           {isLatestRemote ? (
             <span className='rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'>
-              远程最新
+              {changelogCopy.latestRemoteBadge}
             </span>
           ) : null}
         </div>
@@ -206,22 +302,22 @@ function renderChangelogEntry(
 
       <div className='space-y-3'>
         <ChangeList
-          items={entry.added}
-          title='新增功能'
+          items={addedItems}
+          title={changelogCopy.addedTitle}
           icon={<Plus className='h-4 w-4' />}
           dotClassName='bg-green-500'
           titleClassName='text-green-700 dark:text-green-400'
         />
         <ChangeList
-          items={entry.changed}
-          title='功能改进'
+          items={changedItems}
+          title={changelogCopy.changedTitle}
           icon={<RefreshCw className='h-4 w-4' />}
           dotClassName='bg-blue-500'
           titleClassName='text-blue-700 dark:text-blue-400'
         />
         <ChangeList
-          items={entry.fixed}
-          title='问题修复'
+          items={fixedItems}
+          title={changelogCopy.fixedTitle}
           icon={<Bug className='h-4 w-4' />}
           dotClassName='bg-purple-500'
           titleClassName='text-purple-700 dark:text-purple-400'
@@ -236,8 +332,11 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
   const [remoteChangelog, setRemoteChangelog] = useState<
     RemoteChangelogEntry[]
   >([]);
+  const [changelogLocale, setChangelogLocale] =
+    useState<ChangelogLocale>('zh-CN');
   const [showRemoteContent, setShowRemoteContent] = useState(false);
   const updateState = useAppUpdateState();
+  const changelogCopy = CHANGELOG_COPY[changelogLocale];
   const isDesktopTarget = getRuntimeConfig().APP_TARGET === 'desktop';
   const isDesktopUpdaterAvailable =
     updateState.canUseDesktopUpdater &&
@@ -251,6 +350,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
 
   useEffect(() => {
     setMounted(true);
+    setChangelogLocale(readChangelogLocalePreference());
     return () => setMounted(false);
   }, []);
 
@@ -271,22 +371,39 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
       force: true,
       allowAutoDownload: true,
     });
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    let cancelled = false;
 
     void (async () => {
       try {
-        const response = await fetch(getChangelogFileUrl());
+        const response = await fetch(getChangelogFileUrl(changelogLocale));
 
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
 
         const content = await response.text();
-        setRemoteChangelog(parseRemoteChangelog(content));
+        if (!cancelled) {
+          setRemoteChangelog(parseRemoteChangelog(content));
+        }
       } catch (error) {
-        console.error('Failed to fetch remote changelog:', error);
+        if (!cancelled) {
+          setRemoteChangelog([]);
+          console.error('Failed to fetch remote changelog:', error);
+        }
       }
     })();
-  }, [isOpen]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [changelogLocale, isOpen]);
 
   const openReleasePage = () => {
     window.open(updateState.releasePageUrl, '_blank', 'noopener,noreferrer');
@@ -305,6 +422,12 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
 
   const handleInstallUpdate = () => {
     void installDownloadedUpdate();
+  };
+
+  const handleChangelogLocaleChange = (value: string) => {
+    const nextLocale = value === 'en' ? 'en' : 'zh-CN';
+    setChangelogLocale(nextLocale);
+    persistChangelogLocalePreference(nextLocale);
   };
 
   const versionPanelContent = (
@@ -563,7 +686,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                 <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
                   <h4 className='flex items-center gap-2 text-lg font-semibold text-gray-800 dark:text-gray-200'>
                     <Download className='h-5 w-5 text-amber-500' />
-                    远程更新内容
+                    {changelogCopy.remoteSectionTitle}
                   </h4>
                   <button
                     type='button'
@@ -573,12 +696,12 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     {showRemoteContent ? (
                       <>
                         <ChevronUp className='h-4 w-4' />
-                        收起
+                        {changelogCopy.hideRemoteButton}
                       </>
                     ) : (
                       <>
                         <ChevronDown className='h-4 w-4' />
-                        查看更新内容
+                        {changelogCopy.showRemoteButton}
                       </>
                     )}
                   </button>
@@ -587,7 +710,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                 {showRemoteContent ? (
                   <div className='space-y-4'>
                     {remoteOnlyEntries.map((entry) =>
-                      renderChangelogEntry(entry, {
+                      renderChangelogEntry(entry, changelogLocale, {
                         isLatestRemote: entry.version === latestKnownVersion,
                       })
                     )}
@@ -597,12 +720,20 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
             ) : null}
 
             <div className='border-b border-gray-200 pb-4 dark:border-gray-700'>
-              <h4 className='pb-4 text-lg font-semibold text-gray-800 dark:text-gray-200'>
-                变更日志
-              </h4>
+              <div className='flex flex-col gap-3 pb-4 sm:flex-row sm:items-center sm:justify-between'>
+                <h4 className='text-lg font-semibold text-gray-800 dark:text-gray-200'>
+                  {changelogCopy.localSectionTitle}
+                </h4>
+                <CapsuleSwitch
+                  options={[...CHANGELOG_LOCALE_OPTIONS]}
+                  active={changelogLocale}
+                  onChange={handleChangelogLocaleChange}
+                  className='self-start'
+                />
+              </div>
               <div className='space-y-4'>
                 {changelog.map((entry) =>
-                  renderChangelogEntry(entry, {
+                  renderChangelogEntry(entry, changelogLocale, {
                     isCurrentVersion: entry.version === CURRENT_VERSION,
                   })
                 )}
