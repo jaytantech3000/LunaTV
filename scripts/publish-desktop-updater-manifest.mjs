@@ -241,32 +241,30 @@ async function main() {
     prerelease: release.prerelease === true,
   };
 
-  await Promise.all([
-    upsertBranchFile({
-      repository,
-      branch: updaterBranch,
-      filePath: 'latest.json',
-      content: latestJson.endsWith('\n') ? latestJson : `${latestJson}\n`,
-      message: `chore(desktop): publish updater manifest for ${version}`,
-      token,
-    }),
-    upsertBranchFile({
-      repository,
-      branch: updaterBranch,
-      filePath: 'VERSION.txt',
-      content: `${version}\n`,
-      message: `chore(desktop): publish version marker for ${version}`,
-      token,
-    }),
-    upsertBranchFile({
-      repository,
-      branch: updaterBranch,
-      filePath: 'desktop-release.json',
-      content: `${JSON.stringify(manifestMetadata, null, 2)}\n`,
-      message: `chore(desktop): publish release metadata for ${version}`,
-      token,
-    }),
-  ]);
+  await upsertBranchFile({
+    repository,
+    branch: updaterBranch,
+    filePath: 'latest.json',
+    content: latestJson.endsWith('\n') ? latestJson : `${latestJson}\n`,
+    message: `chore(desktop): publish updater manifest for ${version}`,
+    token,
+  });
+  await upsertBranchFile({
+    repository,
+    branch: updaterBranch,
+    filePath: 'VERSION.txt',
+    content: `${version}\n`,
+    message: `chore(desktop): publish version marker for ${version}`,
+    token,
+  });
+  await upsertBranchFile({
+    repository,
+    branch: updaterBranch,
+    filePath: 'desktop-release.json',
+    content: `${JSON.stringify(manifestMetadata, null, 2)}\n`,
+    message: `chore(desktop): publish release metadata for ${version}`,
+    token,
+  });
 
   console.log(
     `Published desktop updater manifest for ${version} to ${repository}@${updaterBranch}`
