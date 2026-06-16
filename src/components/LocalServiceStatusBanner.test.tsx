@@ -41,11 +41,37 @@ describe('LocalServiceStatusBanner', () => {
 
     expect(await screen.findByText('检测到本地服务在线')).toBeInTheDocument();
     expect(
-      screen.getByText('已检测到本地服务在线，刷新一次页面即可切换到本机加速。')
-    ).toBeInTheDocument();
-    expect(
       screen.getByText('http://127.0.0.1:8787 · 端口 8787')
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '刷新启用加速' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '重新检测' })
+    ).toBeInTheDocument();
+  });
+
+  it('collapses to a simpler status when local acceleration is already active', async () => {
+    window.RUNTIME_CONFIG = {
+      API_BASE_URL: 'http://127.0.0.1:8787',
+    };
+    global.fetch = jest.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          base_url: 'http://127.0.0.1:8787',
+          port: 8787,
+          status: 'ok',
+        })
+      )
+    ) as typeof fetch;
+
+    render(<LocalServiceStatusBanner />);
+
+    expect(await screen.findByText('本机加速已启用')).toBeInTheDocument();
+    expect(screen.getByText('当前页已走本机加速')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '刷新启用加速' })
+    ).not.toBeInTheDocument();
   });
 
   it('stays hidden when the local service health endpoint is unavailable', async () => {

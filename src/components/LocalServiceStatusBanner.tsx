@@ -153,15 +153,19 @@ export function LocalServiceStatusBanner() {
 
     const active = isLocalAccelerationActive(health.baseUrl);
     return {
-      accentClassName: active
-        ? 'from-emerald-500 via-emerald-500 to-teal-500'
-        : 'from-sky-500 via-cyan-500 to-teal-500',
-      badgeLabel: active ? '本机加速已启用' : '刷新后启用加速',
-      description: active
-        ? '当前页面会优先命中本地服务进行播放与下载加速。'
-        : '已检测到本地服务在线，刷新一次页面即可切换到本机加速。',
-      pulseClassName: active ? 'bg-emerald-100' : 'bg-cyan-100',
-      title: active ? '本地服务已连接' : '检测到本地服务在线',
+      active,
+      glowClassName: active
+        ? 'from-emerald-500/18 via-emerald-400/8'
+        : 'from-green-500/14 via-emerald-500/8',
+      iconSurfaceClassName: active
+        ? 'border-emerald-400/20 bg-emerald-500/12 text-emerald-100'
+        : 'border-green-400/15 bg-green-500/10 text-green-100',
+      metaClassName: active ? 'text-emerald-100/70' : 'text-green-100/70',
+      pulseClassName: active ? 'bg-emerald-300' : 'bg-green-300',
+      surfaceClassName: active
+        ? 'border-emerald-500/20 bg-[#071510]/95 shadow-black/40'
+        : 'border-green-500/15 bg-[#08110f]/95 shadow-black/35',
+      title: active ? '本机加速已启用' : '检测到本地服务在线',
     };
   }, [health]);
 
@@ -170,49 +174,68 @@ export function LocalServiceStatusBanner() {
   }
 
   return (
-    <div className='sticky top-12 z-[950] px-3 pt-2 md:top-0 md:px-6 lg:px-8'>
+    <div className='sticky top-12 z-[950] px-3 pt-1.5 md:top-0 md:px-6 lg:px-8'>
       <div
-        className={`overflow-hidden rounded-2xl border border-white/15 bg-gradient-to-r ${bannerState.accentClassName} text-white shadow-lg shadow-emerald-950/20`}
+        className={`relative overflow-hidden rounded-xl border ${bannerState.surfaceClassName} text-white shadow-lg`}
       >
-        <div className='flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5'>
-          <div className='flex items-start gap-3'>
-            <div className='mt-0.5 rounded-2xl bg-white/15 p-2.5 backdrop-blur-sm'>
-              <ServerCog className='h-5 w-5' />
+        <div
+          aria-hidden='true'
+          className={`pointer-events-none absolute inset-y-0 left-0 w-28 bg-gradient-to-r ${bannerState.glowClassName} to-transparent`}
+        />
+        <div className='flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-4'>
+          <div className='flex min-w-0 items-center gap-3'>
+            <div
+              className={`rounded-xl border p-2 backdrop-blur-sm ${bannerState.iconSurfaceClassName}`}
+            >
+              <ServerCog className='h-4.5 w-4.5' />
             </div>
             <div className='min-w-0'>
               <div className='flex flex-wrap items-center gap-2'>
                 <span
-                  className={`h-2.5 w-2.5 rounded-full ${
+                  className={`h-2.5 w-2.5 rounded-full shrink-0 ${
                     bannerState.pulseClassName
                   } ${isChecking ? 'animate-pulse' : ''}`}
                 />
                 <span className='text-sm font-semibold tracking-wide'>
                   {bannerState.title}
                 </span>
-                <span className='inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-0.5 text-[11px] font-medium text-white/95 backdrop-blur-sm'>
-                  <Zap className='h-3.5 w-3.5' />
-                  {bannerState.badgeLabel}
-                </span>
+                {bannerState.active && (
+                  <span className='inline-flex items-center gap-1 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-100 backdrop-blur-sm'>
+                    <Zap className='h-3.5 w-3.5' />
+                    当前页已走本机加速
+                  </span>
+                )}
               </div>
-              <p className='mt-1 text-sm text-white/90'>
-                {bannerState.description}
-              </p>
-              <p className='mt-1 text-xs text-white/75'>
+              <p
+                className={`mt-0.5 truncate text-xs ${bannerState.metaClassName}`}
+              >
                 {health.baseUrl}
                 {health.port ? ` · 端口 ${health.port}` : ''}
               </p>
             </div>
           </div>
-          <button
-            className='inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-white/15'
-            onClick={() => setProbeNonce((value) => value + 1)}
-            type='button'
-          >
-            <RefreshCw
-              className={`h-4 w-4 ${isChecking ? 'animate-spin' : ''}`}
-            />
-            重新检测
-          </button>
+          <div className='flex items-center gap-2 self-start sm:self-center'>
+            {!bannerState.active && (
+              <button
+                className='inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm shadow-black/30 transition-colors hover:bg-green-500'
+                onClick={() => window.location.reload()}
+                type='button'
+              >
+                <Zap className='h-4 w-4' />
+                刷新启用加速
+              </button>
+            )}
+            <button
+              className='inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-white/10'
+              onClick={() => setProbeNonce((value) => value + 1)}
+              type='button'
+            >
+              <RefreshCw
+                className={`h-4 w-4 ${isChecking ? 'animate-spin' : ''}`}
+              />
+              重新检测
+            </button>
+          </div>
         </div>
       </div>
     </div>
