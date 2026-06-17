@@ -74,6 +74,10 @@ function inferContentType(fileName: string): string {
     return 'application/vnd.microsoft.portable-executable';
   }
 
+  if (normalizedName.endsWith('.deb')) {
+    return 'application/vnd.debian.binary-package';
+  }
+
   if (normalizedName.endsWith('.pkg')) {
     return 'application/octet-stream';
   }
@@ -285,6 +289,8 @@ async function handleLocalServiceInstallerDownload(
     fallbackFileName:
       platform === 'win-x64'
         ? 'lunatv-local-service-win-x64.exe'
+        : platform.startsWith('linux-')
+        ? `lunatv-local-service-${platform}.deb`
         : `lunatv-local-service-${platform}.pkg`,
     method,
     targetUrl,

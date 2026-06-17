@@ -11,6 +11,46 @@
 
 ---
 
+## 2026-06-17 - 本地服务 Linux `.deb` 安装包与脚本兜底 v1
+
+- 分支：`nova`
+- 方案/说明文档：
+  - `docs/local-service-release.md`
+
+### 目标
+
+- 为 Linux 端本地服务尽量提供安装包，而不是只给脚本。
+- 保持 Debian / Ubuntu 用户可直接安装，同时不牺牲其他 Linux 发行版的脚本兜底路径。
+- 让 Linux 停止 / 卸载脚本同时兼容 `.deb` 安装和旧版 `~/.lunatv` 脚本安装。
+
+### 核心实现
+
+- 新增 Linux 发布资源与 systemd 服务定义：
+  - `.github/local-service/linux/lunatv-local-service.service`
+  - `.github/local-service/linux/postinst`
+  - `.github/local-service/linux/prerm`
+  - `.github/local-service/linux/postrm`
+- Linux 本地服务 release 现在额外产出：
+  - `lunatv-local-service-linux-x64.deb`
+  - `lunatv-local-service-linux-arm64.deb`
+- Web 下载映射与面板升级：
+  - `src/lib/client-download.ts`
+  - `src/app/api/client-download/route.ts`
+  - `src/components/DownloadClientPanel.tsx`
+- Linux 停止 / 卸载脚本兼容 systemd + `dpkg` 安装场景：
+  - `src/app/api/local-service-script/route.ts`
+
+### 本阶段已处理的问题
+
+- Linux 端此前只能下载脚本，Debian / Ubuntu 用户缺少可安装包。
+- 如果直接把 Linux 平台切成安装包入口，Fedora / Arch 等非 `.deb` 发行版会失去原有脚本安装路径。
+- Linux 停止 / 卸载脚本此前只认 `~/.lunatv` 用户目录，不识别 systemd 和系统级安装目录。
+
+### 当前约束
+
+- 当前 Linux 安装包先覆盖 Debian / Ubuntu `.deb` 生态，其他发行版仍建议使用脚本安装。
+- `.deb` 安装链路的最终双击体验仍需要在真实 Linux 桌面环境做一次人工回归。
+
 ## 2026-06-17 - 本地服务 Windows 安装包与发布可用性修复 v1
 
 - 分支：`nova`

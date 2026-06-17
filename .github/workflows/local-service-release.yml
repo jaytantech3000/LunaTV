@@ -155,15 +155,22 @@ jobs:
 
   build-linux:
     needs:
+      - prepare-release
       - verify
     strategy:
       matrix:
         include:
           - asset_name: lunatv-server-linux-x64
+            deb_arch: amd64
+            deb_name: lunatv-local-service-linux-x64.deb
             target: x86_64-unknown-linux-musl
           - asset_name: lunatv-server-linux-arm64
+            deb_arch: arm64
+            deb_name: lunatv-local-service-linux-arm64.deb
             target: aarch64-unknown-linux-musl
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
     steps:
       - name: Checkout source code
         uses: actions/checkout@v6
@@ -179,17 +186,62 @@ jobs:
       - name: Build binary
         run: cross build --locked --release --manifest-path crates/moontv-local-service/Cargo.toml --target ${{ matrix.target }}
 
-      - name: Package artifact
+      - name: Package artifacts
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
           cp "crates/moontv-local-service/target/${{ matrix.target }}/release/lunatv-server" "dist/${{ matrix.asset_name }}"
+
+          pkg_version="$RELEASE_TAG"
+          pkg_version="${pkg_version#local-service-}"
+          pkg_version="${pkg_version#nova-}"
+          pkg_version="${pkg_version#luna-}"
+          pkg_version="$(printf '%s' "$pkg_version" | tr -cs '0-9.' '.')"
+          pkg_version="${pkg_version#.}"
+          pkg_version="${pkg_version%.}"
+          if [[ -z "$pkg_version" ]]; then
+            pkg_version='1.0.0'
+          fi
+
+          deb_root="deb-root"
+          rm -rf "$deb_root"
+          mkdir -p \
+            "$deb_root/DEBIAN" \
+            "$deb_root/etc/lunatv-local-service" \
+            "$deb_root/lib/systemd/system" \
+            "$deb_root/opt/lunatv-local-service/bin" \
+            "$deb_root/var/lib/lunatv-local-service"
+
+          install -m 755 "crates/moontv-local-service/target/${{ matrix.target }}/release/lunatv-server" "$deb_root/opt/lunatv-local-service/bin/lunatv-server"
+          install -m 644 config.example.json "$deb_root/etc/lunatv-local-service/config.json"
+          install -m 644 ".github/local-service/linux/lunatv-local-service.service" "$deb_root/lib/systemd/system/lunatv-local-service.service"
+          install -m 755 ".github/local-service/linux/postinst" "$deb_root/DEBIAN/postinst"
+          install -m 755 ".github/local-service/linux/prerm" "$deb_root/DEBIAN/prerm"
+          install -m 755 ".github/local-service/linux/postrm" "$deb_root/DEBIAN/postrm"
+
+          printf '%s\n' \
+            'Package: lunatv-local-service' \
+            "Version: $pkg_version" \
+            'Section: net' \
+            'Priority: optional' \
+            'Architecture: ${{ matrix.deb_arch }}' \
+            'Maintainer: LunaTV' \
+            'Description: LunaTV local acceleration service' \
+            ' Local HTTP proxy service for LunaTV web deployments.' \
+            > "$deb_root/DEBIAN/control"
+
+          printf '%s\n' \
+            '/etc/lunatv-local-service/config.json' \
+            > "$deb_root/DEBIAN/conffiles"
+
+          dpkg-deb --build --root-owner-group "$deb_root" "dist/${{ matrix.deb_name }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: local-service-${{ matrix.asset_name }}
-          path: dist/${{ matrix.asset_name }}
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 

@@ -372,6 +372,12 @@ describe('client-download helpers', () => {
     mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
     mutableEnv.LOCAL_SERVICE_RELEASE_TAG = 'local-service-nova-latest';
 
+    expect(resolveLocalServiceInstallerUrl('linux-arm64')).toBe(
+      'https://github.com/demo/LunaTV/releases/download/local-service-nova-latest/lunatv-local-service-linux-arm64.deb'
+    );
+    expect(resolveLocalServiceInstallerUrl('linux-x64')).toBe(
+      'https://github.com/demo/LunaTV/releases/download/local-service-nova-latest/lunatv-local-service-linux-x64.deb'
+    );
     expect(resolveLocalServiceInstallerUrl('mac-arm64')).toBe(
       'https://github.com/demo/LunaTV/releases/download/local-service-nova-latest/lunatv-local-service-mac-arm64.pkg'
     );
@@ -501,43 +507,71 @@ describe('client-download helpers', () => {
             assets: [
               {
                 browser_download_url:
-                  'https://example.com/lunatv-server-mac-arm64',
+                  'https://example.com/lunatv-server-linux-arm64',
                 id: 20,
+                name: 'lunatv-server-linux-arm64',
+                size: 100,
+              },
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-server-linux-x64',
+                id: 21,
+                name: 'lunatv-server-linux-x64',
+                size: 100,
+              },
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-server-mac-arm64',
+                id: 22,
                 name: 'lunatv-server-mac-arm64',
                 size: 100,
               },
               {
                 browser_download_url:
                   'https://example.com/lunatv-server-mac-x64',
-                id: 21,
+                id: 23,
                 name: 'lunatv-server-mac-x64',
                 size: 100,
               },
               {
                 browser_download_url:
                   'https://example.com/lunatv-server-win-x64.exe',
-                id: 22,
+                id: 24,
                 name: 'lunatv-server-win-x64.exe',
                 size: 100,
               },
               {
                 browser_download_url:
+                  'https://example.com/lunatv-local-service-linux-arm64.deb',
+                id: 25,
+                name: 'lunatv-local-service-linux-arm64.deb',
+                size: 100,
+              },
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-local-service-linux-x64.deb',
+                id: 26,
+                name: 'lunatv-local-service-linux-x64.deb',
+                size: 100,
+              },
+              {
+                browser_download_url:
                   'https://example.com/lunatv-local-service-mac-arm64.pkg',
-                id: 23,
+                id: 27,
                 name: 'lunatv-local-service-mac-arm64.pkg',
                 size: 100,
               },
               {
                 browser_download_url:
                   'https://example.com/lunatv-local-service-mac-x64.pkg',
-                id: 24,
+                id: 28,
                 name: 'lunatv-local-service-mac-x64.pkg',
                 size: 100,
               },
               {
                 browser_download_url:
                   'https://example.com/lunatv-local-service-win-x64.exe',
-                id: 25,
+                id: 29,
                 name: 'lunatv-local-service-win-x64.exe',
                 size: 100,
               },
@@ -582,7 +616,13 @@ describe('client-download helpers', () => {
     ) as typeof fetch;
 
     await expect(fetchLocalServiceReleaseSummary()).resolves.toEqual({
-      availablePlatforms: ['mac-arm64', 'mac-x64', 'win-x64'],
+      availablePlatforms: [
+        'linux-arm64',
+        'linux-x64',
+        'mac-arm64',
+        'mac-x64',
+        'win-x64',
+      ],
       configuredPlatforms: [
         'linux-arm64',
         'linux-x64',
@@ -591,7 +631,13 @@ describe('client-download helpers', () => {
         'win-x64',
       ],
       displayName: 'LunaTV Local Service (local-service-nova-2026-06-16.3)',
-      installerPlatforms: ['mac-arm64', 'mac-x64', 'win-x64'],
+      installerPlatforms: [
+        'linux-arm64',
+        'linux-x64',
+        'mac-arm64',
+        'mac-x64',
+        'win-x64',
+      ],
       publishedAt: '2026-06-16T03:00:00.000Z',
       releaseStatus: 'release',
       version: 'local-service-nova-2026-06-16.3',

@@ -13,10 +13,7 @@ export type LocalServicePlatformKey =
   | 'linux-arm64'
   | 'win-x64';
 
-export type LocalServiceInstallerPlatformKey =
-  | 'mac-arm64'
-  | 'mac-x64'
-  | 'win-x64';
+export type LocalServiceInstallerPlatformKey = LocalServicePlatformKey;
 
 export type LocalServiceReleaseStatus = 'release' | 'direct-url' | 'missing';
 
@@ -139,6 +136,8 @@ const LOCAL_SERVICE_INSTALLER_ASSET_NAMES: Record<
   LocalServiceInstallerPlatformKey,
   string
 > = {
+  'linux-arm64': 'lunatv-local-service-linux-arm64.deb',
+  'linux-x64': 'lunatv-local-service-linux-x64.deb',
   'mac-arm64': 'lunatv-local-service-mac-arm64.pkg',
   'mac-x64': 'lunatv-local-service-mac-x64.pkg',
   'win-x64': 'lunatv-local-service-win-x64.exe',
@@ -471,7 +470,7 @@ export function isLocalServicePlatformKey(
 export function isLocalServiceInstallerPlatformKey(
   value: string | null | undefined
 ): value is LocalServiceInstallerPlatformKey {
-  return value === 'mac-arm64' || value === 'mac-x64' || value === 'win-x64';
+  return isLocalServicePlatformKey(value);
 }
 
 export function getLocalServicePlatformLabel(

@@ -85,7 +85,8 @@ describe('/api/client-download', () => {
     (
       isLocalServiceInstallerPlatformKey as unknown as jest.Mock
     ).mockImplementation(
-      (value: string | null) => value === 'mac-arm64' || value === 'win-x64'
+      (value: string | null) =>
+        value === 'mac-arm64' || value === 'linux-x64' || value === 'win-x64'
     );
     (resolveLocalServiceInstallerUrl as jest.Mock).mockReturnValue(
       'https://objects.githubusercontent.com/lunatv-local-service-mac-arm64.pkg'
@@ -187,6 +188,27 @@ describe('/api/client-download', () => {
     expect(resolveLocalServiceInstallerUrl).toHaveBeenCalledWith('win-x64');
     expect(response.headers.get('Content-Disposition')).toBe(
       'attachment; filename="lunatv-local-service-win-x64.exe"'
+    );
+  });
+
+  it('uses a .deb fallback filename for the Linux local-service installer', async () => {
+    (resolveLocalServiceInstallerUrl as jest.Mock).mockReturnValue(
+      'https://objects.githubusercontent.com/'
+    );
+    (validateProxyTargetUrl as jest.Mock).mockResolvedValue(
+      'https://objects.githubusercontent.com/'
+    );
+
+    const request = new NextRequest(
+      'http://localhost/api/client-download?kind=local-service-installer&platform=linux-x64'
+    );
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
+    expect(resolveLocalServiceInstallerUrl).toHaveBeenCalledWith('linux-x64');
+    expect(response.headers.get('Content-Disposition')).toBe(
+      'attachment; filename="lunatv-local-service-linux-x64.deb"'
     );
   });
 

@@ -16,7 +16,8 @@ describe('/api/local-service-script', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (isLocalServicePlatformKey as unknown as jest.Mock).mockImplementation(
-      (value: string | null) => value === 'mac-arm64' || value === 'win-x64'
+      (value: string | null) =>
+        value === 'linux-x64' || value === 'mac-arm64' || value === 'win-x64'
     );
     (resolveLocalServiceBinaryUrl as jest.Mock).mockReturnValue(
       'https://objects.githubusercontent.com/lunatv-server'
@@ -96,6 +97,40 @@ describe('/api/local-service-script', () => {
     );
     expect(body).toContain('Get-Process -Name "lunatv-server"');
     expect(body).toContain('LunaTV local service stopped.');
+  });
+
+  it('returns a Linux stop script that handles packaged systemd installs', async () => {
+    const request = new NextRequest(
+      'http://localhost/api/local-service-script?platform=linux-x64&action=stop'
+    );
+
+    const response = await GET(request);
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Disposition')).toBe(
+      'attachment; filename="lunatv-local-service-linux-x64-stop.sh"'
+    );
+    expect(body).toContain('systemctl stop "$SYSTEM_SERVICE"');
+    expect(body).toContain('/opt/lunatv-local-service/bin/lunatv-server');
+  });
+
+  it('returns a Linux uninstall script that removes the Debian package when present', async () => {
+    const request = new NextRequest(
+      'http://localhost/api/local-service-script?platform=linux-x64&action=uninstall'
+    );
+
+    const response = await GET(request);
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Disposition')).toBe(
+      'attachment; filename="lunatv-local-service-linux-x64-uninstall.sh"'
+    );
+    expect(body).toContain('dpkg -s "$PACKAGE_NAME"');
+    expect(body).toContain('dpkg -r "$PACKAGE_NAME"');
+    expect(body).toContain('/etc/lunatv-local-service');
+    expect(body).toContain('/var/lib/lunatv-local-service');
   });
 
   it('uses HEAD to report script availability without returning a body', async () => {

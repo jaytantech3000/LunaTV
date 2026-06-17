@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SERVICE_NAME="lunatv-local-service.service"
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+if [[ "${1:-}" == "purge" ]]; then
+  rm -rf /etc/lunatv-local-service
+  rm -rf /opt/lunatv-local-service
+  rm -rf /var/lib/lunatv-local-service
+fi

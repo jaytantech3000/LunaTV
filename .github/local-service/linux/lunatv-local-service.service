@@ -1,0 +1,13 @@
+[Unit]
+Description=LunaTV Local Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/lunatv-local-service
+ExecStart=/opt/lunatv-local-service/bin/lunatv-server --host 127.0.0.1 --port 8787 --config-path /etc/lunatv-local-service/config.json --data-dir /var/lib/lunatv-local-service --sqlite-path /var/lib/lunatv-local-service/moontv-local-service.sqlite3
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

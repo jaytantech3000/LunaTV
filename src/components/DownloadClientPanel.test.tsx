@@ -281,10 +281,10 @@ describe('DownloadClientPanel', () => {
       }).parentElement as HTMLElement;
       const localServiceArmRow = screen.getByRole('button', {
         name: 'macOS Apple Silicon 安装包下载',
-      }).parentElement as HTMLElement;
+      }).parentElement?.parentElement as HTMLElement;
       const localServiceIntelRow = screen.getByRole('button', {
         name: 'macOS Intel 安装包下载',
-      }).parentElement as HTMLElement;
+      }).parentElement?.parentElement as HTMLElement;
 
       expect(within(desktopArmRow).getByText('当前设备')).toBeInTheDocument();
       expect(within(desktopIntelRow).queryByText('当前设备')).toBeNull();
@@ -415,6 +415,74 @@ describe('DownloadClientPanel', () => {
     ).toBeEnabled();
     expect(
       screen.getByText('下载 Windows 安装包 (.exe)，双击即可安装并自动启动')
+    ).toBeInTheDocument();
+  });
+
+  it('shows a Linux .deb installer while keeping the script fallback visible', async () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value:
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    });
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      configurable: true,
+      value: undefined,
+    });
+
+    global.fetch = jest.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === '/api/desktop-release') {
+        return Promise.resolve(
+          jsonResponse({
+            assets: [],
+            missingAssetKeys: [
+              'mac-arm64',
+              'mac-x64',
+              'win-x64-setup',
+              'win-x64-portable',
+            ],
+            publishedAt: '2026-06-15T00:00:00.000Z',
+            releaseId: 39,
+            version: 'Desktop Internal #39',
+          })
+        );
+      }
+
+      if (url === '/api/local-service-release') {
+        return Promise.resolve(
+          jsonResponse({
+            availablePlatforms: ['linux-x64'],
+            configuredPlatforms: ['linux-x64'],
+            displayName:
+              'LunaTV Local Service (local-service-nova-2026-06-17.2)',
+            installerPlatforms: ['linux-x64'],
+            publishedAt: '2026-06-17T04:00:00.000Z',
+            releaseStatus: 'release',
+            version: 'local-service-nova-2026-06-17.2',
+          })
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    }) as typeof fetch;
+
+    render(<DownloadClientPanel isOpen onClose={jest.fn()} />);
+
+    expect(
+      await screen.findByText('local-service-nova-2026-06-17.2')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Linux x64 安装包下载' })
+    ).toBeEnabled();
+    expect(
+      screen.getByRole('button', { name: 'Linux x64 脚本下载' })
+    ).toBeEnabled();
+    expect(
+      screen.getByText(
+        '下载 Debian / Ubuntu 安装包 (.deb)，安装后自动注册 systemd 服务；其他发行版仍可改用脚本'
+      )
     ).toBeInTheDocument();
   });
 });

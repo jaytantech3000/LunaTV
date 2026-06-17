@@ -26,8 +26,13 @@ type LocalServicePlatformKey =
   | 'linux-arm64'
   | 'win-x64';
 
-type LocalServiceInstallerPlatformKey = 'mac-arm64' | 'mac-x64' | 'win-x64';
+type LocalServiceInstallerPlatformKey = LocalServicePlatformKey;
 type LocalServiceMaintenanceAction = 'stop' | 'uninstall';
+type LocalServiceDownloadAction = {
+  ariaLabelSuffix: string;
+  href: string;
+  label: string;
+};
 type MacArchitecture = 'arm64' | 'x64';
 type RecommendedTargets = {
   desktop?: DesktopAssetKey;
@@ -394,44 +399,49 @@ async function detectRecommendedTargets(): Promise<RecommendedTargets> {
   return createMacRecommendedTargets(macArchitecture || 'x64');
 }
 
-function isLocalServiceInstallerPlatform(
-  value: LocalServicePlatformKey
-): value is LocalServiceInstallerPlatformKey {
-  return value === 'mac-arm64' || value === 'mac-x64' || value === 'win-x64';
+function buildLocalServiceScriptDownloadAction(
+  platform: LocalServicePlatformKey
+): LocalServiceDownloadAction {
+  return {
+    ariaLabelSuffix: '脚本下载',
+    href: `/api/local-service-script?platform=${platform}`,
+    label: '下载脚本',
+  };
 }
 
 function getLocalServiceDownloadConfig(
   platform: LocalServicePlatformKey,
   installerPlatforms: Set<LocalServiceInstallerPlatformKey>
 ): {
-  ariaLabelSuffix: string;
   description: string;
-  href: string;
-  label: string;
+  primaryAction: LocalServiceDownloadAction;
+  secondaryAction?: LocalServiceDownloadAction;
 } {
-  if (
-    isLocalServiceInstallerPlatform(platform) &&
-    installerPlatforms.has(platform)
-  ) {
+  if (installerPlatforms.has(platform)) {
     return {
-      ariaLabelSuffix: '安装包下载',
       description:
         platform === 'win-x64'
           ? '下载 Windows 安装包 (.exe)，双击即可安装并自动启动'
+          : platform.startsWith('linux-')
+          ? '下载 Debian / Ubuntu 安装包 (.deb)，安装后自动注册 systemd 服务；其他发行版仍可改用脚本'
           : '下载 macOS 安装包 (.pkg)，双击即可安装并自动启动',
-      href: `/api/client-download?kind=local-service-installer&platform=${platform}`,
-      label: '下载安装包',
+      primaryAction: {
+        ariaLabelSuffix: '安装包下载',
+        href: `/api/client-download?kind=local-service-installer&platform=${platform}`,
+        label: '下载安装包',
+      },
+      secondaryAction: platform.startsWith('linux-')
+        ? buildLocalServiceScriptDownloadAction(platform)
+        : undefined,
     };
   }
 
   return {
-    ariaLabelSuffix: '脚本下载',
     description:
       platform === 'win-x64'
         ? '下载 PowerShell 脚本 (.ps1)'
         : '下载 shell 脚本 (.sh)',
-    href: `/api/local-service-script?platform=${platform}`,
-    label: '下载脚本',
+    primaryAction: buildLocalServiceScriptDownloadAction(platform),
   };
 }
 
@@ -668,7 +678,7 @@ export default function DownloadClientPanel({
                 客户端下载
               </h3>
               <p className='text-xs text-gray-500 dark:text-gray-400 sm:text-sm'>
-                桌面版安装包与本地服务脚本均通过本站接口分发
+                桌面版安装包与本地服务安装文件均通过本站接口分发
               </p>
             </div>
           </div>
@@ -829,7 +839,8 @@ export default function DownloadClientPanel({
               </div>
               <p className='mt-1 text-sm text-gray-600 dark:text-gray-300'>
                 安装后视频流量走本机，不经过 Vercel。macOS / Windows
-                优先提供双击安装包，Linux 提供脚本安装。
+                优先提供双击安装包，Linux 优先提供 Debian / Ubuntu
+                安装包，并保留脚本兜底。
               </p>
             </div>
 
@@ -935,6 +946,7 @@ export default function DownloadClientPanel({
                   meta.key,
                   localServiceInstallerPlatforms
                 );
+                const secondaryAction = downloadConfig.secondaryAction;
 
                 return (
                   <div
@@ -965,22 +977,44 @@ export default function DownloadClientPanel({
                         {downloadConfig.description}
                       </div>
                     </div>
-                    <button
-                      aria-label={`${meta.label} ${downloadConfig.ariaLabelSuffix}`}
-                      className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                        isUnavailable
-                          ? 'cursor-not-allowed bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
-                          : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                      }`}
-                      disabled={isUnavailable}
-                      onClick={() =>
-                        !isUnavailable && handleDownload(downloadConfig.href)
-                      }
-                      type='button'
-                    >
-                      <Download className='h-4 w-4' />
-                      {downloadConfig.label}
-                    </button>
+                    <div className='flex flex-wrap gap-2'>
+                      <button
+                        aria-label={`${meta.label} ${downloadConfig.primaryAction.ariaLabelSuffix}`}
+                        className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                          isUnavailable
+                            ? 'cursor-not-allowed bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                            : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                        }`}
+                        disabled={isUnavailable}
+                        onClick={() =>
+                          !isUnavailable &&
+                          handleDownload(downloadConfig.primaryAction.href)
+                        }
+                        type='button'
+                      >
+                        <Download className='h-4 w-4' />
+                        {downloadConfig.primaryAction.label}
+                      </button>
+                      {secondaryAction && (
+                        <button
+                          aria-label={`${meta.label} ${secondaryAction.ariaLabelSuffix}`}
+                          className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                            isUnavailable
+                              ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-500 dark:border-gray-800 dark:bg-gray-900/30 dark:text-gray-500'
+                              : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-200 dark:hover:bg-gray-800/60'
+                          }`}
+                          disabled={isUnavailable}
+                          onClick={() =>
+                            !isUnavailable &&
+                            handleDownload(secondaryAction.href)
+                          }
+                          type='button'
+                        >
+                          <Download className='h-4 w-4' />
+                          {secondaryAction.label}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}

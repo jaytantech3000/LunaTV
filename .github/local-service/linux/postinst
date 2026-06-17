@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_DIR="/etc/lunatv-local-service"
+DATA_DIR="/var/lib/lunatv-local-service"
+SERVICE_NAME="lunatv-local-service.service"
+
+mkdir -p "$CONFIG_DIR" "$DATA_DIR"
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload || true
+  systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+  systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+fi
