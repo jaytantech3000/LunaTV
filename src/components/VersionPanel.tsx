@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
+  ExternalLink,
   Loader2,
   Plus,
   RefreshCw,
@@ -363,7 +364,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
   const autoDownloadDescription = isAutoDownloadInProgress
     ? '正在自动下载最新版本，完成后可直接点击上方安装。'
     : isAutoInstallingUpdate
-    ? '正在安装更新，应用即将自动重启。'
+    ? '正在安装更新，请稍候。'
     : hasAutoDownloadedUpdate
     ? '更新包已自动下载完成，点击上方安装即可。'
     : isDesktopUpdaterAvailable
@@ -659,9 +660,9 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                       {updateState.isInstalling ? (
                         <Loader2 className='h-4 w-4 animate-spin' />
                       ) : (
-                        <Download className='h-4 w-4' />
+                        <CheckCircle2 className='h-4 w-4' />
                       )}
-                      静默安装并重启
+                      安装更新
                     </button>
                   ) : null}
 
@@ -670,7 +671,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     onClick={openReleasePage}
                     className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-medium text-gray-700 ring-1 ring-gray-200 transition-colors hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-700 dark:hover:bg-gray-800 sm:w-auto'
                   >
-                    <Download className='h-4 w-4' />
+                    <ExternalLink className='h-4 w-4' />
                     打开发布页
                   </button>
                 </div>
@@ -692,31 +693,6 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                   <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
                     {autoDownloadDescription}
                   </p>
-                  {isAutoDownloadInProgress ? (
-                    <div className='mt-3 space-y-2'>
-                      <div className='h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-800'>
-                        <div
-                          className='h-full rounded-full bg-emerald-500 transition-[width]'
-                          style={{
-                            width: `${updateState.progressPercent ?? 0}%`,
-                          }}
-                        />
-                      </div>
-                      <div className='flex items-center justify-between text-[11px] text-gray-500 dark:text-gray-400'>
-                        <span>
-                          {updateState.progressPercent !== null
-                            ? `自动下载中 ${updateState.progressPercent}%`
-                            : '自动下载中'}
-                        </span>
-                        <span>
-                          {formatBytes(updateState.downloadedBytes)}
-                          {updateState.totalBytes
-                            ? ` / ${formatBytes(updateState.totalBytes)}`
-                            : ''}
-                        </span>
-                      </div>
-                    </div>
-                  ) : null}
                 </div>
                 <label
                   className={`flex items-center ${

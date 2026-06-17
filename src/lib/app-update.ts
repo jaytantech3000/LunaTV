@@ -354,8 +354,8 @@ async function checkDesktopUpdates(allowAutoDownload: boolean) {
       releaseNotes:
         nextUpdate.body?.trim() || downloadedUpdate?.body?.trim() || null,
       statusMessage: autoDownloadEnabled
-        ? '更新包已自动下载，点击安装即可静默安装并自动重启。'
-        : '更新包已下载，点击后将静默安装并自动重启。',
+        ? '更新包已自动下载，点击安装即可。'
+        : '更新包已下载，点击安装即可。',
       errorMessage: null,
     });
 
@@ -578,8 +578,8 @@ export async function downloadLatestVersion() {
         publishedAt: updateToDownload.date || state.publishedAt,
         releaseNotes: updateToDownload.body?.trim() || state.releaseNotes,
         statusMessage: readAutoDownloadPreference()
-          ? '更新包已自动下载，点击安装即可静默安装并自动重启。'
-          : '更新包已下载，点击后将静默安装并自动重启。',
+          ? '更新包已自动下载，点击安装即可。'
+          : '更新包已下载，点击安装即可。',
         errorMessage: null,
       });
     } catch (error) {
@@ -647,7 +647,7 @@ export async function installDownloadedUpdate() {
       isDownloading: false,
       isInstalling: true,
       isBusy: true,
-      statusMessage: '正在静默安装更新并准备自动重启...',
+      statusMessage: '正在安装更新...',
       errorMessage: null,
     });
 
