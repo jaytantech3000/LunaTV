@@ -422,7 +422,7 @@ describe('DownloadClientPanel', () => {
       screen.getByRole('button', { name: 'Windows x64 安装包下载' })
     ).toBeEnabled();
     expect(
-      screen.getByText('下载 Windows 安装包 (.exe)，双击即可安装并自动启动')
+      screen.getByText('提供 Windows 安装包 (.exe)，双击安装后自动启动')
     ).toBeInTheDocument();
   });
 
@@ -489,7 +489,7 @@ describe('DownloadClientPanel', () => {
     ).toBeEnabled();
     expect(
       screen.getByText(
-        '下载 Debian / Ubuntu 安装包 (.deb)，安装后自动注册 systemd 服务；其他发行版仍可改用脚本'
+        '提供 Debian / Ubuntu 安装包 (.deb)，自动注册 systemd；其他发行版可改用脚本'
       )
     ).toBeInTheDocument();
   });
