@@ -209,17 +209,54 @@ jobs:
       - name: Build binary
         run: cargo build --locked --release --manifest-path crates/moontv-local-service/Cargo.toml --target x86_64-pc-windows-msvc
 
-      - name: Package artifact
-        shell: bash
+      - name: Install 7-Zip
+        shell: pwsh
+        run: choco install 7zip.install -y
+
+      - name: Package artifacts
+        shell: pwsh
         run: |
-          mkdir -p dist
-          cp "crates/moontv-local-service/target/x86_64-pc-windows-msvc/release/lunatv-server.exe" "dist/lunatv-server-win-x64.exe"
+          New-Item -ItemType Directory -Force dist, installer-build, installer-payload | Out-Null
+
+          Copy-Item "crates/moontv-local-service/target/x86_64-pc-windows-msvc/release/lunatv-server.exe" "dist/lunatv-server-win-x64.exe"
+          Copy-Item "crates/moontv-local-service/target/x86_64-pc-windows-msvc/release/lunatv-server.exe" "installer-payload/lunatv-server.exe"
+          Copy-Item "config.example.json" "installer-payload/config.json"
+          Copy-Item ".github/local-service/windows/install-local-service.cmd" "installer-payload/install-local-service.cmd"
+          Copy-Item ".github/local-service/windows/run-local-service.vbs" "installer-payload/run-local-service.vbs"
+
+          $sevenZipExe = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+          $sevenZipSfx = Join-Path $env:ProgramFiles "7-Zip\7z.sfx"
+          if (-not (Test-Path $sevenZipExe) -or -not (Test-Path $sevenZipSfx)) {
+            throw "7-Zip SFX components are unavailable on the runner."
+          }
+
+          $archivePath = Join-Path (Resolve-Path "installer-build").Path "lunatv-local-service-win-x64.7z"
+          $configPath = Join-Path (Resolve-Path "installer-build").Path "lunatv-local-service-win-x64.txt"
+          $targetPath = Join-Path (Resolve-Path "dist").Path "lunatv-local-service-win-x64.exe"
+
+          & $sevenZipExe a -t7z $archivePath ".\installer-payload\*" | Out-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip failed to create the Windows installer payload."
+          }
+
+          @'
+          ;!@Install@!UTF-8!
+          Title="LunaTV Local Service"
+          RunProgram="install-local-service.cmd"
+          GUIMode="1"
+          ;!@InstallEnd@!
+          '@ | Set-Content -Path $configPath -Encoding UTF8
+
+          & cmd.exe /c "copy /b /y ""$sevenZipSfx""+""$configPath""+""$archivePath"" ""$targetPath"" >nul"
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $targetPath)) {
+            throw "Failed to assemble the Windows self-extracting installer."
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: local-service-lunatv-server-win-x64.exe
-          path: dist/lunatv-server-win-x64.exe
+          name: local-service-windows-artifacts
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 

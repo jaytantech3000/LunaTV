@@ -282,7 +282,10 @@ async function handleLocalServiceInstallerDownload(
   }
 
   return proxyDownload(request, {
-    fallbackFileName: `lunatv-local-service-${platform}.pkg`,
+    fallbackFileName:
+      platform === 'win-x64'
+        ? 'lunatv-local-service-win-x64.exe'
+        : `lunatv-local-service-${platform}.pkg`,
     method,
     targetUrl,
   });

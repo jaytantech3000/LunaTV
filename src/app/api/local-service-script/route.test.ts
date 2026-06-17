@@ -38,6 +38,9 @@ describe('/api/local-service-script', () => {
     expect(body).toContain(
       'curl -fsSL "https://objects.githubusercontent.com/lunatv-server"'
     );
+    expect(body).toContain('--config-path "${CONFIG_PATH}"');
+    expect(body).toContain('--data-dir "${DATA_DIR}"');
+    expect(body).toContain('--sqlite-path "${SQLITE_PATH}"');
   });
 
   it('returns a macOS uninstall script even when the current binary mapping is unavailable', async () => {
@@ -71,6 +74,12 @@ describe('/api/local-service-script', () => {
       'attachment; filename="lunatv-local-service-win-x64.ps1"'
     );
     expect(body).toContain('Invoke-WebRequest -UseBasicParsing');
+    expect(body).toContain('config.json');
+    expect(body).toContain('run-local-service.vbs');
+    expect(body).toContain('--config-path');
+    expect(body).toContain(
+      'Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"'
+    );
   });
 
   it('returns a stop script for Windows', async () => {

@@ -16,10 +16,11 @@
 - `lunatv-server-linux-arm64`
 - `lunatv-server-win-x64.exe`
 
-另外会额外产出 2 个 macOS 原生安装包：
+另外会额外产出 3 个双击安装包：
 
 - `lunatv-local-service-mac-arm64.pkg`
 - `lunatv-local-service-mac-x64.pkg`
+- `lunatv-local-service-win-x64.exe`
 
 脚本下载时会把原始二进制保存为本机统一文件名：
 
@@ -42,7 +43,7 @@
 
 1. 先执行 `cargo test --locked`
 2. 构建 macOS / Linux / Windows 五个平台的二进制
-3. 为 macOS 额外封装可双击安装的 `.pkg`
+3. 为 macOS 额外封装 `.pkg`，并为 Windows 额外封装可双击安装的自解压 `.exe`
 4. 创建或更新同名 GitHub Release
 5. 用 `--clobber` 覆盖旧资产，保证固定 tag 可重复发布
 
@@ -96,8 +97,10 @@ DESKTOP_RELEASE_REPO=your-org/LunaTV
 Web 下载面板策略：
 
 - macOS：优先下发 `.pkg` 安装包，下载后双击即可安装并自动启动本地服务
-- Windows / Linux：继续下发脚本，但脚本内会直连公开 release 资产，不再依赖站点登录态
+- Windows：优先下发 `.exe` 安装包，下载后双击即可安装并自动启动；如果 release 里暂时只有原始二进制，则退回 PowerShell 脚本
+- Linux：继续下发 shell 脚本，脚本内会直连公开 release 资产，不再依赖站点登录态
 - 下载面板额外提供当前设备对应的“停止脚本”和“卸载脚本”
+- 如果部署分支自动推导出的 `local-service-<channel>-latest` 在 GitHub 上还不存在真实 release，下载面板会提示当前通道缺少产物并禁用安装入口，而不是继续暴露失效脚本
 
 ## 停用与卸载
 
@@ -111,7 +114,7 @@ Web 下载面板策略：
 
 - macOS：移除 `/Library/Application Support/LunaTV Local Service`、`/Library/LaunchDaemons/io.qzz.lunatv.local-service.plist`、`/Library/Logs/LunaTV Local Service`，并清理旧脚本模式下可能遗留的 `~/.lunatv`。因为会写入 `/Library`，执行时会请求管理员授权。
 - Linux：移除 `~/.lunatv`，并停止 `~/.lunatv/bin/lunatv-server`。
-- Windows：移除 `%USERPROFILE%\\.lunatv`，并停止 `lunatv-server.exe` 进程。
+- Windows：移除 `%LOCALAPPDATA%\\LunaTV Local Service`，清理旧脚本模式遗留的 `%USERPROFILE%\\.lunatv`，删除开机自启动项，并停止 `lunatv-server.exe` 进程。
 
 可选增强：
 

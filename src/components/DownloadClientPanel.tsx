@@ -26,13 +26,14 @@ type LocalServicePlatformKey =
   | 'linux-arm64'
   | 'win-x64';
 
-type LocalServiceInstallerPlatformKey = 'mac-arm64' | 'mac-x64';
+type LocalServiceInstallerPlatformKey = 'mac-arm64' | 'mac-x64' | 'win-x64';
 type LocalServiceMaintenanceAction = 'stop' | 'uninstall';
 type MacArchitecture = 'arm64' | 'x64';
 type RecommendedTargets = {
   desktop?: DesktopAssetKey;
   localService?: LocalServicePlatformKey;
 };
+type LocalServiceReleaseStatus = 'release' | 'direct-url' | 'missing';
 
 interface NavigatorUserAgentDataValues {
   architecture?: string;
@@ -67,10 +68,12 @@ interface DesktopReleasePayload {
 }
 
 interface LocalServiceReleasePayload {
+  availablePlatforms: LocalServicePlatformKey[];
   configuredPlatforms: LocalServicePlatformKey[];
   displayName: string | null;
   installerPlatforms: LocalServiceInstallerPlatformKey[];
   publishedAt: string | null;
+  releaseStatus: LocalServiceReleaseStatus;
   version: string;
 }
 
@@ -230,14 +233,14 @@ function parseMacArchitectureFromUserAgent(
   return null;
 }
 
-function getNavigatorUAData(): NavigatorWithUserAgentData['userAgentData'] | null {
+function getNavigatorUAData():
+  | NavigatorWithUserAgentData['userAgentData']
+  | null {
   if (typeof navigator === 'undefined') {
     return null;
   }
 
-  return (
-    (navigator as NavigatorWithUserAgentData).userAgentData || null
-  );
+  return (navigator as NavigatorWithUserAgentData).userAgentData || null;
 }
 
 function detectRecommendedTargetsSync(): {
@@ -292,9 +295,7 @@ function detectRecommendedTargetsSync(): {
   };
 }
 
-async function detectMacArchitectureFromUserAgentData(): Promise<
-  MacArchitecture | null
-> {
+async function detectMacArchitectureFromUserAgentData(): Promise<MacArchitecture | null> {
   const userAgentData = getNavigatorUAData();
   if (!userAgentData) {
     return null;
@@ -396,7 +397,7 @@ async function detectRecommendedTargets(): Promise<RecommendedTargets> {
 function isLocalServiceInstallerPlatform(
   value: LocalServicePlatformKey
 ): value is LocalServiceInstallerPlatformKey {
-  return value === 'mac-arm64' || value === 'mac-x64';
+  return value === 'mac-arm64' || value === 'mac-x64' || value === 'win-x64';
 }
 
 function getLocalServiceDownloadConfig(
@@ -414,24 +415,21 @@ function getLocalServiceDownloadConfig(
   ) {
     return {
       ariaLabelSuffix: '安装包下载',
-      description: '下载 macOS 安装包 (.pkg)，双击即可安装并自动启动',
+      description:
+        platform === 'win-x64'
+          ? '下载 Windows 安装包 (.exe)，双击即可安装并自动启动'
+          : '下载 macOS 安装包 (.pkg)，双击即可安装并自动启动',
       href: `/api/client-download?kind=local-service-installer&platform=${platform}`,
       label: '下载安装包',
     };
   }
 
-  if (platform === 'win-x64') {
-    return {
-      ariaLabelSuffix: '脚本下载',
-      description: '下载 PowerShell 脚本 (.ps1)',
-      href: `/api/local-service-script?platform=${platform}`,
-      label: '下载脚本',
-    };
-  }
-
   return {
     ariaLabelSuffix: '脚本下载',
-    description: '下载 shell 脚本 (.sh)',
+    description:
+      platform === 'win-x64'
+        ? '下载 PowerShell 脚本 (.ps1)'
+        : '下载 shell 脚本 (.sh)',
     href: `/api/local-service-script?platform=${platform}`,
     label: '下载脚本',
   };
@@ -583,7 +581,7 @@ export default function DownloadClientPanel({
       }
 
       const releasePayload = payload as LocalServiceReleasePayload;
-      const availablePlatforms = new Set(releasePayload.configuredPlatforms);
+      const availablePlatforms = new Set(releasePayload.availablePlatforms);
       const nextStatuses = createUnknownLocalServiceStatuses();
 
       LOCAL_SERVICE_META.forEach(({ key }) => {
@@ -830,8 +828,8 @@ export default function DownloadClientPanel({
                 </h4>
               </div>
               <p className='mt-1 text-sm text-gray-600 dark:text-gray-300'>
-                安装后视频流量走本机，不经过 Vercel。macOS
-                提供双击安装包，Windows / Linux 提供脚本安装。
+                安装后视频流量走本机，不经过 Vercel。macOS / Windows
+                优先提供双击安装包，Linux 提供脚本安装。
               </p>
             </div>
 
@@ -849,6 +847,14 @@ export default function DownloadClientPanel({
                 {localServiceError}
               </div>
             )}
+
+            {!localServiceLoading &&
+              localServiceRelease?.releaseStatus === 'missing' && (
+                <div className='mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200'>
+                  当前发布通道暂未找到可下载的本地服务产物，安装入口已禁用。请先发布对应的
+                  local-service release，再刷新此面板。
+                </div>
+              )}
 
             {!localServiceLoading && localServiceRelease && (
               <div className='mb-4 grid gap-3 rounded-lg bg-white/90 p-4 dark:bg-gray-900/40 sm:grid-cols-2'>

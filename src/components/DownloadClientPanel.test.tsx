@@ -100,11 +100,13 @@ describe('DownloadClientPanel', () => {
       if (url === '/api/local-service-release') {
         return Promise.resolve(
           jsonResponse({
+            availablePlatforms: ['mac-arm64', 'mac-x64', 'linux-x64'],
             configuredPlatforms: ['mac-arm64', 'mac-x64', 'linux-x64'],
             displayName:
               'LunaTV Local Service (local-service-nova-2026-06-16.3)',
             installerPlatforms: ['mac-arm64', 'mac-x64'],
             publishedAt: '2026-06-16T03:00:00.000Z',
+            releaseStatus: 'release',
             version: 'local-service-nova-2026-06-16.3',
           })
         );
@@ -172,11 +174,13 @@ describe('DownloadClientPanel', () => {
       if (url === '/api/local-service-release') {
         return Promise.resolve(
           jsonResponse({
+            availablePlatforms: ['mac-arm64', 'mac-x64', 'linux-x64'],
             configuredPlatforms: ['mac-arm64', 'mac-x64', 'linux-x64'],
             displayName:
               'LunaTV Local Service (local-service-nova-2026-06-16.3)',
             installerPlatforms: ['mac-arm64', 'mac-x64'],
             publishedAt: '2026-06-16T03:00:00.000Z',
+            releaseStatus: 'release',
             version: 'local-service-nova-2026-06-16.3',
           })
         );
@@ -249,11 +253,13 @@ describe('DownloadClientPanel', () => {
       if (url === '/api/local-service-release') {
         return Promise.resolve(
           jsonResponse({
+            availablePlatforms: ['mac-arm64', 'mac-x64'],
             configuredPlatforms: ['mac-arm64', 'mac-x64'],
             displayName:
               'LunaTV Local Service (local-service-nova-2026-06-16.3)',
             installerPlatforms: ['mac-arm64', 'mac-x64'],
             publishedAt: '2026-06-16T03:00:00.000Z',
+            releaseStatus: 'release',
             version: 'local-service-nova-2026-06-16.3',
           })
         );
@@ -287,5 +293,128 @@ describe('DownloadClientPanel', () => {
       ).toBeInTheDocument();
       expect(within(localServiceIntelRow).queryByText('当前设备')).toBeNull();
     });
+  });
+
+  it('shows a missing-release warning and disables unavailable local-service downloads', async () => {
+    global.fetch = jest.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === '/api/desktop-release') {
+        return Promise.resolve(
+          jsonResponse({
+            assets: [],
+            missingAssetKeys: [
+              'mac-arm64',
+              'mac-x64',
+              'win-x64-setup',
+              'win-x64-portable',
+            ],
+            publishedAt: '2026-06-15T00:00:00.000Z',
+            releaseId: 39,
+            version: 'Desktop Internal #39',
+          })
+        );
+      }
+
+      if (url === '/api/local-service-release') {
+        return Promise.resolve(
+          jsonResponse({
+            availablePlatforms: [],
+            configuredPlatforms: [
+              'linux-arm64',
+              'linux-x64',
+              'mac-arm64',
+              'mac-x64',
+              'win-x64',
+            ],
+            displayName: null,
+            installerPlatforms: [],
+            publishedAt: null,
+            releaseStatus: 'missing',
+            version: 'local-service-luna-latest',
+          })
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    }) as typeof fetch;
+
+    render(<DownloadClientPanel isOpen onClose={jest.fn()} />);
+
+    expect(await screen.findByText('Desktop Internal #39')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '当前发布通道暂未找到可下载的本地服务产物，安装入口已禁用。请先发布对应的 local-service release，再刷新此面板。'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'macOS Apple Silicon 脚本下载' })
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Windows x64 脚本下载' })
+    ).toBeDisabled();
+  });
+
+  it('prefers the Windows installer button when the release includes a packaged exe', async () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    });
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      configurable: true,
+      value: undefined,
+    });
+
+    global.fetch = jest.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === '/api/desktop-release') {
+        return Promise.resolve(
+          jsonResponse({
+            assets: [],
+            missingAssetKeys: [
+              'mac-arm64',
+              'mac-x64',
+              'win-x64-setup',
+              'win-x64-portable',
+            ],
+            publishedAt: '2026-06-15T00:00:00.000Z',
+            releaseId: 39,
+            version: 'Desktop Internal #39',
+          })
+        );
+      }
+
+      if (url === '/api/local-service-release') {
+        return Promise.resolve(
+          jsonResponse({
+            availablePlatforms: ['win-x64'],
+            configuredPlatforms: ['win-x64'],
+            displayName:
+              'LunaTV Local Service (local-service-nova-2026-06-17.1)',
+            installerPlatforms: ['win-x64'],
+            publishedAt: '2026-06-17T03:00:00.000Z',
+            releaseStatus: 'release',
+            version: 'local-service-nova-2026-06-17.1',
+          })
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    }) as typeof fetch;
+
+    render(<DownloadClientPanel isOpen onClose={jest.fn()} />);
+
+    expect(
+      await screen.findByText('local-service-nova-2026-06-17.1')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Windows x64 安装包下载' })
+    ).toBeEnabled();
+    expect(
+      screen.getByText('下载 Windows 安装包 (.exe)，双击即可安装并自动启动')
+    ).toBeInTheDocument();
   });
 });

@@ -13,7 +13,12 @@ export type LocalServicePlatformKey =
   | 'linux-arm64'
   | 'win-x64';
 
-export type LocalServiceInstallerPlatformKey = 'mac-arm64' | 'mac-x64';
+export type LocalServiceInstallerPlatformKey =
+  | 'mac-arm64'
+  | 'mac-x64'
+  | 'win-x64';
+
+export type LocalServiceReleaseStatus = 'release' | 'direct-url' | 'missing';
 
 export interface GitHubReleaseAsset {
   browser_download_url: string;
@@ -47,10 +52,12 @@ export interface DesktopReleaseAssetInfo {
 }
 
 export interface LocalServiceReleaseSummary {
+  availablePlatforms: LocalServicePlatformKey[];
   configuredPlatforms: LocalServicePlatformKey[];
   displayName: string | null;
   installerPlatforms: LocalServiceInstallerPlatformKey[];
   publishedAt: string | null;
+  releaseStatus: LocalServiceReleaseStatus;
   version: string;
 }
 
@@ -134,6 +141,7 @@ const LOCAL_SERVICE_INSTALLER_ASSET_NAMES: Record<
 > = {
   'mac-arm64': 'lunatv-local-service-mac-arm64.pkg',
   'mac-x64': 'lunatv-local-service-mac-x64.pkg',
+  'win-x64': 'lunatv-local-service-win-x64.exe',
 };
 
 function getClientDownloadSigningSecret(): string | null {
@@ -463,7 +471,7 @@ export function isLocalServicePlatformKey(
 export function isLocalServiceInstallerPlatformKey(
   value: string | null | undefined
 ): value is LocalServiceInstallerPlatformKey {
-  return value === 'mac-arm64' || value === 'mac-x64';
+  return value === 'mac-arm64' || value === 'mac-x64' || value === 'win-x64';
 }
 
 export function getLocalServicePlatformLabel(
@@ -509,6 +517,42 @@ export function getConfiguredLocalServicePlatforms(): LocalServicePlatformKey[] 
   ).filter((platform) => Boolean(resolveLocalServiceBinaryUrl(platform)));
 }
 
+function getExplicitLocalServiceBinaryUrlPlatforms(): LocalServicePlatformKey[] {
+  return (
+    Object.keys(LOCAL_SERVICE_URL_ENV_MAP) as LocalServicePlatformKey[]
+  ).filter((platform) =>
+    Boolean(process.env[LOCAL_SERVICE_URL_ENV_MAP[platform]]?.trim())
+  );
+}
+
+function listAvailableLocalServiceBinaryPlatforms(
+  release: GitHubRelease | null | undefined
+): LocalServicePlatformKey[] {
+  if (!release) {
+    return [];
+  }
+
+  return (
+    Object.keys(LOCAL_SERVICE_RELEASE_ASSET_NAMES) as LocalServicePlatformKey[]
+  ).filter((platform) =>
+    release.assets.some(
+      (asset) =>
+        normalizeAssetName(asset.name) ===
+        normalizeAssetName(LOCAL_SERVICE_RELEASE_ASSET_NAMES[platform])
+    )
+  );
+}
+
+function orderLocalServicePlatforms(
+  platforms: Iterable<LocalServicePlatformKey>
+): LocalServicePlatformKey[] {
+  const available = new Set(platforms);
+
+  return (
+    Object.keys(LOCAL_SERVICE_PLATFORM_LABELS) as LocalServicePlatformKey[]
+  ).filter((platform) => available.has(platform));
+}
+
 function listAvailableLocalServiceInstallerPlatforms(
   release: GitHubRelease | null | undefined
 ): LocalServiceInstallerPlatformKey[] {
@@ -540,6 +584,7 @@ async function fetchGitHubReleaseByTag(
 
 export async function fetchLocalServiceReleaseSummary(): Promise<LocalServiceReleaseSummary | null> {
   const configuredPlatforms = getConfiguredLocalServicePlatforms();
+  const explicitUrlPlatforms = getExplicitLocalServiceBinaryUrlPlatforms();
   const releaseConfig = getLocalServiceReleaseConfig();
   const fallbackVersion =
     getConfiguredLocalServiceReleaseTag({ includeDefaultTag: false }) ||
@@ -579,14 +624,24 @@ export async function fetchLocalServiceReleaseSummary(): Promise<LocalServiceRel
     fallbackVersion ||
     releaseConfig?.tag ||
     '未配置';
+  const availablePlatforms = orderLocalServicePlatforms([
+    ...explicitUrlPlatforms,
+    ...listAvailableLocalServiceBinaryPlatforms(resolvedRelease),
+  ]);
 
   return {
+    availablePlatforms,
     configuredPlatforms,
     displayName: resolvedRelease?.name?.trim() || null,
     installerPlatforms:
       listAvailableLocalServiceInstallerPlatforms(resolvedRelease),
     publishedAt:
       resolvedRelease?.published_at || resolvedRelease?.created_at || null,
+    releaseStatus: resolvedRelease
+      ? 'release'
+      : explicitUrlPlatforms.length > 0
+      ? 'direct-url'
+      : 'missing',
     version: resolvedVersion,
   };
 }

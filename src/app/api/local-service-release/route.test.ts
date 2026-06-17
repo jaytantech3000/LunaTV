@@ -13,10 +13,12 @@ describe('/api/local-service-release', () => {
 
   it('returns local service release metadata with cache headers', async () => {
     (fetchLocalServiceReleaseSummary as jest.Mock).mockResolvedValue({
+      availablePlatforms: ['mac-arm64'],
       configuredPlatforms: ['mac-arm64', 'win-x64'],
       displayName: 'LunaTV Local Service (local-service-nova-2026-06-16.3)',
       installerPlatforms: ['mac-arm64'],
       publishedAt: '2026-06-16T03:00:00.000Z',
+      releaseStatus: 'release',
       version: 'local-service-nova-2026-06-16.3',
     });
 
@@ -25,10 +27,12 @@ describe('/api/local-service-release', () => {
 
     expect(response.status).toBe(200);
     expect(payload).toEqual({
+      availablePlatforms: ['mac-arm64'],
       configuredPlatforms: ['mac-arm64', 'win-x64'],
       displayName: 'LunaTV Local Service (local-service-nova-2026-06-16.3)',
       installerPlatforms: ['mac-arm64'],
       publishedAt: '2026-06-16T03:00:00.000Z',
+      releaseStatus: 'release',
       version: 'local-service-nova-2026-06-16.3',
     });
     expect(response.headers.get('Vercel-CDN-Cache-Control')).toBe(

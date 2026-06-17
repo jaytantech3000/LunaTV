@@ -385,7 +385,7 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | NEXT_PUBLIC_FLUID_SEARCH            | 是否开启搜索接口流式输出                   | true/ false              | true                                                                                                                       |
 | NEXT_PUBLIC_RELEASE_REPOSITORY      | 版本面板和登录页跳转使用的 GitHub 仓库     | owner/repo               | MoonTechLab/LunaTV                                                                                                         |
 | NEXT_PUBLIC_RELEASE_BRANCH          | 远程变更日志使用的分支                     | 分支名                   | luna                                                                                                                       |
-| NEXT_PUBLIC_UPDATER_BRANCH          | 远程版本号文件使用的分支                   | 分支名                   | 跟随 NEXT_PUBLIC_RELEASE_BRANCH                                                                                             |
+| NEXT_PUBLIC_UPDATER_BRANCH          | 远程版本号文件使用的分支                   | 分支名                   | 跟随 NEXT_PUBLIC_RELEASE_BRANCH                                                                                            |
 
 NEXT_PUBLIC_DOUBAN_PROXY_TYPE 选项解释：
 
@@ -411,7 +411,7 @@ v100.0.0 以上版本可配合 [Selene](https://github.com/MoonTechLab/Selene) �
 仓库内已补齐本地服务二进制发布链路：
 
 - Rust 服务源码位于 `crates/moontv-local-service`
-- 手动触发 `.github/workflows/local-service-release.yml` 可发布多平台二进制，并为 macOS 额外生成可双击安装的 `.pkg`
+- 手动触发 `.github/workflows/local-service-release.yml` 可发布多平台二进制，并为 macOS / Windows 额外生成可双击安装的安装包
 - Web 端“客户端下载”面板会按当前设备展示桌面版下载、本地服务安装包或脚本、停止脚本和卸载脚本
 - `nova` / `luna` 部署会自动匹配 `local-service-nova-latest` / `local-service-luna-latest`，其他环境回退 `local-service-latest`
 

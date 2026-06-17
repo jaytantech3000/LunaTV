@@ -11,6 +11,64 @@
 
 ---
 
+## 2026-06-17 - 本地服务 Windows 安装包与发布可用性修复 v1
+
+- 分支：`nova`
+- 方案/说明文档：
+  - `docs/local-service-release.md`
+
+### 目标
+
+- 为 Web 端本地服务补齐 Windows 双击安装包，减少脚本安装失败率。
+- 修复 `luna` / `nova` 等分支通道在 release 缺失时，下载面板仍错误暴露可下载入口的问题。
+- 让脚本安装链路和安装包链路都使用统一的配置文件与启动参数，避免本地服务启动后找不到配置或数据目录。
+
+### 核心实现
+
+- Windows 本地服务安装器与发布工作流升级：
+  - `.github/workflows/local-service-release.yml`
+  - `.github/local-service/windows/install-local-service.cmd`
+  - `.github/local-service/windows/run-local-service.vbs`
+- Web 下载可用性判断和安装器映射修复：
+  - `src/lib/client-download.ts`
+  - `src/app/api/client-download/route.ts`
+  - `src/components/DownloadClientPanel.tsx`
+- 安装 / 停止 / 卸载脚本统一配置与数据目录：
+  - `src/app/api/local-service-script/route.ts`
+- 补齐针对性自动化测试与文档：
+  - `src/lib/client-download.test.ts`
+  - `src/app/api/client-download/route.test.ts`
+  - `src/app/api/local-service-release/route.test.ts`
+  - `src/app/api/local-service-script/route.test.ts`
+  - `src/components/DownloadClientPanel.test.tsx`
+  - `README.md`
+  - `docs/local-service-release.md`
+
+### 本阶段已处理的问题
+
+- Windows 端此前只有原始服务 exe 或脚本，缺少真正可双击执行的安装包。
+- `local-service-<channel>-latest` 在 GitHub 上不存在真实 release 时，下载面板仍会按理论 URL 显示脚本入口，用户点进去只能得到失效链接。
+- Windows / Unix 脚本安装链路没有传 `--config-path`、`--data-dir`、`--sqlite-path`，本地服务启动后容易落到错误工作目录。
+- Windows 安装与卸载没有统一处理 `%LOCALAPPDATA%` 安装目录、自启动项和旧版 `~/.lunatv` 遗留文件。
+
+### 验证结论
+
+- `pnpm test -- src/lib/client-download.test.ts src/app/api/local-service-release/route.test.ts src/app/api/client-download/route.test.ts src/app/api/local-service-script/route.test.ts src/components/DownloadClientPanel.test.tsx` 已通过。
+- `pnpm lint` 已通过。
+- `pnpm typecheck` 已通过。
+- `pnpm build` 已通过。
+- `cargo test --manifest-path crates/moontv-local-service/Cargo.toml --locked` 已通过。
+
+### 当前约束
+
+- Windows 自解压安装器的真实打包结果仍依赖 GitHub Actions 的 Windows runner 产物验证。
+- 双击安装和卸载的最终体验仍需要在真实 macOS / Windows 机器上做一次人工回归。
+
+### 后续建议
+
+- 为 GitHub Release 产物补一份人工回归清单，至少覆盖 macOS `.pkg`、Windows `.exe`、Linux 脚本三条安装链路。
+- 若后续继续扩展更多本地服务安装形态，优先保持 `client-download` 与 `local-service-release` 的资产命名约定不变。
+
 ## 2026-06-16 - Web 版本信息面板双语化与版本检查增强 v1
 
 - 分支：`nova`

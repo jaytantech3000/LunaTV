@@ -39,8 +39,16 @@ describe('client-download helpers', () => {
     LOCAL_SERVICE_RELEASE_REPO: mutableEnv.LOCAL_SERVICE_RELEASE_REPO,
     LOCAL_SERVICE_RELEASE_CHANNEL: mutableEnv.LOCAL_SERVICE_RELEASE_CHANNEL,
     LOCAL_SERVICE_RELEASE_TAG: mutableEnv.LOCAL_SERVICE_RELEASE_TAG,
+    LOCAL_SERVICE_RELEASE_URL_LINUX_ARM64:
+      mutableEnv.LOCAL_SERVICE_RELEASE_URL_LINUX_ARM64,
+    LOCAL_SERVICE_RELEASE_URL_LINUX_X64:
+      mutableEnv.LOCAL_SERVICE_RELEASE_URL_LINUX_X64,
     LOCAL_SERVICE_RELEASE_URL_MAC_ARM64:
       mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64,
+    LOCAL_SERVICE_RELEASE_URL_MAC_X64:
+      mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_X64,
+    LOCAL_SERVICE_RELEASE_URL_WIN_X64:
+      mutableEnv.LOCAL_SERVICE_RELEASE_URL_WIN_X64,
     NODE_ENV: mutableEnv.NODE_ENV,
     RAILWAY_GIT_BRANCH: mutableEnv.RAILWAY_GIT_BRANCH,
     VERCEL_GIT_COMMIT_REF: mutableEnv.VERCEL_GIT_COMMIT_REF,
@@ -79,8 +87,24 @@ describe('client-download helpers', () => {
       originalEnv.LOCAL_SERVICE_RELEASE_TAG
     );
     restoreEnvValue(
+      'LOCAL_SERVICE_RELEASE_URL_LINUX_ARM64',
+      originalEnv.LOCAL_SERVICE_RELEASE_URL_LINUX_ARM64
+    );
+    restoreEnvValue(
+      'LOCAL_SERVICE_RELEASE_URL_LINUX_X64',
+      originalEnv.LOCAL_SERVICE_RELEASE_URL_LINUX_X64
+    );
+    restoreEnvValue(
       'LOCAL_SERVICE_RELEASE_URL_MAC_ARM64',
       originalEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64
+    );
+    restoreEnvValue(
+      'LOCAL_SERVICE_RELEASE_URL_MAC_X64',
+      originalEnv.LOCAL_SERVICE_RELEASE_URL_MAC_X64
+    );
+    restoreEnvValue(
+      'LOCAL_SERVICE_RELEASE_URL_WIN_X64',
+      originalEnv.LOCAL_SERVICE_RELEASE_URL_WIN_X64
     );
     restoreEnvValue('NODE_ENV', originalEnv.NODE_ENV);
     restoreEnvValue('RAILWAY_GIT_BRANCH', originalEnv.RAILWAY_GIT_BRANCH);
@@ -344,7 +368,7 @@ describe('client-download helpers', () => {
     );
   });
 
-  it('derives stable GitHub release urls for mac local service installers', () => {
+  it('derives stable GitHub release urls for local service installers', () => {
     mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
     mutableEnv.LOCAL_SERVICE_RELEASE_TAG = 'local-service-nova-latest';
 
@@ -353,6 +377,9 @@ describe('client-download helpers', () => {
     );
     expect(resolveLocalServiceInstallerUrl('mac-x64')).toBe(
       'https://github.com/demo/LunaTV/releases/download/local-service-nova-latest/lunatv-local-service-mac-x64.pkg'
+    );
+    expect(resolveLocalServiceInstallerUrl('win-x64')).toBe(
+      'https://github.com/demo/LunaTV/releases/download/local-service-nova-latest/lunatv-local-service-win-x64.exe'
     );
   });
 
@@ -439,11 +466,23 @@ describe('client-download helpers', () => {
   it('fetches local service release summary with the resolved version tag', async () => {
     mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
     mutableEnv.VERCEL_GIT_COMMIT_REF = 'nova';
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_LINUX_ARM64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_LINUX_X64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_X64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_WIN_X64;
     global.fetch = jest.fn().mockResolvedValue(
       new Response(
         JSON.stringify([
           {
             assets: [
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-server-mac-arm64',
+                id: 10,
+                name: 'lunatv-server-mac-arm64',
+                size: 100,
+              },
               {
                 browser_download_url:
                   'https://example.com/lunatv-local-service-mac-arm64.pkg',
@@ -462,16 +501,44 @@ describe('client-download helpers', () => {
             assets: [
               {
                 browser_download_url:
-                  'https://example.com/lunatv-local-service-mac-arm64.pkg',
+                  'https://example.com/lunatv-server-mac-arm64',
+                id: 20,
+                name: 'lunatv-server-mac-arm64',
+                size: 100,
+              },
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-server-mac-x64',
                 id: 21,
+                name: 'lunatv-server-mac-x64',
+                size: 100,
+              },
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-server-win-x64.exe',
+                id: 22,
+                name: 'lunatv-server-win-x64.exe',
+                size: 100,
+              },
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-local-service-mac-arm64.pkg',
+                id: 23,
                 name: 'lunatv-local-service-mac-arm64.pkg',
                 size: 100,
               },
               {
                 browser_download_url:
                   'https://example.com/lunatv-local-service-mac-x64.pkg',
-                id: 22,
+                id: 24,
                 name: 'lunatv-local-service-mac-x64.pkg',
+                size: 100,
+              },
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-local-service-win-x64.exe',
+                id: 25,
+                name: 'lunatv-local-service-win-x64.exe',
                 size: 100,
               },
             ],
@@ -483,6 +550,13 @@ describe('client-download helpers', () => {
           },
           {
             assets: [
+              {
+                browser_download_url:
+                  'https://example.com/lunatv-server-mac-arm64',
+                id: 30,
+                name: 'lunatv-server-mac-arm64',
+                size: 100,
+              },
               {
                 browser_download_url:
                   'https://example.com/lunatv-local-service-mac-arm64.pkg',
@@ -508,6 +582,7 @@ describe('client-download helpers', () => {
     ) as typeof fetch;
 
     await expect(fetchLocalServiceReleaseSummary()).resolves.toEqual({
+      availablePlatforms: ['mac-arm64', 'mac-x64', 'win-x64'],
       configuredPlatforms: [
         'linux-arm64',
         'linux-x64',
@@ -516,9 +591,49 @@ describe('client-download helpers', () => {
         'win-x64',
       ],
       displayName: 'LunaTV Local Service (local-service-nova-2026-06-16.3)',
-      installerPlatforms: ['mac-arm64', 'mac-x64'],
+      installerPlatforms: ['mac-arm64', 'mac-x64', 'win-x64'],
       publishedAt: '2026-06-16T03:00:00.000Z',
+      releaseStatus: 'release',
       version: 'local-service-nova-2026-06-16.3',
+    });
+  });
+
+  it('marks a configured branch channel as missing when no release assets can be resolved', async () => {
+    mutableEnv.DESKTOP_RELEASE_REPO = 'demo/LunaTV';
+    mutableEnv.VERCEL_GIT_COMMIT_REF = 'luna';
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_LINUX_ARM64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_LINUX_X64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_ARM64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_MAC_X64;
+    delete mutableEnv.LOCAL_SERVICE_RELEASE_URL_WIN_X64;
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([]), {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          status: 200,
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(null, { status: 404 })
+      ) as typeof fetch;
+
+    await expect(fetchLocalServiceReleaseSummary()).resolves.toEqual({
+      availablePlatforms: [],
+      configuredPlatforms: [
+        'linux-arm64',
+        'linux-x64',
+        'mac-arm64',
+        'mac-x64',
+        'win-x64',
+      ],
+      displayName: null,
+      installerPlatforms: [],
+      publishedAt: null,
+      releaseStatus: 'missing',
+      version: 'local-service-luna-latest',
     });
   });
 });
