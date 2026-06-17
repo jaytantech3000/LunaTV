@@ -6,17 +6,24 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["multipart"] }
+aes = "0.8.4"
+base64 = "0.22.1"
 bs58.workspace = true
+cbc = "0.1.2"
 clap.workspace = true
+flate2 = "1.1.9"
 futures.workspace = true
 html-escape.workspace = true
+md-5 = "0.10.6"
 moontv-storage = { path = "../moontv-storage" }
+rand = "0.9.4"
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+time = { version = "0.3.47", features = ["formatting", "parsing"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

@@ -2,23 +2,29 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     convert::Infallible,
     env, fs,
+    io::{Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use aes::{
+    Aes256,
+    cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
+};
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
-    extract::{OriginalUri, Query, Request, State},
+    extract::{FromRequest, Multipart, OriginalUri, Query, Request, State},
     http::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
         header::{
             ACCEPT_RANGES, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
             ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, CACHE_CONTROL,
-            CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ORIGIN, RANGE, REFERER, USER_AGENT,
+            CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ORIGIN, RANGE,
+            REFERER, USER_AGENT,
         },
     },
     middleware::{self, Next},
@@ -28,18 +34,24 @@ use axum::{
     },
     routing::{any, delete, get, post, put},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use cbc::{Decryptor, Encryptor};
 use clap::Parser;
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use futures::{
     StreamExt,
     future::join_all,
     stream::{self, FuturesUnordered},
 };
+use md5::Md5;
 use moontv_storage::sqlite::{DesktopSqlite, SqliteDatabaseInfo};
+use rand::Rng;
 use regex::Regex;
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::net::TcpListener;
 use tokio::sync::{RwLock, mpsc};
 use tracing::{info, warn};
@@ -62,6 +74,10 @@ const DEFAULT_SEARCH_TIMEOUT_MS: u64 = 8_000;
 const DEFAULT_DETAIL_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PROXY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+const DESKTOP_CONFIG_SUBSCRIPTION_REFRESH_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const DESKTOP_CONFIG_SUBSCRIPTION_REFRESH_MIN_INTERVAL: TimeDuration = TimeDuration::hours(1);
+const DESKTOP_LOCAL_DATA_MIGRATION_NOTE: &str = "桌面本地模式仅迁移管理员配置和本地账号密码；播放记录、收藏、搜索历史与跳过片头片尾等浏览器本地数据不会导入或导出。";
+const OPENSSL_SALTED_PREFIX: &[u8; 8] = b"Salted__";
 const DEFAULT_LIVE_PROXY_USER_AGENT: &str = "AptvPlayer/1.4.10";
 const DEFAULT_BANGUMI_API_BASE_URL: &str = "https://api.bgm.tv";
 const DEFAULT_DOUBAN_API_BASE_URL: &str = "https://m.douban.com";
@@ -1450,6 +1466,7 @@ type AppResult<T> = std::result::Result<T, AppError>;
 
 pub async fn run(cli: Cli) -> Result<()> {
     let state = AppState::from_cli(&cli)?;
+    spawn_background_tasks(state.clone());
     let app = build_router(state.clone());
     let listener = TcpListener::bind(state.bind_addr())
         .await
@@ -1545,6 +1562,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/admin/reset", get(reset_admin_config))
         .route("/api/admin/config_file", post(update_admin_config_file))
         .route(
+            "/api/admin/data_migration/export",
+            post(export_admin_data_migration),
+        )
+        .route(
+            "/api/admin/data_migration/import",
+            post(import_admin_data_migration),
+        )
+        .route(
             "/api/admin/config_subscription/fetch",
             post(fetch_admin_config_subscription),
         )
@@ -1579,6 +1604,25 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/proxy/vod/key", get(get_vod_key))
         .with_state(state)
         .layer(middleware::from_fn(cors_middleware))
+}
+
+fn spawn_background_tasks(state: AppState) {
+    tokio::spawn(async move {
+        if let Err(error) = refresh_admin_config_subscription_if_due(&state).await {
+            warn!("desktop subscription refresh task failed during startup: {error}");
+        }
+
+        let mut interval =
+            tokio::time::interval(DESKTOP_CONFIG_SUBSCRIPTION_REFRESH_CHECK_INTERVAL);
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+            if let Err(error) = refresh_admin_config_subscription_if_due(&state).await {
+                warn!("desktop subscription refresh task failed: {error}");
+            }
+        }
+    });
 }
 
 async fn shutdown_signal() {
@@ -2113,6 +2157,56 @@ struct AdminConfigSubscriptionFetchRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct AdminDataMigrationExportRequest {
+    password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct AdminDataMigrationArchive {
+    timestamp: String,
+    #[serde(rename = "serverVersion")]
+    server_version: String,
+    data: AdminDataMigrationArchiveData,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct AdminDataMigrationArchiveData {
+    #[serde(rename = "adminConfig")]
+    admin_config: DesktopAdminConfig,
+    #[serde(rename = "userData", default)]
+    user_data: BTreeMap<String, AdminDataMigrationUserData>,
+    #[serde(
+        rename = "desktopMetadata",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    desktop_metadata: Option<AdminDataMigrationDesktopMetadata>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct AdminDataMigrationUserData {
+    #[serde(rename = "playRecords", default)]
+    play_records: BTreeMap<String, Value>,
+    #[serde(default)]
+    favorites: BTreeMap<String, Value>,
+    #[serde(rename = "searchHistory", default)]
+    search_history: Vec<String>,
+    #[serde(rename = "skipConfigs", default)]
+    skip_configs: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AdminDataMigrationDesktopMetadata {
+    scope: String,
+    note: String,
+    includes_browser_local_data: bool,
+    includes_remote_profile_data: bool,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AdminSourceMutationRequest {
     action: String,
@@ -2203,10 +2297,118 @@ async fn reset_admin_config(State(state): State<AppState>) -> AppResult<Response
     no_store_json_response(&json!({ "ok": true }))
 }
 
+async fn export_admin_data_migration(
+    State(state): State<AppState>,
+    request: Request,
+) -> AppResult<Response> {
+    if should_proxy_admin_data_migration(&state)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return proxy_profile_sync_passthrough(&state, request).await;
+    }
+
+    let body_bytes = to_bytes(request.into_body(), usize::MAX)
+        .await
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    let payload = serde_json::from_slice::<AdminDataMigrationExportRequest>(&body_bytes)
+        .map_err(|error| AppError::bad_request(format!("请求体格式错误: {error}")))?;
+    let password = normalize_owned_string(Some(payload.password))
+        .ok_or_else(|| AppError::bad_request("请提供加密密码"))?;
+
+    let archive = build_local_admin_data_migration_archive(&state)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let archive_json =
+        serde_json::to_vec(&archive).map_err(|error| AppError::internal(error.to_string()))?;
+    let compressed =
+        gzip_bytes(&archive_json).map_err(|error| AppError::internal(error.to_string()))?;
+    let encrypted = cryptojs_aes_encrypt_text(&BASE64_STANDARD.encode(&compressed), &password)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    build_binary_file_response(
+        encrypted,
+        &format!("moontv-backup-{}.dat", current_timestamp_ms()),
+    )
+}
+
+async fn import_admin_data_migration(
+    State(state): State<AppState>,
+    request: Request,
+) -> AppResult<Response> {
+    if should_proxy_admin_data_migration(&state)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return proxy_profile_sync_passthrough(&state, request).await;
+    }
+
+    let mut multipart = Multipart::from_request(request, &())
+        .await
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    let mut encrypted_data = None::<String>;
+    let mut password = None::<String>;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| AppError::bad_request(error.to_string()))?
+    {
+        match field.name() {
+            Some("file") => {
+                encrypted_data = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|error| AppError::bad_request(error.to_string()))?,
+                );
+            }
+            Some("password") => {
+                password = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|error| AppError::bad_request(error.to_string()))?,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let encrypted_data = encrypted_data.ok_or_else(|| AppError::bad_request("请选择备份文件"))?;
+    let password =
+        normalize_owned_string(password).ok_or_else(|| AppError::bad_request("请提供解密密码"))?;
+
+    let archive = parse_local_admin_data_migration_archive(&encrypted_data, &password)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    import_local_admin_data_migration_archive(&state, &archive)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    no_store_json_response(&json!({
+        "message": "数据导入成功",
+        "importedUsers": archive.data.user_data.len(),
+        "timestamp": archive.timestamp,
+        "serverVersion": archive.server_version,
+        "note": DESKTOP_LOCAL_DATA_MIGRATION_NOTE,
+    }))
+}
+
+#[allow(unreachable_code)]
 async fn update_admin_config_file(
     State(state): State<AppState>,
     Json(payload): Json<AdminConfigFileRequest>,
 ) -> AppResult<Response> {
+    persist_admin_config_file_with_subscription(
+        &state,
+        payload.config_file.trim(),
+        normalize_owned_string(payload.subscription_url).unwrap_or_default(),
+        payload.auto_update.unwrap_or(false),
+        normalize_owned_string(payload.last_check_time).unwrap_or_default(),
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+
+    return no_store_json_response(&json!({
+        "success": true,
+        "message": "閰嶇疆鏂囦欢鏇存柊鎴愬姛"
+    }));
+
     let config_file = payload.config_file.trim();
     if config_file.is_empty() {
         return Err(AppError::bad_request("配置文件内容不能为空"));
@@ -2238,10 +2440,20 @@ async fn update_admin_config_file(
     }))
 }
 
+#[allow(unreachable_code)]
 async fn fetch_admin_config_subscription(
     State(state): State<AppState>,
     Json(payload): Json<AdminConfigSubscriptionFetchRequest>,
 ) -> AppResult<Response> {
+    let config_content =
+        fetch_admin_config_subscription_content(&state, payload.url.trim()).await?;
+
+    return no_store_json_response(&json!({
+        "success": true,
+        "configContent": config_content,
+        "message": "閰嶇疆鎷夊彇鎴愬姛"
+    }));
+
     let url = payload.url.trim().to_string();
     if url.is_empty() {
         return Err(AppError::bad_request("缺少URL参数"));
@@ -2284,6 +2496,125 @@ async fn fetch_admin_config_subscription(
         "configContent": config_content,
         "message": "配置拉取成功"
     }))
+}
+
+async fn fetch_admin_config_subscription_content(state: &AppState, url: &str) -> AppResult<String> {
+    let normalized_url = url.trim();
+    if normalized_url.is_empty() {
+        return Err(AppError::bad_request("missing subscription url"));
+    }
+
+    let upstream_response = state
+        .client
+        .get(normalized_url)
+        .timeout(Duration::from_millis(DEFAULT_PROXY_TIMEOUT_MS))
+        .send()
+        .await
+        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+
+    if !upstream_response.status().is_success() {
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "subscription request failed: {} {}",
+                upstream_response.status(),
+                upstream_response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("upstream error")
+            ),
+        ));
+    }
+
+    let encoded_content = upstream_response
+        .text()
+        .await
+        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+    let decoded_content = bs58::decode(encoded_content.trim())
+        .into_vec()
+        .map_err(|error| {
+            AppError::bad_request(format!("subscription base58 decode failed: {error}"))
+        })?;
+    let config_content = String::from_utf8(decoded_content).map_err(|error| {
+        AppError::bad_request(format!("subscription content is not utf-8: {error}"))
+    })?;
+
+    validate_admin_config_file_contents(&config_content)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+
+    Ok(config_content)
+}
+
+async fn refresh_admin_config_subscription_if_due(state: &AppState) -> Result<()> {
+    let persistence = state.load_admin_persistence()?;
+    let subscription = persistence.config.config_subscribtion;
+    if !should_auto_refresh_admin_config_subscription(&subscription) {
+        return Ok(());
+    }
+
+    let config_content = fetch_admin_config_subscription_content(state, &subscription.url)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?;
+    persist_admin_config_file_with_subscription(
+        state,
+        &config_content,
+        subscription.url,
+        subscription.auto_update,
+        current_iso_timestamp(),
+    )?;
+    Ok(())
+}
+
+fn should_auto_refresh_admin_config_subscription(subscription: &DesktopConfigSubscribtion) -> bool {
+    if !subscription.auto_update || subscription.url.trim().is_empty() {
+        return false;
+    }
+
+    let last_check = subscription.last_check.trim();
+    if last_check.is_empty() {
+        return true;
+    }
+
+    OffsetDateTime::parse(last_check, &Rfc3339)
+        .map(|timestamp| {
+            OffsetDateTime::now_utc()
+                >= timestamp + DESKTOP_CONFIG_SUBSCRIPTION_REFRESH_MIN_INTERVAL
+        })
+        .unwrap_or(true)
+}
+
+fn validate_admin_config_file_contents(config_file: &str) -> Result<()> {
+    let trimmed = config_file.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("config file content cannot be empty");
+    }
+
+    serde_json::from_str::<Value>(trimmed).context("config file json is invalid")?;
+    Ok(())
+}
+
+fn persist_admin_config_file_with_subscription(
+    state: &AppState,
+    config_file: &str,
+    subscription_url: String,
+    auto_update: bool,
+    last_check: String,
+) -> Result<()> {
+    validate_admin_config_file_contents(config_file)?;
+    state.write_raw_config(config_file)?;
+
+    let mut persistence = state.load_admin_persistence()?;
+    persistence.config.config_subscribtion.url = subscription_url;
+    persistence.config.config_subscribtion.auto_update = auto_update;
+    persistence.config.config_subscribtion.last_check = last_check;
+    state.save_admin_persistence(&persistence)?;
+    Ok(())
+}
+
+fn current_iso_timestamp() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| current_timestamp_ms().to_string())
 }
 
 async fn update_admin_site_config(
@@ -4356,41 +4687,28 @@ fn merge_admin_persistence_with_raw(
     let owner_username = normalize_optional_string(raw_config.auth.username.clone())
         .unwrap_or_else(|| "owner".to_string());
 
-    if persistence.config.config_file.trim().is_empty() {
-        persistence.config.config_file = raw_contents.clone();
-    } else {
-        persistence.config.config_file = raw_contents.clone();
-    }
-
-    if persistence.config.source_config.is_empty()
-        && persistence.config.custom_categories.is_empty()
-        && persistence.config.live_config.is_empty()
-    {
-        persistence.config = build_default_admin_config(&raw_contents, raw_config);
-    } else {
-        persistence.config.site_config =
-            normalize_desktop_site_config(persistence.config.site_config);
-        persistence.config.source_config = merge_source_config(
-            std::mem::take(&mut persistence.config.source_config),
-            &raw_config.api_site,
-        );
-        persistence.config.custom_categories = merge_category_config(
-            std::mem::take(&mut persistence.config.custom_categories),
-            &raw_config.custom_category,
-        );
-        persistence.config.live_config = merge_live_config(
-            std::mem::take(&mut persistence.config.live_config),
-            &raw_config.lives,
-        );
-        persistence.config.player_enhancement_config = merge_player_enhancement_config(
-            std::mem::take(&mut persistence.config.player_enhancement_config),
-            &raw_config.player_enhancements,
-        );
-        persistence.config.user_config = normalize_user_config(
-            std::mem::take(&mut persistence.config.user_config),
-            &owner_username,
-        );
-    }
+    persistence.config.config_file = raw_contents.clone();
+    persistence.config.site_config = normalize_desktop_site_config(persistence.config.site_config);
+    persistence.config.source_config = merge_source_config(
+        std::mem::take(&mut persistence.config.source_config),
+        &raw_config.api_site,
+    );
+    persistence.config.custom_categories = merge_category_config(
+        std::mem::take(&mut persistence.config.custom_categories),
+        &raw_config.custom_category,
+    );
+    persistence.config.live_config = merge_live_config(
+        std::mem::take(&mut persistence.config.live_config),
+        &raw_config.lives,
+    );
+    persistence.config.player_enhancement_config = merge_player_enhancement_config(
+        std::mem::take(&mut persistence.config.player_enhancement_config),
+        &raw_config.player_enhancements,
+    );
+    persistence.config.user_config = normalize_user_config(
+        std::mem::take(&mut persistence.config.user_config),
+        &owner_username,
+    );
 
     persistence.profile_sync_api_base_url =
         normalize_optional_string(raw_config.profile_sync.api_base_url.clone());
@@ -4868,6 +5186,330 @@ fn normalize_user_config(
         users,
         tags: user_config.tags,
     }
+}
+
+fn should_proxy_admin_data_migration(state: &AppState) -> Result<bool> {
+    Ok(state.load_config()?.profile_sync_api_base_url.is_some())
+}
+
+fn build_local_admin_data_migration_archive(state: &AppState) -> Result<AdminDataMigrationArchive> {
+    let persistence = state.load_admin_persistence()?;
+    let owner_username = resolve_owner_username_for_import(&persistence.config);
+    let owner_password = extract_owner_password_from_config_file(&persistence.config.config_file);
+    let mut user_data = BTreeMap::new();
+
+    for user in &persistence.config.user_config.users {
+        let password = if Some(user.username.as_str()) == owner_username.as_deref() {
+            owner_password.clone()
+        } else {
+            persistence.user_passwords.get(&user.username).cloned()
+        };
+        user_data.insert(
+            user.username.clone(),
+            AdminDataMigrationUserData {
+                password,
+                ..AdminDataMigrationUserData::default()
+            },
+        );
+    }
+
+    for (username, password) in &persistence.user_passwords {
+        user_data
+            .entry(username.clone())
+            .or_insert_with(|| AdminDataMigrationUserData {
+                password: Some(password.clone()),
+                ..AdminDataMigrationUserData::default()
+            });
+    }
+
+    Ok(AdminDataMigrationArchive {
+        timestamp: current_iso_timestamp(),
+        server_version: env!("CARGO_PKG_VERSION").to_string(),
+        data: AdminDataMigrationArchiveData {
+            admin_config: persistence.config,
+            user_data,
+            desktop_metadata: Some(AdminDataMigrationDesktopMetadata {
+                scope: "desktop-local".to_string(),
+                note: DESKTOP_LOCAL_DATA_MIGRATION_NOTE.to_string(),
+                includes_browser_local_data: false,
+                includes_remote_profile_data: false,
+            }),
+        },
+    })
+}
+
+fn import_local_admin_data_migration_archive(
+    state: &AppState,
+    archive: &AdminDataMigrationArchive,
+) -> Result<()> {
+    let mut admin_config = archive.data.admin_config.clone();
+    let configured_owner = extract_owner_username_from_config_file(&admin_config.config_file);
+    let mut has_owner = admin_config
+        .user_config
+        .users
+        .iter()
+        .any(|user| user.role == "owner");
+
+    for username in archive.data.user_data.keys() {
+        if admin_config
+            .user_config
+            .users
+            .iter()
+            .any(|user| user.username == *username)
+        {
+            continue;
+        }
+
+        let role = if !has_owner && configured_owner.as_deref() == Some(username.as_str()) {
+            has_owner = true;
+            "owner"
+        } else {
+            "user"
+        };
+
+        admin_config.user_config.users.push(DesktopUserConfigItem {
+            username: username.clone(),
+            role: role.to_string(),
+            banned: false,
+            enabled_apis: Vec::new(),
+            tags: Vec::new(),
+        });
+    }
+
+    let prepared_config_file =
+        prepare_imported_admin_config_file(&admin_config, &archive.data.user_data)?;
+    admin_config.config_file = prepared_config_file.clone();
+    let owner_username = resolve_owner_username_for_import(&admin_config);
+    let mut user_passwords = BTreeMap::new();
+
+    for (username, user_data) in &archive.data.user_data {
+        if Some(username.as_str()) == owner_username.as_deref() {
+            continue;
+        }
+
+        if let Some(password) = normalize_owned_string(user_data.password.clone()) {
+            user_passwords.insert(username.clone(), password);
+        }
+    }
+
+    let imported_persistence = DesktopAdminPersistence {
+        config: admin_config,
+        user_passwords,
+        profile_sync_api_base_url: None,
+    };
+
+    state.write_raw_config(&prepared_config_file)?;
+    state.save_admin_persistence(&imported_persistence)?;
+
+    // Re-load once so the persisted desktop state is normalized against the raw config.
+    let merged_persistence = state.load_admin_persistence()?;
+    state.save_admin_persistence(&merged_persistence)?;
+
+    Ok(())
+}
+
+fn prepare_imported_admin_config_file(
+    admin_config: &DesktopAdminConfig,
+    user_data: &BTreeMap<String, AdminDataMigrationUserData>,
+) -> Result<String> {
+    validate_admin_config_file_contents(&admin_config.config_file)?;
+    let mut config_value = serde_json::from_str::<Value>(admin_config.config_file.trim())
+        .context("failed to parse imported config file")?;
+    let owner_username = resolve_owner_username_for_import(admin_config);
+    let owner_password = owner_username
+        .as_ref()
+        .and_then(|username| user_data.get(username))
+        .and_then(|entry| normalize_owned_string(entry.password.clone()));
+    let root = config_value
+        .as_object_mut()
+        .context("imported config file root must be an object")?;
+    let auth_value = root.entry("auth".to_string()).or_insert_with(|| json!({}));
+    if !auth_value.is_object() {
+        *auth_value = json!({});
+    }
+
+    let auth = auth_value
+        .as_object_mut()
+        .expect("auth should be an object after normalization");
+    let has_username = auth
+        .get("username")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !has_username {
+        if let Some(username) = owner_username {
+            auth.insert("username".to_string(), Value::String(username));
+        }
+    }
+
+    let has_password = auth
+        .get("password")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !has_password {
+        if let Some(password) = owner_password {
+            auth.insert("password".to_string(), Value::String(password));
+        }
+    }
+
+    serde_json::to_string_pretty(&config_value).context("failed to serialize imported config file")
+}
+
+fn resolve_owner_username_for_import(admin_config: &DesktopAdminConfig) -> Option<String> {
+    admin_config
+        .user_config
+        .users
+        .iter()
+        .find(|user| user.role == "owner")
+        .map(|user| user.username.clone())
+        .or_else(|| extract_owner_username_from_config_file(&admin_config.config_file))
+        .or_else(|| {
+            admin_config
+                .user_config
+                .users
+                .first()
+                .map(|user| user.username.clone())
+        })
+}
+
+fn extract_owner_username_from_config_file(config_file: &str) -> Option<String> {
+    serde_json::from_str::<RawServiceConfig>(config_file.trim())
+        .ok()
+        .and_then(|config| normalize_optional_string(config.auth.username))
+}
+
+fn extract_owner_password_from_config_file(config_file: &str) -> Option<String> {
+    serde_json::from_str::<RawServiceConfig>(config_file.trim())
+        .ok()
+        .and_then(|config| normalize_optional_string(config.auth.password))
+}
+
+fn parse_local_admin_data_migration_archive(
+    encrypted_data: &str,
+    password: &str,
+) -> Result<AdminDataMigrationArchive> {
+    let compressed_base64 = cryptojs_aes_decrypt_text(encrypted_data, password)?;
+    let compressed = BASE64_STANDARD
+        .decode(compressed_base64.trim())
+        .context("failed to decode encrypted backup payload")?;
+    let archive_json = gunzip_bytes(&compressed)?;
+    serde_json::from_slice::<AdminDataMigrationArchive>(&archive_json)
+        .context("backup file json is invalid")
+}
+
+fn build_binary_file_response(body: String, filename: &str) -> AppResult<Response> {
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::from(body.clone()))
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    response.headers_mut().insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .map_err(|error| AppError::internal(error.to_string()))?,
+    );
+    response.headers_mut().insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&body.len().to_string())
+            .map_err(|error| AppError::internal(error.to_string()))?,
+    );
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+
+    Ok(response)
+}
+
+fn gzip_bytes(payload: &[u8]) -> Result<Vec<u8>> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(payload)?;
+    encoder.finish().context("failed to finish gzip encoding")
+}
+
+fn gunzip_bytes(payload: &[u8]) -> Result<Vec<u8>> {
+    let mut decoder = GzDecoder::new(payload);
+    let mut decoded = Vec::new();
+    decoder
+        .read_to_end(&mut decoded)
+        .context("failed to gunzip backup payload")?;
+    Ok(decoded)
+}
+
+fn cryptojs_aes_encrypt_text(plaintext: &str, password: &str) -> Result<String> {
+    let mut salt = [0_u8; 8];
+    rand::rng().fill(&mut salt);
+    let (key, iv) = derive_openssl_key_iv(password.as_bytes(), &salt, 32, 16);
+    let encryptor = Encryptor::<Aes256>::new_from_slices(&key, &iv)
+        .context("failed to initialize backup encryptor")?;
+    let mut buffer = plaintext.as_bytes().to_vec();
+    let original_len = buffer.len();
+    let padded_len = ((original_len / 16) + 1) * 16;
+    buffer.resize(padded_len, 0);
+    let ciphertext = encryptor
+        .encrypt_padded_mut::<Pkcs7>(&mut buffer, original_len)
+        .map_err(|error| anyhow::anyhow!("failed to encrypt backup payload: {error}"))?;
+
+    let mut openssl_payload =
+        Vec::with_capacity(OPENSSL_SALTED_PREFIX.len() + salt.len() + ciphertext.len());
+    openssl_payload.extend_from_slice(OPENSSL_SALTED_PREFIX);
+    openssl_payload.extend_from_slice(&salt);
+    openssl_payload.extend_from_slice(ciphertext);
+    Ok(BASE64_STANDARD.encode(openssl_payload))
+}
+
+fn cryptojs_aes_decrypt_text(encrypted_data: &str, password: &str) -> Result<String> {
+    let payload = BASE64_STANDARD
+        .decode(encrypted_data.trim())
+        .context("failed to decode encrypted backup payload")?;
+    if payload.len() < OPENSSL_SALTED_PREFIX.len() + 8
+        || &payload[..OPENSSL_SALTED_PREFIX.len()] != OPENSSL_SALTED_PREFIX
+    {
+        anyhow::bail!("invalid encrypted backup payload");
+    }
+
+    let salt_start = OPENSSL_SALTED_PREFIX.len();
+    let salt_end = salt_start + 8;
+    let salt = &payload[salt_start..salt_end];
+    let ciphertext = &payload[salt_end..];
+    let (key, iv) = derive_openssl_key_iv(password.as_bytes(), salt, 32, 16);
+    let decryptor = Decryptor::<Aes256>::new_from_slices(&key, &iv)
+        .context("failed to initialize backup decryptor")?;
+    let mut buffer = ciphertext.to_vec();
+    let plaintext = decryptor
+        .decrypt_padded_mut::<Pkcs7>(&mut buffer)
+        .map_err(|_| anyhow::anyhow!("decrypt failed"))?;
+
+    String::from_utf8(plaintext.to_vec()).context("decrypted backup payload is not utf-8")
+}
+
+fn derive_openssl_key_iv(
+    password: &[u8],
+    salt: &[u8],
+    key_len: usize,
+    iv_len: usize,
+) -> (Vec<u8>, Vec<u8>) {
+    let mut derived = Vec::with_capacity(key_len + iv_len);
+    let mut previous = Vec::new();
+
+    while derived.len() < key_len + iv_len {
+        let mut digest = Md5::new();
+        if !previous.is_empty() {
+            digest.update(&previous);
+        }
+        digest.update(password);
+        digest.update(salt);
+        previous = digest.finalize().to_vec();
+        derived.extend_from_slice(&previous);
+    }
+
+    let key = derived[..key_len].to_vec();
+    let iv = derived[key_len..key_len + iv_len].to_vec();
+    (key, iv)
 }
 
 fn no_store_json_response<T: Serialize>(payload: &T) -> AppResult<Response> {
@@ -8657,6 +9299,469 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn admin_data_migration_export_route_returns_local_backup() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "auth": {
+                "username": "desktop-owner",
+                "password": "owner-secret"
+              },
+              "api_site": {
+                "raw": {
+                  "api": "https://example.com/api.php/provide/vod",
+                  "name": "Raw Source"
+                }
+              }
+            }),
+        );
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "https://example.com/sub",
+                  "AutoUpdate": true,
+                  "LastCheck": ""
+                },
+                "ConfigFile": "",
+                "SiteConfig": {
+                  "SiteName": "Desktop LunaTV",
+                  "Announcement": "local admin",
+                  "SearchDownstreamMaxPage": 3,
+                  "SiteInterfaceCacheTime": 1800,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "desktop-owner",
+                      "role": "owner"
+                    },
+                    {
+                      "username": "kid",
+                      "role": "user"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [
+                  {
+                    "key": "raw",
+                    "name": "Raw Source",
+                    "api": "https://example.com/api.php/provide/vod",
+                    "from": "config",
+                    "disabled": false
+                  }
+                ],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {
+                "kid": "123456"
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/data_migration/export")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "password": "backup-secret"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("admin data migration export request"),
+            )
+            .await
+            .expect("admin data migration export response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/octet-stream")
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("admin data migration export body");
+        let encrypted = String::from_utf8(body.to_vec()).expect("encrypted backup utf8");
+        let archive = parse_local_admin_data_migration_archive(&encrypted, "backup-secret")
+            .expect("parse local backup archive");
+
+        assert_eq!(
+            archive.data.admin_config.site_config.site_name,
+            "Desktop LunaTV"
+        );
+        assert_eq!(
+            archive
+                .data
+                .user_data
+                .get("desktop-owner")
+                .and_then(|entry| entry.password.as_deref()),
+            Some("owner-secret")
+        );
+        assert_eq!(
+            archive
+                .data
+                .user_data
+                .get("kid")
+                .and_then(|entry| entry.password.as_deref()),
+            Some("123456")
+        );
+        assert_eq!(
+            archive
+                .data
+                .desktop_metadata
+                .as_ref()
+                .map(|metadata| metadata.note.as_str()),
+            Some(DESKTOP_LOCAL_DATA_MIGRATION_NOTE)
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_data_migration_import_route_restores_local_admin_state() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "auth": {
+                "username": "old-owner",
+                "password": "old-secret"
+              },
+              "api_site": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        let app = build_router(state.clone());
+
+        let mut admin_config = DesktopAdminConfig::default();
+        admin_config.config_subscribtion.url = "https://example.com/sub".to_string();
+        admin_config.config_subscribtion.auto_update = true;
+        admin_config.config_file = serde_json::to_string_pretty(&json!({
+          "auth": {
+            "username": "new-owner"
+          },
+          "site_name": "Imported Raw Site",
+          "api_site": {
+            "raw": {
+              "api": "https://example.com/api.php/provide/vod",
+              "name": "Raw Source"
+            }
+          }
+        }))
+        .expect("serialize imported config file");
+        admin_config.site_config.site_name = "Imported LunaTV".to_string();
+        admin_config.source_config.push(DesktopSourceConfigItem {
+            key: "raw".to_string(),
+            name: "Raw Source".to_string(),
+            api: "https://example.com/api.php/provide/vod".to_string(),
+            detail: None,
+            ua: None,
+            referer: None,
+            from: "config".to_string(),
+            disabled: false,
+            disable_ad_filter: false,
+        });
+        admin_config.user_config.users = vec![
+            DesktopUserConfigItem {
+                username: "new-owner".to_string(),
+                role: "owner".to_string(),
+                banned: false,
+                enabled_apis: Vec::new(),
+                tags: Vec::new(),
+            },
+            DesktopUserConfigItem {
+                username: "kid".to_string(),
+                role: "user".to_string(),
+                banned: false,
+                enabled_apis: Vec::new(),
+                tags: Vec::new(),
+            },
+        ];
+
+        let archive = AdminDataMigrationArchive {
+            timestamp: current_iso_timestamp(),
+            server_version: env!("CARGO_PKG_VERSION").to_string(),
+            data: AdminDataMigrationArchiveData {
+                admin_config,
+                user_data: BTreeMap::from([
+                    (
+                        "new-owner".to_string(),
+                        AdminDataMigrationUserData {
+                            play_records: BTreeMap::from([(
+                                "raw+1".to_string(),
+                                json!({ "title": "Skipped play record" }),
+                            )]),
+                            password: Some("owner-secret".to_string()),
+                            ..AdminDataMigrationUserData::default()
+                        },
+                    ),
+                    (
+                        "kid".to_string(),
+                        AdminDataMigrationUserData {
+                            favorites: BTreeMap::from([(
+                                "raw+1".to_string(),
+                                json!({ "title": "Skipped favorite" }),
+                            )]),
+                            password: Some("kid-secret".to_string()),
+                            ..AdminDataMigrationUserData::default()
+                        },
+                    ),
+                ]),
+                desktop_metadata: None,
+            },
+        };
+        let archive_json = serde_json::to_vec(&archive).expect("serialize archive");
+        let compressed = gzip_bytes(&archive_json).expect("gzip archive");
+        let encrypted =
+            cryptojs_aes_encrypt_text(&BASE64_STANDARD.encode(&compressed), "import-secret")
+                .expect("encrypt archive");
+        let boundary = "----LunaTVBoundary";
+        let multipart_body = build_multipart_form_data(boundary, &encrypted, "import-secret");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/data_migration/import")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(multipart_body))
+                    .expect("admin data migration import request"),
+            )
+            .await
+            .expect("admin data migration import response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("admin data migration import body");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("admin data migration import payload");
+
+        assert_eq!(
+            payload.get("note").and_then(Value::as_str),
+            Some(DESKTOP_LOCAL_DATA_MIGRATION_NOTE)
+        );
+
+        let persistence = state
+            .load_admin_persistence()
+            .expect("load imported admin persistence");
+        assert_eq!(persistence.config.site_config.site_name, "Imported LunaTV");
+        assert_eq!(
+            persistence.user_passwords.get("kid").map(String::as_str),
+            Some("kid-secret")
+        );
+        assert_eq!(
+            extract_owner_password_from_config_file(&persistence.config.config_file).as_deref(),
+            Some("owner-secret")
+        );
+        assert!(
+            persistence
+                .config
+                .user_config
+                .users
+                .iter()
+                .any(|user| user.username == "new-owner" && user.role == "owner")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_admin_config_subscription_if_due_updates_local_state() {
+        let subscription_config = json!({
+          "auth": {
+            "username": "desktop-owner"
+          },
+          "site_name": "Updated LunaTV",
+          "api_site": {
+            "raw": {
+              "api": "https://example.com/api.php/provide/vod",
+              "name": "Raw Source"
+            }
+          }
+        });
+        let encoded_subscription = bs58::encode(
+            serde_json::to_string(&subscription_config).expect("serialize subscription config"),
+        )
+        .into_string();
+        let upstream = spawn_mock_server(Router::new().route(
+            "/subscription",
+            get({
+                let encoded_subscription = encoded_subscription.clone();
+                move || {
+                    let encoded_subscription = encoded_subscription.clone();
+                    async move { encoded_subscription }
+                }
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "auth": {
+                "username": "desktop-owner"
+              },
+              "site_name": "Old LunaTV",
+              "api_site": {}
+            }),
+        );
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": format!("{}/subscription", upstream.base_url()),
+                  "AutoUpdate": true,
+                  "LastCheck": ""
+                },
+                "ConfigFile": "",
+                "SiteConfig": {
+                  "SiteName": "Old LunaTV",
+                  "Announcement": "",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "desktop-owner",
+                      "role": "owner"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [],
+                "CustomCategories": [],
+                "LiveConfig": []
+              }
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path.clone(),
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+
+        refresh_admin_config_subscription_if_due(&state)
+            .await
+            .expect("refresh desktop config subscription");
+
+        let persistence = state
+            .load_admin_persistence()
+            .expect("load refreshed admin persistence");
+        assert!(!persistence.config.config_subscribtion.last_check.is_empty());
+        assert!(persistence.config.config_file.contains("Updated LunaTV"));
+        assert!(
+            persistence
+                .config
+                .source_config
+                .iter()
+                .any(|source| source.key == "raw" && source.name == "Raw Source")
+        );
+
+        let raw_config = fs::read_to_string(config_path).expect("read refreshed raw config");
+        assert!(raw_config.contains("Updated LunaTV"));
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn admin_data_migration_export_route_proxies_profile_sync_mode() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/admin/data_migration/export",
+            post(|| async move {
+                (
+                    [(CONTENT_TYPE, "application/octet-stream")],
+                    "REMOTE_BACKUP",
+                )
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": upstream.base_url()
+              },
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/data_migration/export")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "password": "backup-secret"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("proxied admin data migration export request"),
+            )
+            .await
+            .expect("proxied admin data migration export response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("proxied admin data migration export body");
+        assert_eq!(body.as_ref(), b"REMOTE_BACKUP");
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
     async fn admin_source_disable_affects_runtime_search() {
         let upstream = spawn_mock_server(mock_upstream_router()).await;
         let temp_dir = TestDir::new();
@@ -9592,6 +10697,24 @@ segment0.ts
         fn abort(self) {
             self.task.abort();
         }
+    }
+
+    fn build_multipart_form_data(boundary: &str, encrypted: &str, password: &str) -> String {
+        format!(
+            concat!(
+                "--{boundary}\r\n",
+                "Content-Disposition: form-data; name=\"file\"; filename=\"backup.dat\"\r\n",
+                "Content-Type: application/octet-stream\r\n\r\n",
+                "{encrypted}\r\n",
+                "--{boundary}\r\n",
+                "Content-Disposition: form-data; name=\"password\"\r\n\r\n",
+                "{password}\r\n",
+                "--{boundary}--\r\n"
+            ),
+            boundary = boundary,
+            encrypted = encrypted,
+            password = password,
+        )
     }
 
     struct TestDir {
