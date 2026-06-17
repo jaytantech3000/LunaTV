@@ -101,7 +101,7 @@ Web 下载面板策略：
 - macOS：优先下发 `.pkg` 安装包，下载后双击即可安装并自动启动本地服务
 - Windows：优先下发 `.exe` 安装包，下载后双击即可安装并自动启动；如果 release 里暂时只有原始二进制，则退回 PowerShell 脚本
 - Linux：优先下发 Debian / Ubuntu `.deb` 安装包，安装后会写入 systemd 服务并自动启动；同时保留 shell 脚本作为其他发行版或手工安装场景的兜底
-- 下载面板额外提供当前设备对应的“停止脚本”和“卸载脚本”
+- 下载面板额外提供当前设备对应的“停止脚本”、“卸载方式”和“兜底卸载脚本”
 - 如果部署分支自动推导出的 `local-service-<channel>-latest` 在 GitHub 上还不存在真实 release，下载面板会提示当前通道缺少产物并禁用安装入口，而不是继续暴露失效脚本
 
 ## 停用与卸载
@@ -110,13 +110,13 @@ Web 下载面板策略：
 
 - 回退默认线路：在 Web 页面顶部的本地服务提示里点击 `停用`，页面刷新后即可切回站点默认代理；这不会删除本机安装文件。
 - 停止本地服务：在下载面板里下载当前设备对应的“停止脚本”，执行后会关闭本地服务进程。
-- 卸载本地服务：在下载面板里下载当前设备对应的“卸载脚本”，执行后会删除本地服务文件并关闭进程。
+- 卸载本地服务：优先使用当前平台自带的卸载入口；只有旧版脚本安装或系统原生卸载入口不可用时，才再下载兜底卸载脚本。
 
 各平台卸载范围：
 
-- macOS：移除 `/Library/Application Support/LunaTV Local Service`、`/Library/LaunchDaemons/io.qzz.lunatv.local-service.plist`、`/Library/Logs/LunaTV Local Service`，并清理旧脚本模式下可能遗留的 `~/.lunatv`。因为会写入 `/Library`，执行时会请求管理员授权。
-- Linux：如果通过 `.deb` 安装，则会停止并移除 `lunatv-local-service.service`、`/opt/lunatv-local-service`、`/etc/lunatv-local-service`、`/var/lib/lunatv-local-service`；旧脚本模式下仍会清理 `~/.lunatv`。
-- Windows：移除 `%LOCALAPPDATA%\\LunaTV Local Service`，清理旧脚本模式遗留的 `%USERPROFILE%\\.lunatv`，删除开机自启动项，并停止 `lunatv-server.exe` 进程。
+- macOS：安装包会额外放置 `/Applications/LunaTV Local Service/uninstall-local-service.command` 作为卸载入口；执行后会移除 `/Library/Application Support/LunaTV Local Service`、`/Library/LaunchDaemons/io.qzz.lunatv.local-service.plist`、`/Library/Logs/LunaTV Local Service`，并清理旧脚本模式下可能遗留的 `~/.lunatv`。因为会写入 `/Library`，执行时会请求管理员授权。
+- Linux：如果通过 `.deb` 安装，则优先在软件中心移除，或执行 `sudo apt remove lunatv-local-service` / `sudo dpkg -r lunatv-local-service`；卸载时会停止并移除 `lunatv-local-service.service`、`/opt/lunatv-local-service`、`/etc/lunatv-local-service`、`/var/lib/lunatv-local-service`。旧脚本模式下仍可通过兜底卸载脚本清理 `~/.lunatv`。
+- Windows：安装包会写入“已安装的应用”卸载项，并在 `%LOCALAPPDATA%\\LunaTV Local Service\\uninstall-local-service.cmd` 放一份本地卸载入口；卸载时会移除 `%LOCALAPPDATA%\\LunaTV Local Service`、旧版 `%USERPROFILE%\\.lunatv` 遗留目录、开机自启动项，并停止 `lunatv-server.exe` 进程。
 
 可选增强：
 

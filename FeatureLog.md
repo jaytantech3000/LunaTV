@@ -11,6 +11,39 @@
 
 ---
 
+## 2026-06-17 - 下载面板动作布局与原生卸载入口 v1
+
+- 分支：`nova`
+- 方案/说明文档：
+  - `docs/local-service-release.md`
+
+### 目标
+
+- 整理客户端下载面板里本地服务按钮布局，避免不同平台动作数量不一致时出现错位和凌乱。
+- 把卸载入口尽量改成安装后就地可执行或系统可识别的原生方式，而不是继续把“下载卸载脚本”暴露成默认路径。
+
+### 核心实现
+
+- 下载面板本地服务区域改成固定动作列布局：
+  - `src/components/DownloadClientPanel.tsx`
+- “下载卸载脚本”改成“查看卸载方式”，并保留兜底卸载脚本：
+  - `src/components/DownloadClientPanel.tsx`
+- macOS 安装包内新增卸载入口：
+  - `.github/local-service/macos/uninstall-local-service.command`
+  - `.github/local-service/macos/uninstall-local-service.sh`
+- Windows 安装包内新增卸载入口与系统卸载注册：
+  - `.github/local-service/windows/install-local-service.cmd`
+  - `.github/local-service/windows/uninstall-local-service.cmd`
+  - `.github/workflows/local-service-release.yml`
+- 卸载脚本接口同步改成更贴近原生卸载路径：
+  - `src/app/api/local-service-script/route.ts`
+
+### 本阶段已处理的问题
+
+- Linux 两按钮、其他平台一按钮时，下载行高和按钮对齐不一致，视觉上比较散。
+- 管理卡片里“下载卸载脚本”与安装包化方向不一致，用户看不到优先应走的系统卸载入口。
+- Windows 安装包此前不会在“已安装的应用”里注册卸载项；macOS 安装包也缺少安装后可直接找到的卸载器。
+
 ## 2026-06-17 - 本地服务 Linux `.deb` 安装包与脚本兜底 v1
 
 - 分支：`nova`

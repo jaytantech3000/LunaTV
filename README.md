@@ -412,7 +412,7 @@ v100.0.0 以上版本可配合 [Selene](https://github.com/MoonTechLab/Selene) �
 
 - Rust 服务源码位于 `crates/moontv-local-service`
 - 手动触发 `.github/workflows/local-service-release.yml` 可发布多平台二进制，并为 macOS / Windows 额外生成安装包、为 Linux 额外生成 Debian / Ubuntu `.deb`
-- Web 端“客户端下载”面板会按当前设备展示桌面版下载、本地服务安装包或脚本、停止脚本和卸载脚本
+- Web 端“客户端下载”面板会按当前设备展示桌面版下载、本地服务安装包或脚本、停止脚本、卸载方式和兜底卸载脚本
 - `nova` / `luna` 部署会自动匹配 `local-service-nova-latest` / `local-service-luna-latest`，其他环境回退 `local-service-latest`
 
 发布和环境变量细节见 `docs/local-service-release.md`

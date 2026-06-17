@@ -128,7 +128,15 @@ describe('DownloadClientPanel', () => {
       screen.getByRole('button', { name: 'macOS Apple Silicon 停止脚本下载' })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'macOS Apple Silicon 卸载脚本下载' })
+      screen.getByRole('button', { name: 'macOS Apple Silicon 卸载方式' })
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'macOS Apple Silicon 卸载方式' })
+    );
+    expect(
+      screen.getByRole('button', {
+        name: 'macOS Apple Silicon 兜底卸载脚本下载',
+      })
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'macOS Intel 下载' })

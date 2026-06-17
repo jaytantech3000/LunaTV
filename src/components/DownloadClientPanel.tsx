@@ -33,6 +33,11 @@ type LocalServiceDownloadAction = {
   href: string;
   label: string;
 };
+type LocalServiceUninstallGuide = {
+  description: string;
+  fallbackAction?: LocalServiceDownloadAction;
+  steps: string[];
+};
 type MacArchitecture = 'arm64' | 'x64';
 type RecommendedTargets = {
   desktop?: DesktopAssetKey;
@@ -409,6 +414,21 @@ function buildLocalServiceScriptDownloadAction(
   };
 }
 
+function buildLocalServiceMaintenanceDownloadAction(
+  params: {
+    action: LocalServiceMaintenanceAction;
+    ariaLabelSuffix: string;
+    label: string;
+    platform: LocalServicePlatformKey;
+  }
+): LocalServiceDownloadAction {
+  return {
+    ariaLabelSuffix: params.ariaLabelSuffix,
+    href: buildLocalServiceScriptHref(params.platform, params.action),
+    label: params.label,
+  };
+}
+
 function getLocalServiceDownloadConfig(
   platform: LocalServicePlatformKey,
   installerPlatforms: Set<LocalServiceInstallerPlatformKey>
@@ -452,28 +472,76 @@ function buildLocalServiceScriptHref(
   return `/api/local-service-script?platform=${platform}&action=${action}`;
 }
 
-function getLocalServiceMaintenanceActions(
+function getLocalServicePlatformLabel(platform: LocalServicePlatformKey): string {
+  return (
+    LOCAL_SERVICE_META.find((meta) => meta.key === platform)?.label || platform
+  );
+}
+
+function getLocalServiceStopAction(
   platform: LocalServicePlatformKey
-): Array<{
-  action: LocalServiceMaintenanceAction;
-  ariaLabelSuffix: string;
-  href: string;
-  label: string;
-}> {
-  return [
-    {
-      action: 'stop',
-      ariaLabelSuffix: '停止脚本下载',
-      href: buildLocalServiceScriptHref(platform, 'stop'),
-      label: '下载停止脚本',
-    },
-    {
-      action: 'uninstall',
-      ariaLabelSuffix: '卸载脚本下载',
-      href: buildLocalServiceScriptHref(platform, 'uninstall'),
-      label: '下载卸载脚本',
-    },
-  ];
+): LocalServiceDownloadAction {
+  return buildLocalServiceMaintenanceDownloadAction({
+    action: 'stop',
+    ariaLabelSuffix: '停止脚本下载',
+    label: '下载停止脚本',
+    platform,
+  });
+}
+
+function getLocalServiceUninstallGuide(
+  platform: LocalServicePlatformKey,
+  installerPlatforms: Set<LocalServiceInstallerPlatformKey>
+): LocalServiceUninstallGuide {
+  const fallbackAction = buildLocalServiceMaintenanceDownloadAction({
+    action: 'uninstall',
+    ariaLabelSuffix: '兜底卸载脚本下载',
+    label: '下载兜底卸载脚本',
+    platform,
+  });
+
+  if (!installerPlatforms.has(platform)) {
+    return {
+      description: '当前平台仍以脚本安装为主，直接运行卸载脚本即可清理服务文件。',
+      fallbackAction,
+      steps: [
+        '下载并运行卸载脚本，会停止本地服务并移除安装目录。',
+        '如果之前装过更早期版本，卸载脚本也会顺带清理旧版 ~/.lunatv 遗留文件。',
+      ],
+    };
+  }
+
+  if (platform.startsWith('mac-')) {
+    return {
+      description: '优先使用安装包自带的卸载器，只有旧版脚本安装才需要兜底脚本。',
+      fallbackAction,
+      steps: [
+        '打开“应用程序 / LunaTV Local Service”，双击 `uninstall-local-service.command`。',
+        '卸载器会请求管理员授权，并移除 LaunchDaemon、服务目录和日志目录。',
+      ],
+    };
+  }
+
+  if (platform === 'win-x64') {
+    return {
+      description: '优先通过系统已安装应用卸载，安装包也会写入本地卸载入口。',
+      fallbackAction,
+      steps: [
+        '打开“设置 > 应用 > 已安装的应用”，卸载 “LunaTV Local Service”。',
+        '如果系统列表里暂时没显示，也可运行 `%LOCALAPPDATA%\\LunaTV Local Service\\uninstall-local-service.cmd`。',
+      ],
+    };
+  }
+
+  return {
+    description: 'Debian / Ubuntu 优先走系统包管理器卸载，脚本只保留给旧版脚本安装兜底。',
+    fallbackAction,
+    steps: [
+      '可以直接在系统软件中心移除 `lunatv-local-service`。',
+      '命令行可执行 `sudo apt remove lunatv-local-service`；没有 apt 时可用 `sudo dpkg -r lunatv-local-service`。',
+      '如果当初是脚本安装，再使用下面的兜底卸载脚本。',
+    ],
+  };
 }
 
 export default function DownloadClientPanel({
@@ -497,6 +565,7 @@ export default function DownloadClientPanel({
   const [recommendedTargets, setRecommendedTargets] =
     useState<RecommendedTargets>(() => detectRecommendedTargetsSync().targets);
   const [reloadKey, setReloadKey] = useState(0);
+  const [showUninstallGuide, setShowUninstallGuide] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -522,6 +591,12 @@ export default function DownloadClientPanel({
       return acquireScrollLock({
         lockHtml: true,
       });
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setShowUninstallGuide(false);
     }
   }, [isOpen]);
 
@@ -640,6 +715,20 @@ export default function DownloadClientPanel({
   const localServiceInstallerPlatforms = new Set(
     localServiceRelease?.installerPlatforms ?? []
   );
+  const recommendedLocalServiceLabel = recommendedLocalServicePlatform
+    ? getLocalServicePlatformLabel(recommendedLocalServicePlatform)
+    : null;
+  const localServiceStopAction = recommendedLocalServicePlatform
+    ? getLocalServiceStopAction(recommendedLocalServicePlatform)
+    : null;
+  const localServiceUninstallGuide = recommendedLocalServicePlatform
+    ? getLocalServiceUninstallGuide(
+        recommendedLocalServicePlatform,
+        localServiceInstallerPlatforms
+      )
+    : null;
+  const localServiceUninstallFallbackAction =
+    localServiceUninstallGuide?.fallbackAction ?? null;
   const desktopAssetMap = new Map(
     desktopRelease?.assets.map((asset) => [asset.key, asset]) || []
   );
@@ -896,43 +985,89 @@ export default function DownloadClientPanel({
             )}
 
             {recommendedLocalServicePlatform && (
-              <div className='mb-4 rounded-lg border border-emerald-200/80 bg-white/90 p-4 dark:border-emerald-900/40 dark:bg-gray-900/40'>
-                <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+              <div className='mb-4 rounded-xl border border-emerald-200/80 bg-white/90 p-4 dark:border-emerald-900/40 dark:bg-gray-900/40'>
+                <div className='grid gap-4 sm:grid-cols-[minmax(0,1fr)_13rem] sm:items-start'>
                   <div>
                     <div className='text-sm font-semibold text-gray-900 dark:text-gray-100'>
                       管理当前设备上的本地服务
                     </div>
-                    <div className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-                      页面内可直接停用加速回退默认线路；如果还想停止进程或彻底移除安装，可下载下面的管理脚本。macOS
-                      卸载会请求管理员授权。
+                    <div className='mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400'>
+                      页面内可直接停用加速回退默认线路；彻底卸载优先走系统自带入口，下面保留停止脚本和当前平台的卸载说明。
                     </div>
                   </div>
-                  <div className='flex flex-wrap gap-2'>
-                    {getLocalServiceMaintenanceActions(
-                      recommendedLocalServicePlatform
-                    ).map((item) => (
+                  <div className='flex w-full flex-col gap-2 sm:w-52'>
+                    {localServiceStopAction && recommendedLocalServiceLabel && (
                       <button
-                        aria-label={`${
-                          LOCAL_SERVICE_META.find(
-                            (meta) =>
-                              meta.key === recommendedLocalServicePlatform
-                          )?.label || recommendedLocalServicePlatform
-                        } ${item.ariaLabelSuffix}`}
-                        className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                          item.action === 'uninstall'
-                            ? 'border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:bg-amber-900/30'
-                            : 'border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-200 dark:hover:bg-gray-800/60'
-                        }`}
-                        key={item.action}
-                        onClick={() => handleDownload(item.href)}
+                        aria-label={`${recommendedLocalServiceLabel} ${localServiceStopAction.ariaLabelSuffix}`}
+                        className='inline-flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-200 dark:hover:bg-gray-800/60'
+                        onClick={() =>
+                          handleDownload(localServiceStopAction.href)
+                        }
                         type='button'
                       >
                         <Download className='h-4 w-4' />
-                        {item.label}
+                        {localServiceStopAction.label}
                       </button>
-                    ))}
+                    )}
+                    {recommendedLocalServiceLabel && (
+                      <button
+                        aria-expanded={showUninstallGuide}
+                        aria-label={`${recommendedLocalServiceLabel} 卸载方式`}
+                        className='inline-flex w-full items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:bg-amber-900/30'
+                        onClick={() =>
+                          setShowUninstallGuide((value) => !value)
+                        }
+                        type='button'
+                      >
+                        <Download className='h-4 w-4' />
+                        {showUninstallGuide ? '收起卸载方式' : '查看卸载方式'}
+                      </button>
+                    )}
                   </div>
                 </div>
+
+                {showUninstallGuide &&
+                  localServiceUninstallGuide &&
+                  recommendedLocalServiceLabel && (
+                    <div className='mt-4 rounded-lg border border-amber-200/80 bg-amber-50/80 p-4 dark:border-amber-900/40 dark:bg-amber-900/10'>
+                      <div className='text-sm font-semibold text-gray-900 dark:text-gray-100'>
+                        {recommendedLocalServiceLabel} 卸载方式
+                      </div>
+                      <div className='mt-1 text-xs text-gray-600 dark:text-gray-300'>
+                        {localServiceUninstallGuide.description}
+                      </div>
+                      <div className='mt-3 space-y-2'>
+                        {localServiceUninstallGuide.steps.map((step) => (
+                          <div
+                            className='rounded-lg bg-white/80 px-3 py-2 text-sm leading-6 text-gray-700 dark:bg-gray-900/30 dark:text-gray-200'
+                            key={step}
+                          >
+                            {step}
+                          </div>
+                        ))}
+                      </div>
+                      {localServiceUninstallFallbackAction && (
+                        <div className='mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+                          <div className='text-xs text-gray-500 dark:text-gray-400'>
+                            仅在旧版脚本安装或系统原生卸载入口不可用时，才需要下面这个兜底脚本。
+                          </div>
+                          <button
+                            aria-label={`${recommendedLocalServiceLabel} ${localServiceUninstallFallbackAction.ariaLabelSuffix}`}
+                            className='inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-200 dark:hover:bg-gray-800/60'
+                            onClick={() =>
+                              handleDownload(
+                                localServiceUninstallFallbackAction.href
+                              )
+                            }
+                            type='button'
+                          >
+                            <Download className='h-4 w-4' />
+                            {localServiceUninstallFallbackAction.label}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
               </div>
             )}
 
@@ -950,14 +1085,14 @@ export default function DownloadClientPanel({
 
                 return (
                   <div
-                    className={`flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between ${
+                    className={`grid gap-4 rounded-xl border p-4 sm:grid-cols-[minmax(0,1fr)_13rem] sm:items-start ${
                       isRecommended
                         ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-900/40 dark:bg-emerald-900/15'
                         : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900/30'
                     }`}
                     key={meta.key}
                   >
-                    <div>
+                    <div className='min-w-0'>
                       <div className='flex flex-wrap items-center gap-2'>
                         <span className='text-sm font-medium text-gray-900 dark:text-gray-100'>
                           {meta.label}
@@ -973,14 +1108,14 @@ export default function DownloadClientPanel({
                           </span>
                         )}
                       </div>
-                      <div className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                      <div className='mt-2 text-sm leading-6 text-gray-500 dark:text-gray-400'>
                         {downloadConfig.description}
                       </div>
                     </div>
-                    <div className='flex flex-wrap gap-2'>
+                    <div className='flex w-full flex-col gap-2 sm:w-52'>
                       <button
                         aria-label={`${meta.label} ${downloadConfig.primaryAction.ariaLabelSuffix}`}
-                        className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                        className={`inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                           isUnavailable
                             ? 'cursor-not-allowed bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
                             : 'bg-emerald-600 text-white hover:bg-emerald-700'
@@ -998,7 +1133,7 @@ export default function DownloadClientPanel({
                       {secondaryAction && (
                         <button
                           aria-label={`${meta.label} ${secondaryAction.ariaLabelSuffix}`}
-                          className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                          className={`inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
                             isUnavailable
                               ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-500 dark:border-gray-800 dark:bg-gray-900/30 dark:text-gray-500'
                               : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-200 dark:hover:bg-gray-800/60'

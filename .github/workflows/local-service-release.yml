@@ -120,9 +120,11 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp "crates/moontv-local-service/target/${{ matrix.target }}/release/lunatv-server" "dist/${{ matrix.asset_name }}"
-          mkdir -p "pkg-root/Library/Application Support/LunaTV Local Service" "pkg-root/Library/LaunchDaemons" pkg-scripts
+          mkdir -p "pkg-root/Applications/LunaTV Local Service" "pkg-root/Library/Application Support/LunaTV Local Service" "pkg-root/Library/LaunchDaemons" pkg-scripts
           install -m 755 "crates/moontv-local-service/target/${{ matrix.target }}/release/lunatv-server" "pkg-root/Library/Application Support/LunaTV Local Service/lunatv-server"
           install -m 644 config.example.json "pkg-root/Library/Application Support/LunaTV Local Service/config.json"
+          install -m 755 ".github/local-service/macos/uninstall-local-service.sh" "pkg-root/Library/Application Support/LunaTV Local Service/uninstall-local-service.sh"
+          install -m 755 ".github/local-service/macos/uninstall-local-service.command" "pkg-root/Applications/LunaTV Local Service/uninstall-local-service.command"
           install -m 644 ".github/local-service/macos/io.qzz.lunatv.local-service.plist" "pkg-root/Library/LaunchDaemons/io.qzz.lunatv.local-service.plist"
           install -m 755 ".github/local-service/macos/postinstall" "pkg-scripts/postinstall"
 
@@ -275,6 +277,7 @@ jobs:
           Copy-Item "config.example.json" "installer-payload/config.json"
           Copy-Item ".github/local-service/windows/install-local-service.cmd" "installer-payload/install-local-service.cmd"
           Copy-Item ".github/local-service/windows/run-local-service.vbs" "installer-payload/run-local-service.vbs"
+          Copy-Item ".github/local-service/windows/uninstall-local-service.cmd" "installer-payload/uninstall-local-service.cmd"
 
           $sevenZipExe = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
           $sevenZipSfx = Join-Path $env:ProgramFiles "7-Zip\7z.sfx"

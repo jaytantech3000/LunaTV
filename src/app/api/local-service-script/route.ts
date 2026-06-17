@@ -13,6 +13,7 @@ export const runtime = 'nodejs';
 type LocalServiceScriptAction = 'install' | 'stop' | 'uninstall';
 
 const MACOS_LAUNCHD_LABEL = 'io.qzz.lunatv.local-service';
+const MACOS_APPLICATION_DIR = '/Applications/LunaTV Local Service';
 const MACOS_SUPPORT_DIR = '/Library/Application Support/LunaTV Local Service';
 const MACOS_LOG_DIR = '/Library/Logs/LunaTV Local Service';
 const LINUX_PACKAGE_NAME = 'lunatv-local-service';
@@ -26,6 +27,8 @@ const WINDOWS_INSTALL_ROOT =
 const WINDOWS_RUN_KEY =
   'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const WINDOWS_RUN_VALUE_NAME = 'LunaTVLocalService';
+const WINDOWS_UNINSTALL_KEY =
+  'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\LunaTVLocalService';
 const WINDOWS_LAUNCHER_NAME = 'run-local-service.vbs';
 const DEFAULT_WINDOWS_LAUNCHER_SCRIPT = [
   'Set shell = CreateObject("WScript.Shell")',
@@ -131,6 +134,7 @@ function buildMacUninstallScript(): string {
     'set -euo pipefail',
     '',
     `SERVICE_LABEL="${MACOS_LAUNCHD_LABEL}"`,
+    `APPLICATION_DIR="${MACOS_APPLICATION_DIR}"`,
     'PLIST_PATH="/Library/LaunchDaemons/${SERVICE_LABEL}.plist"',
     `SYSTEM_SUPPORT_DIR="${MACOS_SUPPORT_DIR}"`,
     `SYSTEM_LOG_DIR="${MACOS_LOG_DIR}"`,
@@ -154,10 +158,18 @@ function buildMacUninstallScript(): string {
     'pkill -f "$USER_BINARY" >/dev/null 2>&1 || true',
     '',
     'run_as_root rm -f "$PLIST_PATH" || true',
+    'run_as_root rm -rf "$APPLICATION_DIR" || true',
     'run_as_root rm -rf "$SYSTEM_SUPPORT_DIR" || true',
     'run_as_root rm -rf "$SYSTEM_LOG_DIR" || true',
     'rm -rf "$USER_ROOT"',
     'rm -f /tmp/lunatv-server.log',
+    '',
+    'if command -v pkgutil >/dev/null 2>&1; then',
+    "  while IFS= read -r package_id; do",
+    '    [ -n "$package_id" ] || continue',
+    '    run_as_root pkgutil --forget "$package_id" >/dev/null 2>&1 || true',
+    "  done < <(pkgutil --pkgs | grep '^io\\.qzz\\.lunatv\\.local-service\\.mac-') || true",
+    'fi',
     '',
     'echo "LunaTV local service uninstalled."',
     'echo "Refresh LunaTV in your browser to use the default route."',
@@ -226,7 +238,11 @@ function buildLinuxUninstallScript(): string {
     'pkill -f "$USER_BINARY" >/dev/null 2>&1 || true',
     '',
     'if command -v dpkg >/dev/null 2>&1 && dpkg -s "$PACKAGE_NAME" >/dev/null 2>&1; then',
-    '  run_as_root dpkg -r "$PACKAGE_NAME" >/dev/null 2>&1 || true',
+    '  if command -v apt-get >/dev/null 2>&1; then',
+    '    run_as_root apt-get remove -y "$PACKAGE_NAME" >/dev/null 2>&1 || run_as_root dpkg -r "$PACKAGE_NAME" >/dev/null 2>&1 || true',
+    '  else',
+    '    run_as_root dpkg -r "$PACKAGE_NAME" >/dev/null 2>&1 || true',
+    '  fi',
     '  if command -v systemctl >/dev/null 2>&1; then',
     '    run_as_root systemctl daemon-reload >/dev/null 2>&1 || true',
     '  fi',
@@ -274,6 +290,7 @@ function buildWindowsUninstallScript(): string {
     '}',
     '',
     `Remove-ItemProperty -Path "${WINDOWS_RUN_KEY}" -Name "${WINDOWS_RUN_VALUE_NAME}" -ErrorAction SilentlyContinue`,
+    `Remove-Item -Path "${WINDOWS_UNINSTALL_KEY}" -Recurse -Force -ErrorAction SilentlyContinue`,
     '',
     'if (Test-Path $InstallRoot) {',
     '  Remove-Item -Recurse -Force $InstallRoot',

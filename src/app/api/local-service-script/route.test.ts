@@ -58,7 +58,9 @@ describe('/api/local-service-script', () => {
     expect(response.headers.get('Content-Disposition')).toBe(
       'attachment; filename="lunatv-local-service-mac-arm64-uninstall.sh"'
     );
+    expect(body).toContain('rm -rf "$APPLICATION_DIR"');
     expect(body).toContain('launchctl bootout system "$PLIST_PATH"');
+    expect(body).toContain('pkgutil --forget "$package_id"');
     expect(body).toContain('rm -rf "$SYSTEM_SUPPORT_DIR"');
   });
 
@@ -99,6 +101,24 @@ describe('/api/local-service-script', () => {
     expect(body).toContain('LunaTV local service stopped.');
   });
 
+  it('returns a Windows uninstall script that clears the uninstall registry entry', async () => {
+    const request = new NextRequest(
+      'http://localhost/api/local-service-script?platform=win-x64&action=uninstall'
+    );
+
+    const response = await GET(request);
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Disposition')).toBe(
+      'attachment; filename="lunatv-local-service-win-x64-uninstall.ps1"'
+    );
+    expect(body).toContain(
+      'Remove-Item -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\LunaTVLocalService"'
+    );
+    expect(body).toContain('Remove-Item -Recurse -Force $InstallRoot');
+  });
+
   it('returns a Linux stop script that handles packaged systemd installs', async () => {
     const request = new NextRequest(
       'http://localhost/api/local-service-script?platform=linux-x64&action=stop'
@@ -127,6 +147,7 @@ describe('/api/local-service-script', () => {
     expect(response.headers.get('Content-Disposition')).toBe(
       'attachment; filename="lunatv-local-service-linux-x64-uninstall.sh"'
     );
+    expect(body).toContain('apt-get remove -y "$PACKAGE_NAME"');
     expect(body).toContain('dpkg -s "$PACKAGE_NAME"');
     expect(body).toContain('dpkg -r "$PACKAGE_NAME"');
     expect(body).toContain('/etc/lunatv-local-service');
