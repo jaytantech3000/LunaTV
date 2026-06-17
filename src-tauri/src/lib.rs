@@ -1,18 +1,19 @@
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, RunEvent, State};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::{process::Command as TokioCommand, sync::Mutex as AsyncMutex};
 
 const LOCAL_SERVICE_PORT: u16 = 8787;
 const LOCAL_SERVICE_HEALTH_PATH: &str = "/health";
@@ -32,6 +33,7 @@ const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
 struct DesktopRuntimeState {
     service_process: Mutex<Option<ServiceProcess>>,
     service_start_lock: AsyncMutex<()>,
+    last_start_failure: Mutex<Option<LocalServiceStartupFailure>>,
 }
 
 struct ServiceProcess {
@@ -67,6 +69,81 @@ struct DesktopAuthStatus {
 struct DesktopAuthSession {
     username: String,
     role: String,
+}
+
+#[derive(Clone)]
+struct LocalServiceStartupFailure {
+    captured_at_ms: u64,
+    message: String,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum DiagnosticLevel {
+    Ok,
+    Warning,
+    Error,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalServiceDiagnosticFinding {
+    level: DiagnosticLevel,
+    title: String,
+    detail: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalServiceDiagnosticsReport {
+    status: DiagnosticLevel,
+    captured_at_ms: u64,
+    summary: String,
+    findings: Vec<LocalServiceDiagnosticFinding>,
+    recommendations: Vec<String>,
+    log_text: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalServiceDiagnosticsUploadResult {
+    uploaded: bool,
+    target: String,
+    issue_url: Option<String>,
+    issue_number: Option<u64>,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalServiceDiagnosticsUploadRequest {
+    source_app: String,
+    app_version: String,
+    target_triple: String,
+    platform: String,
+    uploaded_at_ms: u64,
+    report: LocalServiceDiagnosticsReport,
+}
+
+struct SidecarTrialResult {
+    healthy: bool,
+    timed_out: bool,
+    spawn_error: Option<String>,
+    exit_status: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+#[derive(Clone)]
+struct PortOccupant {
+    pid: u32,
+    process_name: Option<String>,
+}
+
+struct PortInspection {
+    bind_available: bool,
+    occupants: Vec<PortOccupant>,
+    raw_output: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -144,6 +221,25 @@ async fn get_local_service_status(
     state: State<'_, DesktopRuntimeState>,
 ) -> Result<LocalServiceStatus, String> {
     get_local_service_status_impl(&app, &state)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn run_local_service_diagnostics(
+    app: AppHandle,
+    state: State<'_, DesktopRuntimeState>,
+) -> Result<LocalServiceDiagnosticsReport, String> {
+    Ok(run_local_service_diagnostics_impl(&app, &state).await)
+}
+
+#[tauri::command]
+async fn upload_local_service_diagnostics(
+    app: AppHandle,
+    remote_base_url: String,
+    report: LocalServiceDiagnosticsReport,
+) -> Result<LocalServiceDiagnosticsUploadResult, String> {
+    upload_local_service_diagnostics_impl(&app, remote_base_url, report)
         .await
         .map_err(|error| error.to_string())
 }
@@ -271,6 +367,8 @@ pub fn run() {
             start_local_service,
             stop_local_service,
             get_local_service_status,
+            run_local_service_diagnostics,
+            upload_local_service_diagnostics,
             read_app_config,
             write_app_config,
             get_desktop_auth_status,
@@ -301,6 +399,24 @@ fn spawn_local_service_start(app: AppHandle) {
 }
 
 async fn start_local_service_impl(
+    app: &AppHandle,
+    state: &DesktopRuntimeState,
+) -> Result<LocalServiceStatus> {
+    let result = start_local_service_impl_inner(app, state).await;
+
+    match result {
+        Ok(status) => {
+            clear_local_service_start_failure(state);
+            Ok(status)
+        }
+        Err(error) => {
+            record_local_service_start_failure(state, error.to_string());
+            Err(error)
+        }
+    }
+}
+
+async fn start_local_service_impl_inner(
     app: &AppHandle,
     state: &DesktopRuntimeState,
 ) -> Result<LocalServiceStatus> {
@@ -559,6 +675,981 @@ async fn local_service_is_healthy(base_url: &str) -> bool {
         .await
         .map(|response| response.status().is_success())
         .unwrap_or(false)
+}
+
+async fn run_local_service_diagnostics_impl(
+    app: &AppHandle,
+    state: &DesktopRuntimeState,
+) -> LocalServiceDiagnosticsReport {
+    let captured_at_ms = current_timestamp_ms();
+    let mut findings = Vec::new();
+    let mut recommendations = BTreeSet::new();
+    let mut log_lines = vec![
+        "LunaTV Desktop Local Service Diagnostics".to_string(),
+        format!("CapturedAtMs: {captured_at_ms}"),
+    ];
+
+    let _start_guard = state.service_start_lock.lock().await;
+
+    let paths = match resolve_runtime_paths(app) {
+        Ok(paths) => {
+            log_lines.push(format!("DataDir: {}", paths.data_dir.display()));
+            log_lines.push(format!("ConfigPath: {}", paths.config_path.display()));
+            log_lines.push(format!("SqlitePath: {}", paths.sqlite_path.display()));
+            paths
+        }
+        Err(error) => {
+            findings.push(LocalServiceDiagnosticFinding {
+                level: DiagnosticLevel::Error,
+                title: "运行目录解析失败".to_string(),
+                detail: error.to_string(),
+            });
+            recommendations.insert("请确认桌面程序有权访问当前用户的数据目录。".to_string());
+            return finalize_local_service_diagnostics_report(
+                captured_at_ms,
+                "桌面程序无法解析运行目录，尚未开始检查本地服务。".to_string(),
+                findings,
+                recommendations.into_iter().collect(),
+                log_lines,
+            );
+        }
+    };
+
+    let base_url = format!("http://127.0.0.1:{LOCAL_SERVICE_PORT}");
+    log_lines.push(format!("BaseUrl: {base_url}"));
+
+    match state.service_process.lock() {
+        Ok(guard) => {
+            if let Some(process) = guard.as_ref() {
+                findings.push(LocalServiceDiagnosticFinding {
+                    level: DiagnosticLevel::Warning,
+                    title: "桌面壳仍记录着本地服务子进程".to_string(),
+                    detail: format!(
+                        "桌面壳内部仍在追踪一个子进程，目标地址为 {}。如果健康检查失败，这通常说明子进程已失效或状态未同步。",
+                        process.base_url
+                    ),
+                });
+            } else {
+                findings.push(LocalServiceDiagnosticFinding {
+                    level: DiagnosticLevel::Ok,
+                    title: "桌面壳当前未追踪本地服务子进程".to_string(),
+                    detail: "当前没有已登记的本地服务子进程句柄。".to_string(),
+                });
+            }
+        }
+        Err(_) => {
+            findings.push(LocalServiceDiagnosticFinding {
+                level: DiagnosticLevel::Warning,
+                title: "无法读取桌面壳内部进程状态".to_string(),
+                detail: "桌面壳的进程状态锁不可用，本次报告无法确认是否存在遗留子进程。"
+                    .to_string(),
+            });
+        }
+    }
+
+    let last_start_failure = snapshot_local_service_start_failure(state);
+    if let Some(failure) = last_start_failure.as_ref() {
+        findings.push(LocalServiceDiagnosticFinding {
+            level: DiagnosticLevel::Warning,
+            title: "记录到最近一次启动失败".to_string(),
+            detail: format!(
+                "CapturedAtMs={}，错误信息：{}",
+                failure.captured_at_ms, failure.message
+            ),
+        });
+        log_lines.push(format!(
+            "LastStartFailure: {}",
+            failure.message.replace('\n', " | ")
+        ));
+    }
+
+    let service_healthy = local_service_is_healthy(&base_url).await;
+    findings.push(LocalServiceDiagnosticFinding {
+        level: if service_healthy {
+            DiagnosticLevel::Ok
+        } else {
+            DiagnosticLevel::Warning
+        },
+        title: "健康检查".to_string(),
+        detail: if service_healthy {
+            format!("{base_url}{LOCAL_SERVICE_HEALTH_PATH} 已返回成功。")
+        } else {
+            format!("{base_url}{LOCAL_SERVICE_HEALTH_PATH} 当前没有返回成功。")
+        },
+    });
+
+    let sidecar_candidates = match local_service_sidecar_candidates(app) {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            findings.push(LocalServiceDiagnosticFinding {
+                level: DiagnosticLevel::Error,
+                title: "无法计算 sidecar 路径".to_string(),
+                detail: error.to_string(),
+            });
+            recommendations.insert("请重新安装桌面版，确认安装目录结构完整。".to_string());
+            return finalize_local_service_diagnostics_report(
+                captured_at_ms,
+                "无法计算本地服务可执行文件路径。".to_string(),
+                findings,
+                recommendations.into_iter().collect(),
+                log_lines,
+            );
+        }
+    };
+    let sidecar_path = sidecar_candidates
+        .iter()
+        .find(|path| path.is_file())
+        .cloned();
+    log_lines.push("SidecarCandidates:".to_string());
+    for candidate in &sidecar_candidates {
+        let status = if candidate.is_file() {
+            "found"
+        } else {
+            "missing"
+        };
+        log_lines.push(format!("  - [{status}] {}", candidate.display()));
+    }
+
+    let sidecar_missing = sidecar_path.is_none();
+    findings.push(LocalServiceDiagnosticFinding {
+        level: if sidecar_missing {
+            DiagnosticLevel::Error
+        } else {
+            DiagnosticLevel::Ok
+        },
+        title: "本地服务可执行文件".to_string(),
+        detail: if let Some(path) = sidecar_path.as_ref() {
+            format!("已找到 sidecar：{}", path.display())
+        } else {
+            "未找到可用的本地服务 sidecar，可执行文件可能缺失、被移动，或被安全软件隔离。"
+                .to_string()
+        },
+    });
+
+    let mut config_invalid = false;
+    match fs::read_to_string(&paths.config_path) {
+        Ok(contents) => match serde_json::from_str::<serde_json::Value>(&contents) {
+            Ok(_) => findings.push(LocalServiceDiagnosticFinding {
+                level: DiagnosticLevel::Ok,
+                title: "桌面配置文件".to_string(),
+                detail: "desktop.config.json 可读取且 JSON 格式有效。".to_string(),
+            }),
+            Err(error) => {
+                config_invalid = true;
+                findings.push(LocalServiceDiagnosticFinding {
+                    level: DiagnosticLevel::Error,
+                    title: "桌面配置文件".to_string(),
+                    detail: format!("desktop.config.json 可读取，但 JSON 格式无效：{}", error),
+                });
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            findings.push(LocalServiceDiagnosticFinding {
+                level: DiagnosticLevel::Warning,
+                title: "桌面配置文件".to_string(),
+                detail: "desktop.config.json 当前不存在。启动服务时会尝试自动创建默认配置。"
+                    .to_string(),
+            });
+        }
+        Err(error) => {
+            config_invalid = true;
+            findings.push(LocalServiceDiagnosticFinding {
+                level: DiagnosticLevel::Error,
+                title: "桌面配置文件".to_string(),
+                detail: format!("读取 desktop.config.json 失败：{error}"),
+            });
+        }
+    }
+
+    let mut data_dir_unwritable = false;
+    if let Err(error) = fs::create_dir_all(&paths.data_dir) {
+        data_dir_unwritable = true;
+        findings.push(LocalServiceDiagnosticFinding {
+            level: DiagnosticLevel::Error,
+            title: "数据目录".to_string(),
+            detail: format!(
+                "无法创建或访问数据目录 {}：{error}",
+                paths.data_dir.display()
+            ),
+        });
+    } else {
+        let probe_path = paths
+            .data_dir
+            .join(format!(".lunatv-diagnostic-write-{}.tmp", captured_at_ms));
+        match fs::write(&probe_path, b"lunatv-diagnostic") {
+            Ok(_) => {
+                let _ = fs::remove_file(&probe_path);
+                findings.push(LocalServiceDiagnosticFinding {
+                    level: DiagnosticLevel::Ok,
+                    title: "数据目录".to_string(),
+                    detail: "数据目录可写。".to_string(),
+                });
+            }
+            Err(error) => {
+                data_dir_unwritable = true;
+                findings.push(LocalServiceDiagnosticFinding {
+                    level: DiagnosticLevel::Error,
+                    title: "数据目录".to_string(),
+                    detail: format!("数据目录不可写：{error}"),
+                });
+            }
+        }
+    }
+
+    let mut sqlite_inaccessible = false;
+    match fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&paths.sqlite_path)
+    {
+        Ok(_) => findings.push(LocalServiceDiagnosticFinding {
+            level: DiagnosticLevel::Ok,
+            title: "SQLite 文件".to_string(),
+            detail: format!("SQLite 文件可打开：{}", paths.sqlite_path.display()),
+        }),
+        Err(error) => {
+            sqlite_inaccessible = true;
+            findings.push(LocalServiceDiagnosticFinding {
+                level: DiagnosticLevel::Error,
+                title: "SQLite 文件".to_string(),
+                detail: format!(
+                    "无法打开 SQLite 文件 {}：{error}",
+                    paths.sqlite_path.display()
+                ),
+            });
+        }
+    }
+
+    let port_inspection = inspect_local_service_port(LOCAL_SERVICE_PORT);
+    if let Some(raw_output) = port_inspection.raw_output.as_ref() {
+        log_lines.push("PortInspectionOutput:".to_string());
+        log_lines.extend(raw_output.lines().map(|line| format!("  {line}")));
+    }
+
+    let port_occupied = !service_healthy && !port_inspection.bind_available;
+    findings.push(LocalServiceDiagnosticFinding {
+        level: if port_occupied {
+            DiagnosticLevel::Error
+        } else {
+            DiagnosticLevel::Ok
+        },
+        title: format!("端口 {LOCAL_SERVICE_PORT}"),
+        detail: if port_occupied {
+            describe_port_occupants(LOCAL_SERVICE_PORT, &port_inspection.occupants)
+        } else {
+            format!("127.0.0.1:{LOCAL_SERVICE_PORT} 当前可用于绑定。")
+        },
+    });
+
+    let trial_result = if let Some(path) = sidecar_path.as_ref() {
+        let result = run_local_service_trial(path, &paths).await;
+        log_lines.push(format!("TrialSidecar: {}", path.display()));
+        if let Some(spawn_error) = result.spawn_error.as_ref() {
+            log_lines.push(format!("TrialSpawnError: {spawn_error}"));
+        }
+        if !result.stdout.trim().is_empty() {
+            log_lines.push("TrialStdout:".to_string());
+            log_lines.extend(result.stdout.lines().map(|line| format!("  {line}")));
+        }
+        if !result.stderr.trim().is_empty() {
+            log_lines.push("TrialStderr:".to_string());
+            log_lines.extend(result.stderr.lines().map(|line| format!("  {line}")));
+        }
+
+        findings.push(build_sidecar_trial_finding(&result));
+        Some(result)
+    } else {
+        None
+    };
+
+    let combined_error_text =
+        collect_diagnostics_error_text(last_start_failure.as_ref(), trial_result.as_ref());
+
+    let detected_bind_issue = text_contains_any(
+        &combined_error_text,
+        &[
+            "failed to bind local service listener",
+            "address already in use",
+            "only one usage of each socket address",
+        ],
+    );
+    let detected_sqlite_issue = text_contains_any(
+        &combined_error_text,
+        &[
+            "failed to initialize desktop sqlite foundation",
+            "failed to open",
+            "failed to configure sqlite",
+            "failed to commit sqlite migrations",
+            "failed to apply sqlite migration",
+        ],
+    );
+    let detected_runtime_dependency_issue = text_contains_any(
+        &combined_error_text,
+        &[
+            "vcruntime",
+            "msvcp",
+            "api-ms-win",
+            "code execution cannot proceed",
+            "0xc0000135",
+        ],
+    );
+
+    if sidecar_missing {
+        recommendations.insert(
+            "请重新安装桌面版，并确认安装目录中的本地服务 EXE 没有被安全软件隔离。".to_string(),
+        );
+    }
+    if port_occupied || detected_bind_issue {
+        recommendations
+            .insert("请关闭占用 127.0.0.1:8787 的程序后重试，必要时重启电脑。".to_string());
+    }
+    if config_invalid {
+        recommendations.insert(format!(
+            "请修复或重置桌面配置文件：{}",
+            paths.config_path.display()
+        ));
+    }
+    if data_dir_unwritable || sqlite_inaccessible || detected_sqlite_issue {
+        recommendations.insert(format!(
+            "请检查 {} 的读写权限，并确认 SQLite 文件未损坏或未被其他程序锁住。",
+            paths.data_dir.display()
+        ));
+    }
+    if detected_runtime_dependency_issue {
+        recommendations.insert(
+            "诊断日志看起来像系统运行库或 DLL 依赖异常，请检查系统运行时环境以及安全软件隔离记录。"
+                .to_string(),
+        );
+    }
+    if trial_result.as_ref().is_some_and(|result| result.healthy) {
+        recommendations.insert(
+            "诊断试运行可以拉起本地服务，更像是后台自动启动或状态同步失败；关闭应用后重新打开再观察。"
+                .to_string(),
+        );
+    }
+    if recommendations.is_empty() {
+        recommendations.insert("请导出排查日志并反馈给开发者继续定位。".to_string());
+    }
+
+    let summary = if service_healthy {
+        "本地服务已经能够通过健康检查，更像是桌面状态没有及时刷新。".to_string()
+    } else if sidecar_missing {
+        "安装目录中没有找到本地服务 sidecar，可执行文件缺失或被隔离。".to_string()
+    } else if port_occupied || detected_bind_issue {
+        describe_primary_port_issue(LOCAL_SERVICE_PORT, &port_inspection.occupants)
+    } else if config_invalid {
+        "desktop.config.json 读取或解析失败，本地服务无法按当前配置启动。".to_string()
+    } else if data_dir_unwritable {
+        "桌面数据目录不可写，本地服务无法在当前用户目录下正常启动。".to_string()
+    } else if sqlite_inaccessible || detected_sqlite_issue {
+        "SQLite 初始化或访问失败，本地服务无法完成启动。".to_string()
+    } else if detected_runtime_dependency_issue {
+        "sidecar 启动日志显示系统运行时或 DLL 依赖异常。".to_string()
+    } else if trial_result.as_ref().is_some_and(|result| result.healthy) {
+        "诊断试运行可以成功拉起本地服务，问题更像是后台自动启动或状态同步没有完成。".to_string()
+    } else if trial_result
+        .as_ref()
+        .is_some_and(|result| result.spawn_error.is_some())
+    {
+        "桌面程序尝试拉起本地服务进程时就失败了。".to_string()
+    } else if trial_result.as_ref().is_some_and(|result| result.timed_out) {
+        "本地服务进程没有立刻崩溃，但在限定时间内始终没有通过健康检查。".to_string()
+    } else if let Some(failure) = last_start_failure.as_ref() {
+        format!("最近一次本地服务启动失败：{}", failure.message)
+    } else {
+        "本地服务当前未能启动，但本次排查没有拿到唯一明确的根因，请导出日志继续分析。".to_string()
+    };
+
+    finalize_local_service_diagnostics_report(
+        captured_at_ms,
+        summary,
+        findings,
+        recommendations.into_iter().collect(),
+        log_lines,
+    )
+}
+
+async fn upload_local_service_diagnostics_impl(
+    app: &AppHandle,
+    remote_base_url: String,
+    report: LocalServiceDiagnosticsReport,
+) -> Result<LocalServiceDiagnosticsUploadResult> {
+    let normalized_base_url =
+        normalize_required_string(remote_base_url, "missing profile_sync.api_base_url")?;
+    let base_url = reqwest::Url::parse(&normalized_base_url)
+        .context("profile_sync.api_base_url is not a valid URL")?;
+    let scheme = base_url.scheme();
+    if scheme != "http" && scheme != "https" {
+        anyhow::bail!("profile_sync.api_base_url must use http or https");
+    }
+
+    let endpoint = base_url
+        .join("/api/desktop/diagnostics/upload")
+        .context("failed to resolve remote diagnostics upload endpoint")?;
+    let app_version = app.package_info().version.to_string();
+    let payload = LocalServiceDiagnosticsUploadRequest {
+        source_app: "lunatv-desktop".to_string(),
+        app_version: app_version.clone(),
+        target_triple: env!("LUNATV_TARGET_TRIPLE").to_string(),
+        platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        uploaded_at_ms: current_timestamp_ms(),
+        report,
+    };
+
+    let response = reqwest::Client::new()
+        .post(endpoint.clone())
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(
+            reqwest::header::USER_AGENT,
+            format!("LunaTV-Desktop/{app_version}"),
+        )
+        .timeout(Duration::from_secs(20))
+        .json(&payload)
+        .send()
+        .await
+        .with_context(|| format!("failed to POST diagnostics to {endpoint}"))?;
+
+    let status = response.status();
+    let body_text = response
+        .text()
+        .await
+        .context("failed to read diagnostics upload response body")?;
+
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(LocalServiceDiagnosticsUploadResult {
+            uploaded: false,
+            target: "remote-site".to_string(),
+            issue_url: None,
+            issue_number: None,
+            message: "当前 Web 站点还没有部署桌面排查日志上传接口。".to_string(),
+        });
+    }
+
+    if let Ok(payload) = serde_json::from_str::<LocalServiceDiagnosticsUploadResult>(&body_text) {
+        return Ok(payload);
+    }
+
+    if !status.is_success() {
+        anyhow::bail!(
+            "automatic diagnostics upload failed ({status}): {}",
+            summarize_http_response_body(&body_text)
+        );
+    }
+
+    Err(anyhow::anyhow!(
+        "diagnostics upload endpoint returned unexpected response"
+    ))
+}
+
+fn finalize_local_service_diagnostics_report(
+    captured_at_ms: u64,
+    summary: String,
+    findings: Vec<LocalServiceDiagnosticFinding>,
+    recommendations: Vec<String>,
+    log_lines: Vec<String>,
+) -> LocalServiceDiagnosticsReport {
+    let status = findings
+        .iter()
+        .fold(DiagnosticLevel::Ok, |current, finding| {
+            max_diagnostic_level(current, finding.level)
+        });
+    let mut export_lines = vec![
+        "LunaTV Desktop Local Service Diagnostics".to_string(),
+        format!("CapturedAtMs: {captured_at_ms}"),
+        format!("Status: {}", diagnostic_level_code(status)),
+        format!("Summary: {summary}"),
+        String::new(),
+        "Findings:".to_string(),
+    ];
+
+    for finding in &findings {
+        export_lines.push(format!(
+            "- [{}] {}",
+            diagnostic_level_code(finding.level),
+            finding.title
+        ));
+        export_lines.extend(
+            finding
+                .detail
+                .lines()
+                .map(|line| format!("  {line}"))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    if !recommendations.is_empty() {
+        export_lines.push(String::new());
+        export_lines.push("Recommendations:".to_string());
+        export_lines.extend(
+            recommendations
+                .iter()
+                .map(|item| format!("- {item}"))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    if !log_lines.is_empty() {
+        export_lines.push(String::new());
+        export_lines.push("RawDiagnostics:".to_string());
+        export_lines.extend(log_lines);
+    }
+
+    LocalServiceDiagnosticsReport {
+        status,
+        captured_at_ms,
+        summary,
+        findings,
+        recommendations,
+        log_text: export_lines.join("\n"),
+    }
+}
+
+fn max_diagnostic_level(left: DiagnosticLevel, right: DiagnosticLevel) -> DiagnosticLevel {
+    match (left, right) {
+        (DiagnosticLevel::Error, _) | (_, DiagnosticLevel::Error) => DiagnosticLevel::Error,
+        (DiagnosticLevel::Warning, _) | (_, DiagnosticLevel::Warning) => DiagnosticLevel::Warning,
+        _ => DiagnosticLevel::Ok,
+    }
+}
+
+fn diagnostic_level_code(level: DiagnosticLevel) -> &'static str {
+    match level {
+        DiagnosticLevel::Ok => "OK",
+        DiagnosticLevel::Warning => "WARN",
+        DiagnosticLevel::Error => "ERROR",
+    }
+}
+
+fn snapshot_local_service_start_failure(
+    state: &DesktopRuntimeState,
+) -> Option<LocalServiceStartupFailure> {
+    state
+        .last_start_failure
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+}
+
+fn record_local_service_start_failure(state: &DesktopRuntimeState, message: String) {
+    if let Ok(mut guard) = state.last_start_failure.lock() {
+        *guard = Some(LocalServiceStartupFailure {
+            captured_at_ms: current_timestamp_ms(),
+            message,
+        });
+    }
+}
+
+fn clear_local_service_start_failure(state: &DesktopRuntimeState) {
+    if let Ok(mut guard) = state.last_start_failure.lock() {
+        *guard = None;
+    }
+}
+
+fn local_service_sidecar_candidates(app: &AppHandle) -> Result<Vec<PathBuf>> {
+    if cfg!(debug_assertions) {
+        return Ok(vec![
+            project_root()
+                .join("src-tauri")
+                .join("binaries")
+                .join(sidecar_binary_file_name()),
+        ]);
+    }
+
+    sidecar_release_candidates(app)
+}
+
+fn inspect_local_service_port(port: u16) -> PortInspection {
+    let bind_available = TcpListener::bind(("127.0.0.1", port))
+        .map(|listener| {
+            drop(listener);
+            true
+        })
+        .unwrap_or(false);
+
+    #[cfg(target_os = "windows")]
+    let (occupants, raw_output) = inspect_windows_port_occupants(port);
+    #[cfg(not(target_os = "windows"))]
+    let (occupants, raw_output) = (Vec::new(), None);
+
+    PortInspection {
+        bind_available,
+        occupants,
+        raw_output,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn inspect_windows_port_occupants(port: u16) -> (Vec<PortOccupant>, Option<String>) {
+    let mut command = Command::new("netstat");
+    command.args(["-ano", "-p", "tcp"]);
+    configure_background_command(&mut command);
+
+    match command.output() {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).replace('\r', "");
+            let stderr = String::from_utf8_lossy(&output.stderr).replace('\r', "");
+            let raw_output = if stderr.trim().is_empty() {
+                stdout.clone()
+            } else {
+                format!("{stdout}\n{stderr}")
+            };
+            let target_suffix = format!(":{port}");
+            let mut occupant_lines = Vec::new();
+            let mut pids = BTreeSet::new();
+
+            for line in stdout.lines() {
+                let columns = line.split_whitespace().collect::<Vec<_>>();
+                if columns.len() < 5 {
+                    continue;
+                }
+
+                let local_address = columns[1];
+                let state = columns[3];
+                let pid_text = columns[4];
+                if !local_address.ends_with(&target_suffix) || state != "LISTENING" {
+                    continue;
+                }
+
+                let Ok(pid) = pid_text.parse::<u32>() else {
+                    continue;
+                };
+
+                pids.insert(pid);
+                occupant_lines.push((pid, line.trim().to_string()));
+            }
+
+            let occupant_names = pids
+                .into_iter()
+                .map(|pid| (pid, inspect_windows_process_name(pid)))
+                .collect::<BTreeMap<_, _>>();
+            let occupants = occupant_lines
+                .into_iter()
+                .map(|(pid, _raw_line)| PortOccupant {
+                    pid,
+                    process_name: occupant_names.get(&pid).cloned().flatten(),
+                })
+                .collect();
+
+            (occupants, Some(raw_output))
+        }
+        Err(error) => (
+            Vec::new(),
+            Some(format!("failed to run netstat -ano -p tcp: {error}")),
+        ),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn inspect_windows_process_name(pid: u32) -> Option<String> {
+    let mut command = Command::new("tasklist");
+    command.args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]);
+    configure_background_command(&mut command);
+
+    let output = command.output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).replace('\r', "");
+    let first_line = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("INFO:"))?;
+
+    if let Some(value) = first_line.strip_prefix('"') {
+        return value
+            .split("\",\"")
+            .next()
+            .map(|token| token.trim_matches('"').to_string());
+    }
+
+    first_line
+        .split(',')
+        .next()
+        .map(|token| token.trim_matches('"').to_string())
+}
+
+fn describe_port_occupants(port: u16, occupants: &[PortOccupant]) -> String {
+    if occupants.is_empty() {
+        return format!("127.0.0.1:{port} 当前无法绑定，但没有拿到明确的监听进程信息。");
+    }
+
+    let details = occupants
+        .iter()
+        .map(|occupant| match occupant.process_name.as_deref() {
+            Some(name) => format!("{name} (PID {})", occupant.pid),
+            None => format!("PID {}", occupant.pid),
+        })
+        .collect::<Vec<_>>()
+        .join("，");
+
+    format!("127.0.0.1:{port} 当前已被占用：{details}")
+}
+
+fn describe_primary_port_issue(port: u16, occupants: &[PortOccupant]) -> String {
+    if let Some(occupant) = occupants.first() {
+        if let Some(name) = occupant.process_name.as_deref() {
+            return format!(
+                "127.0.0.1:{port} 已被 {name} (PID {}) 占用，本地服务无法绑定端口。",
+                occupant.pid
+            );
+        }
+
+        return format!(
+            "127.0.0.1:{port} 已被 PID {} 占用，本地服务无法绑定端口。",
+            occupant.pid
+        );
+    }
+
+    format!("127.0.0.1:{port} 当前无法绑定，本地服务无法监听固定端口。")
+}
+
+async fn run_local_service_trial(sidecar_path: &Path, paths: &RuntimePaths) -> SidecarTrialResult {
+    let mut command = TokioCommand::new(sidecar_path);
+    command
+        .arg("--port")
+        .arg(LOCAL_SERVICE_PORT.to_string())
+        .arg("--config-path")
+        .arg(&paths.config_path)
+        .arg("--data-dir")
+        .arg(&paths.data_dir)
+        .arg("--sqlite-path")
+        .arg(&paths.sqlite_path)
+        .current_dir(&paths.data_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_background_tokio_command(&mut command);
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return SidecarTrialResult {
+                healthy: false,
+                timed_out: false,
+                spawn_error: Some(error.to_string()),
+                exit_status: None,
+                stdout: String::new(),
+                stderr: String::new(),
+            };
+        }
+    };
+
+    let base_url = format!("http://127.0.0.1:{LOCAL_SERVICE_PORT}");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut healthy = false;
+    let mut timed_out = false;
+
+    while Instant::now() < deadline {
+        if local_service_is_healthy(&base_url).await {
+            healthy = true;
+            break;
+        }
+
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill().await;
+                let output = child.wait_with_output().await.ok();
+                return SidecarTrialResult {
+                    healthy: false,
+                    timed_out: false,
+                    spawn_error: Some(format!(
+                        "failed to poll diagnostic sidecar process: {error}"
+                    )),
+                    exit_status: output.as_ref().and_then(|value| value.status.code()),
+                    stdout: output
+                        .as_ref()
+                        .map(|value| String::from_utf8_lossy(&value.stdout).trim().to_string())
+                        .unwrap_or_default(),
+                    stderr: output
+                        .as_ref()
+                        .map(|value| String::from_utf8_lossy(&value.stderr).trim().to_string())
+                        .unwrap_or_default(),
+                };
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    if healthy || child.try_wait().ok().flatten().is_none() {
+        if !healthy {
+            timed_out = true;
+        }
+        let _ = child.kill().await;
+    }
+
+    let output = child.wait_with_output().await.ok();
+    SidecarTrialResult {
+        healthy,
+        timed_out,
+        spawn_error: None,
+        exit_status: output.as_ref().and_then(|value| value.status.code()),
+        stdout: output
+            .as_ref()
+            .map(|value| String::from_utf8_lossy(&value.stdout).trim().to_string())
+            .unwrap_or_default(),
+        stderr: output
+            .as_ref()
+            .map(|value| String::from_utf8_lossy(&value.stderr).trim().to_string())
+            .unwrap_or_default(),
+    }
+}
+
+fn build_sidecar_trial_finding(result: &SidecarTrialResult) -> LocalServiceDiagnosticFinding {
+    if let Some(error) = result.spawn_error.as_ref() {
+        return LocalServiceDiagnosticFinding {
+            level: DiagnosticLevel::Error,
+            title: "试运行本地服务".to_string(),
+            detail: format!("无法拉起 sidecar 进程：{error}"),
+        };
+    }
+
+    if result.healthy {
+        return LocalServiceDiagnosticFinding {
+            level: DiagnosticLevel::Warning,
+            title: "试运行本地服务".to_string(),
+            detail: "诊断模式下 sidecar 可以通过健康检查，说明可执行文件和基本运行环境是可用的。"
+                .to_string(),
+        };
+    }
+
+    if result.timed_out {
+        return LocalServiceDiagnosticFinding {
+            level: DiagnosticLevel::Error,
+            title: "试运行本地服务".to_string(),
+            detail: format!(
+                "sidecar 进程没有及时通过健康检查。{}",
+                summarize_trial_output(result)
+            ),
+        };
+    }
+
+    LocalServiceDiagnosticFinding {
+        level: DiagnosticLevel::Error,
+        title: "试运行本地服务".to_string(),
+        detail: format!(
+            "sidecar 在健康检查通过前就退出了。{}",
+            summarize_trial_output(result)
+        ),
+    }
+}
+
+fn summarize_trial_output(result: &SidecarTrialResult) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(exit_status) = result.exit_status {
+        parts.push(format!("退出码：{exit_status}"));
+    }
+
+    let stderr_tail = tail_non_empty_lines(&result.stderr, 6);
+    if !stderr_tail.is_empty() {
+        parts.push(format!("stderr 摘要：{}", stderr_tail.replace('\n', " | ")));
+    }
+
+    let stdout_tail = tail_non_empty_lines(&result.stdout, 6);
+    if !stdout_tail.is_empty() {
+        parts.push(format!("stdout 摘要：{}", stdout_tail.replace('\n', " | ")));
+    }
+
+    if parts.is_empty() {
+        "没有拿到额外输出。".to_string()
+    } else {
+        parts.join("；")
+    }
+}
+
+fn collect_diagnostics_error_text(
+    last_failure: Option<&LocalServiceStartupFailure>,
+    trial_result: Option<&SidecarTrialResult>,
+) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(failure) = last_failure {
+        parts.push(failure.message.clone());
+    }
+
+    if let Some(result) = trial_result {
+        if let Some(spawn_error) = result.spawn_error.as_ref() {
+            parts.push(spawn_error.clone());
+        }
+        if !result.stdout.is_empty() {
+            parts.push(result.stdout.clone());
+        }
+        if !result.stderr.is_empty() {
+            parts.push(result.stderr.clone());
+        }
+    }
+
+    parts.join("\n")
+}
+
+fn tail_non_empty_lines(text: &str, max_lines: usize) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .rev()
+        .take(max_lines)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn summarize_http_response_body(body_text: &str) -> String {
+    let trimmed = body_text.trim();
+    if trimmed.is_empty() {
+        return "empty response body".to_string();
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(message) = value.get("message").and_then(|item| item.as_str()) {
+            let normalized = message.trim();
+            if !normalized.is_empty() {
+                return normalized.to_string();
+            }
+        }
+
+        if let Some(message) = value.get("error").and_then(|item| item.as_str()) {
+            let normalized = message.trim();
+            if !normalized.is_empty() {
+                return normalized.to_string();
+            }
+        }
+    }
+
+    tail_non_empty_lines(trimmed, 8).replace('\n', " | ")
+}
+
+fn text_contains_any(text: &str, patterns: &[&str]) -> bool {
+    let normalized = text.to_ascii_lowercase();
+    patterns
+        .iter()
+        .any(|pattern| normalized.contains(&pattern.to_ascii_lowercase()))
+}
+
+#[cfg(target_os = "windows")]
+fn configure_background_command(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_background_command(_command: &mut Command) {}
+
+#[cfg(target_os = "windows")]
+fn configure_background_tokio_command(command: &mut TokioCommand) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_background_tokio_command(_command: &mut TokioCommand) {}
+
+fn current_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_millis() as u64
 }
 
 fn ensure_desktop_config_file(config_path: &Path) -> Result<()> {
@@ -877,20 +1968,13 @@ fn normalize_required_string(value: String, error_message: &str) -> Result<Strin
 }
 
 fn resolve_sidecar_binary_path(app: &AppHandle) -> Result<PathBuf> {
-    if cfg!(debug_assertions) {
-        return Ok(project_root()
-            .join("src-tauri")
-            .join("binaries")
-            .join(sidecar_binary_file_name()));
-    }
-
-    sidecar_release_candidates(app)?
+    local_service_sidecar_candidates(app)?
         .into_iter()
         .find(|path| path.is_file())
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "failed to locate bundled local service sidecar; checked: {}",
-                sidecar_release_candidates(app)
+                local_service_sidecar_candidates(app)
                     .ok()
                     .unwrap_or_default()
                     .into_iter()
@@ -984,8 +2068,10 @@ impl RuntimePaths {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_DESKTOP_OWNER_USERNAME, ensure_default_desktop_owner_auth_value,
-        set_desktop_local_user_password_value, set_desktop_owner_password_value,
+        DEFAULT_DESKTOP_OWNER_USERNAME, LocalServiceStartupFailure, PortOccupant,
+        SidecarTrialResult, collect_diagnostics_error_text, describe_primary_port_issue,
+        ensure_default_desktop_owner_auth_value, set_desktop_local_user_password_value,
+        set_desktop_owner_password_value, summarize_trial_output,
     };
 
     #[test]
@@ -1091,5 +2177,57 @@ mod tests {
             persistence_value["config"]["UserConfig"]["Users"][0]["username"],
             serde_json::Value::String("alice".to_string())
         );
+    }
+
+    #[test]
+    fn summarizes_sidecar_trial_output_with_exit_code_and_stderr() {
+        let result = SidecarTrialResult {
+            healthy: false,
+            timed_out: false,
+            spawn_error: None,
+            exit_status: Some(1),
+            stdout: String::new(),
+            stderr: "line one\nline two\nfailed to bind local service listener".to_string(),
+        };
+
+        let summary = summarize_trial_output(&result);
+
+        assert!(summary.contains("退出码：1"));
+        assert!(summary.contains("failed to bind local service listener"));
+    }
+
+    #[test]
+    fn primary_port_issue_mentions_process_name_when_available() {
+        let occupants = vec![PortOccupant {
+            pid: 9527,
+            process_name: Some("example.exe".to_string()),
+        }];
+
+        let detail = describe_primary_port_issue(8787, &occupants);
+
+        assert!(detail.contains("example.exe"));
+        assert!(detail.contains("9527"));
+    }
+
+    #[test]
+    fn collects_last_failure_and_trial_text_for_diagnostics() {
+        let failure = LocalServiceStartupFailure {
+            captured_at_ms: 1,
+            message: "spawn failed".to_string(),
+        };
+        let result = SidecarTrialResult {
+            healthy: false,
+            timed_out: true,
+            spawn_error: None,
+            exit_status: None,
+            stdout: "stdout".to_string(),
+            stderr: "stderr".to_string(),
+        };
+
+        let text = collect_diagnostics_error_text(Some(&failure), Some(&result));
+
+        assert!(text.contains("spawn failed"));
+        assert!(text.contains("stdout"));
+        assert!(text.contains("stderr"));
     }
 }

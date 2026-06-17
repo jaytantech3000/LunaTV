@@ -23,6 +23,31 @@ export interface DesktopAuthSession {
   role: 'owner' | 'admin' | 'user';
 }
 
+export type DesktopDiagnosticsLevel = 'ok' | 'warning' | 'error';
+
+export interface DesktopLocalServiceDiagnosticFinding {
+  level: DesktopDiagnosticsLevel;
+  title: string;
+  detail: string;
+}
+
+export interface DesktopLocalServiceDiagnosticsReport {
+  status: DesktopDiagnosticsLevel;
+  capturedAtMs: number;
+  summary: string;
+  findings: DesktopLocalServiceDiagnosticFinding[];
+  recommendations: string[];
+  logText: string;
+}
+
+export interface DesktopLocalServiceDiagnosticsUploadResult {
+  uploaded: boolean;
+  target: string;
+  issueUrl?: string | null;
+  issueNumber?: number | null;
+  message: string;
+}
+
 declare global {
   interface Window {
     __TAURI__?: unknown;
@@ -72,6 +97,25 @@ export function startLocalService(): Promise<DesktopLocalServiceStatus> {
 
 export function stopLocalService(): Promise<DesktopLocalServiceStatus> {
   return invokeDesktopCommand<DesktopLocalServiceStatus>('stop_local_service');
+}
+
+export function runLocalServiceDiagnostics(): Promise<DesktopLocalServiceDiagnosticsReport> {
+  return invokeDesktopCommand<DesktopLocalServiceDiagnosticsReport>(
+    'run_local_service_diagnostics'
+  );
+}
+
+export function uploadLocalServiceDiagnostics(
+  remoteBaseUrl: string,
+  report: DesktopLocalServiceDiagnosticsReport
+): Promise<DesktopLocalServiceDiagnosticsUploadResult> {
+  return invokeDesktopCommand<DesktopLocalServiceDiagnosticsUploadResult>(
+    'upload_local_service_diagnostics',
+    {
+      remoteBaseUrl,
+      report,
+    }
+  );
 }
 
 export function readDesktopAppConfig(): Promise<DesktopAppConfig> {
