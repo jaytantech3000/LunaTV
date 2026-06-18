@@ -1478,10 +1478,21 @@ pub async fn run(cli: Cli) -> Result<()> {
         state.config_path.display()
     );
 
+    serve_local_service(listener, app)
+        .await
+        .context("local service exited unexpectedly")
+}
+
+#[cfg(target_os = "windows")]
+async fn serve_local_service(listener: TcpListener, app: Router) -> std::io::Result<()> {
+    axum::serve(listener, app).await
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn serve_local_service(listener: TcpListener, app: Router) -> std::io::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .context("local service exited unexpectedly")
 }
 
 pub fn build_router(state: AppState) -> Router {
