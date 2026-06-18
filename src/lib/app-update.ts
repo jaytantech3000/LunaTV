@@ -1,3 +1,4 @@
+import { isNewerVersion } from '@/lib/app-update-version';
 import { isDesktopTauriRuntimeAvailable } from '@/lib/desktop/tauri-client';
 import { getReleasePageUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
@@ -72,6 +73,12 @@ type DesktopUpdaterHandle = {
   install(): Promise<void>;
   close?(): Promise<void>;
 };
+
+type RefreshDesktopUpdateTargetResult = 'unchanged' | 'refreshed' | 'blocked';
+
+interface DownloadLatestVersionOptions {
+  skipTargetRefresh?: boolean;
+}
 
 let state: AppUpdateState = createInitialState();
 const listeners = new Set<AppUpdateListener>();
@@ -230,6 +237,160 @@ function getDownloadProgressState(
   return Math.min(100, Math.round((downloadedBytes / totalBytes) * 100));
 }
 
+function applyDownloadedDesktopUpdateState(
+  nextUpdate: DesktopUpdaterHandle,
+  autoDownloadEnabled: boolean
+) {
+  if (downloadedUpdate && downloadedUpdate !== nextUpdate) {
+    closeUpdateHandle(nextUpdate);
+  }
+
+  patchState({
+    phase: 'downloaded',
+    source: 'desktop-updater',
+    updateStatus: UpdateStatus.HAS_UPDATE,
+    latestVersion: nextUpdate.version,
+    autoDownloadEnabled,
+    canUseDesktopUpdater: true,
+    canCheck: true,
+    canDownload: false,
+    canInstall: true,
+    isChecking: false,
+    isDownloading: false,
+    isInstalling: false,
+    isBusy: false,
+    progressPercent: state.progressPercent ?? 100,
+    downloadedBytes: state.downloadedBytes,
+    totalBytes: state.totalBytes,
+    publishedAt: nextUpdate.date || downloadedUpdate?.date || null,
+    releaseNotes:
+      nextUpdate.body?.trim() || downloadedUpdate?.body?.trim() || null,
+    statusMessage: autoDownloadEnabled
+      ? '最新版已自动下载，点击安装即可。'
+      : '最新版已下载，点击安装即可。',
+    errorMessage: null,
+  });
+}
+
+function applyAvailableDesktopUpdateState(
+  nextUpdate: DesktopUpdaterHandle,
+  autoDownloadEnabled: boolean
+) {
+  setDownloadedUpdate(null);
+  pendingUpdate = nextUpdate;
+  patchState({
+    phase: 'available',
+    source: 'desktop-updater',
+    updateStatus: UpdateStatus.HAS_UPDATE,
+    latestVersion: nextUpdate.version,
+    autoDownloadEnabled,
+    canUseDesktopUpdater: true,
+    canCheck: true,
+    canDownload: true,
+    canInstall: false,
+    isChecking: false,
+    isDownloading: false,
+    isInstalling: false,
+    isBusy: false,
+    progressPercent: null,
+    downloadedBytes: 0,
+    totalBytes: null,
+    publishedAt: nextUpdate.date || null,
+    releaseNotes: nextUpdate.body?.trim() || null,
+    statusMessage: '发现新版本，可直接下载最新版。',
+    errorMessage: null,
+  });
+}
+
+async function refreshDesktopUpdateTargetIfNeeded(
+  referenceVersion: string | null,
+  action: 'download' | 'install'
+): Promise<RefreshDesktopUpdateTargetResult> {
+  if (!referenceVersion || !state.canUseDesktopUpdater) {
+    return 'unchanged';
+  }
+
+  const remoteVersion = await fetchLatestRemoteVersion();
+  if (!isNewerVersion(remoteVersion, referenceVersion)) {
+    return 'unchanged';
+  }
+
+  const autoDownloadEnabled = readAutoDownloadPreference();
+  const blockedMessage =
+    action === 'install'
+      ? `检测到更新后的新版本 v${remoteVersion}，已停止安装旧版本，请先下载最新版。`
+      : `检测到更新后的新版本 v${remoteVersion}，请稍后重试或前往发布页下载最新版。`;
+
+  try {
+    const { check } = await import('@tauri-apps/plugin-updater');
+    const nextUpdate = await check();
+    const updaterHasLatestVersion =
+      nextUpdate && !isNewerVersion(remoteVersion, nextUpdate.version);
+
+    if (!nextUpdate || !updaterHasLatestVersion) {
+      closeUpdateHandle(nextUpdate || null);
+      patchState({
+        phase: 'error',
+        source: 'desktop-updater',
+        updateStatus: UpdateStatus.HAS_UPDATE,
+        latestVersion: remoteVersion,
+        autoDownloadEnabled,
+        canUseDesktopUpdater: true,
+        canCheck: true,
+        canDownload: false,
+        canInstall: false,
+        isChecking: false,
+        isDownloading: false,
+        isInstalling: false,
+        isBusy: false,
+        progressPercent: null,
+        downloadedBytes: 0,
+        totalBytes: null,
+        publishedAt: null,
+        releaseNotes: null,
+        statusMessage: blockedMessage,
+        errorMessage: blockedMessage,
+      });
+      return 'blocked';
+    }
+
+    clearPendingUpdate();
+    applyAvailableDesktopUpdateState(nextUpdate, autoDownloadEnabled);
+    patchState({
+      statusMessage:
+        action === 'install'
+          ? `检测到更新后的新版本 v${nextUpdate.version}，正在改为下载最新版。`
+          : `检测到更新后的新版本 v${nextUpdate.version}，已切换为最新版。`,
+    });
+
+    return 'refreshed';
+  } catch (_) {
+    patchState({
+      phase: 'error',
+      source: 'desktop-updater',
+      updateStatus: UpdateStatus.HAS_UPDATE,
+      latestVersion: remoteVersion,
+      autoDownloadEnabled,
+      canUseDesktopUpdater: true,
+      canCheck: true,
+      canDownload: false,
+      canInstall: false,
+      isChecking: false,
+      isDownloading: false,
+      isInstalling: false,
+      isBusy: false,
+      progressPercent: null,
+      downloadedBytes: 0,
+      totalBytes: null,
+      publishedAt: null,
+      releaseNotes: null,
+      statusMessage: blockedMessage,
+      errorMessage: blockedMessage,
+    });
+    return 'blocked';
+  }
+}
+
 function buildRemoteState(
   remoteVersion: string | null,
   desktopUpdaterErrorMessage?: string | null
@@ -256,7 +417,7 @@ function buildRemoteState(
   const updateStatus = compareVersions(remoteVersion, CURRENT_VERSION);
   const hasUpdate = updateStatus === UpdateStatus.HAS_UPDATE;
   const fallbackStatusMessage = hasUpdate
-    ? desktopUpdaterErrorMessage || '发现新版本，请打开发布页下载。'
+    ? desktopUpdaterErrorMessage || '发现新版本，请打开发布页下载最新版。'
     : '当前已是最新版本。';
 
   return {
@@ -333,62 +494,17 @@ async function checkDesktopUpdates(allowAutoDownload: boolean) {
   }
 
   if (isDownloadedUpdateReady(nextUpdate.version)) {
-    patchState({
-      phase: 'downloaded',
-      source: 'desktop-updater',
-      updateStatus: UpdateStatus.HAS_UPDATE,
-      latestVersion: nextUpdate.version,
-      autoDownloadEnabled,
-      canUseDesktopUpdater: true,
-      canCheck: true,
-      canDownload: false,
-      canInstall: true,
-      isChecking: false,
-      isDownloading: false,
-      isInstalling: false,
-      isBusy: false,
-      progressPercent: state.progressPercent ?? 100,
-      downloadedBytes: state.downloadedBytes,
-      totalBytes: state.totalBytes,
-      publishedAt: nextUpdate.date || downloadedUpdate?.date || null,
-      releaseNotes:
-        nextUpdate.body?.trim() || downloadedUpdate?.body?.trim() || null,
-      statusMessage: autoDownloadEnabled
-        ? '更新包已自动下载，点击安装即可。'
-        : '更新包已下载，点击安装即可。',
-      errorMessage: null,
-    });
+    applyDownloadedDesktopUpdateState(nextUpdate, autoDownloadEnabled);
 
     return state;
   }
 
-  setDownloadedUpdate(null);
-  pendingUpdate = nextUpdate;
-  patchState({
-    phase: 'available',
-    source: 'desktop-updater',
-    updateStatus: UpdateStatus.HAS_UPDATE,
-    latestVersion: nextUpdate.version,
-    autoDownloadEnabled,
-    canUseDesktopUpdater: true,
-    canCheck: true,
-    canDownload: true,
-    canInstall: false,
-    isChecking: false,
-    isDownloading: false,
-    isInstalling: false,
-    isBusy: false,
-    progressPercent: null,
-    downloadedBytes: 0,
-    totalBytes: null,
-    publishedAt: nextUpdate.date || null,
-    releaseNotes: nextUpdate.body?.trim() || null,
-    statusMessage: '发现新版本，可立即下载。',
-    errorMessage: null,
-  });
+  applyAvailableDesktopUpdateState(nextUpdate, autoDownloadEnabled);
 
   if (allowAutoDownload && readAutoDownloadPreference()) {
-    return downloadLatestVersion();
+    return downloadLatestVersion({
+      skipTargetRefresh: true,
+    });
   }
 
   return state;
@@ -465,12 +581,25 @@ export async function checkForAppUpdates(options?: {
   }
 }
 
-export async function downloadLatestVersion() {
+export async function downloadLatestVersion(
+  options?: DownloadLatestVersionOptions
+) {
   if (downloadPromise) {
     return downloadPromise;
   }
 
   const nextPromise = (async () => {
+    if (!options?.skipTargetRefresh) {
+      const refreshResult = await refreshDesktopUpdateTargetIfNeeded(
+        pendingUpdate?.version || downloadedUpdate?.version || null,
+        'download'
+      );
+
+      if (refreshResult === 'blocked') {
+        return state;
+      }
+    }
+
     if (state.phase === 'downloaded' && downloadedUpdate) {
       return state;
     }
@@ -521,7 +650,7 @@ export async function downloadLatestVersion() {
       progressPercent: 0,
       downloadedBytes: 0,
       totalBytes: null,
-      statusMessage: '正在下载更新包...',
+      statusMessage: '正在下载最新版...',
       errorMessage: null,
     });
 
@@ -578,8 +707,8 @@ export async function downloadLatestVersion() {
         publishedAt: updateToDownload.date || state.publishedAt,
         releaseNotes: updateToDownload.body?.trim() || state.releaseNotes,
         statusMessage: readAutoDownloadPreference()
-          ? '更新包已自动下载，点击安装即可。'
-          : '更新包已下载，点击安装即可。',
+          ? '最新版已自动下载，点击安装即可。'
+          : '最新版已下载，点击安装即可。',
         errorMessage: null,
       });
     } catch (error) {
@@ -595,9 +724,9 @@ export async function downloadLatestVersion() {
         progressPercent: null,
         downloadedBytes: 0,
         totalBytes: null,
-        statusMessage: '下载更新包失败，请重试。',
+        statusMessage: '下载最新版失败，请重试。',
         errorMessage:
-          error instanceof Error ? error.message : '下载更新包失败，请重试。',
+          error instanceof Error ? error.message : '下载最新版失败，请重试。',
       });
     }
 
@@ -622,6 +751,22 @@ export async function installDownloadedUpdate() {
   }
 
   const nextPromise = (async () => {
+    const refreshResult = await refreshDesktopUpdateTargetIfNeeded(
+      downloadedUpdate?.version || pendingUpdate?.version || null,
+      'install'
+    );
+
+    if (refreshResult === 'blocked') {
+      return;
+    }
+
+    if (refreshResult === 'refreshed') {
+      await downloadLatestVersion({
+        skipTargetRefresh: true,
+      });
+      return;
+    }
+
     const updateToInstall = downloadedUpdate;
 
     if (!updateToInstall || state.phase !== 'downloaded') {

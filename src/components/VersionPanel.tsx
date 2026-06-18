@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import {
+  type AppUpdateState,
   checkForAppUpdates,
   downloadLatestVersion,
   installDownloadedUpdate,
@@ -213,6 +214,88 @@ function formatBytes(bytes: number) {
   }`;
 }
 
+function renderUpdateStatusIcon(
+  updateState: Pick<AppUpdateState, 'phase' | 'updateStatus' | 'errorMessage'>
+) {
+  if (updateState.phase === 'checking' || updateState.phase === 'installing') {
+    return <Loader2 className='h-5 w-5 animate-spin' />;
+  }
+
+  if (updateState.phase === 'downloading') {
+    return (
+      <Download className='h-5 w-5 text-emerald-600 dark:text-emerald-400' />
+    );
+  }
+
+  if (updateState.phase === 'error') {
+    return (
+      <AlertCircle className='h-5 w-5 text-amber-600 dark:text-amber-400' />
+    );
+  }
+
+  if (updateState.phase === 'downloaded' && updateState.errorMessage) {
+    return (
+      <AlertCircle className='h-5 w-5 text-amber-600 dark:text-amber-400' />
+    );
+  }
+
+  if (updateState.phase === 'downloaded') {
+    return (
+      <CheckCircle2 className='h-5 w-5 text-green-600 dark:text-green-400' />
+    );
+  }
+
+  if (updateState.updateStatus === UpdateStatus.HAS_UPDATE) {
+    return <Download className='h-5 w-5 text-amber-600 dark:text-amber-400' />;
+  }
+
+  if (updateState.updateStatus === UpdateStatus.NO_UPDATE) {
+    return (
+      <CheckCircle2 className='h-5 w-5 text-green-600 dark:text-green-400' />
+    );
+  }
+
+  return <RotateCw className='h-5 w-5' />;
+}
+
+function getUpdateStatusTitle(
+  updateState: Pick<AppUpdateState, 'phase' | 'updateStatus' | 'errorMessage'>
+) {
+  if (updateState.phase === 'checking') {
+    return '正在检查最新版本';
+  }
+
+  if (updateState.phase === 'downloading') {
+    return '正在下载最新版';
+  }
+
+  if (updateState.phase === 'installing') {
+    return '正在安装更新';
+  }
+
+  if (updateState.phase === 'error') {
+    return '更新暂不可用';
+  }
+
+  if (updateState.phase === 'downloaded' && updateState.errorMessage) {
+    return '安装失败，可重试';
+  }
+
+  if (updateState.phase === 'downloaded') {
+    return '更新包已就绪';
+  }
+
+  if (updateState.updateStatus === UpdateStatus.HAS_UPDATE) {
+    return '发现新版本';
+  }
+
+  if (updateState.updateStatus === UpdateStatus.NO_UPDATE) {
+    return '当前已是最新版本';
+  }
+
+  return '检查应用更新';
+}
+
 function ChangeList({
   items,
   title,
@@ -362,14 +445,20 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
     (entry) => !localVersions.includes(entry.version)
   );
   const autoDownloadDescription = isAutoDownloadInProgress
-    ? '正在自动下载最新版本，完成后可直接点击上方安装。'
+    ? '正在自动下载最新版，完成后可直接安装。'
     : isAutoInstallingUpdate
     ? '正在安装更新，请稍候。'
     : hasAutoDownloadedUpdate
-    ? '更新包已自动下载完成，点击上方安装即可。'
+    ? '最新版已自动下载完成，点击上方安装即可。'
     : isDesktopUpdaterAvailable
-    ? '启动后发现新版本时自动下载，安装仍需你手动确认。'
+    ? '检测到新版本后自动下载最新版，安装仍需你手动确认。'
     : '当前桌面构建尚未配置应用内更新源。';
+  const updateStatusTitle = getUpdateStatusTitle(updateState);
+  const shouldShowUpdateStatusMessage =
+    Boolean(updateState.statusMessage) &&
+    updateState.phase !== 'checking' &&
+    updateState.phase !== 'downloading' &&
+    updateState.phase !== 'installing';
 
   useEffect(() => {
     setMounted(true);
@@ -494,7 +583,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
             {updateState.updateStatus === UpdateStatus.HAS_UPDATE ? (
               <span className='hidden rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 sm:inline-flex sm:items-center sm:gap-1'>
                 <Download className='h-4 w-4' />
-                有新版本
+                新版本可用
               </span>
             ) : null}
           </div>
@@ -514,39 +603,12 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
               <div className='flex flex-col gap-3'>
                 <div className='flex items-start gap-3'>
                   <div className='flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-200'>
-                    {updateState.phase === 'checking' ? (
-                      <Loader2 className='h-5 w-5 animate-spin' />
-                    ) : updateState.phase === 'downloading' ? (
-                      <Download className='h-5 w-5' />
-                    ) : updateState.phase === 'downloaded' ? (
-                      <CheckCircle2 className='h-5 w-5 text-green-600 dark:text-green-400' />
-                    ) : updateState.updateStatus === UpdateStatus.HAS_UPDATE ? (
-                      <AlertCircle className='h-5 w-5 text-amber-600 dark:text-amber-400' />
-                    ) : updateState.updateStatus === UpdateStatus.NO_UPDATE ? (
-                      <CheckCircle2 className='h-5 w-5 text-green-600 dark:text-green-400' />
-                    ) : (
-                      <RotateCw className='h-5 w-5' />
-                    )}
+                    {renderUpdateStatusIcon(updateState)}
                   </div>
 
                   <div className='min-w-0 flex-1'>
                     <h4 className='text-base font-semibold text-gray-900 dark:text-gray-100'>
-                      {updateState.phase === 'checking'
-                        ? '正在检查更新'
-                        : updateState.phase === 'downloading'
-                        ? '正在下载更新包'
-                        : updateState.phase === 'installing'
-                        ? '正在安装更新'
-                        : updateState.phase === 'downloaded' &&
-                          updateState.errorMessage
-                        ? '安装失败，可重试'
-                        : updateState.phase === 'downloaded'
-                        ? '更新包已就绪'
-                        : updateState.updateStatus === UpdateStatus.HAS_UPDATE
-                        ? '发现新版本'
-                        : updateState.updateStatus === UpdateStatus.NO_UPDATE
-                        ? '当前已是最新版本'
-                        : '检查应用更新'}
+                      {updateStatusTitle}
                     </h4>
                     <p className='mt-1 break-all text-sm text-gray-600 dark:text-gray-300'>
                       v{CURRENT_VERSION}
@@ -555,7 +617,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                         ? ` → v${latestKnownVersion}`
                         : ''}
                     </p>
-                    {updateState.statusMessage ? (
+                    {shouldShowUpdateStatusMessage ? (
                       <p className='mt-2 text-sm text-gray-500 dark:text-gray-400'>
                         {updateState.statusMessage}
                       </p>
@@ -584,8 +646,8 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     <div className='flex items-center justify-between text-xs text-gray-500 dark:text-gray-400'>
                       <span>
                         {updateState.progressPercent !== null
-                          ? `${updateState.progressPercent}%`
-                          : '下载中'}
+                          ? `已下载 ${updateState.progressPercent}%`
+                          : '正在下载最新版'}
                       </span>
                       <span>
                         {formatBytes(updateState.downloadedBytes)}
@@ -634,18 +696,6 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     >
                       <Download className='h-4 w-4' />
                       下载最新版本
-                    </button>
-                  ) : null}
-
-                  {isDesktopUpdaterAvailable &&
-                  updateState.phase === 'downloading' ? (
-                    <button
-                      type='button'
-                      disabled
-                      className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white opacity-70 sm:w-auto'
-                    >
-                      <Loader2 className='h-4 w-4 animate-spin' />
-                      下载中
                     </button>
                   ) : null}
 
