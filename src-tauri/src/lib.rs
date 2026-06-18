@@ -6,14 +6,18 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Mutex, OnceLock},
+    sync::Mutex,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tauri::{AppHandle, Manager, RunEvent, State};
-use tokio::{process::Command as TokioCommand, sync::Mutex as AsyncMutex};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command as TokioCommand,
+    sync::Mutex as AsyncMutex,
+};
 
 const LOCAL_SERVICE_PORT: u16 = 8787;
 const LOCAL_SERVICE_HEALTH_PATH: &str = "/health";
@@ -811,48 +815,81 @@ async fn local_service_is_healthy(base_url: &str) -> bool {
     local_service_health_check(base_url).await.healthy
 }
 
-fn configure_local_service_health_check_client(
-    builder: reqwest::ClientBuilder,
-) -> reqwest::ClientBuilder {
-    builder.no_proxy()
-}
-
-fn local_service_health_check_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-    CLIENT.get_or_init(|| {
-        configure_local_service_health_check_client(reqwest::Client::builder())
-            .build()
-            .expect("failed to build local service health check client")
-    })
-}
-
 async fn local_service_health_check(base_url: &str) -> LocalServiceHealthCheck {
-    let health_url = format!("{base_url}{LOCAL_SERVICE_HEALTH_PATH}");
+    let authority = base_url
+        .trim()
+        .trim_end_matches('/')
+        .strip_prefix("http://")
+        .map(str::to_string);
 
-    run_local_service_health_check_with_client(local_service_health_check_client(), &health_url)
-        .await
-}
+    let authority = match authority {
+        Some(authority) if !authority.is_empty() => authority,
+        _ => {
+            return LocalServiceHealthCheck {
+                healthy: false,
+                status_code: None,
+                error: Some(format!("unsupported local service base URL: {base_url}")),
+            };
+        }
+    };
 
-async fn run_local_service_health_check_with_client(
-    client: &reqwest::Client,
-    health_url: &str,
-) -> LocalServiceHealthCheck {
-    match client
-        .get(health_url)
-        .timeout(Duration::from_secs(1))
-        .send()
-        .await
-    {
-        Ok(response) => LocalServiceHealthCheck {
-            healthy: response.status().is_success(),
-            status_code: Some(response.status().as_u16()),
+    let request = format!(
+        "GET {LOCAL_SERVICE_HEALTH_PATH} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nAccept: application/json\r\n\r\n"
+    );
+    let result = tokio::time::timeout(Duration::from_secs(1), async {
+        let mut stream = tokio::net::TcpStream::connect(&authority)
+            .await
+            .map_err(|error| format!("tcp connect failed: {error}"))?;
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .map_err(|error| format!("failed to write health request: {error}"))?;
+
+        let mut buffer = [0_u8; 1024];
+        let bytes_read = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|error| format!("failed to read health response: {error}"))?;
+
+        if bytes_read == 0 {
+            return Err("health response closed before sending data".to_string());
+        }
+
+        let response_head = String::from_utf8_lossy(&buffer[..bytes_read]);
+        let status_line = response_head
+            .lines()
+            .next()
+            .map(str::trim)
+            .unwrap_or_default();
+
+        let status_code = status_line
+            .split_whitespace()
+            .nth(1)
+            .ok_or_else(|| format!("invalid health response status line: {status_line}"))?
+            .parse::<u16>()
+            .map_err(|error| {
+                format!("invalid health response status line: {status_line}; {error}")
+            })?;
+
+        Ok(status_code)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(status_code)) => LocalServiceHealthCheck {
+            healthy: status_code >= 200 && status_code < 300,
+            status_code: Some(status_code),
             error: None,
         },
-        Err(error) => LocalServiceHealthCheck {
+        Ok(Err(error)) => LocalServiceHealthCheck {
             healthy: false,
             status_code: None,
-            error: Some(error.to_string()),
+            error: Some(error),
+        },
+        Err(_) => LocalServiceHealthCheck {
+            healthy: false,
+            status_code: None,
+            error: Some("health request timed out after 1s".to_string()),
         },
     }
 }
@@ -2960,9 +2997,8 @@ impl RuntimePaths {
 mod tests {
     use super::{
         DEFAULT_DESKTOP_OWNER_USERNAME, LocalServiceStartupFailure, PortOccupant,
-        SidecarTrialResult, collect_diagnostics_error_text,
-        configure_local_service_health_check_client, describe_primary_port_issue,
-        ensure_default_desktop_owner_auth_value, run_local_service_health_check_with_client,
+        SidecarTrialResult, collect_diagnostics_error_text, describe_primary_port_issue,
+        ensure_default_desktop_owner_auth_value, local_service_health_check,
         set_desktop_local_user_password_value, set_desktop_owner_password_value,
         summarize_trial_output,
     };
@@ -3135,12 +3171,12 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn local_service_health_check_client_bypasses_proxies() {
+    async fn local_service_health_check_reads_loopback_http_response() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test health listener");
         let address = listener.local_addr().expect("test listener address");
-        let health_url = format!("http://{address}/health");
+        let base_url = format!("http://{address}");
         let response_body = r#"{"status":"ok"}"#;
         let expected_content_length = response_body.len();
 
@@ -3157,25 +3193,28 @@ mod tests {
                 .expect("write test response");
         });
 
-        let bad_proxy = reqwest::Proxy::all("http://127.0.0.1:9").expect("build bad proxy");
-        let proxied_client = reqwest::Client::builder()
-            .proxy(bad_proxy.clone())
-            .build()
-            .expect("build proxied client");
-        let bypass_proxy_client = configure_local_service_health_check_client(
-            reqwest::Client::builder().proxy(bad_proxy),
-        )
-        .build()
-        .expect("build bypassed client");
+        let result = local_service_health_check(&base_url).await;
+        assert!(result.healthy);
+        assert_eq!(result.status_code, Some(200));
+        assert!(result.error.is_none());
+    }
 
-        let proxied_result =
-            run_local_service_health_check_with_client(&proxied_client, &health_url).await;
-        assert!(!proxied_result.healthy);
-        assert!(proxied_result.error.is_some());
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_service_health_check_reports_tcp_connect_failures() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind disposable listener");
+        let address = listener.local_addr().expect("listener address");
+        drop(listener);
 
-        let bypassed_result =
-            run_local_service_health_check_with_client(&bypass_proxy_client, &health_url).await;
-        assert!(bypassed_result.healthy);
-        assert_eq!(bypassed_result.status_code, Some(200));
+        let result = local_service_health_check(&format!("http://{address}")).await;
+        assert!(!result.healthy);
+        assert!(result.status_code.is_none());
+        assert!(
+            result
+                .error
+                .as_deref()
+                .is_some_and(|message| message.contains("tcp connect failed"))
+        );
     }
 }
