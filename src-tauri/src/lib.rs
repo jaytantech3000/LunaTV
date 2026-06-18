@@ -6,7 +6,7 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -137,9 +137,31 @@ struct SidecarTrialResult {
     healthy: bool,
     timed_out: bool,
     spawn_error: Option<String>,
+    health_check_detail: Option<String>,
     exit_status: Option<i32>,
     stdout: String,
     stderr: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct LocalServiceHealthCheck {
+    healthy: bool,
+    status_code: Option<u16>,
+    error: Option<String>,
+}
+
+impl LocalServiceHealthCheck {
+    fn failure_detail(&self) -> Option<String> {
+        if self.healthy {
+            return None;
+        }
+
+        if let Some(status_code) = self.status_code {
+            return Some(format!("health endpoint returned HTTP {status_code}"));
+        }
+
+        self.error.clone()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -752,11 +774,14 @@ fn terminate_child_process(child: &mut Child) -> Result<()> {
 
 async fn wait_for_local_service(base_url: &str, child: &mut Child) -> Result<()> {
     let deadline = Instant::now() + LOCAL_SERVICE_STARTUP_TIMEOUT;
+    let mut last_health_check_detail = None;
 
     while Instant::now() < deadline {
-        if local_service_is_healthy(base_url).await {
+        let health_check = local_service_health_check(base_url).await;
+        if health_check.healthy {
             return Ok(());
         }
+        last_health_check_detail = health_check.failure_detail();
 
         if let Some(status) = child
             .try_wait()
@@ -770,21 +795,66 @@ async fn wait_for_local_service(base_url: &str, child: &mut Child) -> Result<()>
         tokio::time::sleep(LOCAL_SERVICE_STARTUP_RETRY_INTERVAL).await;
     }
 
-    Err(anyhow::anyhow!(
-        "local service did not become healthy at {base_url}{LOCAL_SERVICE_HEALTH_PATH}"
-    ))
+    let mut message =
+        format!("local service did not become healthy at {base_url}{LOCAL_SERVICE_HEALTH_PATH}");
+    if let Some(detail) = last_health_check_detail {
+        message.push_str(&format!(
+            "; last health check failure: {}",
+            detail.replace('\n', " | ")
+        ));
+    }
+
+    Err(anyhow::anyhow!(message))
 }
 
 async fn local_service_is_healthy(base_url: &str) -> bool {
+    local_service_health_check(base_url).await.healthy
+}
+
+fn configure_local_service_health_check_client(
+    builder: reqwest::ClientBuilder,
+) -> reqwest::ClientBuilder {
+    builder.no_proxy()
+}
+
+fn local_service_health_check_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+    CLIENT.get_or_init(|| {
+        configure_local_service_health_check_client(reqwest::Client::builder())
+            .build()
+            .expect("failed to build local service health check client")
+    })
+}
+
+async fn local_service_health_check(base_url: &str) -> LocalServiceHealthCheck {
     let health_url = format!("{base_url}{LOCAL_SERVICE_HEALTH_PATH}");
 
-    reqwest::Client::new()
+    run_local_service_health_check_with_client(local_service_health_check_client(), &health_url)
+        .await
+}
+
+async fn run_local_service_health_check_with_client(
+    client: &reqwest::Client,
+    health_url: &str,
+) -> LocalServiceHealthCheck {
+    match client
         .get(health_url)
         .timeout(Duration::from_secs(1))
         .send()
         .await
-        .map(|response| response.status().is_success())
-        .unwrap_or(false)
+    {
+        Ok(response) => LocalServiceHealthCheck {
+            healthy: response.status().is_success(),
+            status_code: Some(response.status().as_u16()),
+            error: None,
+        },
+        Err(error) => LocalServiceHealthCheck {
+            healthy: false,
+            status_code: None,
+            error: Some(error.to_string()),
+        },
+    }
 }
 
 async fn run_local_service_diagnostics_impl(
@@ -875,7 +945,15 @@ async fn run_local_service_diagnostics_impl(
         ));
     }
 
-    let service_healthy = local_service_is_healthy(&base_url).await;
+    let service_health = local_service_health_check(&base_url).await;
+    let service_healthy = service_health.healthy;
+    let service_health_detail = service_health.failure_detail();
+    if let Some(detail) = service_health_detail.as_ref() {
+        log_lines.push(format!(
+            "HealthCheckFailure: {}",
+            detail.replace('\n', " | ")
+        ));
+    }
     findings.push(LocalServiceDiagnosticFinding {
         level: if service_healthy {
             DiagnosticLevel::Ok
@@ -885,6 +963,8 @@ async fn run_local_service_diagnostics_impl(
         title: "健康检查".to_string(),
         detail: if service_healthy {
             format!("{base_url}{LOCAL_SERVICE_HEALTH_PATH} 已返回成功。")
+        } else if let Some(detail) = service_health_detail.as_ref() {
+            format!("{base_url}{LOCAL_SERVICE_HEALTH_PATH} 当前没有返回成功：{detail}")
         } else {
             format!("{base_url}{LOCAL_SERVICE_HEALTH_PATH} 当前没有返回成功。")
         },
@@ -1036,7 +1116,10 @@ async fn run_local_service_diagnostics_impl(
 
     let port_inspection = inspect_local_service_port(LOCAL_SERVICE_PORT);
     log_lines.push("PortInspection:".to_string());
-    log_lines.push(format!("  BindAvailable: {}", port_inspection.bind_available));
+    log_lines.push(format!(
+        "  BindAvailable: {}",
+        port_inspection.bind_available
+    ));
     log_lines.extend(
         port_inspection
             .debug_lines
@@ -1064,6 +1147,12 @@ async fn run_local_service_diagnostics_impl(
         log_lines.push(format!("TrialSidecar: {}", path.display()));
         if let Some(spawn_error) = result.spawn_error.as_ref() {
             log_lines.push(format!("TrialSpawnError: {spawn_error}"));
+        }
+        if let Some(detail) = result.health_check_detail.as_ref() {
+            log_lines.push(format!(
+                "TrialHealthCheckFailure: {}",
+                detail.replace('\n', " | ")
+            ));
         }
         if !result.stdout.trim().is_empty() {
             log_lines.push("TrialStdout:".to_string());
@@ -1429,7 +1518,12 @@ fn append_windows_diagnostic_snapshot_log_lines(
 ) {
     log_lines.push("SystemProfile:".to_string());
     if let Some(os) = snapshot.os.as_ref() {
-        push_log_kv(log_lines, 1, "OS", format_optional_text(os.caption.as_deref()));
+        push_log_kv(
+            log_lines,
+            1,
+            "OS",
+            format_optional_text(os.caption.as_deref()),
+        );
         push_log_kv(
             log_lines,
             1,
@@ -1534,13 +1628,23 @@ fn append_windows_diagnostic_snapshot_log_lines(
             format_optional_bool(computer.hypervisor_present),
         );
     } else {
-        push_log_kv(log_lines, 1, "CollectionStatus", "computer snapshot unavailable");
+        push_log_kv(
+            log_lines,
+            1,
+            "CollectionStatus",
+            "computer snapshot unavailable",
+        );
     }
 
     push_log_kv(log_lines, 1, "CPUCount", snapshot.cpus.len().to_string());
     for (index, cpu) in snapshot.cpus.iter().enumerate() {
         log_lines.push(format!("  - CPU {}", index + 1));
-        push_log_kv(log_lines, 2, "Name", format_optional_text(cpu.name.as_deref()));
+        push_log_kv(
+            log_lines,
+            2,
+            "Name",
+            format_optional_text(cpu.name.as_deref()),
+        );
         push_log_kv(
             log_lines,
             2,
@@ -1582,7 +1686,12 @@ fn append_windows_diagnostic_snapshot_log_lines(
     push_log_kv(log_lines, 1, "GPUCount", snapshot.gpus.len().to_string());
     for (index, gpu) in snapshot.gpus.iter().enumerate() {
         log_lines.push(format!("  - GPU {}", index + 1));
-        push_log_kv(log_lines, 2, "Name", format_optional_text(gpu.name.as_deref()));
+        push_log_kv(
+            log_lines,
+            2,
+            "Name",
+            format_optional_text(gpu.name.as_deref()),
+        );
         push_log_kv(
             log_lines,
             2,
@@ -1612,7 +1721,12 @@ fn append_windows_diagnostic_snapshot_log_lines(
     }
 
     log_lines.push("NetworkProfile:".to_string());
-    push_log_kv(log_lines, 1, "AdapterCount", snapshot.network.len().to_string());
+    push_log_kv(
+        log_lines,
+        1,
+        "AdapterCount",
+        snapshot.network.len().to_string(),
+    );
     for (index, adapter) in snapshot.network.iter().enumerate() {
         log_lines.push(format!("  - Adapter {}", index + 1));
         push_log_kv(
@@ -1674,7 +1788,12 @@ fn append_windows_diagnostic_snapshot_log_lines(
         );
         push_log_kv(log_lines, 2, "IPv4", format_string_list(&adapter.ipv4));
         push_log_kv(log_lines, 2, "IPv6", format_string_list(&adapter.ipv6));
-        push_log_kv(log_lines, 2, "Gateways", format_string_list(&adapter.gateways));
+        push_log_kv(
+            log_lines,
+            2,
+            "Gateways",
+            format_string_list(&adapter.gateways),
+        );
         push_log_kv(
             log_lines,
             2,
@@ -1826,8 +1945,18 @@ fn decode_utf8_command_output(bytes: Vec<u8>) -> Result<String> {
     Ok(decoded.trim_start_matches('\u{feff}').replace('\r', ""))
 }
 
-fn push_log_kv(log_lines: &mut Vec<String>, indent_level: usize, key: &str, value: impl Into<String>) {
-    log_lines.push(format!("{}{}: {}", "  ".repeat(indent_level), key, value.into()));
+fn push_log_kv(
+    log_lines: &mut Vec<String>,
+    indent_level: usize,
+    key: &str,
+    value: impl Into<String>,
+) {
+    log_lines.push(format!(
+        "{}{}: {}",
+        "  ".repeat(indent_level),
+        key,
+        value.into()
+    ));
 }
 
 fn format_optional_text(value: Option<&str>) -> String {
@@ -2121,6 +2250,7 @@ async fn run_local_service_trial(sidecar_path: &Path, paths: &RuntimePaths) -> S
                 healthy: false,
                 timed_out: false,
                 spawn_error: Some(error.to_string()),
+                health_check_detail: None,
                 exit_status: None,
                 stdout: String::new(),
                 stderr: String::new(),
@@ -2132,12 +2262,16 @@ async fn run_local_service_trial(sidecar_path: &Path, paths: &RuntimePaths) -> S
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut healthy = false;
     let mut timed_out = false;
+    let mut last_health_check_detail = None;
 
     while Instant::now() < deadline {
-        if local_service_is_healthy(&base_url).await {
+        let health_check = local_service_health_check(&base_url).await;
+        if health_check.healthy {
             healthy = true;
+            last_health_check_detail = None;
             break;
         }
+        last_health_check_detail = health_check.failure_detail();
 
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -2151,6 +2285,7 @@ async fn run_local_service_trial(sidecar_path: &Path, paths: &RuntimePaths) -> S
                     spawn_error: Some(format!(
                         "failed to poll diagnostic sidecar process: {error}"
                     )),
+                    health_check_detail: last_health_check_detail,
                     exit_status: output.as_ref().and_then(|value| value.status.code()),
                     stdout: output
                         .as_ref()
@@ -2179,6 +2314,7 @@ async fn run_local_service_trial(sidecar_path: &Path, paths: &RuntimePaths) -> S
         healthy,
         timed_out,
         spawn_error: None,
+        health_check_detail: last_health_check_detail,
         exit_status: output.as_ref().and_then(|value| value.status.code()),
         stdout: output
             .as_ref()
@@ -2237,6 +2373,10 @@ fn summarize_trial_output(result: &SidecarTrialResult) -> String {
         parts.push(format!("退出码：{exit_status}"));
     }
 
+    if let Some(detail) = result.health_check_detail.as_ref() {
+        parts.push(format!("健康检查失败：{}", detail.replace('\n', " | ")));
+    }
+
     let stderr_tail = tail_non_empty_lines(&result.stderr, 6);
     if !stderr_tail.is_empty() {
         parts.push(format!("stderr 摘要：{}", stderr_tail.replace('\n', " | ")));
@@ -2267,6 +2407,9 @@ fn collect_diagnostics_error_text(
     if let Some(result) = trial_result {
         if let Some(spawn_error) = result.spawn_error.as_ref() {
             parts.push(spawn_error.clone());
+        }
+        if let Some(health_check_detail) = result.health_check_detail.as_ref() {
+            parts.push(health_check_detail.clone());
         }
         if !result.stdout.is_empty() {
             parts.push(result.stdout.clone());
@@ -2817,9 +2960,15 @@ impl RuntimePaths {
 mod tests {
     use super::{
         DEFAULT_DESKTOP_OWNER_USERNAME, LocalServiceStartupFailure, PortOccupant,
-        SidecarTrialResult, collect_diagnostics_error_text, describe_primary_port_issue,
-        ensure_default_desktop_owner_auth_value, set_desktop_local_user_password_value,
-        set_desktop_owner_password_value, summarize_trial_output,
+        SidecarTrialResult, collect_diagnostics_error_text,
+        configure_local_service_health_check_client, describe_primary_port_issue,
+        ensure_default_desktop_owner_auth_value, run_local_service_health_check_with_client,
+        set_desktop_local_user_password_value, set_desktop_owner_password_value,
+        summarize_trial_output,
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
     };
 
     #[test]
@@ -2933,6 +3082,7 @@ mod tests {
             healthy: false,
             timed_out: false,
             spawn_error: None,
+            health_check_detail: Some("proxy connect timeout".to_string()),
             exit_status: Some(1),
             stdout: String::new(),
             stderr: "line one\nline two\nfailed to bind local service listener".to_string(),
@@ -2941,6 +3091,7 @@ mod tests {
         let summary = summarize_trial_output(&result);
 
         assert!(summary.contains("退出码：1"));
+        assert!(summary.contains("proxy connect timeout"));
         assert!(summary.contains("failed to bind local service listener"));
     }
 
@@ -2969,6 +3120,7 @@ mod tests {
             healthy: false,
             timed_out: true,
             spawn_error: None,
+            health_check_detail: Some("request error".to_string()),
             exit_status: None,
             stdout: "stdout".to_string(),
             stderr: "stderr".to_string(),
@@ -2977,7 +3129,53 @@ mod tests {
         let text = collect_diagnostics_error_text(Some(&failure), Some(&result));
 
         assert!(text.contains("spawn failed"));
+        assert!(text.contains("request error"));
         assert!(text.contains("stdout"));
         assert!(text.contains("stderr"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_service_health_check_client_bypasses_proxies() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test health listener");
+        let address = listener.local_addr().expect("test listener address");
+        let health_url = format!("http://{address}/health");
+        let response_body = r#"{"status":"ok"}"#;
+        let expected_content_length = response_body.len();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept test request");
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {expected_content_length}\r\nconnection: close\r\n\r\n{response_body}"
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write test response");
+        });
+
+        let bad_proxy = reqwest::Proxy::all("http://127.0.0.1:9").expect("build bad proxy");
+        let proxied_client = reqwest::Client::builder()
+            .proxy(bad_proxy.clone())
+            .build()
+            .expect("build proxied client");
+        let bypass_proxy_client = configure_local_service_health_check_client(
+            reqwest::Client::builder().proxy(bad_proxy),
+        )
+        .build()
+        .expect("build bypassed client");
+
+        let proxied_result =
+            run_local_service_health_check_with_client(&proxied_client, &health_url).await;
+        assert!(!proxied_result.healthy);
+        assert!(proxied_result.error.is_some());
+
+        let bypassed_result =
+            run_local_service_health_check_with_client(&bypass_proxy_client, &health_url).await;
+        assert!(bypassed_result.healthy);
+        assert_eq!(bypassed_result.status_code, Some(200));
     }
 }
