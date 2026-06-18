@@ -28,6 +28,9 @@ const ADMIN_PERSISTENCE_FILE_NAME: &str = "desktop-admin-state.json";
 const DEFAULT_DESKTOP_OWNER_USERNAME: &str = "owner";
 const LOCAL_SERVICE_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCAL_SERVICE_STARTUP_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+const LOCAL_SERVICE_HEALTH_CONNECT_TIMEOUT: Duration = Duration::from_millis(350);
+const LOCAL_SERVICE_HEALTH_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
+const LOCAL_SERVICE_HEALTH_READ_TIMEOUT: Duration = Duration::from_millis(400);
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -138,10 +141,12 @@ struct LocalServiceDiagnosticsUploadRequest {
 }
 
 struct SidecarTrialResult {
+    pid: Option<u32>,
     healthy: bool,
     timed_out: bool,
     spawn_error: Option<String>,
     health_check_detail: Option<String>,
+    port_observation: Option<String>,
     exit_status: Option<i32>,
     stdout: String,
     stderr: String,
@@ -836,20 +841,43 @@ async fn local_service_health_check(base_url: &str) -> LocalServiceHealthCheck {
     let request = format!(
         "GET {LOCAL_SERVICE_HEALTH_PATH} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nAccept: application/json\r\n\r\n"
     );
-    let result = tokio::time::timeout(Duration::from_secs(1), async {
-        let mut stream = tokio::net::TcpStream::connect(&authority)
-            .await
-            .map_err(|error| format!("tcp connect failed: {error}"))?;
-        stream
-            .write_all(request.as_bytes())
-            .await
-            .map_err(|error| format!("failed to write health request: {error}"))?;
+    let result = async {
+        let mut stream = tokio::time::timeout(
+            LOCAL_SERVICE_HEALTH_CONNECT_TIMEOUT,
+            tokio::net::TcpStream::connect(&authority),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "tcp connect timed out after {}ms",
+                LOCAL_SERVICE_HEALTH_CONNECT_TIMEOUT.as_millis()
+            )
+        })?
+        .map_err(|error| format!("tcp connect failed: {error}"))?;
+        tokio::time::timeout(
+            LOCAL_SERVICE_HEALTH_WRITE_TIMEOUT,
+            stream.write_all(request.as_bytes()),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "health request write timed out after {}ms",
+                LOCAL_SERVICE_HEALTH_WRITE_TIMEOUT.as_millis()
+            )
+        })?
+        .map_err(|error| format!("failed to write health request: {error}"))?;
 
         let mut buffer = [0_u8; 1024];
-        let bytes_read = stream
-            .read(&mut buffer)
-            .await
-            .map_err(|error| format!("failed to read health response: {error}"))?;
+        let bytes_read =
+            tokio::time::timeout(LOCAL_SERVICE_HEALTH_READ_TIMEOUT, stream.read(&mut buffer))
+                .await
+                .map_err(|_| {
+                    format!(
+                        "health response read timed out after {}ms",
+                        LOCAL_SERVICE_HEALTH_READ_TIMEOUT.as_millis()
+                    )
+                })?
+                .map_err(|error| format!("failed to read health response: {error}"))?;
 
         if bytes_read == 0 {
             return Err("health response closed before sending data".to_string());
@@ -872,24 +900,19 @@ async fn local_service_health_check(base_url: &str) -> LocalServiceHealthCheck {
             })?;
 
         Ok(status_code)
-    })
+    }
     .await;
 
     match result {
-        Ok(Ok(status_code)) => LocalServiceHealthCheck {
+        Ok(status_code) => LocalServiceHealthCheck {
             healthy: status_code >= 200 && status_code < 300,
             status_code: Some(status_code),
             error: None,
         },
-        Ok(Err(error)) => LocalServiceHealthCheck {
+        Err(error) => LocalServiceHealthCheck {
             healthy: false,
             status_code: None,
             error: Some(error),
-        },
-        Err(_) => LocalServiceHealthCheck {
-            healthy: false,
-            status_code: None,
-            error: Some("health request timed out after 1s".to_string()),
         },
     }
 }
@@ -1038,6 +1061,11 @@ async fn run_local_service_diagnostics_impl(
         };
         log_lines.push(format!("  - [{status}] {}", candidate.display()));
     }
+    if let Some(path) = sidecar_path.as_ref() {
+        if let Some(metadata_summary) = describe_file_metadata(path) {
+            log_lines.push(format!("SidecarMetadata: {metadata_summary}"));
+        }
+    }
 
     let sidecar_missing = sidecar_path.is_none();
     findings.push(LocalServiceDiagnosticFinding {
@@ -1182,12 +1210,21 @@ async fn run_local_service_diagnostics_impl(
     let trial_result = if let Some(path) = sidecar_path.as_ref() {
         let result = run_local_service_trial(path, &paths).await;
         log_lines.push(format!("TrialSidecar: {}", path.display()));
+        if let Some(pid) = result.pid {
+            log_lines.push(format!("TrialChildPid: {pid}"));
+        }
         if let Some(spawn_error) = result.spawn_error.as_ref() {
             log_lines.push(format!("TrialSpawnError: {spawn_error}"));
         }
         if let Some(detail) = result.health_check_detail.as_ref() {
             log_lines.push(format!(
                 "TrialHealthCheckFailure: {}",
+                detail.replace('\n', " | ")
+            ));
+        }
+        if let Some(detail) = result.port_observation.as_ref() {
+            log_lines.push(format!(
+                "TrialPortObservation: {}",
                 detail.replace('\n', " | ")
             ));
         }
@@ -2284,16 +2321,19 @@ async fn run_local_service_trial(sidecar_path: &Path, paths: &RuntimePaths) -> S
         Ok(child) => child,
         Err(error) => {
             return SidecarTrialResult {
+                pid: None,
                 healthy: false,
                 timed_out: false,
                 spawn_error: Some(error.to_string()),
                 health_check_detail: None,
+                port_observation: None,
                 exit_status: None,
                 stdout: String::new(),
                 stderr: String::new(),
             };
         }
     };
+    let child_pid = child.id();
 
     let base_url = format!("http://127.0.0.1:{LOCAL_SERVICE_PORT}");
     let deadline = Instant::now() + Duration::from_secs(8);
@@ -2317,12 +2357,14 @@ async fn run_local_service_trial(sidecar_path: &Path, paths: &RuntimePaths) -> S
                 let _ = child.kill().await;
                 let output = child.wait_with_output().await.ok();
                 return SidecarTrialResult {
+                    pid: child_pid,
                     healthy: false,
                     timed_out: false,
                     spawn_error: Some(format!(
                         "failed to poll diagnostic sidecar process: {error}"
                     )),
                     health_check_detail: last_health_check_detail,
+                    port_observation: child_pid.and_then(observe_trial_sidecar_port),
                     exit_status: output.as_ref().and_then(|value| value.status.code()),
                     stdout: output
                         .as_ref()
@@ -2339,6 +2381,12 @@ async fn run_local_service_trial(sidecar_path: &Path, paths: &RuntimePaths) -> S
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 
+    let port_observation = if healthy {
+        None
+    } else {
+        child_pid.and_then(observe_trial_sidecar_port)
+    };
+
     if healthy || child.try_wait().ok().flatten().is_none() {
         if !healthy {
             timed_out = true;
@@ -2348,10 +2396,12 @@ async fn run_local_service_trial(sidecar_path: &Path, paths: &RuntimePaths) -> S
 
     let output = child.wait_with_output().await.ok();
     SidecarTrialResult {
+        pid: child_pid,
         healthy,
         timed_out,
         spawn_error: None,
         health_check_detail: last_health_check_detail,
+        port_observation,
         exit_status: output.as_ref().and_then(|value| value.status.code()),
         stdout: output
             .as_ref()
@@ -2406,12 +2456,20 @@ fn build_sidecar_trial_finding(result: &SidecarTrialResult) -> LocalServiceDiagn
 fn summarize_trial_output(result: &SidecarTrialResult) -> String {
     let mut parts = Vec::new();
 
+    if let Some(pid) = result.pid {
+        parts.push(format!("PID：{pid}"));
+    }
+
     if let Some(exit_status) = result.exit_status {
         parts.push(format!("退出码：{exit_status}"));
     }
 
     if let Some(detail) = result.health_check_detail.as_ref() {
         parts.push(format!("健康检查失败：{}", detail.replace('\n', " | ")));
+    }
+
+    if let Some(detail) = result.port_observation.as_ref() {
+        parts.push(detail.clone());
     }
 
     let stderr_tail = tail_non_empty_lines(&result.stderr, 6);
@@ -2519,6 +2577,69 @@ fn configure_background_tokio_command(command: &mut TokioCommand) {
 
 #[cfg(not(target_os = "windows"))]
 fn configure_background_tokio_command(_command: &mut TokioCommand) {}
+
+fn describe_file_metadata(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    let mut parts = vec![
+        format!("Path={}", path.display()),
+        format!("SizeBytes={}", metadata.len()),
+    ];
+    if let Some(modified_at_ms) = metadata.modified().ok().and_then(system_time_to_unix_ms) {
+        parts.push(format!("ModifiedAtMs={modified_at_ms}"));
+    }
+    Some(parts.join(" | "))
+}
+
+fn system_time_to_unix_ms(value: SystemTime) -> Option<u64> {
+    value
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis() as u64)
+}
+
+#[cfg(target_os = "windows")]
+fn observe_trial_sidecar_port(pid: u32) -> Option<String> {
+    let inspection = inspect_local_service_port(LOCAL_SERVICE_PORT);
+    let matching_occupants = inspection
+        .occupants
+        .iter()
+        .filter(|occupant| occupant.pid == pid)
+        .collect::<Vec<_>>();
+
+    if !matching_occupants.is_empty() {
+        let listening_addresses = matching_occupants
+            .iter()
+            .map(|occupant| occupant.local_address.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Some(format!(
+            "端口探测发现诊断 sidecar PID {pid} 正在监听 {listening_addresses}。"
+        ));
+    }
+
+    if inspection.bind_available {
+        return Some(format!(
+            "端口探测没有发现诊断 sidecar PID {pid} 监听 127.0.0.1:{LOCAL_SERVICE_PORT}，并且该端口仍然可绑定。"
+        ));
+    }
+
+    if let Some(occupant) = inspection.occupants.first() {
+        let process_name = occupant.process_name.as_deref().unwrap_or("未知进程");
+        return Some(format!(
+            "端口探测没有发现诊断 sidecar PID {pid} 监听 127.0.0.1:{LOCAL_SERVICE_PORT}；当前监听者是 {process_name} (PID {})。",
+            occupant.pid
+        ));
+    }
+
+    Some(format!(
+        "端口探测没有发现诊断 sidecar PID {pid} 监听 127.0.0.1:{LOCAL_SERVICE_PORT}。"
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn observe_trial_sidecar_port(_pid: u32) -> Option<String> {
+    None
+}
 
 fn current_timestamp_ms() -> u64 {
     SystemTime::now()
@@ -2996,12 +3117,14 @@ impl RuntimePaths {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_DESKTOP_OWNER_USERNAME, LocalServiceStartupFailure, PortOccupant,
-        SidecarTrialResult, collect_diagnostics_error_text, describe_primary_port_issue,
+        DEFAULT_DESKTOP_OWNER_USERNAME, LOCAL_SERVICE_HEALTH_READ_TIMEOUT,
+        LocalServiceStartupFailure, PortOccupant, SidecarTrialResult,
+        collect_diagnostics_error_text, describe_primary_port_issue,
         ensure_default_desktop_owner_auth_value, local_service_health_check,
         set_desktop_local_user_password_value, set_desktop_owner_password_value,
         summarize_trial_output,
     };
+    use std::time::Duration;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -3115,10 +3238,14 @@ mod tests {
     #[test]
     fn summarizes_sidecar_trial_output_with_exit_code_and_stderr() {
         let result = SidecarTrialResult {
+            pid: Some(42),
             healthy: false,
             timed_out: false,
             spawn_error: None,
             health_check_detail: Some("proxy connect timeout".to_string()),
+            port_observation: Some(
+                "端口探测发现诊断 sidecar PID 42 正在监听 127.0.0.1:8787。".to_string(),
+            ),
             exit_status: Some(1),
             stdout: String::new(),
             stderr: "line one\nline two\nfailed to bind local service listener".to_string(),
@@ -3127,7 +3254,9 @@ mod tests {
         let summary = summarize_trial_output(&result);
 
         assert!(summary.contains("退出码：1"));
+        assert!(summary.contains("PID：42"));
         assert!(summary.contains("proxy connect timeout"));
+        assert!(summary.contains("端口探测发现诊断 sidecar PID 42"));
         assert!(summary.contains("failed to bind local service listener"));
     }
 
@@ -3153,10 +3282,12 @@ mod tests {
             message: "spawn failed".to_string(),
         };
         let result = SidecarTrialResult {
+            pid: None,
             healthy: false,
             timed_out: true,
             spawn_error: None,
             health_check_detail: Some("request error".to_string()),
+            port_observation: None,
             exit_status: None,
             stdout: "stdout".to_string(),
             stderr: "stderr".to_string(),
@@ -3197,6 +3328,32 @@ mod tests {
         assert!(result.healthy);
         assert_eq!(result.status_code, Some(200));
         assert!(result.error.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_service_health_check_reports_read_timeouts_after_connect() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind stalled health listener");
+        let address = listener.local_addr().expect("listener address");
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept stalled request");
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer).await;
+            tokio::time::sleep(LOCAL_SERVICE_HEALTH_READ_TIMEOUT + Duration::from_millis(100))
+                .await;
+        });
+
+        let result = local_service_health_check(&format!("http://{address}")).await;
+        assert!(!result.healthy);
+        assert!(result.status_code.is_none());
+        assert!(
+            result
+                .error
+                .as_deref()
+                .is_some_and(|message| message.contains("health response read timed out"))
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
