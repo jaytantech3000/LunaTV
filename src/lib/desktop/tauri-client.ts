@@ -48,6 +48,12 @@ export interface DesktopLocalServiceDiagnosticsUploadResult {
   message: string;
 }
 
+export interface DesktopLocalServiceDiagnosticsSaveResult {
+  saved: boolean;
+  canceled: boolean;
+  path: string | null;
+}
+
 declare global {
   interface Window {
     __TAURI__?: unknown;
@@ -114,6 +120,19 @@ export function uploadLocalServiceDiagnostics(
     {
       remoteBaseUrl,
       report,
+    }
+  );
+}
+
+export function saveLocalServiceDiagnostics(
+  defaultFilename: string,
+  contents: string
+): Promise<DesktopLocalServiceDiagnosticsSaveResult> {
+  return invokeDesktopCommand<DesktopLocalServiceDiagnosticsSaveResult>(
+    'save_local_service_diagnostics',
+    {
+      defaultFilename,
+      contents,
     }
   );
 }

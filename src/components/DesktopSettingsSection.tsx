@@ -27,6 +27,7 @@ import {
   isDesktopTauriRuntimeAvailable,
   readDesktopAppConfig,
   runLocalServiceDiagnostics,
+  saveLocalServiceDiagnostics,
   startLocalService,
   stopLocalService,
   uploadLocalServiceDiagnostics,
@@ -231,7 +232,7 @@ function DiagnosticsModal({
   }
 
   return createPortal(
-    <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4'>
+    <div className='fixed inset-0 z-[1100] flex items-center justify-center bg-black/55 p-4'>
       <div className='w-full max-w-3xl overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900'>
         <div className='flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-700'>
           <div>
@@ -589,22 +590,47 @@ export default function DesktopSettingsSection({
     setErrorMessage('');
     setInfoMessage('');
 
-    const didExport = downloadTextFile(
-      buildDiagnosticsFilename(diagnosticsReport),
-      diagnosticsReport.logText
-    );
+    let localExportState: 'saved' | 'canceled' | 'failed' = 'failed';
+    let localExportPath = '';
+    let localExportErrorMessage = '';
+
+    if (ipcAvailable) {
+      try {
+        const saveResult = await saveLocalServiceDiagnostics(
+          buildDiagnosticsFilename(diagnosticsReport),
+          diagnosticsReport.logText
+        );
+
+        if (saveResult.saved) {
+          localExportState = 'saved';
+          localExportPath = saveResult.path || '';
+        } else if (saveResult.canceled) {
+          localExportState = 'canceled';
+        }
+      } catch (error) {
+        localExportState = 'failed';
+        localExportErrorMessage = getErrorMessage(error);
+      }
+    } else {
+      localExportState = downloadTextFile(
+        buildDiagnosticsFilename(diagnosticsReport),
+        diagnosticsReport.logText
+      )
+        ? 'saved'
+        : 'failed';
+    }
+
     let uploadSucceeded = false;
     let uploadMessage = '';
+    let uploadFailed = false;
 
     try {
       if (!ipcAvailable) {
-        uploadMessage =
-          '褰撳墠涓嶅湪妗岄潰澹崇幆澧冧腑锛屾湭鎵ц鑷姩涓婁紶銆?';
+        uploadMessage = '当前不在桌面壳环境中，未执行自动上传。';
       } else {
         const remoteBaseUrl = await resolveDiagnosticsUploadBaseUrl();
         if (!remoteBaseUrl) {
-          uploadMessage =
-            '鏈厤缃?profile_sync.api_base_url锛屾湭鎵ц鑷姩涓婁紶銆?';
+          uploadMessage = '未配置 profile_sync.api_base_url，未执行自动上传。';
         } else {
           const uploadResult = await uploadLocalServiceDiagnostics(
             remoteBaseUrl,
@@ -615,19 +641,31 @@ export default function DesktopSettingsSection({
         }
       }
     } catch (error) {
-      uploadMessage = `鑷姩涓婁紶澶辫触锛?${getErrorMessage(error)}`;
+      uploadFailed = true;
+      uploadMessage = `自动上传失败：${getErrorMessage(error)}`;
     } finally {
       setIsExportingDiagnostics(false);
     }
 
-    const localMessage = didExport
-      ? '鎺掓煡鏃ュ織宸插鍑恒€?'
-      : '鎺掓煡鏃ュ織鏈湴瀵煎嚭澶辫触銆?';
+    const localMessage =
+      localExportState === 'saved'
+        ? localExportPath
+          ? `排查日志已保存到：${localExportPath}`
+          : '排查日志已导出。'
+        : localExportState === 'canceled'
+        ? '已取消保存排查日志。'
+        : localExportErrorMessage
+        ? `排查日志保存失败：${localExportErrorMessage}`
+        : '排查日志本地导出失败。';
     const combinedMessage = [localMessage, uploadMessage]
       .filter((value) => value.trim().length > 0)
       .join(' ');
 
-    if (didExport || uploadSucceeded) {
+    if (
+      localExportState === 'saved' ||
+      uploadSucceeded ||
+      (localExportState === 'canceled' && !uploadFailed)
+    ) {
       setDiagnosticsActionMessage(combinedMessage);
       setDiagnosticsActionErrorMessage('');
       setInfoMessage(combinedMessage);

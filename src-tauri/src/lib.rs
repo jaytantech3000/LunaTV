@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tauri::{AppHandle, Manager, RunEvent, State};
 use tokio::{process::Command as TokioCommand, sync::Mutex as AsyncMutex};
 
@@ -114,6 +114,14 @@ struct LocalServiceDiagnosticsUploadResult {
     message: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalServiceDiagnosticsSaveResult {
+    saved: bool,
+    canceled: bool,
+    path: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalServiceDiagnosticsUploadRequest {
@@ -134,16 +142,108 @@ struct SidecarTrialResult {
     stderr: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PortOccupant {
     pid: u32,
+    local_address: String,
+    state: String,
     process_name: Option<String>,
 }
 
 struct PortInspection {
     bind_available: bool,
     occupants: Vec<PortOccupant>,
-    raw_output: Option<String>,
+    debug_lines: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct WindowsDiagnosticSnapshot {
+    os: Option<WindowsOsSnapshot>,
+    computer: Option<WindowsComputerSnapshot>,
+    #[serde(default)]
+    cpus: Vec<WindowsCpuSnapshot>,
+    #[serde(default)]
+    gpus: Vec<WindowsGpuSnapshot>,
+    #[serde(default)]
+    network: Vec<WindowsNetworkAdapterSnapshot>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowsOsSnapshot {
+    caption: Option<String>,
+    version: Option<String>,
+    build_number: Option<String>,
+    architecture: Option<String>,
+    computer_name: Option<String>,
+    last_boot_up_time: Option<String>,
+    free_physical_memory_kb: Option<u64>,
+    total_visible_memory_kb: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowsComputerSnapshot {
+    manufacturer: Option<String>,
+    model: Option<String>,
+    system_type: Option<String>,
+    total_physical_memory_bytes: Option<u64>,
+    processors: Option<u32>,
+    logical_processors: Option<u32>,
+    hypervisor_present: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowsCpuSnapshot {
+    name: Option<String>,
+    manufacturer: Option<String>,
+    cores: Option<u32>,
+    logical_processors: Option<u32>,
+    max_clock_mhz: Option<u32>,
+    processor_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowsGpuSnapshot {
+    name: Option<String>,
+    driver_version: Option<String>,
+    adapter_ram_bytes: Option<u64>,
+    video_processor: Option<String>,
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowsNetworkAdapterSnapshot {
+    name: Option<String>,
+    description: Option<String>,
+    service_name: Option<String>,
+    manufacturer: Option<String>,
+    adapter_type: Option<String>,
+    mac_address: Option<String>,
+    dhcp_enabled: Option<bool>,
+    net_enabled: Option<bool>,
+    speed_bits_per_second: Option<u64>,
+    #[serde(default)]
+    ipv4: Vec<String>,
+    #[serde(default)]
+    ipv6: Vec<String>,
+    #[serde(default)]
+    gateways: Vec<String>,
+    #[serde(default)]
+    dns_servers: Vec<String>,
+    dns_domain: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct WindowsPortOccupantsPayload {
+    #[serde(default)]
+    occupants: Vec<PortOccupant>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -241,6 +341,15 @@ async fn upload_local_service_diagnostics(
 ) -> Result<LocalServiceDiagnosticsUploadResult, String> {
     upload_local_service_diagnostics_impl(&app, remote_base_url, report)
         .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_local_service_diagnostics(
+    default_filename: String,
+    contents: String,
+) -> Result<LocalServiceDiagnosticsSaveResult, String> {
+    save_local_service_diagnostics_impl(default_filename, contents)
         .map_err(|error| error.to_string())
 }
 
@@ -369,6 +478,7 @@ pub fn run() {
             get_local_service_status,
             run_local_service_diagnostics,
             upload_local_service_diagnostics,
+            save_local_service_diagnostics,
             read_app_config,
             write_app_config,
             get_desktop_auth_status,
@@ -688,6 +798,8 @@ async fn run_local_service_diagnostics_impl(
         "LunaTV Desktop Local Service Diagnostics".to_string(),
         format!("CapturedAtMs: {captured_at_ms}"),
     ];
+    append_app_context_log_lines(app, &mut log_lines);
+    append_platform_diagnostic_snapshot_log_lines(&mut log_lines);
 
     let _start_guard = state.service_start_lock.lock().await;
 
@@ -923,10 +1035,14 @@ async fn run_local_service_diagnostics_impl(
     }
 
     let port_inspection = inspect_local_service_port(LOCAL_SERVICE_PORT);
-    if let Some(raw_output) = port_inspection.raw_output.as_ref() {
-        log_lines.push("PortInspectionOutput:".to_string());
-        log_lines.extend(raw_output.lines().map(|line| format!("  {line}")));
-    }
+    log_lines.push("PortInspection:".to_string());
+    log_lines.push(format!("  BindAvailable: {}", port_inspection.bind_available));
+    log_lines.extend(
+        port_inspection
+            .debug_lines
+            .iter()
+            .map(|line| format!("  {line}")),
+    );
 
     let port_occupied = !service_healthy && !port_inspection.bind_available;
     findings.push(LocalServiceDiagnosticFinding {
@@ -995,6 +1111,46 @@ async fn run_local_service_diagnostics_impl(
             "0xc0000135",
         ],
     );
+
+    log_lines.push("FailureClassification:".to_string());
+    log_lines.push(format!("  ServiceHealthy: {service_healthy}"));
+    log_lines.push(format!("  SidecarMissing: {sidecar_missing}"));
+    log_lines.push(format!("  PortOccupied: {port_occupied}"));
+    log_lines.push(format!("  DetectedBindIssue: {detected_bind_issue}"));
+    log_lines.push(format!("  ConfigInvalid: {config_invalid}"));
+    log_lines.push(format!("  DataDirUnwritable: {data_dir_unwritable}"));
+    log_lines.push(format!("  SqliteInaccessible: {sqlite_inaccessible}"));
+    log_lines.push(format!("  DetectedSqliteIssue: {detected_sqlite_issue}"));
+    log_lines.push(format!(
+        "  RuntimeDependencyIssue: {detected_runtime_dependency_issue}"
+    ));
+    log_lines.push(format!("  TrialAttempted: {}", trial_result.is_some()));
+    log_lines.push(format!(
+        "  TrialHealthy: {}",
+        trial_result.as_ref().is_some_and(|result| result.healthy)
+    ));
+    log_lines.push(format!(
+        "  TrialTimedOut: {}",
+        trial_result.as_ref().is_some_and(|result| result.timed_out)
+    ));
+    log_lines.push(format!(
+        "  TrialSpawnError: {}",
+        trial_result
+            .as_ref()
+            .is_some_and(|result| result.spawn_error.is_some())
+    ));
+    log_lines.push(format!(
+        "  TrialExitStatus: {}",
+        trial_result
+            .as_ref()
+            .and_then(|result| result.exit_status)
+            .map(|status| status.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    ));
+    log_lines.push(format!(
+        "  LastStartFailureRecorded: {}",
+        last_start_failure.is_some()
+    ));
 
     if sidecar_missing {
         recommendations.insert(
@@ -1206,6 +1362,554 @@ fn finalize_local_service_diagnostics_report(
     }
 }
 
+fn append_app_context_log_lines(app: &AppHandle, log_lines: &mut Vec<String>) {
+    log_lines.push("AppContext:".to_string());
+    push_log_kv(log_lines, 1, "Application", "LunaTV Desktop");
+    push_log_kv(
+        log_lines,
+        1,
+        "Version",
+        app.package_info().version.to_string(),
+    );
+    push_log_kv(log_lines, 1, "TargetTriple", env!("LUNATV_TARGET_TRIPLE"));
+    push_log_kv(
+        log_lines,
+        1,
+        "Platform",
+        format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+    );
+    push_log_kv(
+        log_lines,
+        1,
+        "BuildProfile",
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
+    );
+
+    match std::env::current_exe() {
+        Ok(path) => push_log_kv(log_lines, 1, "CurrentExe", path.display().to_string()),
+        Err(error) => push_log_kv(log_lines, 1, "CurrentExeError", error.to_string()),
+    }
+
+    match std::env::current_dir() {
+        Ok(path) => push_log_kv(log_lines, 1, "CurrentDir", path.display().to_string()),
+        Err(error) => push_log_kv(log_lines, 1, "CurrentDirError", error.to_string()),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn append_platform_diagnostic_snapshot_log_lines(log_lines: &mut Vec<String>) {
+    match collect_windows_diagnostic_snapshot() {
+        Ok(snapshot) => append_windows_diagnostic_snapshot_log_lines(log_lines, &snapshot),
+        Err(error) => {
+            log_lines.push("SystemProfileError:".to_string());
+            log_lines.push(format!("  {error}"));
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn append_platform_diagnostic_snapshot_log_lines(log_lines: &mut Vec<String>) {
+    log_lines.push("SystemProfile:".to_string());
+    push_log_kv(
+        log_lines,
+        1,
+        "CollectionStatus",
+        "platform-specific snapshot is only implemented on Windows",
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn append_windows_diagnostic_snapshot_log_lines(
+    log_lines: &mut Vec<String>,
+    snapshot: &WindowsDiagnosticSnapshot,
+) {
+    log_lines.push("SystemProfile:".to_string());
+    if let Some(os) = snapshot.os.as_ref() {
+        push_log_kv(log_lines, 1, "OS", format_optional_text(os.caption.as_deref()));
+        push_log_kv(
+            log_lines,
+            1,
+            "Version",
+            format_optional_text(os.version.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "BuildNumber",
+            format_optional_text(os.build_number.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "Architecture",
+            format_optional_text(os.architecture.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "ComputerName",
+            format_optional_text(os.computer_name.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "LastBootUpTime",
+            format_optional_text(os.last_boot_up_time.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "TotalVisibleMemory",
+            os.total_visible_memory_kb
+                .map(format_memory_kib)
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "FreePhysicalMemory",
+            os.free_physical_memory_kb
+                .map(format_memory_kib)
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+    } else {
+        push_log_kv(log_lines, 1, "CollectionStatus", "OS snapshot unavailable");
+    }
+
+    log_lines.push("HardwareProfile:".to_string());
+    if let Some(computer) = snapshot.computer.as_ref() {
+        push_log_kv(
+            log_lines,
+            1,
+            "Manufacturer",
+            format_optional_text(computer.manufacturer.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "Model",
+            format_optional_text(computer.model.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "SystemType",
+            format_optional_text(computer.system_type.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "TotalPhysicalMemory",
+            computer
+                .total_physical_memory_bytes
+                .map(format_byte_quantity)
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "ProcessorPackages",
+            computer
+                .processors
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "LogicalProcessors",
+            computer
+                .logical_processors
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+        push_log_kv(
+            log_lines,
+            1,
+            "HypervisorPresent",
+            format_optional_bool(computer.hypervisor_present),
+        );
+    } else {
+        push_log_kv(log_lines, 1, "CollectionStatus", "computer snapshot unavailable");
+    }
+
+    push_log_kv(log_lines, 1, "CPUCount", snapshot.cpus.len().to_string());
+    for (index, cpu) in snapshot.cpus.iter().enumerate() {
+        log_lines.push(format!("  - CPU {}", index + 1));
+        push_log_kv(log_lines, 2, "Name", format_optional_text(cpu.name.as_deref()));
+        push_log_kv(
+            log_lines,
+            2,
+            "Manufacturer",
+            format_optional_text(cpu.manufacturer.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "Cores",
+            cpu.cores
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "LogicalProcessors",
+            cpu.logical_processors
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "MaxClockMHz",
+            cpu.max_clock_mhz
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "ProcessorId",
+            format_optional_text(cpu.processor_id.as_deref()),
+        );
+    }
+
+    push_log_kv(log_lines, 1, "GPUCount", snapshot.gpus.len().to_string());
+    for (index, gpu) in snapshot.gpus.iter().enumerate() {
+        log_lines.push(format!("  - GPU {}", index + 1));
+        push_log_kv(log_lines, 2, "Name", format_optional_text(gpu.name.as_deref()));
+        push_log_kv(
+            log_lines,
+            2,
+            "DriverVersion",
+            format_optional_text(gpu.driver_version.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "AdapterRAM",
+            gpu.adapter_ram_bytes
+                .map(format_byte_quantity)
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "VideoProcessor",
+            format_optional_text(gpu.video_processor.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "Status",
+            format_optional_text(gpu.status.as_deref()),
+        );
+    }
+
+    log_lines.push("NetworkProfile:".to_string());
+    push_log_kv(log_lines, 1, "AdapterCount", snapshot.network.len().to_string());
+    for (index, adapter) in snapshot.network.iter().enumerate() {
+        log_lines.push(format!("  - Adapter {}", index + 1));
+        push_log_kv(
+            log_lines,
+            2,
+            "Name",
+            format_optional_text(adapter.name.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "Description",
+            format_optional_text(adapter.description.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "ServiceName",
+            format_optional_text(adapter.service_name.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "Manufacturer",
+            format_optional_text(adapter.manufacturer.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "AdapterType",
+            format_optional_text(adapter.adapter_type.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "MACAddress",
+            format_optional_text(adapter.mac_address.as_deref()),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "DHCPEnabled",
+            format_optional_bool(adapter.dhcp_enabled),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "NetEnabled",
+            format_optional_bool(adapter.net_enabled),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "Speed",
+            adapter
+                .speed_bits_per_second
+                .map(format_bit_rate)
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+        push_log_kv(log_lines, 2, "IPv4", format_string_list(&adapter.ipv4));
+        push_log_kv(log_lines, 2, "IPv6", format_string_list(&adapter.ipv6));
+        push_log_kv(log_lines, 2, "Gateways", format_string_list(&adapter.gateways));
+        push_log_kv(
+            log_lines,
+            2,
+            "DNSServers",
+            format_string_list(&adapter.dns_servers),
+        );
+        push_log_kv(
+            log_lines,
+            2,
+            "DNSDomain",
+            format_optional_text(adapter.dns_domain.as_deref()),
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn collect_windows_diagnostic_snapshot() -> Result<WindowsDiagnosticSnapshot> {
+    run_windows_powershell_json(
+        r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
+$os = Get-CimInstance Win32_OperatingSystem | Select-Object -First 1
+$computer = Get-CimInstance Win32_ComputerSystem | Select-Object -First 1
+$cpus = @(
+    Get-CimInstance Win32_Processor | ForEach-Object {
+        [pscustomobject]@{
+            name = $_.Name
+            manufacturer = $_.Manufacturer
+            cores = if ($null -ne $_.NumberOfCores) { [uint32]$_.NumberOfCores } else { $null }
+            logicalProcessors = if ($null -ne $_.NumberOfLogicalProcessors) { [uint32]$_.NumberOfLogicalProcessors } else { $null }
+            maxClockMhz = if ($null -ne $_.MaxClockSpeed) { [uint32]$_.MaxClockSpeed } else { $null }
+            processorId = $_.ProcessorId
+        }
+    }
+)
+$gpus = @(
+    Get-CimInstance Win32_VideoController | ForEach-Object {
+        [pscustomobject]@{
+            name = $_.Name
+            driverVersion = $_.DriverVersion
+            adapterRamBytes = if ($null -ne $_.AdapterRAM) { [uint64]$_.AdapterRAM } else { $null }
+            videoProcessor = $_.VideoProcessor
+            status = $_.Status
+        }
+    }
+)
+$network = @(
+    Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled = True' | ForEach-Object {
+        $config = $_
+        $adapter = Get-CimInstance Win32_NetworkAdapter -Filter "Index = $($config.Index)" | Select-Object -First 1
+        $addresses = @($config.IPAddress | Where-Object { $_ })
+        [pscustomobject]@{
+            name = if ($adapter -and $adapter.NetConnectionID) { $adapter.NetConnectionID } elseif ($adapter) { $adapter.Name } else { $config.Description }
+            description = $config.Description
+            serviceName = if ($adapter) { $adapter.ServiceName } else { $null }
+            manufacturer = if ($adapter) { $adapter.Manufacturer } else { $null }
+            adapterType = if ($adapter) { $adapter.AdapterType } else { $null }
+            macAddress = $config.MACAddress
+            dhcpEnabled = if ($null -ne $config.DHCPEnabled) { [bool]$config.DHCPEnabled } else { $null }
+            netEnabled = if ($adapter -and $null -ne $adapter.NetEnabled) { [bool]$adapter.NetEnabled } else { $null }
+            speedBitsPerSecond = if ($adapter -and $null -ne $adapter.Speed) { [uint64]$adapter.Speed } else { $null }
+            ipv4 = @($addresses | Where-Object { $_ -notmatch ':' })
+            ipv6 = @($addresses | Where-Object { $_ -match ':' })
+            gateways = @($config.DefaultIPGateway | Where-Object { $_ })
+            dnsServers = @($config.DNSServerSearchOrder | Where-Object { $_ })
+            dnsDomain = $config.DNSDomain
+        }
+    }
+)
+
+[pscustomobject]@{
+    os = [pscustomobject]@{
+        caption = $os.Caption
+        version = $os.Version
+        buildNumber = $os.BuildNumber
+        architecture = $os.OSArchitecture
+        computerName = $os.CSName
+        lastBootUpTime = if ($os.LastBootUpTime) { (Get-Date $os.LastBootUpTime).ToString('o') } else { $null }
+        freePhysicalMemoryKb = if ($null -ne $os.FreePhysicalMemory) { [uint64]$os.FreePhysicalMemory } else { $null }
+        totalVisibleMemoryKb = if ($null -ne $os.TotalVisibleMemorySize) { [uint64]$os.TotalVisibleMemorySize } else { $null }
+    }
+    computer = [pscustomobject]@{
+        manufacturer = $computer.Manufacturer
+        model = $computer.Model
+        systemType = $computer.SystemType
+        totalPhysicalMemoryBytes = if ($null -ne $computer.TotalPhysicalMemory) { [uint64]$computer.TotalPhysicalMemory } else { $null }
+        processors = if ($null -ne $computer.NumberOfProcessors) { [uint32]$computer.NumberOfProcessors } else { $null }
+        logicalProcessors = if ($null -ne $computer.NumberOfLogicalProcessors) { [uint32]$computer.NumberOfLogicalProcessors } else { $null }
+        hypervisorPresent = if ($null -ne $computer.HypervisorPresent) { [bool]$computer.HypervisorPresent } else { $null }
+    }
+    cpus = $cpus
+    gpus = $gpus
+    network = $network
+} | ConvertTo-Json -Depth 6 -Compress
+"#,
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_powershell_json<T: DeserializeOwned>(script: &str) -> Result<T> {
+    let mut command = Command::new("powershell");
+    command.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+    ]);
+    configure_background_command(&mut command);
+
+    let output = command
+        .output()
+        .context("failed to start Windows PowerShell for diagnostics")?;
+    let stdout = decode_utf8_command_output(output.stdout)
+        .context("failed to decode Windows PowerShell stdout as UTF-8")?;
+    let stderr = decode_utf8_command_output(output.stderr)
+        .context("failed to decode Windows PowerShell stderr as UTF-8")?;
+
+    if !output.status.success() {
+        let details = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if !stdout.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            "no output".to_string()
+        };
+        anyhow::bail!(
+            "Windows PowerShell exited with {:?}: {}",
+            output.status.code(),
+            details
+        );
+    }
+
+    let payload = stdout.trim();
+    if payload.is_empty() {
+        anyhow::bail!("Windows PowerShell returned an empty JSON payload");
+    }
+
+    serde_json::from_str(payload)
+        .with_context(|| "failed to parse Windows PowerShell JSON payload".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn decode_utf8_command_output(bytes: Vec<u8>) -> Result<String> {
+    let decoded = String::from_utf8(bytes).context("command output was not valid UTF-8")?;
+    Ok(decoded.trim_start_matches('\u{feff}').replace('\r', ""))
+}
+
+fn push_log_kv(log_lines: &mut Vec<String>, indent_level: usize, key: &str, value: impl Into<String>) {
+    log_lines.push(format!("{}{}: {}", "  ".repeat(indent_level), key, value.into()));
+}
+
+fn format_optional_text(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn format_optional_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn format_string_list(values: &[String]) -> String {
+    let items = values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        "none".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn format_memory_kib(value_kb: u64) -> String {
+    format_byte_quantity(value_kb.saturating_mul(1024))
+}
+
+fn format_byte_quantity(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    const TIB: f64 = GIB * 1024.0;
+
+    let bytes_f64 = bytes as f64;
+    if bytes >= 1024_u64.pow(4) {
+        format!("{:.2} TiB ({bytes} bytes)", bytes_f64 / TIB)
+    } else if bytes >= 1024_u64.pow(3) {
+        format!("{:.2} GiB ({bytes} bytes)", bytes_f64 / GIB)
+    } else if bytes >= 1024_u64.pow(2) {
+        format!("{:.2} MiB ({bytes} bytes)", bytes_f64 / MIB)
+    } else if bytes >= 1024 {
+        format!("{:.2} KiB ({bytes} bytes)", bytes_f64 / KIB)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+fn format_bit_rate(bits_per_second: u64) -> String {
+    const KBPS: f64 = 1_000.0;
+    const MBPS: f64 = KBPS * 1_000.0;
+    const GBPS: f64 = MBPS * 1_000.0;
+
+    let bits_per_second_f64 = bits_per_second as f64;
+    if bits_per_second >= 1_000_000_000 {
+        format!(
+            "{:.2} Gbps ({} bps)",
+            bits_per_second_f64 / GBPS,
+            bits_per_second
+        )
+    } else if bits_per_second >= 1_000_000 {
+        format!(
+            "{:.2} Mbps ({} bps)",
+            bits_per_second_f64 / MBPS,
+            bits_per_second
+        )
+    } else if bits_per_second >= 1_000 {
+        format!(
+            "{:.2} Kbps ({} bps)",
+            bits_per_second_f64 / KBPS,
+            bits_per_second
+        )
+    } else {
+        format!("{bits_per_second} bps")
+    }
+}
+
 fn max_diagnostic_level(left: DiagnosticLevel, right: DiagnosticLevel) -> DiagnosticLevel {
     match (left, right) {
         (DiagnosticLevel::Error, _) | (_, DiagnosticLevel::Error) => DiagnosticLevel::Error,
@@ -1269,102 +1973,93 @@ fn inspect_local_service_port(port: u16) -> PortInspection {
         .unwrap_or(false);
 
     #[cfg(target_os = "windows")]
-    let (occupants, raw_output) = inspect_windows_port_occupants(port);
+    let (occupants, debug_lines) = inspect_windows_port_occupants(port);
     #[cfg(not(target_os = "windows"))]
-    let (occupants, raw_output) = (Vec::new(), None);
+    let (occupants, debug_lines) = (
+        Vec::new(),
+        vec!["Process-level port inspection is only implemented on Windows.".to_string()],
+    );
 
     PortInspection {
         bind_available,
         occupants,
-        raw_output,
+        debug_lines,
     }
 }
 
 #[cfg(target_os = "windows")]
-fn inspect_windows_port_occupants(port: u16) -> (Vec<PortOccupant>, Option<String>) {
-    let mut command = Command::new("netstat");
-    command.args(["-ano", "-p", "tcp"]);
-    configure_background_command(&mut command);
+fn inspect_windows_port_occupants(port: u16) -> (Vec<PortOccupant>, Vec<String>) {
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
-    match command.output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).replace('\r', "");
-            let stderr = String::from_utf8_lossy(&output.stderr).replace('\r', "");
-            let raw_output = if stderr.trim().is_empty() {
-                stdout.clone()
+$port = __PORT__
+$listeners = @(
+    Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+        Sort-Object LocalAddress, LocalPort, OwningProcess
+)
+$processTable = @{}
+if ($listeners.Count -gt 0) {
+    $pids = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
+    foreach ($processId in $pids) {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue | Select-Object -First 1
+        $processTable[[uint32]$processId] = if ($process) { $process.Name } else { $null }
+    }
+}
+
+[pscustomobject]@{
+    occupants = @(
+        $listeners | ForEach-Object {
+            [pscustomobject]@{
+                pid = [uint32]$_.OwningProcess
+                localAddress = "$($_.LocalAddress):$($_.LocalPort)"
+                state = [string]$_.State
+                processName = $processTable[[uint32]$_.OwningProcess]
+            }
+        }
+    )
+} | ConvertTo-Json -Depth 4 -Compress
+"#
+    .replace("__PORT__", &port.to_string());
+
+    let mut debug_lines = vec![
+        "Command: PowerShell Get-NetTCPConnection".to_string(),
+        format!("TargetPort: {port}"),
+    ];
+
+    match run_windows_powershell_json::<WindowsPortOccupantsPayload>(&script) {
+        Ok(payload) => {
+            let mut occupants = payload.occupants;
+            occupants.sort_by(|left, right| {
+                left.local_address
+                    .cmp(&right.local_address)
+                    .then(left.pid.cmp(&right.pid))
+                    .then(left.process_name.cmp(&right.process_name))
+            });
+
+            debug_lines.push(format!("MatchedListeners: {}", occupants.len()));
+            if occupants.is_empty() {
+                debug_lines.push("No LISTEN sockets matched the target port.".to_string());
             } else {
-                format!("{stdout}\n{stderr}")
-            };
-            let target_suffix = format!(":{port}");
-            let mut occupant_lines = Vec::new();
-            let mut pids = BTreeSet::new();
-
-            for line in stdout.lines() {
-                let columns = line.split_whitespace().collect::<Vec<_>>();
-                if columns.len() < 5 {
-                    continue;
+                for occupant in &occupants {
+                    debug_lines.push(format!(
+                        "- LocalAddress: {} | State: {} | PID: {} | ProcessName: {}",
+                        occupant.local_address,
+                        occupant.state,
+                        occupant.pid,
+                        occupant.process_name.as_deref().unwrap_or("unknown")
+                    ));
                 }
-
-                let local_address = columns[1];
-                let state = columns[3];
-                let pid_text = columns[4];
-                if !local_address.ends_with(&target_suffix) || state != "LISTENING" {
-                    continue;
-                }
-
-                let Ok(pid) = pid_text.parse::<u32>() else {
-                    continue;
-                };
-
-                pids.insert(pid);
-                occupant_lines.push((pid, line.trim().to_string()));
             }
 
-            let occupant_names = pids
-                .into_iter()
-                .map(|pid| (pid, inspect_windows_process_name(pid)))
-                .collect::<BTreeMap<_, _>>();
-            let occupants = occupant_lines
-                .into_iter()
-                .map(|(pid, _raw_line)| PortOccupant {
-                    pid,
-                    process_name: occupant_names.get(&pid).cloned().flatten(),
-                })
-                .collect();
-
-            (occupants, Some(raw_output))
+            (occupants, debug_lines)
         }
-        Err(error) => (
-            Vec::new(),
-            Some(format!("failed to run netstat -ano -p tcp: {error}")),
-        ),
+        Err(error) => {
+            debug_lines.push(format!("CommandError: {error}"));
+            (Vec::new(), debug_lines)
+        }
     }
-}
-
-#[cfg(target_os = "windows")]
-fn inspect_windows_process_name(pid: u32) -> Option<String> {
-    let mut command = Command::new("tasklist");
-    command.args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]);
-    configure_background_command(&mut command);
-
-    let output = command.output().ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout).replace('\r', "");
-    let first_line = stdout
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("INFO:"))?;
-
-    if let Some(value) = first_line.strip_prefix('"') {
-        return value
-            .split("\",\"")
-            .next()
-            .map(|token| token.trim_matches('"').to_string());
-    }
-
-    first_line
-        .split(',')
-        .next()
-        .map(|token| token.trim_matches('"').to_string())
 }
 
 fn describe_port_occupants(port: u16, occupants: &[PortOccupant]) -> String {
@@ -1967,6 +2662,59 @@ fn normalize_required_string(value: String, error_message: &str) -> Result<Strin
     Ok(normalized)
 }
 
+fn save_local_service_diagnostics_impl(
+    default_filename: String,
+    contents: String,
+) -> Result<LocalServiceDiagnosticsSaveResult> {
+    let default_filename = normalize_required_string(
+        default_filename,
+        "diagnostics export filename cannot be empty",
+    )?;
+
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("导出排查日志")
+        .set_file_name(&default_filename)
+        .add_filter("Text", &["txt"])
+        .save_file()
+    else {
+        return Ok(LocalServiceDiagnosticsSaveResult {
+            saved: false,
+            canceled: true,
+            path: None,
+        });
+    };
+
+    let path = ensure_file_extension(path, "txt");
+
+    if let Some(parent_dir) = path.parent() {
+        fs::create_dir_all(parent_dir)
+            .with_context(|| format!("failed to create {}", parent_dir.display()))?;
+    }
+
+    fs::write(&path, contents.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+
+    Ok(LocalServiceDiagnosticsSaveResult {
+        saved: true,
+        canceled: false,
+        path: Some(path.display().to_string()),
+    })
+}
+
+fn ensure_file_extension(mut path: PathBuf, extension: &str) -> PathBuf {
+    let has_extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+
+    if !has_extension {
+        path.set_extension(extension);
+    }
+
+    path
+}
+
 fn resolve_sidecar_binary_path(app: &AppHandle) -> Result<PathBuf> {
     local_service_sidecar_candidates(app)?
         .into_iter()
@@ -2200,6 +2948,8 @@ mod tests {
     fn primary_port_issue_mentions_process_name_when_available() {
         let occupants = vec![PortOccupant {
             pid: 9527,
+            local_address: "127.0.0.1:8787".to_string(),
+            state: "LISTENING".to_string(),
             process_name: Some("example.exe".to_string()),
         }];
 
