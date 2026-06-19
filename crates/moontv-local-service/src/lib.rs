@@ -1431,6 +1431,17 @@ struct DesktopDownloadCacheMetaResponse {
     size_bytes: Option<u64>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDownloadRuntimeStorageInfoResponse {
+    runtime_kind: &'static str,
+    root_dir: String,
+    cache_body_dir: String,
+    cache_meta_dir: String,
+    resource_index_dir: String,
+    sqlite_path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopDownloadResourceIndexRecord {
@@ -1681,6 +1692,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/download-runtime/cache/all",
             delete(clear_download_runtime_cache),
+        )
+        .route(
+            "/api/download-runtime/storage-info",
+            get(get_download_runtime_storage_info),
         )
         .route(
             "/api/download-runtime/resource-index",
@@ -1953,6 +1968,28 @@ async fn clear_download_runtime_cache(State(state): State<AppState>) -> AppResul
         .clear_cached_downloads()
         .map_err(|error| AppError::internal(error.to_string()))?;
     no_store_json_response(&json!({ "ok": true }))
+}
+
+async fn get_download_runtime_storage_info(State(state): State<AppState>) -> AppResult<Response> {
+    let payload = DesktopDownloadRuntimeStorageInfoResponse {
+        runtime_kind: "desktop-local",
+        root_dir: state.download_runtime_dir().display().to_string(),
+        cache_body_dir: state
+            .download_runtime_cache_body_dir()
+            .display()
+            .to_string(),
+        cache_meta_dir: state
+            .download_runtime_cache_meta_dir()
+            .display()
+            .to_string(),
+        resource_index_dir: state
+            .download_runtime_resource_index_dir()
+            .display()
+            .to_string(),
+        sqlite_path: state.sqlite.path().display().to_string(),
+    };
+
+    no_store_json_response(&payload)
 }
 
 async fn put_download_runtime_resource_index(

@@ -14,6 +14,15 @@ interface DesktopDownloadCacheMetaResponse {
   sizeBytes?: number;
 }
 
+export interface DesktopDownloadRuntimeStorageInfoResponse {
+  runtimeKind: 'desktop-local';
+  rootDir: string;
+  cacheBodyDir: string;
+  cacheMetaDir: string;
+  resourceIndexDir: string;
+  sqlitePath: string;
+}
+
 function ensureDesktopLocalDownloadRuntime(): void {
   if (!isDesktopLocalDownloadRuntimeEnabled()) {
     throw new Error(
@@ -56,6 +65,20 @@ export function getDesktopDownloadRuntimeLabel(): string {
   return isDesktopLocalDownloadRuntimeEnabled()
     ? '桌面本地下载运行时'
     : '浏览器离线缓存';
+}
+
+export async function getDesktopDownloadRuntimeStorageInfo(): Promise<DesktopDownloadRuntimeStorageInfoResponse> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(
+    buildDesktopDownloadRuntimeUrl('/storage-info'),
+    {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
+
+  return parseJsonResponse<DesktopDownloadRuntimeStorageInfoResponse>(response);
 }
 
 export async function putDesktopDownloadCacheEntry(

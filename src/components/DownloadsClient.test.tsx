@@ -41,11 +41,24 @@ jest.mock('./NavigationFeedbackProvider', () => ({
   })),
 }));
 
+jest.mock('@/lib/download/desktop-runtime', () => {
+  const actual = jest.requireActual('@/lib/download/desktop-runtime');
+  return {
+    __esModule: true,
+    ...actual,
+    getDesktopDownloadRuntimeStorageInfo: jest.fn(),
+    getDesktopDownloadRuntimeLabel: jest.fn(() => '浏览器离线缓存'),
+    isDesktopLocalDownloadRuntimeEnabled: jest.fn(() => false),
+  };
+});
+
+import * as desktopRuntime from '@/lib/download/desktop-runtime';
 import DownloadsClient, { DownloadedContentDialog } from './DownloadsClient';
 import { SiteProvider } from './SiteProvider';
 
 function buildDownloadedContentMeta(
-  partial: Partial<DownloadedContentMeta> & Pick<DownloadedContentMeta, 'contentId' | 'source' | 'vodId'>
+  partial: Partial<DownloadedContentMeta> &
+    Pick<DownloadedContentMeta, 'contentId' | 'source' | 'vodId'>
 ): DownloadedContentMeta {
   return {
     contentId: partial.contentId,
@@ -63,25 +76,34 @@ function buildDownloadedContentMeta(
     doubanId: partial.doubanId,
     episodeTitles: partial.episodeTitles ?? ['第1集'],
     ownerUsername: partial.ownerUsername ?? 'tester',
-    episodes:
-      partial.episodes ?? [
-        {
-          episodeIndex: 0,
-          episodeTitle: '第1集',
-          rootManifestUrl: '/root.m3u8',
-          playbackManifestUrl: '/play.m3u8',
-          cacheIndexId: `${partial.contentId}:0`,
-          resourceCount: 1,
-          sizeBytes: 1024,
-          downloadedAt: 1710000000000,
-        },
-      ],
+    episodes: partial.episodes ?? [
+      {
+        episodeIndex: 0,
+        episodeTitle: '第1集',
+        rootManifestUrl: '/root.m3u8',
+        playbackManifestUrl: '/play.m3u8',
+        cacheIndexId: `${partial.contentId}:0`,
+        resourceCount: 1,
+        sizeBytes: 1024,
+        downloadedAt: 1710000000000,
+      },
+    ],
     totalSizeBytes: partial.totalSizeBytes ?? 1024,
     updatedAt: partial.updatedAt ?? 1710000000000,
   };
 }
 
 describe('DownloadedContentDialog', () => {
+  const mockGetDesktopDownloadRuntimeStorageInfo = jest.mocked(
+    desktopRuntime.getDesktopDownloadRuntimeStorageInfo
+  );
+  const mockGetDesktopDownloadRuntimeLabel = jest.mocked(
+    desktopRuntime.getDesktopDownloadRuntimeLabel
+  );
+  const mockIsDesktopLocalDownloadRuntimeEnabled = jest.mocked(
+    desktopRuntime.isDesktopLocalDownloadRuntimeEnabled
+  );
+
   beforeEach(() => {
     mockRouter.push.mockReset();
     mockRouter.replace.mockReset();
@@ -106,6 +128,9 @@ describe('DownloadedContentDialog', () => {
       value: (id: number) => window.clearTimeout(id),
       writable: true,
     });
+    mockGetDesktopDownloadRuntimeStorageInfo.mockReset();
+    mockGetDesktopDownloadRuntimeLabel.mockReturnValue('浏览器离线缓存');
+    mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(false);
   });
 
   it('still closes after enabling local title grouping from the dialog menu', async () => {
@@ -357,12 +382,8 @@ describe('DownloadedContentDialog', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: '编辑' }));
-    fireEvent.click(
-      screen.getByRole('button', { name: '选择 源 B 的 第1集' })
-    );
-    fireEvent.click(
-      screen.getByRole('button', { name: '选择 源 A 的 第2集' })
-    );
+    fireEvent.click(screen.getByRole('button', { name: '选择 源 B 的 第1集' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择 源 A 的 第2集' }));
     fireEvent.click(screen.getByRole('button', { name: '删除' }));
 
     await waitFor(() => {
@@ -607,7 +628,7 @@ describe('DownloadedContentDialog', () => {
     ).toBeInTheDocument();
   });
 
-  it('hides downloaded adult resources when adult filtering is enabled', async () => {
+  it('moves the adult filtering notice into download settings', async () => {
     const adultContent = buildDownloadedContentMeta({
       contentId: 'adult-a:1',
       source: 'adult-a',
@@ -640,13 +661,62 @@ describe('DownloadedContentDialog', () => {
     );
 
     expect(
-      screen.getByText('成人内容过滤已开启，已暂时隐藏 1 部离线成人资源。')
-    ).toBeInTheDocument();
+      screen.queryByText(
+        '成人内容过滤已开启，下载管理中已暂时隐藏 1 部离线成人资源。'
+      )
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: '查看 普通剧集 的离线资源详情' })
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: '查看 OnlyFans 精选合集 的离线资源详情' })
+      screen.queryByRole('button', {
+        name: '查看 OnlyFans 精选合集 的离线资源详情',
+      })
     ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '下载设置' }));
+
+    expect(
+      screen.getByText(
+        '成人内容过滤已开启，下载管理中已暂时隐藏 1 部离线成人资源。'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('shows local desktop download paths in settings when the desktop runtime is enabled', async () => {
+    mockGetDesktopDownloadRuntimeLabel.mockReturnValue('桌面本地下载运行时');
+    mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(true);
+    mockGetDesktopDownloadRuntimeStorageInfo.mockResolvedValue({
+      runtimeKind: 'desktop-local',
+      rootDir: 'C:\\Users\\jay\\.lunatv-desktop\\download-runtime',
+      cacheBodyDir:
+        'C:\\Users\\jay\\.lunatv-desktop\\download-runtime\\cache-body',
+      cacheMetaDir:
+        'C:\\Users\\jay\\.lunatv-desktop\\download-runtime\\cache-meta',
+      resourceIndexDir:
+        'C:\\Users\\jay\\.lunatv-desktop\\download-runtime\\resource-index',
+      sqlitePath: 'C:\\Users\\jay\\.lunatv-desktop\\moontv-desktop.sqlite3',
+    });
+
+    render(
+      <SiteProvider siteName='LunaTV'>
+        <DownloadsClient />
+      </SiteProvider>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '下载设置' }));
+
+    expect(screen.getByText('桌面应用本地目录')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '桌面版会把离线资源写入本机数据目录，不走浏览器 Cache Storage。'
+      )
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        'C:\\Users\\jay\\.lunatv-desktop\\download-runtime'
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText('当前浏览器离线缓存')).not.toBeInTheDocument();
   });
 });

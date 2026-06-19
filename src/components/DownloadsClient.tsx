@@ -22,6 +22,12 @@ import {
 } from '@/lib/download/format';
 import { downloadManager } from '@/lib/download/manager';
 import {
+  type DesktopDownloadRuntimeStorageInfoResponse,
+  getDesktopDownloadRuntimeStorageInfo,
+  getDesktopDownloadRuntimeLabel,
+  isDesktopLocalDownloadRuntimeEnabled,
+} from '@/lib/download/desktop-runtime';
+import {
   normalizeVodDetailForPlayback,
   normalizeVodSearchResultsForPlayback,
 } from '@/lib/download/normalize';
@@ -924,6 +930,12 @@ interface DownloadedContentDialogProps {
 
 interface DownloadSettingsDialogProps {
   storageOrigin: string;
+  storageLabel: string;
+  isDesktopStorage: boolean;
+  isStorageInfoLoading: boolean;
+  desktopStorageInfo: DesktopDownloadRuntimeStorageInfoResponse | null;
+  adultContentFilterEnabled: boolean;
+  hiddenAdultDownloadedContentCount: number;
   isDevelopment: boolean;
   maxConcurrentTasks: number;
   onConcurrentTaskChange: (event: ChangeEvent<HTMLSelectElement>) => void;
@@ -1895,7 +1907,9 @@ export function DownloadedContentDialog({
     isAdultGroupedCollection && groupedCollectionIdentity
       ? groupedCollectionIdentity
       : content.title;
-  const dialogPosterTitle = isAdultGroupedCollection ? dialogTitle : content.title;
+  const dialogPosterTitle = isAdultGroupedCollection
+    ? dialogTitle
+    : content.title;
   const dialogPosterAlt = isAdultGroupedCollection
     ? `${dialogPosterTitle} 归集图`
     : dialogPosterTitle;
@@ -1969,7 +1983,10 @@ export function DownloadedContentDialog({
             episodeTitle: episode.episodeTitle,
           }))
         : content.episodes.map((episode) => ({
-            key: buildEpisodeSelectionKey(content.contentId, episode.episodeIndex),
+            key: buildEpisodeSelectionKey(
+              content.contentId,
+              episode.episodeIndex
+            ),
             contentId: content.contentId,
             episodeIndex: episode.episodeIndex,
             episodeTitle: episode.episodeTitle,
@@ -2312,9 +2329,7 @@ export function DownloadedContentDialog({
   };
 
   const handleToggleSelectAll = () => {
-    setSelectedEpisodeKeys(
-      allEpisodesSelected ? [] : allSelectableEpisodeKeys
-    );
+    setSelectedEpisodeKeys(allEpisodesSelected ? [] : allSelectableEpisodeKeys);
   };
 
   const handleToggleEpisodeSelection = (
@@ -2387,10 +2402,7 @@ export function DownloadedContentDialog({
       title: params.title,
       x: Math.max(
         viewportPadding,
-        Math.min(
-          event.clientX,
-          window.innerWidth - menuWidth - viewportPadding
-        )
+        Math.min(event.clientX, window.innerWidth - menuWidth - viewportPadding)
       ),
       y: Math.max(
         viewportPadding,
@@ -2418,7 +2430,8 @@ export function DownloadedContentDialog({
     const { library: latestLibrary, upsertLibraryItem } =
       useDownloadStore.getState();
     const targetContents = groupedResolvedContents.map(
-      (groupedContent) => latestLibrary[groupedContent.contentId] || groupedContent
+      (groupedContent) =>
+        latestLibrary[groupedContent.contentId] || groupedContent
     );
 
     targetContents.forEach((groupedContent) => {
@@ -2810,9 +2823,7 @@ export function DownloadedContentDialog({
     ? isLoadingAdultGroupedContents
     : isLoadingDownloadableDetail;
 
-  const handleRequestClose = (
-    event?: React.MouseEvent<HTMLButtonElement>
-  ) => {
+  const handleRequestClose = (event?: React.MouseEvent<HTMLButtonElement>) => {
     event?.preventDefault();
     event?.stopPropagation();
 
@@ -2851,361 +2862,796 @@ export function DownloadedContentDialog({
   return createPortal(
     <>
       <div className='fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6'>
-      <button
-        type='button'
-        aria-label='关闭离线资源详情'
-        className='absolute inset-0 bg-black/75 backdrop-blur-sm'
-        onClick={handleRequestClose}
-      />
+        <button
+          type='button'
+          aria-label='关闭离线资源详情'
+          className='absolute inset-0 bg-black/75 backdrop-blur-sm'
+          onClick={handleRequestClose}
+        />
 
-      <div className='relative z-[10001] flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#040b15]/95 text-white shadow-2xl shadow-black/50'>
-        <div className='border-b border-white/10 px-5 py-5 lg:px-6'>
-          <div className='flex items-start justify-between gap-4'>
-            <div className='min-w-0 flex-1 space-y-3'>
-              <div className='text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/80'>
-                已下载资源
-              </div>
-              <div className='break-words text-2xl font-semibold text-white'>
-                {dialogTitle}
-              </div>
-              <div className='flex flex-wrap items-center gap-2 text-sm text-gray-300'>
-                <span>{content.sourceName}</span>
-                <span>{content.episodes.length} 集</span>
-                <span>{formatBytes(content.totalSizeBytes)}</span>
-                {isGroupedCollection ? (
-                  <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200'>
-                    {isAdultGroupedCollection
-                      ? `已归集 ${groupedResolvedContents.length} 部资源`
-                      : `${groupedCollectionLabel} · ${groupedCollectionIdentity} · ${groupedResolvedContents.length} 部资源`}
-                  </span>
-                ) : null}
-                {!isAdultContent ? (
-                  <button
-                    type='button'
-                    onClick={handleToggleMoreDownloads}
-                    className='inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20'
-                  >
-                    {isLoadingMoreDownloads
-                      ? '加载中...'
-                      : isMoreDownloadsOpen
-                      ? '收起更多'
-                      : '下载更多'}
-                  </button>
-                ) : null}
-              </div>
-            </div>
-
-            <div className='flex shrink-0 flex-wrap items-center justify-end gap-2'>
-              {hasDialogMenuActions ? (
-                <div ref={dialogMenuRef} className='relative'>
-                  <button
-                    type='button'
-                    aria-label='更多设置'
-                    aria-expanded={isDialogMenuOpen}
-                    onClick={() =>
-                      setIsDialogMenuOpen((currentState) => !currentState)
-                    }
-                    className={`${dialogHeaderIconButtonClassName} ${
-                      (isAdultContent && isMoreDownloadsOpen) ||
-                      (canToggleLocalTitleGrouping && isTitleGroupingEnabled)
-                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                        : ''
-                    }`}
-                  >
-                    <Settings2 className='h-4 w-4' />
-                  </button>
-
-                  {isDialogMenuOpen ? (
-                    <div className='absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-2xl border border-white/10 bg-[#09111d] shadow-2xl shadow-black/40'>
-                      {canToggleLocalTitleGrouping ? (
-                        <button
-                          type='button'
-                          onClick={() => {
-                            setIsDialogMenuOpen(false);
-                            setIsTitleGroupingEnabled(
-                              (currentState) => !currentState
-                            );
-                          }}
-                          className='flex w-full flex-col items-start gap-1 px-4 py-3 text-left transition-colors hover:bg-white/5'
-                        >
-                          <span className='text-sm font-medium text-white'>
-                            {isTitleGroupingEnabled
-                              ? '关闭同名聚合'
-                              : '开启同名聚合'}
-                          </span>
-                          <span className='text-xs leading-5 text-gray-400'>
-                            聚合当前离线列表中的同名不同源资源，便于统一查看和切换。
-                          </span>
-                        </button>
-                      ) : null}
-
-                      {isAdultContent ? (
-                        <button
-                          type='button'
-                          onClick={() => {
-                            setIsDialogMenuOpen(false);
-                            handleToggleMoreDownloads();
-                          }}
-                          className={`flex w-full flex-col items-start gap-1 px-4 py-3 text-left transition-colors hover:bg-white/5 ${
-                            canToggleLocalTitleGrouping
-                              ? 'border-t border-white/10'
-                              : ''
-                          }`}
-                        >
-                          <span className='text-sm font-medium text-white'>
-                            {isMoreDownloadsOpen ? '收起人名归集' : '按人名归集'}
-                          </span>
-                          <span className='text-xs leading-5 text-gray-400'>
-                            {adultGroupingQuery
-                              ? `按“${adultGroupingQuery}”归集更多可下载资源`
-                              : '根据当前条目识别的人名查找更多资源'}
-                          </span>
-                        </button>
-                      ) : null}
-                    </div>
+        <div className='relative z-[10001] flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#040b15]/95 text-white shadow-2xl shadow-black/50'>
+          <div className='border-b border-white/10 px-5 py-5 lg:px-6'>
+            <div className='flex items-start justify-between gap-4'>
+              <div className='min-w-0 flex-1 space-y-3'>
+                <div className='text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/80'>
+                  已下载资源
+                </div>
+                <div className='break-words text-2xl font-semibold text-white'>
+                  {dialogTitle}
+                </div>
+                <div className='flex flex-wrap items-center gap-2 text-sm text-gray-300'>
+                  <span>{content.sourceName}</span>
+                  <span>{content.episodes.length} 集</span>
+                  <span>{formatBytes(content.totalSizeBytes)}</span>
+                  {isGroupedCollection ? (
+                    <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200'>
+                      {isAdultGroupedCollection
+                        ? `已归集 ${groupedResolvedContents.length} 部资源`
+                        : `${groupedCollectionLabel} · ${groupedCollectionIdentity} · ${groupedResolvedContents.length} 部资源`}
+                    </span>
+                  ) : null}
+                  {!isAdultContent ? (
+                    <button
+                      type='button'
+                      onClick={handleToggleMoreDownloads}
+                      className='inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20'
+                    >
+                      {isLoadingMoreDownloads
+                        ? '加载中...'
+                        : isMoreDownloadsOpen
+                        ? '收起更多'
+                        : '下载更多'}
+                    </button>
                   ) : null}
                 </div>
-              ) : null}
+              </div>
 
-              {isEditing ? (
-                <>
-                  {selectedEpisodeTargets.length > 0 && (
-                    <>
-                      <button
-                        type='button'
-                        onClick={() => void handleRestartSelectedEpisodes()}
-                        disabled={isRestartingSelected || isDeletingSelected}
-                        className='rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50'
-                      >
-                        {isRestartingSelected ? '重下中...' : '重新下载'}
-                      </button>
-                      <button
-                        type='button'
-                        onClick={() => void handleDeleteSelectedEpisodes()}
-                        disabled={isDeletingSelected || isRestartingSelected}
-                        className='rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-200 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50'
-                      >
-                        {isDeletingSelected ? '删除中...' : '删除'}
-                      </button>
-                    </>
-                  )}
-                  <button
-                    type='button'
-                    onClick={handleToggleSelectAll}
-                    className='rounded-xl border border-white/15 px-3 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
-                  >
-                    {allEpisodesSelected ? '取消全选' : '全选'}
-                  </button>
+              <div className='flex shrink-0 flex-wrap items-center justify-end gap-2'>
+                {hasDialogMenuActions ? (
+                  <div ref={dialogMenuRef} className='relative'>
+                    <button
+                      type='button'
+                      aria-label='更多设置'
+                      aria-expanded={isDialogMenuOpen}
+                      onClick={() =>
+                        setIsDialogMenuOpen((currentState) => !currentState)
+                      }
+                      className={`${dialogHeaderIconButtonClassName} ${
+                        (isAdultContent && isMoreDownloadsOpen) ||
+                        (canToggleLocalTitleGrouping && isTitleGroupingEnabled)
+                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                          : ''
+                      }`}
+                    >
+                      <Settings2 className='h-4 w-4' />
+                    </button>
+
+                    {isDialogMenuOpen ? (
+                      <div className='absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-2xl border border-white/10 bg-[#09111d] shadow-2xl shadow-black/40'>
+                        {canToggleLocalTitleGrouping ? (
+                          <button
+                            type='button'
+                            onClick={() => {
+                              setIsDialogMenuOpen(false);
+                              setIsTitleGroupingEnabled(
+                                (currentState) => !currentState
+                              );
+                            }}
+                            className='flex w-full flex-col items-start gap-1 px-4 py-3 text-left transition-colors hover:bg-white/5'
+                          >
+                            <span className='text-sm font-medium text-white'>
+                              {isTitleGroupingEnabled
+                                ? '关闭同名聚合'
+                                : '开启同名聚合'}
+                            </span>
+                            <span className='text-xs leading-5 text-gray-400'>
+                              聚合当前离线列表中的同名不同源资源，便于统一查看和切换。
+                            </span>
+                          </button>
+                        ) : null}
+
+                        {isAdultContent ? (
+                          <button
+                            type='button'
+                            onClick={() => {
+                              setIsDialogMenuOpen(false);
+                              handleToggleMoreDownloads();
+                            }}
+                            className={`flex w-full flex-col items-start gap-1 px-4 py-3 text-left transition-colors hover:bg-white/5 ${
+                              canToggleLocalTitleGrouping
+                                ? 'border-t border-white/10'
+                                : ''
+                            }`}
+                          >
+                            <span className='text-sm font-medium text-white'>
+                              {isMoreDownloadsOpen
+                                ? '收起人名归集'
+                                : '按人名归集'}
+                            </span>
+                            <span className='text-xs leading-5 text-gray-400'>
+                              {adultGroupingQuery
+                                ? `按“${adultGroupingQuery}”归集更多可下载资源`
+                                : '根据当前条目识别的人名查找更多资源'}
+                            </span>
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {isEditing ? (
+                  <>
+                    {selectedEpisodeTargets.length > 0 && (
+                      <>
+                        <button
+                          type='button'
+                          onClick={() => void handleRestartSelectedEpisodes()}
+                          disabled={isRestartingSelected || isDeletingSelected}
+                          className='rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50'
+                        >
+                          {isRestartingSelected ? '重下中...' : '重新下载'}
+                        </button>
+                        <button
+                          type='button'
+                          onClick={() => void handleDeleteSelectedEpisodes()}
+                          disabled={isDeletingSelected || isRestartingSelected}
+                          className='rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-200 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50'
+                        >
+                          {isDeletingSelected ? '删除中...' : '删除'}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type='button'
+                      onClick={handleToggleSelectAll}
+                      className='rounded-xl border border-white/15 px-3 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-white/10'
+                    >
+                      {allEpisodesSelected ? '取消全选' : '全选'}
+                    </button>
+                    <button
+                      type='button'
+                      onClick={handleToggleEditing}
+                      className={dialogHeaderActionButtonClassName}
+                    >
+                      完成
+                    </button>
+                  </>
+                ) : (
                   <button
                     type='button'
                     onClick={handleToggleEditing}
                     className={dialogHeaderActionButtonClassName}
                   >
-                    完成
+                    编辑
                   </button>
-                </>
-              ) : (
+                )}
+
                 <button
                   type='button'
-                  onClick={handleToggleEditing}
+                  onClick={handleRequestClose}
                   className={dialogHeaderActionButtonClassName}
                 >
-                  编辑
+                  关闭
                 </button>
-              )}
-
-              <button
-                type='button'
-                onClick={handleRequestClose}
-                className={dialogHeaderActionButtonClassName}
-              >
-                关闭
-              </button>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className='grid min-h-0 flex-1 lg:grid-cols-[260px_minmax(0,1fr)]'>
-          <div className='overflow-y-auto border-b border-white/10 p-4 lg:border-b-0 lg:border-r lg:border-white/10 lg:p-6'>
-            <div className='space-y-4'>
-              <div className='relative aspect-[4/5] overflow-hidden rounded-3xl bg-black/40'>
-                {dialogPoster ? (
-                  <Image
-                    src={processImageUrl(dialogPoster)}
-                    alt={dialogPosterAlt}
-                    fill
-                    className='object-cover'
-                    referrerPolicy='no-referrer'
-                    sizes='260px'
-                  />
-                ) : (
-                  <div className='absolute inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-700/70 via-gray-900 to-black text-5xl font-semibold text-white/80'>
-                    {dialogPosterTitle.slice(0, 1)}
-                  </div>
-                )}
-                <div className='absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent' />
-                <div className='absolute inset-x-0 bottom-0 p-4'>
-                  <div className='line-clamp-2 text-xl font-semibold text-white'>
-                    {dialogPosterTitle}
-                  </div>
-                </div>
-              </div>
-
-              <div className='flex flex-wrap gap-2 text-xs'>
-                <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-emerald-200'>
-                  {content.episodes.length} 集已缓存
-                </span>
-                <span className='rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1 text-sky-200'>
-                  {formatBytes(content.totalSizeBytes)}
-                </span>
-                {isGroupedCollection ? (
-                  <>
-                    <span className='rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-amber-200'>
-                      {isAdultGroupedCollection
-                        ? `已归集 ${groupedResolvedContents.length} 部资源`
-                        : `${groupedCollectionLabel}下 ${groupedResolvedContents.length} 部资源`}
-                    </span>
-                    <span className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300'>
-                      合计 {groupedCollectionEpisodeCount} 集 ·{' '}
-                      {formatBytes(groupedCollectionTotalSizeBytes)}
-                    </span>
-                  </>
-                ) : null}
-                <span className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300'>
-                  更新于 {formatDateTime(content.updatedAt)}
-                </span>
-              </div>
-
-              <div className='space-y-2 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-gray-300'>
-                {content.year && content.year !== 'unknown' ? (
-                  <div className='flex items-center justify-between gap-3'>
-                    <span className='text-gray-400'>年份</span>
-                    <span>{content.year}</span>
-                  </div>
-                ) : null}
-                {content.typeName ? (
-                  <div className='flex items-center justify-between gap-3'>
-                    <span className='text-gray-400'>类型</span>
-                    <span>{content.typeName}</span>
-                  </div>
-                ) : null}
-                <div className='flex items-center justify-between gap-3'>
-                  <span className='text-gray-400'>离线来源</span>
-                  <span>{content.sourceName}</span>
-                </div>
-              </div>
-
-              {content.desc ? (
-                <button
-                  type='button'
-                  onClick={() =>
-                    setIsDescriptionExpanded((currentState) => !currentState)
-                  }
-                  className='w-full rounded-2xl border border-white/10 bg-white/5 p-4 text-left text-sm leading-6 text-gray-300 transition-colors hover:bg-white/10'
-                >
-                  <div className='mb-2 flex items-center justify-between gap-3'>
-                    <div className='text-xs font-medium uppercase tracking-wide text-gray-400'>
-                      内容简介
+          <div className='grid min-h-0 flex-1 lg:grid-cols-[260px_minmax(0,1fr)]'>
+            <div className='overflow-y-auto border-b border-white/10 p-4 lg:border-b-0 lg:border-r lg:border-white/10 lg:p-6'>
+              <div className='space-y-4'>
+                <div className='relative aspect-[4/5] overflow-hidden rounded-3xl bg-black/40'>
+                  {dialogPoster ? (
+                    <Image
+                      src={processImageUrl(dialogPoster)}
+                      alt={dialogPosterAlt}
+                      fill
+                      className='object-cover'
+                      referrerPolicy='no-referrer'
+                      sizes='260px'
+                    />
+                  ) : (
+                    <div className='absolute inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-700/70 via-gray-900 to-black text-5xl font-semibold text-white/80'>
+                      {dialogPosterTitle.slice(0, 1)}
                     </div>
-                    {shouldCollapseDescription ? (
-                      <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-emerald-200'>
-                        {isDescriptionExpanded ? '收起' : '展开全文'}
+                  )}
+                  <div className='absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent' />
+                  <div className='absolute inset-x-0 bottom-0 p-4'>
+                    <div className='line-clamp-2 text-xl font-semibold text-white'>
+                      {dialogPosterTitle}
+                    </div>
+                  </div>
+                </div>
+
+                <div className='flex flex-wrap gap-2 text-xs'>
+                  <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-emerald-200'>
+                    {content.episodes.length} 集已缓存
+                  </span>
+                  <span className='rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1 text-sky-200'>
+                    {formatBytes(content.totalSizeBytes)}
+                  </span>
+                  {isGroupedCollection ? (
+                    <>
+                      <span className='rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-amber-200'>
+                        {isAdultGroupedCollection
+                          ? `已归集 ${groupedResolvedContents.length} 部资源`
+                          : `${groupedCollectionLabel}下 ${groupedResolvedContents.length} 部资源`}
                       </span>
-                    ) : null}
-                  </div>
-                  <div
-                    className={
-                      shouldCollapseDescription && !isDescriptionExpanded
-                        ? 'line-clamp-6'
-                        : ''
-                    }
-                  >
-                    {content.desc}
-                  </div>
-                  {shouldCollapseDescription ? (
-                    <div className='mt-3 text-xs text-emerald-200'>
-                      {isDescriptionExpanded
-                        ? '点击收起简介'
-                        : '点击查看完整简介'}
+                      <span className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300'>
+                        合计 {groupedCollectionEpisodeCount} 集 ·{' '}
+                        {formatBytes(groupedCollectionTotalSizeBytes)}
+                      </span>
+                    </>
+                  ) : null}
+                  <span className='rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300'>
+                    更新于 {formatDateTime(content.updatedAt)}
+                  </span>
+                </div>
+
+                <div className='space-y-2 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-gray-300'>
+                  {content.year && content.year !== 'unknown' ? (
+                    <div className='flex items-center justify-between gap-3'>
+                      <span className='text-gray-400'>年份</span>
+                      <span>{content.year}</span>
                     </div>
                   ) : null}
-                </button>
-              ) : null}
-            </div>
-          </div>
-
-          <div className='min-h-0 overflow-y-auto p-4 lg:p-6'>
-            <div className='space-y-4'>
-              {selectionError ? (
-                <div className='rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200'>
-                  {selectionError}
+                  {content.typeName ? (
+                    <div className='flex items-center justify-between gap-3'>
+                      <span className='text-gray-400'>类型</span>
+                      <span>{content.typeName}</span>
+                    </div>
+                  ) : null}
+                  <div className='flex items-center justify-between gap-3'>
+                    <span className='text-gray-400'>离线来源</span>
+                    <span>{content.sourceName}</span>
+                  </div>
                 </div>
-              ) : null}
 
-              {selectionFeedback ? (
-                <div className='rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200'>
-                  {selectionFeedback}
-                </div>
-              ) : null}
-
-              {shouldShowGroupedEpisodeList ? (
-                <div className='space-y-4'>
-                  <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-                    {isAdultGroupedCollection ? (
-                      shouldShowAdultGroupedSourceSummary ? (
-                        <div className='text-xs text-gray-400'>
-                          来源：{groupedPlayableSourceNames.join('、')}
-                        </div>
-                      ) : null
-                    ) : (
-                      <div className='flex flex-wrap gap-2'>
-                        {groupedResolvedContents.map((groupedContent) => {
-                          const isCurrentContent =
-                            groupedContent.contentId === content.contentId;
-
-                          return (
-                            <button
-                              type='button'
-                              key={groupedContent.contentId}
-                              disabled={isEditing || isCurrentContent}
-                              onClick={() => {
-                                if (!isEditing && !isCurrentContent) {
-                                  onSelectContent(groupedContent.contentId);
-                                }
-                              }}
-                              title={
-                                isCurrentContent
-                                  ? `${groupedContent.sourceName} 当前详情`
-                                  : `切换到 ${groupedContent.sourceName} 详情`
-                              }
-                              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
-                                isCurrentContent
-                                  ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-                                  : 'border-white/10 bg-white/5 text-gray-300 hover:border-emerald-400/20 hover:bg-white/10'
-                              }`}
-                            >
-                              <span>{groupedContent.sourceName}</span>
-                              {groupedContent.episodes.length > 1 ? (
-                                <span className='opacity-70'>
-                                  {groupedContent.episodes.length} 集
-                                </span>
-                              ) : null}
-                            </button>
-                          );
-                        })}
+                {content.desc ? (
+                  <button
+                    type='button'
+                    onClick={() =>
+                      setIsDescriptionExpanded((currentState) => !currentState)
+                    }
+                    className='w-full rounded-2xl border border-white/10 bg-white/5 p-4 text-left text-sm leading-6 text-gray-300 transition-colors hover:bg-white/10'
+                  >
+                    <div className='mb-2 flex items-center justify-between gap-3'>
+                      <div className='text-xs font-medium uppercase tracking-wide text-gray-400'>
+                        内容简介
                       </div>
-                    )}
+                      {shouldCollapseDescription ? (
+                        <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-emerald-200'>
+                          {isDescriptionExpanded ? '收起' : '展开全文'}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div
+                      className={
+                        shouldCollapseDescription && !isDescriptionExpanded
+                          ? 'line-clamp-6'
+                          : ''
+                      }
+                    >
+                      {content.desc}
+                    </div>
+                    {shouldCollapseDescription ? (
+                      <div className='mt-3 text-xs text-emerald-200'>
+                        {isDescriptionExpanded
+                          ? '点击收起简介'
+                          : '点击查看完整简介'}
+                      </div>
+                    ) : null}
+                  </button>
+                ) : null}
+              </div>
+            </div>
 
-                    <div className='text-xs text-gray-400'>
-                      {groupedPlayableEpisodes.length} 条离线资源 · 覆盖{' '}
-                      {groupedPlayableEpisodeCount} 集
+            <div className='min-h-0 overflow-y-auto p-4 lg:p-6'>
+              <div className='space-y-4'>
+                {selectionError ? (
+                  <div className='rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200'>
+                    {selectionError}
+                  </div>
+                ) : null}
+
+                {selectionFeedback ? (
+                  <div className='rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200'>
+                    {selectionFeedback}
+                  </div>
+                ) : null}
+
+                {shouldShowGroupedEpisodeList ? (
+                  <div className='space-y-4'>
+                    <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+                      {isAdultGroupedCollection ? (
+                        shouldShowAdultGroupedSourceSummary ? (
+                          <div className='text-xs text-gray-400'>
+                            来源：{groupedPlayableSourceNames.join('、')}
+                          </div>
+                        ) : null
+                      ) : (
+                        <div className='flex flex-wrap gap-2'>
+                          {groupedResolvedContents.map((groupedContent) => {
+                            const isCurrentContent =
+                              groupedContent.contentId === content.contentId;
+
+                            return (
+                              <button
+                                type='button'
+                                key={groupedContent.contentId}
+                                disabled={isEditing || isCurrentContent}
+                                onClick={() => {
+                                  if (!isEditing && !isCurrentContent) {
+                                    onSelectContent(groupedContent.contentId);
+                                  }
+                                }}
+                                title={
+                                  isCurrentContent
+                                    ? `${groupedContent.sourceName} 当前详情`
+                                    : `切换到 ${groupedContent.sourceName} 详情`
+                                }
+                                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                                  isCurrentContent
+                                    ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                    : 'border-white/10 bg-white/5 text-gray-300 hover:border-emerald-400/20 hover:bg-white/10'
+                                }`}
+                              >
+                                <span>{groupedContent.sourceName}</span>
+                                {groupedContent.episodes.length > 1 ? (
+                                  <span className='opacity-70'>
+                                    {groupedContent.episodes.length} 集
+                                  </span>
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      <div className='text-xs text-gray-400'>
+                        {groupedPlayableEpisodes.length} 条离线资源 · 覆盖{' '}
+                        {groupedPlayableEpisodeCount} 集
+                      </div>
+                    </div>
+
+                    <div className='grid gap-3 md:grid-cols-2'>
+                      {groupedPlayableEpisodes.map((episode) => {
+                        const selectionKey = buildEpisodeSelectionKey(
+                          episode.contentId,
+                          episode.episodeIndex
+                        );
+                        const isSelected =
+                          selectedEpisodeKeySet.has(selectionKey);
+                        const isPendingOfflineNavigation =
+                          !isEditing &&
+                          pendingOfflineNavigationKey === selectionKey;
+                        const adultEpisodeActionSubject =
+                          episode.contentTitle || episode.episodeTitle;
+                        const adultEpisodeMarker = [
+                          shouldShowAdultGroupedEpisodeCode
+                            ? formatEpisodeCode(episode.episodeIndex)
+                            : null,
+                          shouldShowAdultGroupedEpisodeTitle
+                            ? normalizeMetadataText(episode.episodeTitle)
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ');
+                        const adultDurationText =
+                          groupedEpisodeDurationByKey[selectionKey] ||
+                          extractDurationText(episode.remarks, episode.desc);
+                        const adultEpisodeRemark = adultDurationText
+                          ? null
+                          : getDisplayableOfflineRemark(
+                              episode.remarks,
+                              episode.episodeTitle
+                            );
+                        const adultPrimaryMeta = [
+                          adultDurationText || adultEpisodeRemark,
+                          episode.sourceName,
+                          episode.year && episode.year !== 'unknown'
+                            ? episode.year
+                            : null,
+                        ].filter((item): item is string => Boolean(item));
+                        const adultSecondaryMeta = [adultEpisodeMarker || null]
+                          .filter((item): item is string => Boolean(item))
+                          .slice(0, 3);
+                        const groupedEpisodeActionSubject =
+                          isAdultGroupedCollection
+                            ? shouldShowAdultGroupedSourceSummary
+                              ? `${adultEpisodeActionSubject} · ${episode.sourceName}`
+                              : adultEpisodeActionSubject
+                            : `${episode.sourceName} 的 ${episode.episodeTitle}`;
+
+                        return (
+                          <button
+                            type='button'
+                            key={`${episode.contentId}-${episode.episodeIndex}`}
+                            onClick={() => {
+                              if (isEditing) {
+                                handleToggleEpisodeSelection(
+                                  episode.contentId,
+                                  episode.episodeIndex
+                                );
+                                return;
+                              }
+
+                              if (pendingOfflineNavigationKey) {
+                                return;
+                              }
+
+                              handleOpenOfflinePlayback({
+                                href: episode.offlineHref,
+                                selectionKey,
+                                label: groupedEpisodeActionSubject,
+                              });
+                            }}
+                            onContextMenu={(event) =>
+                              handleOpenAdultCoverMenu(event, {
+                                poster: episode.poster,
+                                title: adultEpisodeActionSubject,
+                              })
+                            }
+                            aria-pressed={isEditing ? isSelected : undefined}
+                            aria-busy={isPendingOfflineNavigation || undefined}
+                            aria-label={
+                              isEditing
+                                ? `${
+                                    isSelected ? '取消选择' : '选择'
+                                  } ${groupedEpisodeActionSubject}`
+                                : `离线播放 ${groupedEpisodeActionSubject}`
+                            }
+                            className={`rounded-xl border p-3 text-left transition-colors ${
+                              isEditing
+                                ? isSelected
+                                  ? 'border-emerald-400/60 bg-emerald-500/10'
+                                  : 'border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/5'
+                                : isPendingOfflineNavigation
+                                ? 'border-emerald-300/60 bg-emerald-500/15 shadow-[0_0_0_1px_rgba(110,231,183,0.2)]'
+                                : episode.isCurrentContent
+                                ? 'border-emerald-400/40 bg-emerald-500/10 hover:bg-emerald-500/15'
+                                : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
+                            }`}
+                          >
+                            {isAdultGroupedCollection ? (
+                              <div className='grid grid-cols-[92px_minmax(0,1fr)_auto] items-start gap-3'>
+                                <div className='relative h-28 overflow-hidden rounded-2xl bg-black/30'>
+                                  {episode.poster ? (
+                                    <Image
+                                      src={processImageUrl(episode.poster)}
+                                      alt={`${adultEpisodeActionSubject} 封面`}
+                                      fill
+                                      className='object-cover'
+                                      referrerPolicy='no-referrer'
+                                      sizes='92px'
+                                    />
+                                  ) : (
+                                    <div className='absolute inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-700/70 via-gray-900 to-black text-3xl font-semibold text-white/70'>
+                                      {adultEpisodeActionSubject.slice(0, 1)}
+                                    </div>
+                                  )}
+                                  <div className='absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent' />
+                                </div>
+
+                                <div className='min-w-0 space-y-1'>
+                                  <div
+                                    className='line-clamp-2 text-sm font-semibold text-white'
+                                    title={adultEpisodeActionSubject}
+                                  >
+                                    {adultEpisodeActionSubject}
+                                  </div>
+
+                                  {adultPrimaryMeta.length > 0 ? (
+                                    <div className='flex flex-wrap items-center gap-2'>
+                                      {adultPrimaryMeta.map((item, index) => (
+                                        <span
+                                          key={`${episode.contentId}-${item}`}
+                                          title={item}
+                                          className={`rounded-full px-2.5 py-1 text-[11px] ${
+                                            index === 0 && adultDurationText
+                                              ? 'border border-emerald-400/30 bg-emerald-500/10 font-medium text-emerald-100'
+                                              : 'border border-white/10 bg-white/5 text-gray-200'
+                                          }`}
+                                        >
+                                          {item}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : null}
+
+                                  {adultSecondaryMeta.length > 0 ? (
+                                    <div className='flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
+                                      {adultSecondaryMeta.map((item) => (
+                                        <span
+                                          key={`${episode.contentId}-${item}`}
+                                          title={item}
+                                        >
+                                          {item}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </div>
+
+                                {isEditing ? (
+                                  <span
+                                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                      isSelected
+                                        ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                        : 'border border-white/10 bg-white/5 text-gray-400'
+                                    }`}
+                                  >
+                                    {isSelected ? '已选' : '选择'}
+                                  </span>
+                                ) : isPendingOfflineNavigation ? (
+                                  <span className='inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-100'>
+                                    <Loader2 className='h-3 w-3 animate-spin' />
+                                    正在打开
+                                  </span>
+                                ) : null}
+
+                                <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
+                                  <span>{formatBytes(episode.sizeBytes)}</span>
+                                  <span>
+                                    {formatDateTime(episode.downloadedAt)}
+                                  </span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className='grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2'>
+                                <div className='flex min-w-0 items-center gap-2'>
+                                  <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
+                                    {formatEpisodeCode(episode.episodeIndex)}
+                                  </span>
+                                  <div
+                                    className='truncate text-sm font-semibold text-white'
+                                    title={episode.episodeTitle}
+                                  >
+                                    {episode.episodeTitle}
+                                  </div>
+                                </div>
+
+                                {isEditing ? (
+                                  <span
+                                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                      isSelected
+                                        ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                        : 'border border-white/10 bg-white/5 text-gray-400'
+                                    }`}
+                                  >
+                                    {isSelected ? '已选' : '选择'}
+                                  </span>
+                                ) : null}
+
+                                <div className='col-span-2 flex flex-wrap items-center gap-2 text-[11px] text-gray-300'>
+                                  <span className='rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-medium text-gray-100'>
+                                    {episode.sourceName}
+                                  </span>
+                                  {episode.contentTitle !== dialogTitle ? (
+                                    <span className='text-gray-400'>
+                                      {episode.contentTitle}
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
+                                  <span>{formatBytes(episode.sizeBytes)}</span>
+                                  <span>
+                                    {formatDateTime(episode.downloadedAt)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
+                ) : null}
 
-                  <div className='grid gap-3 md:grid-cols-2'>
-                    {groupedPlayableEpisodes.map((episode) => {
+                {isMoreDownloadsOpen ? (
+                  <div className='rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4'>
+                    <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+                      <div className='space-y-1'>
+                        <div className='text-sm font-semibold text-white'>
+                          {isAdultContent ? '同人名归集资源' : '未下载资源集'}
+                        </div>
+                        <div className='text-xs text-gray-400'>
+                          {isAdultContent
+                            ? adultGroupingQuery
+                              ? `已按“${adultGroupingQuery}”归集相关成人资源，点击资源卡片即可把可下载内容加入队列。`
+                              : '当前条目没有可用的人名归集词，建议从演员名搜索进入后再使用这个功能。'
+                            : '点击剧集卡片可继续加入离线下载；已在队列中的剧集会显示当前状态。'}
+                        </div>
+                      </div>
+                      {(
+                        isAdultContent ? adultGroupingQuery : downloadableDetail
+                      ) ? (
+                        <span className='inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-200'>
+                          {isAdultContent
+                            ? `${adultRelatedDownloadOptions.length} 部相关资源`
+                            : `${moreDownloadEpisodeOptions.length} 集待处理`}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {isLoadingMoreDownloads ? (
+                      <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
+                        {isAdultContent
+                          ? '正在按人名归集更多资源...'
+                          : '正在加载可下载剧集...'}
+                      </div>
+                    ) : null}
+
+                    {!isLoadingMoreDownloads && moreDownloadsError ? (
+                      <div className='mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200'>
+                        {moreDownloadsError}
+                      </div>
+                    ) : null}
+
+                    {!isLoadingMoreDownloads &&
+                    !moreDownloadsError &&
+                    isAdultContent &&
+                    !adultGroupingQuery ? (
+                      <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
+                        当前条目未识别出可归集的人名。若你是通过演员名搜索进入播放页，重新下载后这里会优先使用那个搜索词来归集资源。
+                      </div>
+                    ) : null}
+
+                    {!isLoadingMoreDownloads &&
+                    !moreDownloadsError &&
+                    isAdultContent &&
+                    adultGroupingQuery &&
+                    adultRelatedDownloadOptions.length === 0 ? (
+                      <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
+                        没有找到更多与“{adultGroupingQuery}”相关的成人资源。
+                      </div>
+                    ) : null}
+
+                    {!isLoadingMoreDownloads &&
+                    !moreDownloadsError &&
+                    !isAdultContent &&
+                    downloadableDetail &&
+                    moreDownloadEpisodeOptions.length === 0 ? (
+                      <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
+                        当前内容的可下载剧集已全部缓存。
+                      </div>
+                    ) : null}
+
+                    {!isLoadingMoreDownloads &&
+                    !moreDownloadsError &&
+                    isAdultContent &&
+                    adultRelatedDownloadOptions.length > 0 ? (
+                      <div className='mt-4 max-h-[320px] overflow-y-auto pr-1'>
+                        <div className='space-y-3'>
+                          {adultRelatedDownloadOptions.map((option) => (
+                            <button
+                              type='button'
+                              key={`${option.contentId}-adult-group`}
+                              disabled={!option.isActionable}
+                              onClick={() =>
+                                void handleStartAdultRelatedDownload(option)
+                              }
+                              className={`w-full rounded-2xl border p-4 text-left transition-colors ${
+                                option.isActionable
+                                  ? 'border-emerald-500/20 bg-black/20 hover:border-emerald-400/40 hover:bg-white/5'
+                                  : 'border-white/10 bg-black/20 text-gray-400'
+                              }`}
+                            >
+                              <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
+                                <div className='min-w-0 flex-1 space-y-3'>
+                                  <div className='flex flex-wrap items-center gap-2 text-[11px] text-gray-300'>
+                                    <span className='rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-medium text-gray-100'>
+                                      {option.detail.source_name}
+                                    </span>
+                                    {option.detail.year &&
+                                    option.detail.year !== 'unknown' ? (
+                                      <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-300'>
+                                        {option.detail.year}
+                                      </span>
+                                    ) : null}
+                                    <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-300'>
+                                      {option.totalEpisodes > 1
+                                        ? `${option.totalEpisodes} 集`
+                                        : '单集资源'}
+                                    </span>
+                                  </div>
+
+                                  <div
+                                    className='line-clamp-3 text-sm font-semibold leading-6 text-white'
+                                    title={option.detail.title}
+                                  >
+                                    {option.detail.title}
+                                  </div>
+                                  <div className='text-xs text-gray-400'>
+                                    {getAdultRelatedDownloadStatus(option)}
+                                  </div>
+                                </div>
+
+                                <div className='flex shrink-0 items-center'>
+                                  <span
+                                    className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${getAdultRelatedDownloadActionBadgeClassName(
+                                      option
+                                    )}`}
+                                  >
+                                    {getAdultRelatedDownloadActionLabel(option)}
+                                  </span>
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {!isLoadingMoreDownloads &&
+                    !moreDownloadsError &&
+                    !isAdultContent &&
+                    moreDownloadEpisodeOptions.length > 0 ? (
+                      <div className='mt-4 max-h-[320px] overflow-y-auto pr-1'>
+                        <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+                          {moreDownloadEpisodeOptions.map((episode) => (
+                            <button
+                              type='button'
+                              key={`${content.contentId}-more-${episode.episodeIndex}`}
+                              disabled={!episode.isActionable}
+                              onClick={() =>
+                                void handleStartMoreDownload(
+                                  episode.episodeIndex
+                                )
+                              }
+                              className={`rounded-xl border p-3 text-left transition-colors ${
+                                episode.isActionable
+                                  ? 'border-emerald-500/20 bg-black/20 hover:border-emerald-400/40 hover:bg-white/5'
+                                  : 'border-white/10 bg-black/20 text-gray-400'
+                              }`}
+                            >
+                              <div className='flex items-start justify-between gap-3'>
+                                <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
+                                  {formatEpisodeCode(episode.episodeIndex)}
+                                </span>
+                                <span
+                                  className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${getMoreDownloadEpisodeActionBadgeClassName(
+                                    episode
+                                  )}`}
+                                >
+                                  {getMoreDownloadEpisodeActionLabel(episode)}
+                                </span>
+                              </div>
+
+                              <div
+                                className='mt-4 truncate text-sm font-semibold text-white'
+                                title={episode.episodeTitle}
+                              >
+                                {episode.episodeTitle}
+                              </div>
+                              <div className='mt-2 text-xs text-gray-400'>
+                                {getMoreDownloadEpisodeStatus(episode)}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {moreDownloadsFeedback ? (
+                      <div className='mt-3 text-xs text-emerald-200'>
+                        {moreDownloadsFeedback}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {shouldShowEpisodeGrid ? (
+                  <div className='grid gap-3 md:grid-cols-2 lg:grid-cols-3'>
+                    {content.episodes.map((episode) => {
+                      const offlineHref = buildOfflinePlayHref({
+                        content,
+                        episodeIndex: episode.episodeIndex,
+                      });
                       const selectionKey = buildEpisodeSelectionKey(
-                        episode.contentId,
+                        content.contentId,
                         episode.episodeIndex
                       );
                       const isSelected =
@@ -3213,54 +3659,15 @@ export function DownloadedContentDialog({
                       const isPendingOfflineNavigation =
                         !isEditing &&
                         pendingOfflineNavigationKey === selectionKey;
-                      const adultEpisodeActionSubject =
-                        episode.contentTitle || episode.episodeTitle;
-                      const adultEpisodeMarker = [
-                        shouldShowAdultGroupedEpisodeCode
-                          ? formatEpisodeCode(episode.episodeIndex)
-                          : null,
-                        shouldShowAdultGroupedEpisodeTitle
-                          ? normalizeMetadataText(episode.episodeTitle)
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ');
-                      const adultDurationText =
-                        groupedEpisodeDurationByKey[selectionKey] ||
-                        extractDurationText(episode.remarks, episode.desc);
-                      const adultEpisodeRemark = adultDurationText
-                        ? null
-                        : getDisplayableOfflineRemark(
-                            episode.remarks,
-                            episode.episodeTitle
-                          );
-                      const adultPrimaryMeta = [
-                        adultDurationText || adultEpisodeRemark,
-                        episode.sourceName,
-                        episode.year && episode.year !== 'unknown'
-                          ? episode.year
-                          : null,
-                      ].filter((item): item is string => Boolean(item));
-                      const adultSecondaryMeta = [
-                        adultEpisodeMarker || null,
-                      ]
-                        .filter((item): item is string => Boolean(item))
-                        .slice(0, 3);
-                      const groupedEpisodeActionSubject =
-                        isAdultGroupedCollection
-                          ? shouldShowAdultGroupedSourceSummary
-                            ? `${adultEpisodeActionSubject} · ${episode.sourceName}`
-                            : adultEpisodeActionSubject
-                          : `${episode.sourceName} 的 ${episode.episodeTitle}`;
 
                       return (
                         <button
                           type='button'
-                          key={`${episode.contentId}-${episode.episodeIndex}`}
+                          key={`${content.contentId}-${episode.episodeIndex}`}
                           onClick={() => {
                             if (isEditing) {
                               handleToggleEpisodeSelection(
-                                episode.contentId,
+                                content.contentId,
                                 episode.episodeIndex
                               );
                               return;
@@ -3271,23 +3678,19 @@ export function DownloadedContentDialog({
                             }
 
                             handleOpenOfflinePlayback({
-                              href: episode.offlineHref,
+                              href: offlineHref,
                               selectionKey,
-                              label: groupedEpisodeActionSubject,
+                              label: episode.episodeTitle,
                             });
                           }}
-                          onContextMenu={(event) =>
-                            handleOpenAdultCoverMenu(event, {
-                              poster: episode.poster,
-                              title: adultEpisodeActionSubject,
-                            })
-                          }
                           aria-pressed={isEditing ? isSelected : undefined}
                           aria-busy={isPendingOfflineNavigation || undefined}
                           aria-label={
                             isEditing
-                              ? `${isSelected ? '取消选择' : '选择'} ${groupedEpisodeActionSubject}`
-                              : `离线播放 ${groupedEpisodeActionSubject}`
+                              ? `${isSelected ? '取消选择' : '选择'} ${
+                                  episode.episodeTitle
+                                }`
+                              : `离线播放 ${episode.episodeTitle}`
                           }
                           className={`rounded-xl border p-3 text-left transition-colors ${
                             isEditing
@@ -3296,439 +3699,56 @@ export function DownloadedContentDialog({
                                 : 'border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/5'
                               : isPendingOfflineNavigation
                               ? 'border-emerald-300/60 bg-emerald-500/15 shadow-[0_0_0_1px_rgba(110,231,183,0.2)]'
-                              : episode.isCurrentContent
-                              ? 'border-emerald-400/40 bg-emerald-500/10 hover:bg-emerald-500/15'
                               : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
                           }`}
                         >
-                          {isAdultGroupedCollection ? (
-                            <div className='grid grid-cols-[92px_minmax(0,1fr)_auto] items-start gap-3'>
-                              <div className='relative h-28 overflow-hidden rounded-2xl bg-black/30'>
-                                {episode.poster ? (
-                                  <Image
-                                    src={processImageUrl(episode.poster)}
-                                    alt={`${adultEpisodeActionSubject} 封面`}
-                                    fill
-                                    className='object-cover'
-                                    referrerPolicy='no-referrer'
-                                    sizes='92px'
-                                  />
-                                ) : (
-                                  <div className='absolute inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-700/70 via-gray-900 to-black text-3xl font-semibold text-white/70'>
-                                    {adultEpisodeActionSubject.slice(0, 1)}
-                                  </div>
-                                )}
-                                <div className='absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent' />
-                              </div>
-
-                              <div className='min-w-0 space-y-1'>
-                                <div
-                                  className='line-clamp-2 text-sm font-semibold text-white'
-                                  title={adultEpisodeActionSubject}
-                                >
-                                  {adultEpisodeActionSubject}
-                                </div>
-
-                                {adultPrimaryMeta.length > 0 ? (
-                                  <div className='flex flex-wrap items-center gap-2'>
-                                    {adultPrimaryMeta.map((item, index) => (
-                                      <span
-                                        key={`${episode.contentId}-${item}`}
-                                        title={item}
-                                        className={`rounded-full px-2.5 py-1 text-[11px] ${
-                                          index === 0 && adultDurationText
-                                            ? 'border border-emerald-400/30 bg-emerald-500/10 font-medium text-emerald-100'
-                                            : 'border border-white/10 bg-white/5 text-gray-200'
-                                        }`}
-                                      >
-                                        {item}
-                                      </span>
-                                    ))}
-                                  </div>
-                                ) : null}
-
-                                {adultSecondaryMeta.length > 0 ? (
-                                  <div className='flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
-                                    {adultSecondaryMeta.map((item) => (
-                                      <span
-                                        key={`${episode.contentId}-${item}`}
-                                        title={item}
-                                      >
-                                        {item}
-                                      </span>
-                                    ))}
-                                  </div>
-                                ) : null}
-                              </div>
-
-                              {isEditing ? (
-                                <span
-                                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                                    isSelected
-                                      ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-                                      : 'border border-white/10 bg-white/5 text-gray-400'
-                                  }`}
-                                >
-                                  {isSelected ? '已选' : '选择'}
-                                </span>
-                              ) : isPendingOfflineNavigation ? (
-                                <span className='inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-100'>
-                                  <Loader2 className='h-3 w-3 animate-spin' />
-                                  正在打开
-                                </span>
-                              ) : null}
-
-                              <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
-                                <span>{formatBytes(episode.sizeBytes)}</span>
-                                <span>{formatDateTime(episode.downloadedAt)}</span>
+                          <div className='grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2'>
+                            <div className='flex min-w-0 items-center gap-2'>
+                              <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
+                                {formatEpisodeCode(episode.episodeIndex)}
+                              </span>
+                              <div
+                                className='truncate text-sm font-semibold text-white'
+                                title={episode.episodeTitle}
+                              >
+                                {episode.episodeTitle}
                               </div>
                             </div>
-                          ) : (
-                            <div className='grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2'>
-                              <div className='flex min-w-0 items-center gap-2'>
-                                <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
-                                  {formatEpisodeCode(episode.episodeIndex)}
-                                </span>
-                                <div
-                                  className='truncate text-sm font-semibold text-white'
-                                  title={episode.episodeTitle}
-                                >
-                                  {episode.episodeTitle}
-                                </div>
-                              </div>
 
-                              {isEditing ? (
-                                <span
-                                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                                    isSelected
-                                      ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-                                      : 'border border-white/10 bg-white/5 text-gray-400'
-                                  }`}
-                                >
-                                  {isSelected ? '已选' : '选择'}
-                                </span>
-                              ) : null}
+                            {isEditing ? (
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                  isSelected
+                                    ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+                                    : 'border border-white/10 bg-white/5 text-gray-400'
+                                }`}
+                              >
+                                {isSelected ? '已选' : '选择'}
+                              </span>
+                            ) : isPendingOfflineNavigation ? (
+                              <span className='inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-100'>
+                                <Loader2 className='h-3 w-3 animate-spin' />
+                                正在打开
+                              </span>
+                            ) : null}
 
-                              <div className='col-span-2 flex flex-wrap items-center gap-2 text-[11px] text-gray-300'>
-                                <span className='rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-medium text-gray-100'>
-                                  {episode.sourceName}
-                                </span>
-                                {episode.contentTitle !== dialogTitle ? (
-                                  <span className='text-gray-400'>
-                                    {episode.contentTitle}
-                                  </span>
-                                ) : null}
-                              </div>
-
-                              <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400'>
-                                <span>{formatBytes(episode.sizeBytes)}</span>
-                                <span>{formatDateTime(episode.downloadedAt)}</span>
-                              </div>
+                            <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300'>
+                              <span>{formatBytes(episode.sizeBytes)}</span>
+                              <span>
+                                下载于 {formatDateTime(episode.downloadedAt)}
+                              </span>
                             </div>
-                          )}
+                          </div>
                         </button>
                       );
                     })}
                   </div>
-                </div>
-              ) : null}
-
-              {isMoreDownloadsOpen ? (
-                <div className='rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4'>
-                  <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
-                    <div className='space-y-1'>
-                      <div className='text-sm font-semibold text-white'>
-                        {isAdultContent ? '同人名归集资源' : '未下载资源集'}
-                      </div>
-                      <div className='text-xs text-gray-400'>
-                        {isAdultContent
-                          ? adultGroupingQuery
-                            ? `已按“${adultGroupingQuery}”归集相关成人资源，点击资源卡片即可把可下载内容加入队列。`
-                            : '当前条目没有可用的人名归集词，建议从演员名搜索进入后再使用这个功能。'
-                          : '点击剧集卡片可继续加入离线下载；已在队列中的剧集会显示当前状态。'}
-                      </div>
-                    </div>
-                    {(
-                      isAdultContent ? adultGroupingQuery : downloadableDetail
-                    ) ? (
-                      <span className='inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-200'>
-                        {isAdultContent
-                          ? `${adultRelatedDownloadOptions.length} 部相关资源`
-                          : `${moreDownloadEpisodeOptions.length} 集待处理`}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  {isLoadingMoreDownloads ? (
-                    <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
-                      {isAdultContent
-                        ? '正在按人名归集更多资源...'
-                        : '正在加载可下载剧集...'}
-                    </div>
-                  ) : null}
-
-                  {!isLoadingMoreDownloads && moreDownloadsError ? (
-                    <div className='mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200'>
-                      {moreDownloadsError}
-                    </div>
-                  ) : null}
-
-                  {!isLoadingMoreDownloads &&
-                  !moreDownloadsError &&
-                  isAdultContent &&
-                  !adultGroupingQuery ? (
-                    <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
-                      当前条目未识别出可归集的人名。若你是通过演员名搜索进入播放页，重新下载后这里会优先使用那个搜索词来归集资源。
-                    </div>
-                  ) : null}
-
-                  {!isLoadingMoreDownloads &&
-                  !moreDownloadsError &&
-                  isAdultContent &&
-                  adultGroupingQuery &&
-                  adultRelatedDownloadOptions.length === 0 ? (
-                    <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
-                      没有找到更多与“{adultGroupingQuery}”相关的成人资源。
-                    </div>
-                  ) : null}
-
-                  {!isLoadingMoreDownloads &&
-                  !moreDownloadsError &&
-                  !isAdultContent &&
-                  downloadableDetail &&
-                  moreDownloadEpisodeOptions.length === 0 ? (
-                    <div className='mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-6 text-sm text-gray-300'>
-                      当前内容的可下载剧集已全部缓存。
-                    </div>
-                  ) : null}
-
-                  {!isLoadingMoreDownloads &&
-                  !moreDownloadsError &&
-                  isAdultContent &&
-                  adultRelatedDownloadOptions.length > 0 ? (
-                    <div className='mt-4 max-h-[320px] overflow-y-auto pr-1'>
-                      <div className='space-y-3'>
-                        {adultRelatedDownloadOptions.map((option) => (
-                          <button
-                            type='button'
-                            key={`${option.contentId}-adult-group`}
-                            disabled={!option.isActionable}
-                            onClick={() =>
-                              void handleStartAdultRelatedDownload(option)
-                            }
-                            className={`w-full rounded-2xl border p-4 text-left transition-colors ${
-                              option.isActionable
-                                ? 'border-emerald-500/20 bg-black/20 hover:border-emerald-400/40 hover:bg-white/5'
-                                : 'border-white/10 bg-black/20 text-gray-400'
-                            }`}
-                          >
-                            <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
-                              <div className='min-w-0 flex-1 space-y-3'>
-                                <div className='flex flex-wrap items-center gap-2 text-[11px] text-gray-300'>
-                                  <span className='rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-medium text-gray-100'>
-                                    {option.detail.source_name}
-                                  </span>
-                                  {option.detail.year &&
-                                  option.detail.year !== 'unknown' ? (
-                                    <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-300'>
-                                      {option.detail.year}
-                                    </span>
-                                  ) : null}
-                                  <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-gray-300'>
-                                    {option.totalEpisodes > 1
-                                      ? `${option.totalEpisodes} 集`
-                                      : '单集资源'}
-                                  </span>
-                                </div>
-
-                                <div
-                                  className='line-clamp-3 text-sm font-semibold leading-6 text-white'
-                                  title={option.detail.title}
-                                >
-                                  {option.detail.title}
-                                </div>
-                                <div className='text-xs text-gray-400'>
-                                  {getAdultRelatedDownloadStatus(option)}
-                                </div>
-                              </div>
-
-                              <div className='flex shrink-0 items-center'>
-                                <span
-                                  className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${getAdultRelatedDownloadActionBadgeClassName(
-                                    option
-                                  )}`}
-                                >
-                                  {getAdultRelatedDownloadActionLabel(option)}
-                                </span>
-                              </div>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {!isLoadingMoreDownloads &&
-                  !moreDownloadsError &&
-                  !isAdultContent &&
-                  moreDownloadEpisodeOptions.length > 0 ? (
-                    <div className='mt-4 max-h-[320px] overflow-y-auto pr-1'>
-                      <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
-                        {moreDownloadEpisodeOptions.map((episode) => (
-                          <button
-                            type='button'
-                            key={`${content.contentId}-more-${episode.episodeIndex}`}
-                            disabled={!episode.isActionable}
-                            onClick={() =>
-                              void handleStartMoreDownload(episode.episodeIndex)
-                            }
-                            className={`rounded-xl border p-3 text-left transition-colors ${
-                              episode.isActionable
-                                ? 'border-emerald-500/20 bg-black/20 hover:border-emerald-400/40 hover:bg-white/5'
-                                : 'border-white/10 bg-black/20 text-gray-400'
-                            }`}
-                          >
-                            <div className='flex items-start justify-between gap-3'>
-                              <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
-                                {formatEpisodeCode(episode.episodeIndex)}
-                              </span>
-                              <span
-                                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${getMoreDownloadEpisodeActionBadgeClassName(
-                                  episode
-                                )}`}
-                              >
-                                {getMoreDownloadEpisodeActionLabel(episode)}
-                              </span>
-                            </div>
-
-                            <div
-                              className='mt-4 truncate text-sm font-semibold text-white'
-                              title={episode.episodeTitle}
-                            >
-                              {episode.episodeTitle}
-                            </div>
-                            <div className='mt-2 text-xs text-gray-400'>
-                              {getMoreDownloadEpisodeStatus(episode)}
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {moreDownloadsFeedback ? (
-                    <div className='mt-3 text-xs text-emerald-200'>
-                      {moreDownloadsFeedback}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {shouldShowEpisodeGrid ? (
-                <div className='grid gap-3 md:grid-cols-2 lg:grid-cols-3'>
-                  {content.episodes.map((episode) => {
-                    const offlineHref = buildOfflinePlayHref({
-                      content,
-                      episodeIndex: episode.episodeIndex,
-                    });
-                    const selectionKey = buildEpisodeSelectionKey(
-                      content.contentId,
-                      episode.episodeIndex
-                    );
-                    const isSelected = selectedEpisodeKeySet.has(selectionKey);
-                    const isPendingOfflineNavigation =
-                      !isEditing &&
-                      pendingOfflineNavigationKey === selectionKey;
-
-                    return (
-                      <button
-                        type='button'
-                        key={`${content.contentId}-${episode.episodeIndex}`}
-                        onClick={() => {
-                          if (isEditing) {
-                            handleToggleEpisodeSelection(
-                              content.contentId,
-                              episode.episodeIndex
-                            );
-                            return;
-                          }
-
-                          if (pendingOfflineNavigationKey) {
-                            return;
-                          }
-
-                          handleOpenOfflinePlayback({
-                            href: offlineHref,
-                            selectionKey,
-                            label: episode.episodeTitle,
-                          });
-                        }}
-                        aria-pressed={isEditing ? isSelected : undefined}
-                        aria-busy={isPendingOfflineNavigation || undefined}
-                        aria-label={
-                          isEditing
-                            ? `${isSelected ? '取消选择' : '选择'} ${
-                                episode.episodeTitle
-                              }`
-                            : `离线播放 ${episode.episodeTitle}`
-                        }
-                        className={`rounded-xl border p-3 text-left transition-colors ${
-                          isEditing
-                            ? isSelected
-                              ? 'border-emerald-400/60 bg-emerald-500/10'
-                              : 'border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/5'
-                            : isPendingOfflineNavigation
-                            ? 'border-emerald-300/60 bg-emerald-500/15 shadow-[0_0_0_1px_rgba(110,231,183,0.2)]'
-                            : 'border-white/10 bg-black/20 hover:border-emerald-400/30 hover:bg-white/5'
-                        }`}
-                      >
-                        <div className='grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2'>
-                          <div className='flex min-w-0 items-center gap-2'>
-                            <span className='rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-200'>
-                              {formatEpisodeCode(episode.episodeIndex)}
-                            </span>
-                            <div
-                              className='truncate text-sm font-semibold text-white'
-                              title={episode.episodeTitle}
-                            >
-                              {episode.episodeTitle}
-                            </div>
-                          </div>
-
-                          {isEditing ? (
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                                isSelected
-                                  ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-                                  : 'border border-white/10 bg-white/5 text-gray-400'
-                              }`}
-                            >
-                              {isSelected ? '已选' : '选择'}
-                            </span>
-                          ) : isPendingOfflineNavigation ? (
-                            <span className='inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-100'>
-                              <Loader2 className='h-3 w-3 animate-spin' />
-                              正在打开
-                            </span>
-                          ) : null}
-
-                          <div className='col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300'>
-                            <span>{formatBytes(episode.sizeBytes)}</span>
-                            <span>
-                              下载于 {formatDateTime(episode.downloadedAt)}
-                            </span>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
+                ) : null}
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
 
       {adultCoverMenu ? (
         <div
@@ -3759,6 +3779,12 @@ export function DownloadedContentDialog({
 
 function DownloadSettingsDialog({
   storageOrigin,
+  storageLabel,
+  isDesktopStorage,
+  isStorageInfoLoading,
+  desktopStorageInfo,
+  adultContentFilterEnabled,
+  hiddenAdultDownloadedContentCount,
   isDevelopment,
   maxConcurrentTasks,
   onConcurrentTaskChange,
@@ -3802,6 +3828,19 @@ function DownloadSettingsDialog({
 
         <div className='min-h-0 overflow-y-auto p-4 lg:p-6'>
           <div className='space-y-4'>
+            {adultContentFilterEnabled &&
+            hiddenAdultDownloadedContentCount > 0 ? (
+              <div className='rounded-2xl border border-amber-400/20 bg-amber-500/10 p-4'>
+                <div className='text-base font-semibold text-amber-100'>
+                  成人内容过滤
+                </div>
+                <p className='mt-2 text-sm leading-6 text-amber-50/90'>
+                  成人内容过滤已开启，下载管理中已暂时隐藏{' '}
+                  {hiddenAdultDownloadedContentCount} 部离线成人资源。
+                </p>
+              </div>
+            ) : null}
+
             <div className='rounded-2xl border border-white/10 bg-white/5 p-4'>
               <label
                 htmlFor='download-concurrency'
@@ -3829,42 +3868,106 @@ function DownloadSettingsDialog({
                 离线保存位置
               </div>
               <div className='mt-3 inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-200'>
-                当前浏览器离线缓存
+                {isDesktopStorage ? '桌面应用本地目录' : storageLabel}
               </div>
               <div className='mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4'>
                 <div className='text-xs font-medium uppercase tracking-wide text-emerald-200'>
-                  逻辑存储位置
+                  {isDesktopStorage ? '本地保存路径' : '逻辑存储位置'}
                 </div>
-                <div className='mt-4 grid gap-3 text-xs text-gray-300'>
-                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                    <span className='font-medium text-gray-200'>站点</span>
-                    <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                      {storageOrigin || '当前站点'}
-                    </code>
+                {isDesktopStorage ? (
+                  <div className='mt-4 space-y-4'>
+                    <p className='text-xs leading-5 text-gray-200'>
+                      桌面版会把离线资源写入本机数据目录，不走浏览器 Cache
+                      Storage。
+                    </p>
+                    {desktopStorageInfo ? (
+                      <div className='grid gap-3 text-xs text-gray-300'>
+                        <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                          <span className='font-medium text-gray-200'>
+                            根目录
+                          </span>
+                          <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                            {desktopStorageInfo.rootDir}
+                          </code>
+                        </div>
+                        <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                          <span className='font-medium text-gray-200'>
+                            缓存文件
+                          </span>
+                          <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                            {desktopStorageInfo.cacheBodyDir}
+                          </code>
+                        </div>
+                        <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                          <span className='font-medium text-gray-200'>
+                            缓存元数据
+                          </span>
+                          <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                            {desktopStorageInfo.cacheMetaDir}
+                          </code>
+                        </div>
+                        <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                          <span className='font-medium text-gray-200'>
+                            资源索引
+                          </span>
+                          <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                            {desktopStorageInfo.resourceIndexDir}
+                          </code>
+                        </div>
+                        <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                          <span className='font-medium text-gray-200'>
+                            状态数据库
+                          </span>
+                          <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                            {desktopStorageInfo.sqlitePath}
+                          </code>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className='text-xs leading-5 text-gray-300'>
+                        {isStorageInfoLoading
+                          ? '正在读取本地保存路径...'
+                          : '当前构建已启用桌面本地下载运行时，但暂时未能读取具体保存路径。'}
+                      </p>
+                    )}
                   </div>
-                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                    <span className='font-medium text-gray-200'>Cache</span>
-                    <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                      {DOWNLOAD_CACHE_NAME}
-                    </code>
+                ) : (
+                  <div className='mt-4 grid gap-3 text-xs text-gray-300'>
+                    <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                      <span className='font-medium text-gray-200'>站点</span>
+                      <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                        {storageOrigin || '当前站点'}
+                      </code>
+                    </div>
+                    <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                      <span className='font-medium text-gray-200'>Cache</span>
+                      <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                        {DOWNLOAD_CACHE_NAME}
+                      </code>
+                    </div>
+                    <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                      <span className='font-medium text-gray-200'>
+                        IndexedDB
+                      </span>
+                      <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                        {DOWNLOAD_RESOURCE_DB_NAME}
+                      </code>
+                    </div>
+                    <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                      <span className='font-medium text-gray-200'>
+                        对象仓库
+                      </span>
+                      <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                        {DOWNLOAD_RESOURCE_STORE_NAME}
+                      </code>
+                    </div>
                   </div>
-                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                    <span className='font-medium text-gray-200'>IndexedDB</span>
-                    <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                      {DOWNLOAD_RESOURCE_DB_NAME}
-                    </code>
-                  </div>
-                  <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                    <span className='font-medium text-gray-200'>对象仓库</span>
-                    <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                      {DOWNLOAD_RESOURCE_STORE_NAME}
-                    </code>
-                  </div>
-                </div>
+                )}
               </div>
               <p className='mt-4 text-xs leading-5 text-gray-400'>
-                实际磁盘位置由浏览器站点沙箱托管，Web
-                版暂不支持直接显示系统路径、打开系统文件夹或自定义磁盘目录。
+                {isDesktopStorage
+                  ? '桌面版会通过本地下载运行时保存离线资源；页面内展示的是当前构建实际使用的本地目录。'
+                  : '实际磁盘位置由浏览器站点沙箱托管，Web 版暂不支持直接显示系统路径、打开系统文件夹或自定义磁盘目录。'}
               </p>
               {isDevelopment && (
                 <p className='mt-2 text-xs leading-5 text-amber-300'>
@@ -3903,12 +4006,17 @@ export default function DownloadsClient() {
       }
     });
   const [storageOrigin, setStorageOrigin] = useState('');
+  const [desktopStorageInfo, setDesktopStorageInfo] =
+    useState<DesktopDownloadRuntimeStorageInfoResponse | null>(null);
+  const [isStorageInfoLoading, setIsStorageInfoLoading] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedActiveTaskContentId, setSelectedActiveTaskContentId] =
     useState<string | null>(null);
   const [selectedContentId, setSelectedContentId] = useState<string | null>(
     null
   );
+  const isDesktopStorage = isDesktopLocalDownloadRuntimeEnabled();
+  const storageLabel = getDesktopDownloadRuntimeLabel();
   const isDevelopment = process.env.NODE_ENV === 'development';
   const hasHydrated = useDownloadStore((state) => state.hasHydrated);
   const tasks = useDownloadStore((state) => state.tasks);
@@ -4001,6 +4109,36 @@ export default function DownloadsClient() {
 
     setStorageOrigin(window.location.origin);
   }, []);
+
+  useEffect(() => {
+    if (!isSettingsOpen || !isDesktopStorage) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsStorageInfoLoading(true);
+
+    getDesktopDownloadRuntimeStorageInfo()
+      .then((nextStorageInfo) => {
+        if (!cancelled) {
+          setDesktopStorageInfo(nextStorageInfo);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDesktopStorageInfo(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsStorageInfoLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isDesktopStorage, isSettingsOpen]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -4232,13 +4370,6 @@ export default function DownloadsClient() {
         </div>
       )}
 
-      {adultContentFilterEnabled && hiddenAdultDownloadedContentCount > 0 ? (
-        <div className='rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-800/40 dark:bg-amber-950/40 dark:text-amber-200'>
-          成人内容过滤已开启，已暂时隐藏 {hiddenAdultDownloadedContentCount}{' '}
-          部离线成人资源。
-        </div>
-      ) : null}
-
       <ActiveTasksSection
         activeTaskGroups={activeTaskCardGroups}
         totalContentCount={activeTaskGroups.length}
@@ -4273,6 +4404,12 @@ export default function DownloadsClient() {
       {isSettingsOpen ? (
         <DownloadSettingsDialog
           storageOrigin={storageOrigin}
+          storageLabel={storageLabel}
+          isDesktopStorage={isDesktopStorage}
+          isStorageInfoLoading={isStorageInfoLoading}
+          desktopStorageInfo={desktopStorageInfo}
+          adultContentFilterEnabled={adultContentFilterEnabled}
+          hiddenAdultDownloadedContentCount={hiddenAdultDownloadedContentCount}
           isDevelopment={isDevelopment}
           maxConcurrentTasks={maxConcurrentTasks}
           onConcurrentTaskChange={handleConcurrentTaskChange}
