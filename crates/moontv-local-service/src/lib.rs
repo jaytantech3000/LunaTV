@@ -66,6 +66,7 @@ use tracing::{info, warn};
 use url::{Url, form_urlencoded};
 
 const DEFAULT_HOST: &str = "127.0.0.1";
+const WINDOWS_WILDCARD_BIND_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_CONFIG_FILE_NAME: &str = "config.example.json";
 const DEFAULT_DATA_DIR_NAME: &str = ".lunatv-desktop";
@@ -368,7 +369,7 @@ impl AppState {
     }
 
     fn bind_addr(&self) -> String {
-        format!("{}:{}", self.host, self.port)
+        format!("{}:{}", effective_bind_host(&self.host), self.port)
     }
 
     fn load_config(&self) -> Result<ServiceConfig> {
@@ -1483,12 +1484,22 @@ pub async fn run(cli: Cli) -> Result<()> {
     let listener = TcpListener::bind(state.bind_addr())
         .await
         .context("failed to bind local service listener")?;
+    let listener_addr = listener.local_addr()?.to_string();
 
-    info!(
-        "LunaTV local service listening on {} with config {}",
-        listener.local_addr()?.to_string(),
-        state.config_path.display()
-    );
+    if effective_bind_host(&state.host) != state.host {
+        info!(
+            "LunaTV local service listening on {} with public base URL {} and config {}",
+            listener_addr,
+            state.public_base_url,
+            state.config_path.display()
+        );
+    } else {
+        info!(
+            "LunaTV local service listening on {} with config {}",
+            listener_addr,
+            state.config_path.display()
+        );
+    }
 
     serve_local_service(listener, app, state.public_base_url.clone())
         .await
@@ -1506,6 +1517,11 @@ async fn serve_local_service(
 
     loop {
         let (stream, remote_addr) = listener.accept().await?;
+        if !remote_addr.ip().is_loopback() {
+            warn!("rejected non-loopback local service connection from {remote_addr}");
+            continue;
+        }
+
         info!("accepted local service connection from {remote_addr}");
 
         let service = app
@@ -1598,6 +1614,18 @@ fn blocking_local_service_health_probe(base_url: &str) -> std::result::Result<u1
         .ok_or_else(|| format!("invalid probe response status line: {status_line}"))?
         .parse::<u16>()
         .map_err(|error| format!("invalid probe response status line: {status_line}; {error}"))
+}
+
+fn effective_bind_host(configured_host: &str) -> &str {
+    resolve_bind_host(configured_host, cfg!(target_os = "windows"))
+}
+
+fn resolve_bind_host<'a>(configured_host: &'a str, use_windows_wildcard_bind: bool) -> &'a str {
+    if use_windows_wildcard_bind && configured_host == DEFAULT_HOST {
+        WINDOWS_WILDCARD_BIND_HOST
+    } else {
+        configured_host
+    }
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -8619,6 +8647,16 @@ mod tests {
             payload.get("sqlite_migration_count"),
             Some(&Value::Number(1.into()))
         );
+    }
+
+    #[test]
+    fn resolve_bind_host_uses_windows_wildcard_for_default_loopback() {
+        assert_eq!(
+            resolve_bind_host(DEFAULT_HOST, true),
+            WINDOWS_WILDCARD_BIND_HOST
+        );
+        assert_eq!(resolve_bind_host(DEFAULT_HOST, false), DEFAULT_HOST);
+        assert_eq!(resolve_bind_host("192.168.1.8", true), "192.168.1.8");
     }
 
     #[test]
