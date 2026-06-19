@@ -44,6 +44,8 @@ use futures::{
     stream::{self, FuturesUnordered},
 };
 #[cfg(target_os = "windows")]
+use hyper::body::Incoming;
+#[cfg(target_os = "windows")]
 use hyper::server::conn::http1;
 #[cfg(target_os = "windows")]
 use hyper_util::{rt::TokioIo, service::TowerToHyperService};
@@ -1506,7 +1508,9 @@ async fn serve_local_service(
         let (stream, remote_addr) = listener.accept().await?;
         info!("accepted local service connection from {remote_addr}");
 
-        let service = app.clone().map_request(|request| request.map(Body::new));
+        let service = app
+            .clone()
+            .map_request(|request: axum::http::Request<Incoming>| request.map(Body::new));
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
             let hyper_service = TowerToHyperService::new(service);
