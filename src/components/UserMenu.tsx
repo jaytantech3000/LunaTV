@@ -52,8 +52,9 @@ import {
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { apiFetch } from '@/lib/transport/api-client';
+import { useAppUpdateState } from '@/lib/use-app-update';
 import { CURRENT_VERSION } from '@/lib/version';
-import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
+import { UpdateStatus } from '@/lib/version_check';
 
 import DesktopSettingsSection from './DesktopSettingsSection';
 import { useNavigationFeedback } from './NavigationFeedbackProvider';
@@ -153,10 +154,8 @@ export const UserMenu: React.FC = () => {
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [passwordError, setPasswordError] = useState('');
   const [passwordNotice, setPasswordNotice] = useState('');
-
-  // 版本检查相关状态
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
-  const [isChecking, setIsChecking] = useState(true);
+  const updateState = useAppUpdateState();
+  const updateStatus = updateState.updateStatus;
 
   // 确保组件已挂载
   useEffect(() => {
@@ -383,22 +382,6 @@ export const UserMenu: React.FC = () => {
         syncPlayerEnhancementPreferences
       );
     };
-  }, []);
-
-  // 版本检查
-  useEffect(() => {
-    const checkUpdate = async () => {
-      try {
-        const status = await checkForUpdates();
-        setUpdateStatus(status);
-      } catch (error) {
-        console.warn('版本检查失败:', error);
-      } finally {
-        setIsChecking(false);
-      }
-    };
-
-    checkUpdate();
   }, []);
 
   const prefetchRoute = useCallback(
@@ -1007,7 +990,7 @@ export const UserMenu: React.FC = () => {
           >
             <div className='flex items-center gap-1'>
               <span className='font-mono'>v{CURRENT_VERSION}</span>
-              {!isChecking &&
+              {!updateState.isChecking &&
                 updateStatus &&
                 updateStatus !== UpdateStatus.FETCH_FAILED && (
                   <div

@@ -43,6 +43,10 @@ use futures::{
     future::join_all,
     stream::{self, FuturesUnordered},
 };
+#[cfg(target_os = "windows")]
+use hyper::server::conn::http1;
+#[cfg(target_os = "windows")]
+use hyper_util::{rt::TokioIo, service::TowerToHyperService};
 use md5::Md5;
 use moontv_storage::sqlite::{DesktopSqlite, SqliteDatabaseInfo};
 use rand::Rng;
@@ -54,6 +58,8 @@ use sha2::{Digest, Sha256};
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::net::TcpListener;
 use tokio::sync::{RwLock, mpsc};
+#[cfg(target_os = "windows")]
+use tower::ServiceExt;
 use tracing::{info, warn};
 use url::{Url, form_urlencoded};
 
@@ -90,6 +96,10 @@ const DEFAULT_DOUBAN_IMAGE_PROXY_TYPE: &str = "cmliussss-cdn-tencent";
 const MAX_DOUBAN_RATING_IDS_PER_REQUEST: usize = 20;
 const DOUBAN_SEARCH_PAGE_SIZE: usize = 15;
 const MAX_DOUBAN_SEARCH_LIMIT: usize = 60;
+#[cfg(target_os = "windows")]
+const WINDOWS_SELF_PROBE_DELAY: Duration = Duration::from_millis(250);
+#[cfg(target_os = "windows")]
+const WINDOWS_SELF_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 
 const ADULT_SOURCE_MARKERS: &[&str] = &["🔞", "成人", "情色", "三级片", "三級", "porn", "av"];
 
@@ -1478,21 +1488,112 @@ pub async fn run(cli: Cli) -> Result<()> {
         state.config_path.display()
     );
 
-    serve_local_service(listener, app)
+    serve_local_service(listener, app, state.public_base_url.clone())
         .await
         .context("local service exited unexpectedly")
 }
 
 #[cfg(target_os = "windows")]
-async fn serve_local_service(listener: TcpListener, app: Router) -> std::io::Result<()> {
-    axum::serve(listener, app).await
+async fn serve_local_service(
+    listener: TcpListener,
+    app: Router,
+    base_url: String,
+) -> std::io::Result<()> {
+    info!("using Windows HTTP/1 local service serve loop");
+    spawn_windows_local_service_self_probe(base_url);
+
+    loop {
+        let (stream, remote_addr) = listener.accept().await?;
+        info!("accepted local service connection from {remote_addr}");
+
+        let service = app.clone().map_request(|request| request.map(Body::new));
+        tokio::spawn(async move {
+            let io = TokioIo::new(stream);
+            let hyper_service = TowerToHyperService::new(service);
+
+            if let Err(error) = http1::Builder::new()
+                .serve_connection(io, hyper_service)
+                .await
+            {
+                warn!("failed to serve local service connection from {remote_addr}: {error}");
+            }
+        });
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
-async fn serve_local_service(listener: TcpListener, app: Router) -> std::io::Result<()> {
+async fn serve_local_service(
+    listener: TcpListener,
+    app: Router,
+    _base_url: String,
+) -> std::io::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_windows_local_service_self_probe(base_url: String) {
+    tokio::spawn(async move {
+        tokio::time::sleep(WINDOWS_SELF_PROBE_DELAY).await;
+
+        match tokio::task::spawn_blocking(move || blocking_local_service_health_probe(&base_url))
+            .await
+        {
+            Ok(Ok(status_code)) => {
+                info!("local service self-probe succeeded with HTTP {status_code}");
+            }
+            Ok(Err(error)) => {
+                warn!("local service self-probe failed: {error}");
+            }
+            Err(error) => {
+                warn!("local service self-probe join failed: {error}");
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn blocking_local_service_health_probe(base_url: &str) -> std::result::Result<u16, String> {
+    let authority = local_service_authority(base_url)?;
+    let request = build_local_service_health_request(&authority);
+    let address = authority
+        .parse::<std::net::SocketAddr>()
+        .map_err(|error| format!("invalid local service address {authority}: {error}"))?;
+
+    let mut stream = std::net::TcpStream::connect_timeout(&address, WINDOWS_SELF_PROBE_TIMEOUT)
+        .map_err(|error| format!("tcp connect failed: {error}"))?;
+    stream
+        .set_write_timeout(Some(WINDOWS_SELF_PROBE_TIMEOUT))
+        .map_err(|error| format!("failed to set probe write timeout: {error}"))?;
+    stream
+        .set_read_timeout(Some(WINDOWS_SELF_PROBE_TIMEOUT))
+        .map_err(|error| format!("failed to set probe read timeout: {error}"))?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| format!("failed to write probe request: {error}"))?;
+
+    let mut buffer = [0_u8; 1024];
+    let bytes_read = stream
+        .read(&mut buffer)
+        .map_err(|error| format!("failed to read probe response: {error}"))?;
+    if bytes_read == 0 {
+        return Err("probe response closed before sending data".to_string());
+    }
+
+    let response_head = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let status_line = response_head
+        .lines()
+        .next()
+        .map(str::trim)
+        .unwrap_or_default();
+
+    status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| format!("invalid probe response status line: {status_line}"))?
+        .parse::<u16>()
+        .map_err(|error| format!("invalid probe response status line: {status_line}; {error}"))
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -2116,6 +2217,24 @@ async fn build_profile_sync_status_payload(
             error: Some(error.to_string()),
         },
     }
+}
+
+#[cfg(target_os = "windows")]
+fn local_service_authority(base_url: &str) -> std::result::Result<String, String> {
+    base_url
+        .trim()
+        .trim_end_matches('/')
+        .strip_prefix("http://")
+        .map(str::to_string)
+        .filter(|authority| !authority.is_empty())
+        .ok_or_else(|| format!("unsupported local service base URL: {base_url}"))
+}
+
+#[cfg(target_os = "windows")]
+fn build_local_service_health_request(authority: &str) -> String {
+    format!(
+        "GET /health HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nAccept: application/json\r\n\r\n"
+    )
 }
 
 async fn response_from_upstream(upstream_response: reqwest::Response) -> AppResult<Response> {

@@ -2338,6 +2338,8 @@ dependencies = [
  "flate2",
  "futures",
  "html-escape",
+ "hyper",
+ "hyper-util",
  "md-5",
  "moontv-storage",
  "rand",

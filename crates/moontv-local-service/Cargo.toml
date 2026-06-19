@@ -15,6 +15,8 @@ clap.workspace = true
 flate2 = "1.1.9"
 futures.workspace = true
 html-escape.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 md-5 = "0.10.6"
 moontv-storage = { path = "../moontv-storage" }
 rand = "0.9.4"

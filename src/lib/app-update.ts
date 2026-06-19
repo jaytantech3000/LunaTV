@@ -11,6 +11,12 @@ import {
 
 const AUTO_DOWNLOAD_STORAGE_KEY = 'lunatv:desktop-updater:auto-download';
 const RELEASE_PAGE_URL = getReleasePageUrl();
+export const DESKTOP_UPDATER_UNSUPPORTED_MESSAGE =
+  '当前版本暂不支持应用内更新。';
+export const DESKTOP_UPDATER_CONNECTION_MESSAGE =
+  '更新源连接失败，请稍后重试。';
+export const DESKTOP_UPDATER_CHECK_FAILED_MESSAGE =
+  '检查更新失败，请稍后重试。';
 
 export type AppUpdatePhase =
   | 'idle'
@@ -197,7 +203,37 @@ function isDownloadedUpdateReady(version?: string | null) {
   return !version || downloadedUpdate.version === version;
 }
 
-function getFriendlyDesktopUpdaterError(error: unknown) {
+function isMissingUpdaterConfiguration(normalized: string) {
+  return (
+    normalized.includes('pubkey') ||
+    normalized.includes('no updater endpoints') ||
+    normalized.includes('missing updater endpoint') ||
+    (normalized.includes('updater endpoint') &&
+      normalized.includes('not configured')) ||
+    (normalized.includes('updater endpoints') &&
+      normalized.includes('not configured')) ||
+    (normalized.includes('updater configuration') &&
+      normalized.includes('not configured')) ||
+    normalized.includes('missing required updater configuration') ||
+    normalized.includes('plugin-updater is not initialized') ||
+    normalized.includes('updater plugin is not initialized') ||
+    normalized.includes('updater disabled')
+  );
+}
+
+function isUpdaterTransportError(normalized: string) {
+  return (
+    normalized.includes('tls') ||
+    normalized.includes('certificate') ||
+    normalized.includes('timed out') ||
+    normalized.includes('timeout') ||
+    normalized.includes('connection refused') ||
+    normalized.includes('network') ||
+    normalized.includes('dns')
+  );
+}
+
+export function getFriendlyDesktopUpdaterError(error: unknown) {
   const message =
     error instanceof Error
       ? error.message
@@ -207,23 +243,18 @@ function getFriendlyDesktopUpdaterError(error: unknown) {
   const normalized = message.toLowerCase();
 
   if (!normalized) {
-    return '检查更新失败，请稍后重试。';
+    return DESKTOP_UPDATER_CHECK_FAILED_MESSAGE;
   }
 
-  if (
-    normalized.includes('pubkey') ||
-    normalized.includes('endpoint') ||
-    normalized.includes('updater') ||
-    normalized.includes('configuration')
-  ) {
-    return '当前版本暂不支持应用内更新。';
+  if (isMissingUpdaterConfiguration(normalized)) {
+    return DESKTOP_UPDATER_UNSUPPORTED_MESSAGE;
   }
 
-  if (normalized.includes('tls') || normalized.includes('https')) {
-    return '更新源连接失败，请稍后重试。';
+  if (isUpdaterTransportError(normalized)) {
+    return DESKTOP_UPDATER_CONNECTION_MESSAGE;
   }
 
-  return '检查更新失败，请稍后重试。';
+  return DESKTOP_UPDATER_CHECK_FAILED_MESSAGE;
 }
 
 function getDownloadProgressState(
@@ -417,7 +448,13 @@ function buildRemoteState(
   const updateStatus = compareVersions(remoteVersion, CURRENT_VERSION);
   const hasUpdate = updateStatus === UpdateStatus.HAS_UPDATE;
   const fallbackStatusMessage = hasUpdate
-    ? desktopUpdaterErrorMessage || '发现新版本，请打开发布页下载最新版。'
+    ? desktopUpdaterErrorMessage === DESKTOP_UPDATER_UNSUPPORTED_MESSAGE
+      ? '检测到新版本，但当前版本暂不支持应用内更新，请打开发布页下载最新版。'
+      : desktopUpdaterErrorMessage === DESKTOP_UPDATER_CONNECTION_MESSAGE
+      ? '检测到新版本，但应用内更新暂时不可用，请打开发布页下载最新版或稍后重试。'
+      : desktopUpdaterErrorMessage
+      ? '检测到新版本，但应用内更新检查未完成，请打开发布页下载最新版。'
+      : '发现新版本，请打开发布页下载最新版。'
     : '当前已是最新版本。';
 
   return {
@@ -456,6 +493,67 @@ async function checkRemoteUpdates(desktopUpdaterErrorMessage?: string | null) {
   });
 
   return state;
+}
+
+export function isDesktopUpdaterAvailable(
+  updateState: Pick<AppUpdateState, 'canUseDesktopUpdater' | 'source'>
+) {
+  return (
+    updateState.canUseDesktopUpdater &&
+    updateState.source === 'desktop-updater'
+  );
+}
+
+export function getAutoDownloadDescription(
+  updateState: Pick<
+    AppUpdateState,
+    | 'autoDownloadEnabled'
+    | 'canUseDesktopUpdater'
+    | 'errorMessage'
+    | 'phase'
+    | 'source'
+    | 'updateStatus'
+  >
+) {
+  const desktopUpdaterAvailable = isDesktopUpdaterAvailable(updateState);
+  const isAutoDownloadInProgress =
+    desktopUpdaterAvailable &&
+    updateState.autoDownloadEnabled &&
+    updateState.phase === 'downloading';
+  const hasAutoDownloadedUpdate =
+    desktopUpdaterAvailable &&
+    updateState.autoDownloadEnabled &&
+    updateState.phase === 'downloaded';
+  const isAutoInstallingUpdate =
+    desktopUpdaterAvailable &&
+    updateState.autoDownloadEnabled &&
+    updateState.phase === 'installing';
+
+  if (isAutoDownloadInProgress) {
+    return '正在自动下载最新版，完成后可直接安装。';
+  }
+
+  if (isAutoInstallingUpdate) {
+    return '正在安装更新，请稍候。';
+  }
+
+  if (hasAutoDownloadedUpdate) {
+    return '最新版已自动下载完成，点击上方安装即可。';
+  }
+
+  if (desktopUpdaterAvailable) {
+    return '检测到新版本后自动下载最新版，安装仍需你手动确认。';
+  }
+
+  if (updateState.updateStatus === UpdateStatus.HAS_UPDATE) {
+    return '检测到新版本，但当前环境暂时只能前往发布页下载最新版。';
+  }
+
+  if (updateState.errorMessage === DESKTOP_UPDATER_UNSUPPORTED_MESSAGE) {
+    return '当前版本暂不支持应用内更新，请前往发布页获取后续版本。';
+  }
+
+  return '当前环境暂时不能使用应用内更新，可稍后重新检查。';
 }
 
 async function checkDesktopUpdates(allowAutoDownload: boolean) {

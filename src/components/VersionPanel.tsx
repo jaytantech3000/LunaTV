@@ -24,7 +24,9 @@ import {
   type AppUpdateState,
   checkForAppUpdates,
   downloadLatestVersion,
+  getAutoDownloadDescription,
   installDownloadedUpdate,
+  isDesktopUpdaterAvailable,
   setAutoDownloadEnabled,
 } from '@/lib/app-update';
 import {
@@ -423,36 +425,14 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
   const updatePhaseRef = useRef(updateState.phase);
   const changelogCopy = CHANGELOG_COPY[changelogLocale];
   const isDesktopTarget = getRuntimeConfig().APP_TARGET === 'desktop';
-  const isDesktopUpdaterAvailable =
-    updateState.canUseDesktopUpdater &&
-    updateState.source === 'desktop-updater';
-  const isAutoDownloadInProgress =
-    isDesktopUpdaterAvailable &&
-    updateState.autoDownloadEnabled &&
-    updateState.phase === 'downloading';
-  const hasAutoDownloadedUpdate =
-    isDesktopUpdaterAvailable &&
-    updateState.autoDownloadEnabled &&
-    updateState.phase === 'downloaded';
-  const isAutoInstallingUpdate =
-    isDesktopUpdaterAvailable &&
-    updateState.autoDownloadEnabled &&
-    updateState.phase === 'installing';
+  const desktopUpdaterAvailable = isDesktopUpdaterAvailable(updateState);
   const latestKnownVersion =
     updateState.latestVersion || remoteChangelog[0]?.version || CURRENT_VERSION;
   const localVersions = changelog.map((entry) => entry.version);
   const remoteOnlyEntries = remoteChangelog.filter(
     (entry) => !localVersions.includes(entry.version)
   );
-  const autoDownloadDescription = isAutoDownloadInProgress
-    ? '正在自动下载最新版，完成后可直接安装。'
-    : isAutoInstallingUpdate
-    ? '正在安装更新，请稍候。'
-    : hasAutoDownloadedUpdate
-    ? '最新版已自动下载完成，点击上方安装即可。'
-    : isDesktopUpdaterAvailable
-    ? '检测到新版本后自动下载最新版，安装仍需你手动确认。'
-    : '当前桌面构建尚未配置应用内更新源。';
+  const autoDownloadDescription = getAutoDownloadDescription(updateState);
   const updateStatusTitle = getUpdateStatusTitle(updateState);
   const shouldShowUpdateStatusMessage =
     Boolean(updateState.statusMessage) &&
@@ -686,7 +666,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     检查更新
                   </button>
 
-                  {isDesktopUpdaterAvailable &&
+                  {desktopUpdaterAvailable &&
                   updateState.phase === 'available' ? (
                     <button
                       type='button'
@@ -699,7 +679,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     </button>
                   ) : null}
 
-                  {isDesktopUpdaterAvailable &&
+                  {desktopUpdaterAvailable &&
                   updateState.phase === 'downloaded' ? (
                     <button
                       type='button'
@@ -731,7 +711,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
             {isDesktopTarget ? (
               <div
                 className={`flex items-center justify-between rounded-lg border p-4 ${
-                  isDesktopUpdaterAvailable
+                  desktopUpdaterAvailable
                     ? 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900/60'
                     : 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40'
                 }`}
@@ -746,7 +726,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                 </div>
                 <label
                   className={`flex items-center ${
-                    isDesktopUpdaterAvailable
+                    desktopUpdaterAvailable
                       ? 'cursor-pointer'
                       : 'cursor-not-allowed opacity-60'
                   }`}
@@ -756,7 +736,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                       type='checkbox'
                       className='peer sr-only'
                       checked={updateState.autoDownloadEnabled}
-                      disabled={!isDesktopUpdaterAvailable}
+                      disabled={!desktopUpdaterAvailable}
                       onChange={(event) =>
                         setAutoDownloadEnabled(event.target.checked)
                       }
