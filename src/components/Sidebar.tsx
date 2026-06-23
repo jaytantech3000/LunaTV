@@ -17,7 +17,7 @@ import {
   Tv,
 } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   type MouseEvent,
   createContext,
@@ -25,13 +25,13 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useState,
 } from 'react';
 import { flushSync } from 'react-dom';
 
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 import { getRuntimeConfig } from '@/lib/runtime-config';
+import { useBrowserLocation } from '@/hooks/useBrowserLocation';
 
 import {
   isModifiedNavigationEvent,
@@ -79,7 +79,7 @@ declare global {
 const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const browserLocation = useBrowserLocation();
   const { beginNavigation, pendingNavigation } = useNavigationFeedback();
   const followUpdatesHref = '/follow-updates';
   // 若同一次 SPA 会话中已经读取过折叠状态，则直接复用，避免闪烁
@@ -114,10 +114,7 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
     }
   }, [isCollapsed]);
 
-  const currentFullPath = useMemo(() => {
-    const queryString = searchParams.toString();
-    return queryString ? `${pathname}?${queryString}` : pathname;
-  }, [pathname, searchParams]);
+  const currentFullPath = activePath ?? (browserLocation.href || pathname);
 
   const [active, setActive] = useState(activePath ?? currentFullPath);
 

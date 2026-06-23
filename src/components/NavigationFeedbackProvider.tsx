@@ -1,7 +1,6 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
-import { usePathname, useSearchParams } from 'next/navigation';
 import {
   type ReactNode,
   createContext,
@@ -12,6 +11,8 @@ import {
   useRef,
   useState,
 } from 'react';
+
+import { useBrowserLocation } from '@/hooks/useBrowserLocation';
 
 interface PendingNavigationState {
   href: string;
@@ -66,9 +67,7 @@ export function NavigationFeedbackProvider({
 }: {
   children: ReactNode;
 }) {
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const searchParamsKey = searchParams.toString();
+  const { href: currentHref } = useBrowserLocation();
   const [pendingNavigation, setPendingNavigation] =
     useState<PendingNavigationState | null>(null);
   const clearTimerRef = useRef<number | null>(null);
@@ -110,7 +109,7 @@ export function NavigationFeedbackProvider({
 
   useEffect(() => {
     clearNavigation();
-  }, [pathname, searchParamsKey, clearNavigation]);
+  }, [clearNavigation, currentHref]);
 
   useEffect(
     () => () => {
