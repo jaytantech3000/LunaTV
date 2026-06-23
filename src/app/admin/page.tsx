@@ -45,8 +45,8 @@ import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { isAdultSourceCandidate } from '@/lib/yellow';
 
-import DesktopDiagnosticsAdminPanel from '@/components/DesktopDiagnosticsAdminPanel';
 import DataMigration from '@/components/DataMigration';
+import DesktopDiagnosticsAdminPanel from '@/components/DesktopDiagnosticsAdminPanel';
 import PageLayout from '@/components/PageLayout';
 
 // 统一按钮样式系统
