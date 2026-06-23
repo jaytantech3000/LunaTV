@@ -147,6 +147,7 @@ function shouldSkipAuth(pathname: string): boolean {
     '/manifest.json',
     '/sw.js',
     '/api/client-download',
+    '/api/desktop/diagnostics/upload',
   ]);
 
   if (skipExactPaths.has(pathname)) {
