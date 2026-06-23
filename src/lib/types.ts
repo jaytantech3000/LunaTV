@@ -32,6 +32,20 @@ export interface Favorite {
   origin?: 'vod' | 'live';
 }
 
+// 追更数据结构
+export interface FollowRecord {
+  title: string;
+  source_name: string;
+  year: string;
+  cover: string;
+  search_title?: string;
+  followed_at: number; // 开启追更时间
+  followed_episode_count: number; // 开启追更时的真实集数
+  acknowledged_episode_count: number; // 用户已确认看到的最新集数
+  latest_episode_count: number; // 最近一次已知的最新集数
+  last_checked_at: number; // 最近检查时间
+}
+
 // 存储接口
 export interface IStorage {
   // 播放记录相关
@@ -51,6 +65,19 @@ export interface IStorage {
   getAllFavorites(userName: string): Promise<{ [key: string]: Favorite }>;
   deleteFavorite(userName: string, key: string): Promise<void>;
   deleteAllFavorites(userName: string): Promise<void>;
+
+  // 追更相关
+  getFollowRecord(userName: string, key: string): Promise<FollowRecord | null>;
+  setFollowRecord(
+    userName: string,
+    key: string,
+    follow: FollowRecord
+  ): Promise<void>;
+  getAllFollowRecords(userName: string): Promise<{
+    [key: string]: FollowRecord;
+  }>;
+  deleteFollowRecord(userName: string, key: string): Promise<void>;
+  deleteAllFollowRecords(userName: string): Promise<void>;
 
   // 用户相关
   registerUser(userName: string, password: string): Promise<void>;

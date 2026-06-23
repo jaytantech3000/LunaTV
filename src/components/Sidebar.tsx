@@ -4,6 +4,7 @@
 
 import {
   Cat,
+  Clock3,
   Clover,
   Download,
   Film,
@@ -30,6 +31,7 @@ import {
 import { flushSync } from 'react-dom';
 
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
+import { getRuntimeConfig } from '@/lib/runtime-config';
 
 import {
   isModifiedNavigationEvent,
@@ -79,6 +81,7 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { beginNavigation, pendingNavigation } = useNavigationFeedback();
+  const followUpdatesHref = '/follow-updates';
   // 若同一次 SPA 会话中已经读取过折叠状态，则直接复用，避免闪烁
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
     if (
@@ -206,6 +209,7 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
       href: '/douban?type=show',
     },
   ]);
+  const [showFollowUpdatesEntry, setShowFollowUpdatesEntry] = useState(false);
 
   useEffect(() => {
     const applyRuntimeMenuItems = () => {
@@ -226,6 +230,26 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
     };
   }, [buildDiscoveryMenuItems]);
 
+  useEffect(() => {
+    const syncFollowUpdatesEntryVisibility = () => {
+      const runtimeConfig = getRuntimeConfig();
+      setShowFollowUpdatesEntry(runtimeConfig.APP_TARGET === 'desktop');
+    };
+
+    syncFollowUpdatesEntryVisibility();
+    window.addEventListener(
+      DESKTOP_RUNTIME_UPDATED_EVENT,
+      syncFollowUpdatesEntryVisibility
+    );
+
+    return () => {
+      window.removeEventListener(
+        DESKTOP_RUNTIME_UPDATED_EVENT,
+        syncFollowUpdatesEntryVisibility
+      );
+    };
+  }, []);
+
   const prefetchRoute = useCallback(
     (href: string) => {
       router.prefetch(href);
@@ -238,6 +262,7 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
       '/',
       '/search',
       '/downloads',
+      ...(showFollowUpdatesEntry ? [followUpdatesHref] : []),
       ...menuItems.map((item) => item.href),
     ];
     const uniqueTargets = Array.from(new Set(prefetchTargets));
@@ -248,7 +273,7 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [menuItems, prefetchRoute]);
+  }, [followUpdatesHref, menuItems, prefetchRoute, showFollowUpdatesEntry]);
 
   const handleNavPointerDown = useCallback(
     (href: string) => {
@@ -439,6 +464,35 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
                   <Loader2 className='ml-auto h-3.5 w-3.5 animate-spin text-green-600 dark:text-green-400' />
                 ) : null}
               </Link>
+              {showFollowUpdatesEntry ? (
+                <Link
+                  href={followUpdatesHref}
+                  prefetch
+                  onPointerDown={() => handleNavPointerDown(followUpdatesHref)}
+                  onClick={(event) =>
+                    handleNavClick(event, followUpdatesHref, '追更')
+                  }
+                  onMouseEnter={() => prefetchRoute(followUpdatesHref)}
+                  onFocus={() => prefetchRoute(followUpdatesHref)}
+                  data-active={isPathActive(followUpdatesHref)}
+                  className={`group flex items-center rounded-lg px-2 py-2 pl-4 text-gray-700 hover:bg-gray-100/30 hover:text-green-600 data-[active=true]:bg-green-500/20 data-[active=true]:text-green-700 font-medium transition-colors duration-200 min-h-[40px] dark:text-gray-300 dark:hover:text-green-400 dark:data-[active=true]:bg-green-500/10 dark:data-[active=true]:text-green-400 ${
+                    isCollapsed ? 'w-full max-w-none mx-0' : 'mx-0'
+                  } gap-3 justify-start`}
+                >
+                  <div className='w-4 h-4 flex items-center justify-center'>
+                    <Clock3 className='h-4 w-4 text-gray-500 group-hover:text-green-600 data-[active=true]:text-green-700 dark:text-gray-400 dark:group-hover:text-green-400 dark:data-[active=true]:text-green-400' />
+                  </div>
+                  {!isCollapsed && (
+                    <span className='whitespace-nowrap transition-opacity duration-200 opacity-100'>
+                      追更
+                    </span>
+                  )}
+                  {pendingNavigationHref === followUpdatesHref &&
+                  !isCollapsed ? (
+                    <Loader2 className='ml-auto h-3.5 w-3.5 animate-spin text-green-600 dark:text-green-400' />
+                  ) : null}
+                </Link>
+              ) : null}
             </nav>
 
             {/* 菜单项 */}

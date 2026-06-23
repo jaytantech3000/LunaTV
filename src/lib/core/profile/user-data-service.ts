@@ -1,6 +1,6 @@
 import { ProfileContext } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { Favorite, PlayRecord, SkipConfig } from '@/lib/types';
+import { Favorite, FollowRecord, PlayRecord, SkipConfig } from '@/lib/types';
 
 import { parseCompositeProfileKey, ProfileServiceError } from './service';
 
@@ -17,6 +17,12 @@ function assertValidPlayRecord(record: PlayRecord): void {
 function assertValidFavorite(favorite: Favorite): void {
   if (!favorite.title || !favorite.source_name) {
     throw new ProfileServiceError('Invalid favorite data', 400);
+  }
+}
+
+function assertValidFollowRecord(follow: FollowRecord): void {
+  if (!follow.title || follow.followed_episode_count < 1) {
+    throw new ProfileServiceError('Invalid follow data', 400);
   }
 }
 
@@ -116,6 +122,79 @@ export async function deleteAllFavorites(
   profileContext: ProfileContext
 ): Promise<void> {
   await db.deleteAllFavorites(getProfileUsername(profileContext));
+}
+
+export async function getFollowRecord(
+  profileContext: ProfileContext,
+  key: string
+) {
+  const { source, id } = parseCompositeProfileKey(key, 'Invalid key format');
+
+  return db.getFollowRecord(getProfileUsername(profileContext), source, id);
+}
+
+export async function getAllFollowRecords(profileContext: ProfileContext) {
+  return db.getAllFollowRecords(getProfileUsername(profileContext));
+}
+
+export async function saveFollowRecord(
+  profileContext: ProfileContext,
+  params: {
+    key: string;
+    follow: FollowRecord;
+  }
+): Promise<void> {
+  assertValidFollowRecord(params.follow);
+
+  const { source, id } = parseCompositeProfileKey(
+    params.key,
+    'Invalid key format'
+  );
+  const now = Date.now();
+  const followedEpisodeCount = Math.max(
+    1,
+    Number(params.follow.followed_episode_count) || 1
+  );
+  const acknowledgedEpisodeCount = Math.max(
+    1,
+    Number(params.follow.acknowledged_episode_count) || followedEpisodeCount
+  );
+  const latestEpisodeCount = Math.max(
+    followedEpisodeCount,
+    acknowledgedEpisodeCount,
+    Number(params.follow.latest_episode_count) || followedEpisodeCount
+  );
+
+  const finalFollow: FollowRecord = {
+    ...params.follow,
+    followed_at: params.follow.followed_at ?? now,
+    followed_episode_count: followedEpisodeCount,
+    acknowledged_episode_count: acknowledgedEpisodeCount,
+    latest_episode_count: latestEpisodeCount,
+    last_checked_at: params.follow.last_checked_at ?? now,
+  };
+
+  await db.saveFollowRecord(
+    getProfileUsername(profileContext),
+    source,
+    id,
+    finalFollow
+  );
+}
+
+export async function deleteFollowRecord(
+  profileContext: ProfileContext,
+  key: string
+): Promise<void> {
+  const { source, id } = parseCompositeProfileKey(key, 'Invalid key format');
+
+  await db.deleteFollowRecord(getProfileUsername(profileContext), source, id);
+}
+
+export async function deleteAllFollowRecords(
+  profileContext: ProfileContext
+): Promise<void> {
+  await db.deleteAllFollowRecords(getProfileUsername(profileContext));
 }
 
 export async function getSearchHistory(profileContext: ProfileContext) {

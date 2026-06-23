@@ -54,6 +54,8 @@ describe('Sidebar', () => {
     jest.clearAllMocks();
     localStorage.clear();
     delete window.__sidebarCollapsed;
+    delete window.RUNTIME_CONFIG;
+    document.cookie = 'auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
   });
 
   afterEach(() => {
@@ -82,5 +84,19 @@ describe('Sidebar', () => {
     });
 
     expect(mockRouter.push).toHaveBeenCalledWith('/douban?type=movie');
+  });
+
+  it('shows the follow-updates entry on desktop', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+    };
+
+    render(
+      <SiteProvider siteName='LunaTV'>
+        <Sidebar activePath='/follow-updates' />
+      </SiteProvider>
+    );
+
+    expect(await screen.findByText('追更')).toBeInTheDocument();
   });
 });

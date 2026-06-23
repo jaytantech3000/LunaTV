@@ -4,7 +4,13 @@ import { AdminConfig } from './admin.types';
 import { KvrocksStorage } from './kvrocks.db';
 import { RedisStorage } from './redis.db';
 import { getConfiguredStorageType } from './runtime/storage-mode';
-import { Favorite, IStorage, PlayRecord, SkipConfig } from './types';
+import {
+  Favorite,
+  FollowRecord,
+  IStorage,
+  PlayRecord,
+  SkipConfig,
+} from './types';
 import { UpstashRedisStorage } from './upstash.db';
 
 const STORAGE_TYPE = getConfiguredStorageType();
@@ -157,6 +163,46 @@ export class DbManager {
   ): Promise<boolean> {
     const favorite = await this.getFavorite(userName, source, id);
     return favorite !== null;
+  }
+
+  // 追更相关方法
+  async getFollowRecord(
+    userName: string,
+    source: string,
+    id: string
+  ): Promise<FollowRecord | null> {
+    const key = generateStorageKey(source, id);
+    return this.storage.getFollowRecord(userName, key);
+  }
+
+  async saveFollowRecord(
+    userName: string,
+    source: string,
+    id: string,
+    follow: FollowRecord
+  ): Promise<void> {
+    const key = generateStorageKey(source, id);
+    await this.storage.setFollowRecord(userName, key, follow);
+  }
+
+  async getAllFollowRecords(userName: string): Promise<{
+    [key: string]: FollowRecord;
+  }> {
+    await this.ensureMigrated();
+    return this.storage.getAllFollowRecords(userName);
+  }
+
+  async deleteFollowRecord(
+    userName: string,
+    source: string,
+    id: string
+  ): Promise<void> {
+    const key = generateStorageKey(source, id);
+    await this.storage.deleteFollowRecord(userName, key);
+  }
+
+  async deleteAllFollowRecords(userName: string): Promise<void> {
+    await this.storage.deleteAllFollowRecords(userName);
   }
 
   // ---------- 用户相关 ----------

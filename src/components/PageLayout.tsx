@@ -1,6 +1,7 @@
 import { BackButton } from './BackButton';
 import DesktopDownloadStoreSync from './DesktopDownloadStoreSync';
 import DownloadSessionSync from './DownloadSessionSync';
+import FollowUpdatesSync from './FollowUpdatesSync';
 import GlobalRatingFilterControl from './GlobalRatingFilterControl';
 import MobileBottomNav from './MobileBottomNav';
 import MobileHeader from './MobileHeader';
@@ -20,6 +21,7 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
       <div className='w-full min-h-screen'>
         <DownloadSessionSync />
         <DesktopDownloadStoreSync />
+        <FollowUpdatesSync />
 
         {/* 移动端头部 */}
         <MobileHeader

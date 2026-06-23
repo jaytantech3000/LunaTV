@@ -63,6 +63,8 @@ interface EpisodeSelectorProps {
   onEpisodeHeaderAction?: () => void;
   episodeHeaderActionDisabled?: boolean;
   episodeHeaderActionTitle?: string;
+  newEpisodeStart?: number;
+  newEpisodeEnd?: number;
 }
 
 /**
@@ -92,6 +94,8 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   onEpisodeHeaderAction,
   episodeHeaderActionDisabled = false,
   episodeHeaderActionTitle,
+  newEpisodeStart,
+  newEpisodeEnd,
 }) => {
   const router = useRouter();
   const pageCount = Math.ceil(totalEpisodes / episodesPerPage);
@@ -562,14 +566,25 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                   return episodes;
                 })().map((episodeNumber) => {
                   const isActive = episodeNumber === value;
+                  const isNewEpisode =
+                    typeof newEpisodeStart === 'number' &&
+                    typeof newEpisodeEnd === 'number' &&
+                    episodeNumber >= newEpisodeStart &&
+                    episodeNumber <= newEpisodeEnd;
                   return (
                     <button
                       key={episodeNumber}
                       onClick={() => handleEpisodeClick(episodeNumber - 1)}
-                      className={`h-10 min-w-10 px-3 py-2 flex items-center justify-center text-sm font-medium rounded-md transition-all duration-200 whitespace-nowrap font-mono
+                      className={`relative h-10 min-w-10 px-3 py-2 flex items-center justify-center text-sm font-medium rounded-md border transition-all duration-200 whitespace-nowrap font-mono
                         ${
                           isActive
-                            ? 'bg-green-500 text-white shadow-lg shadow-green-500/25 dark:bg-green-600'
+                            ? `bg-green-500 text-white shadow-lg shadow-green-500/25 dark:bg-green-600 ${
+                                isNewEpisode
+                                  ? 'border-amber-200/80 ring-2 ring-amber-200/60'
+                                  : 'border-transparent'
+                              }`
+                            : isNewEpisode
+                            ? 'border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:scale-105 dark:border-amber-400/60 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/15'
                             : 'bg-gray-200 text-gray-700 hover:bg-gray-300 hover:scale-105 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20'
                         }`.trim()}
                     >
@@ -585,6 +600,17 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                         }
                         return title;
                       })()}
+                      {isNewEpisode && (
+                        <span
+                          className={`absolute right-1 top-1 rounded px-1 text-[9px] font-bold leading-none ${
+                            isActive
+                              ? 'bg-white/20 text-white'
+                              : 'bg-amber-500 text-white'
+                          }`}
+                        >
+                          新
+                        </span>
+                      )}
                     </button>
                   );
                 })}

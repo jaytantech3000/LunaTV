@@ -21,9 +21,12 @@ import {
   deleteSkipConfig,
   generateStorageKey,
   getAllPlayRecords,
+  getCachedFollowRecordsSnapshot,
+  getFollowRecord,
   getSkipConfig,
   isFavorited,
   saveFavorite,
+  saveFollowRecord,
   savePlayRecord,
   saveSkipConfig,
   subscribeToDataUpdates,
@@ -54,6 +57,12 @@ import { sanitizeVodManifestContent } from '@/lib/download/sanitize-manifest';
 import { ensureOfflineServiceWorkerReady } from '@/lib/download/service-worker';
 import { buildDownloadContentId } from '@/lib/download/types';
 import {
+  advanceAcknowledgedEpisodeCount,
+  getNewEpisodeRange,
+  isDesktopFollowUpdatesEnabled,
+  mergeLatestEpisodeCountWithoutRegression,
+} from '@/lib/follow-updates';
+import {
   preferBestPlaybackSource,
   searchPlaybackSources,
 } from '@/lib/playback-source-prefetch';
@@ -77,7 +86,7 @@ import {
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { apiFetch } from '@/lib/transport/api-client';
-import { SearchResult } from '@/lib/types';
+import { FollowRecord, SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 import { isAdultContentResult } from '@/lib/yellow';
 
@@ -355,9 +364,8 @@ function PlayPageClient() {
     })();
   const downloadStoreHydrated = useDownloadStore((state) => state.hasHydrated);
   const offlineLibrary = useDownloadStore((state) => state.library);
-  const [activeOfflineContentId, setActiveOfflineContentId] = useState(
-    offlineContentId
-  );
+  const [activeOfflineContentId, setActiveOfflineContentId] =
+    useState(offlineContentId);
   const offlineContent = activeOfflineContentId
     ? offlineLibrary[activeOfflineContentId]
     : undefined;
@@ -409,6 +417,7 @@ function PlayPageClient() {
 
   // 收藏状态
   const [favorited, setFavorited] = useState(false);
+  const [followRecord, setFollowRecord] = useState<FollowRecord | null>(null);
 
   // 跳过片头片尾配置
   const [skipConfig, setSkipConfig] = useState<{
@@ -559,6 +568,7 @@ function PlayPageClient() {
   const videoYearRef = useRef(videoYear);
   const videoDoubanIdRef = useRef(videoDoubanId);
   const detailRef = useRef<SearchResult | null>(detail);
+  const followRecordRef = useRef<FollowRecord | null>(followRecord);
   const currentEpisodeIndexRef = useRef(currentEpisodeIndex);
   const offlineEpisodeEntriesRef = useRef<OfflinePlaybackEpisodeEntry[]>([]);
   const episodeProgressMapRef = useRef<Record<number, number>>({});
@@ -570,6 +580,7 @@ function PlayPageClient() {
     currentSourceRef.current = currentSource;
     currentIdRef.current = currentId;
     detailRef.current = detail;
+    followRecordRef.current = followRecord;
     currentEpisodeIndexRef.current = currentEpisodeIndex;
     videoTitleRef.current = videoTitle;
     videoYearRef.current = videoYear;
@@ -578,6 +589,7 @@ function PlayPageClient() {
     currentSource,
     currentId,
     detail,
+    followRecord,
     currentEpisodeIndex,
     videoTitle,
     videoYear,
@@ -1656,8 +1668,8 @@ function PlayPageClient() {
       const restoreKey = `${currentSource}:${currentId}:${
         isOfflineMode
           ? offlineEpisodeEntries
-              .map((episode) =>
-                `${episode.contentId}:${episode.episodeIndex + 1}`
+              .map(
+                (episode) => `${episode.contentId}:${episode.episodeIndex + 1}`
               )
               .join('|')
           : 'online'
@@ -1968,7 +1980,8 @@ function PlayPageClient() {
       return;
     }
 
-    const requestedEpisodeIndex = targetOfflineContent.episodes[0]?.episodeIndex ?? 0;
+    const requestedEpisodeIndex =
+      targetOfflineContent.episodes[0]?.episodeIndex ?? 0;
     const mappedTargetIndex = episodeEntries.findIndex(
       (episode) =>
         episode.contentId === targetOfflineContent.contentId &&
@@ -2014,9 +2027,8 @@ function PlayPageClient() {
         episodeNumber
       );
 
-      resumeTimeRef.current = storedProgress && storedProgress > 0
-        ? storedProgress
-        : null;
+      resumeTimeRef.current =
+        storedProgress && storedProgress > 0 ? storedProgress : null;
 
       setNeedPrefer(false);
       setActiveOfflineContentId(targetContent.contentId);
@@ -2144,6 +2156,34 @@ function PlayPageClient() {
           desc: detailRef.current?.desc,
         }),
       });
+
+      const currentFollowRecord = followRecordRef.current;
+      if (currentFollowRecord) {
+        const nextFollowRecord = advanceAcknowledgedEpisodeCount(
+          currentFollowRecord,
+          getPlaybackRecordEpisodeNumber(currentEpisodeIndexRef.current),
+          {
+            latestEpisodeCount: detailRef.current?.episodes.length || 1,
+            checkedAt: Date.now(),
+          }
+        );
+
+        if (
+          nextFollowRecord.acknowledged_episode_count !==
+            currentFollowRecord.acknowledged_episode_count ||
+          nextFollowRecord.latest_episode_count !==
+            currentFollowRecord.latest_episode_count ||
+          nextFollowRecord.last_checked_at !==
+            currentFollowRecord.last_checked_at
+        ) {
+          await saveFollowRecord(
+            currentSourceRef.current,
+            currentIdRef.current,
+            nextFollowRecord
+          );
+          setFollowRecord(nextFollowRecord);
+        }
+      }
 
       lastSaveTimeRef.current = Date.now();
       console.log('播放进度已保存:', {
@@ -2435,6 +2475,95 @@ function PlayPageClient() {
 
     return unsubscribe;
   }, [currentSource, currentId]);
+
+  useEffect(() => {
+    if (
+      !isDesktopFollowUpdatesEnabled() ||
+      isOfflineMode ||
+      !currentSource ||
+      !currentId
+    ) {
+      setFollowRecord(null);
+      return;
+    }
+
+    let active = true;
+    const key = generateStorageKey(currentSource, currentId);
+    const snapshot = getCachedFollowRecordsSnapshot();
+
+    if (snapshot) {
+      setFollowRecord(snapshot[key] || null);
+    }
+
+    void (async () => {
+      try {
+        const follow = await getFollowRecord(currentSource, currentId);
+        if (active) {
+          setFollowRecord(follow);
+        }
+      } catch (error) {
+        if (active) {
+          console.error('读取追更状态失败:', error);
+        }
+      }
+    })();
+
+    const unsubscribe = subscribeToDataUpdates<Record<string, FollowRecord>>(
+      'followRecordsUpdated',
+      (followRecords) => {
+        setFollowRecord(followRecords[key] || null);
+      }
+    );
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [currentSource, currentId, isOfflineMode]);
+
+  useEffect(() => {
+    if (
+      !followRecord ||
+      !currentSource ||
+      !currentId ||
+      !detail ||
+      !isDesktopFollowUpdatesEnabled()
+    ) {
+      return;
+    }
+
+    const nextFollowRecord = mergeLatestEpisodeCountWithoutRegression(
+      {
+        ...followRecord,
+        title: detail.title || followRecord.title,
+        source_name: detail.source_name || followRecord.source_name,
+        year: detail.year || followRecord.year,
+        cover: detail.poster || followRecord.cover,
+      },
+      detail.episodes.length || 1,
+      followRecord.last_checked_at
+    );
+    const shouldSave =
+      nextFollowRecord.title !== followRecord.title ||
+      nextFollowRecord.source_name !== followRecord.source_name ||
+      nextFollowRecord.year !== followRecord.year ||
+      nextFollowRecord.cover !== followRecord.cover ||
+      nextFollowRecord.latest_episode_count !==
+        followRecord.latest_episode_count;
+
+    if (!shouldSave) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        await saveFollowRecord(currentSource, currentId, nextFollowRecord);
+        setFollowRecord(nextFollowRecord);
+      } catch (error) {
+        console.error('同步追更最新集数失败:', error);
+      }
+    })();
+  }, [currentSource, currentId, detail, followRecord]);
 
   // 切换收藏
   const handleToggleFavorite = async () => {
@@ -3394,6 +3523,7 @@ function PlayPageClient() {
     detail.episodes.length > 0 &&
     currentEpisodeIndex >= 0 &&
     currentEpisodeIndex < detail.episodes.length;
+  const followNewEpisodeRange = getNewEpisodeRange(followRecord);
   const playbackInfoSearchTitle =
     offlineContent?.searchTitle || searchTitle || resolvedVideoTitle;
   const playbackInfoSearchType = offlineContent?.searchType || searchType;
@@ -3514,6 +3644,8 @@ function PlayPageClient() {
                 offlineSameTitleVideos.length === 0
               }
               episodeHeaderActionTitle='查看同名的其他离线视频'
+              newEpisodeStart={followNewEpisodeRange?.start}
+              newEpisodeEnd={followNewEpisodeRange?.end}
             />
           </div>
 
@@ -3749,8 +3881,7 @@ function PlayPageClient() {
                               alt={video.title}
                               className='h-full w-full object-cover'
                               onError={(event) => {
-                                const target =
-                                  event.target as HTMLImageElement;
+                                const target = event.target as HTMLImageElement;
                                 target.style.display = 'none';
                               }}
                             />

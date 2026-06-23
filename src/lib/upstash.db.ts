@@ -4,7 +4,13 @@ import { Redis } from '@upstash/redis';
 
 import { AdminConfig } from './admin.types';
 import { hashPassword, isHashed, verifyPassword } from './password';
-import { Favorite, IStorage, PlayRecord, SkipConfig } from './types';
+import {
+  Favorite,
+  FollowRecord,
+  IStorage,
+  PlayRecord,
+  SkipConfig,
+} from './types';
 
 // 搜索历史最大条数
 const SEARCH_HISTORY_LIMIT = 20;
@@ -161,6 +167,55 @@ export class UpstashRedisStorage implements IStorage {
     await withRetry(() => this.client.del(this.favHashKey(userName)));
   }
 
+  // ---------- 追更 ----------
+  private followHashKey(user: string) {
+    return `u:${user}:follow`;
+  }
+
+  async getFollowRecord(
+    userName: string,
+    key: string
+  ): Promise<FollowRecord | null> {
+    const val = await withRetry(() =>
+      this.client.hget(this.followHashKey(userName), key)
+    );
+    return val ? (val as FollowRecord) : null;
+  }
+
+  async setFollowRecord(
+    userName: string,
+    key: string,
+    follow: FollowRecord
+  ): Promise<void> {
+    await withRetry(() =>
+      this.client.hset(this.followHashKey(userName), { [key]: follow })
+    );
+  }
+
+  async getAllFollowRecords(
+    userName: string
+  ): Promise<Record<string, FollowRecord>> {
+    const all = await withRetry(() =>
+      this.client.hgetall(this.followHashKey(userName))
+    );
+    if (!all || Object.keys(all).length === 0) return {};
+    const result: Record<string, FollowRecord> = {};
+    for (const [field, value] of Object.entries(all)) {
+      if (value) {
+        result[field] = value as FollowRecord;
+      }
+    }
+    return result;
+  }
+
+  async deleteFollowRecord(userName: string, key: string): Promise<void> {
+    await withRetry(() => this.client.hdel(this.followHashKey(userName), key));
+  }
+
+  async deleteAllFollowRecords(userName: string): Promise<void> {
+    await withRetry(() => this.client.del(this.followHashKey(userName)));
+  }
+
   // ---------- 用户注册 / 登录 ----------
   private userPwdKey(user: string) {
     return `u:${user}:pwd`;
@@ -200,9 +255,7 @@ export class UpstashRedisStorage implements IStorage {
   // 修改用户密码
   async changePassword(userName: string, newPassword: string): Promise<void> {
     const hashed = hashPassword(newPassword);
-    await withRetry(() =>
-      this.client.set(this.userPwdKey(userName), hashed)
-    );
+    await withRetry(() => this.client.set(this.userPwdKey(userName), hashed));
   }
 
   // 删除用户及其所有数据
@@ -221,6 +274,9 @@ export class UpstashRedisStorage implements IStorage {
 
     // 删除收藏夹（Hash key 直接删除）
     await withRetry(() => this.client.del(this.favHashKey(userName)));
+
+    // 删除追更记录（Hash key 直接删除）
+    await withRetry(() => this.client.del(this.followHashKey(userName)));
 
     // 删除跳过片头片尾配置（Hash key 直接删除）
     await withRetry(() => this.client.del(this.skipHashKey(userName)));
@@ -264,7 +320,9 @@ export class UpstashRedisStorage implements IStorage {
   }
 
   async getAllUsers(): Promise<string[]> {
-    const members = await withRetry(() => this.client.smembers(this.usersSetKey()));
+    const members = await withRetry(() =>
+      this.client.smembers(this.usersSetKey())
+    );
     return ensureStringArray(members as any[]);
   }
 
@@ -348,14 +406,18 @@ export class UpstashRedisStorage implements IStorage {
 
   async migrateData(): Promise<void> {
     // 检查是否已迁移
-    const migrated = await withRetry(() => this.client.get(this.migrationKey()));
+    const migrated = await withRetry(() =>
+      this.client.get(this.migrationKey())
+    );
     if (migrated === 'done') return;
 
     console.log('开始数据迁移：扁平 key → Hash 结构...');
 
     try {
       // 迁移播放记录：u:*:pr:* → u:username:pr (Hash)
-      const prKeys: string[] = await withRetry(() => this.client.keys('u:*:pr:*'));
+      const prKeys: string[] = await withRetry(() =>
+        this.client.keys('u:*:pr:*')
+      );
       if (prKeys.length > 0) {
         const oldPrKeys = prKeys.filter((k) => {
           const parts = k.split(':');
@@ -380,7 +442,9 @@ export class UpstashRedisStorage implements IStorage {
       }
 
       // 迁移收藏：u:*:fav:* → u:username:fav (Hash)
-      const favKeys: string[] = await withRetry(() => this.client.keys('u:*:fav:*'));
+      const favKeys: string[] = await withRetry(() =>
+        this.client.keys('u:*:fav:*')
+      );
       if (favKeys.length > 0) {
         const oldFavKeys = favKeys.filter((k) => {
           const parts = k.split(':');
@@ -405,7 +469,9 @@ export class UpstashRedisStorage implements IStorage {
       }
 
       // 迁移 skipConfig：u:*:skip:* → u:username:skip (Hash)
-      const skipKeys: string[] = await withRetry(() => this.client.keys('u:*:skip:*'));
+      const skipKeys: string[] = await withRetry(() =>
+        this.client.keys('u:*:skip:*')
+      );
       if (skipKeys.length > 0) {
         const oldSkipKeys = skipKeys.filter((k) => {
           const parts = k.split(':');
@@ -430,9 +496,13 @@ export class UpstashRedisStorage implements IStorage {
       }
 
       // 迁移用户列表：从 KEYS u:*:pwd 构建 sys:users Set
-      const userSetExists = await withRetry(() => this.client.exists(this.usersSetKey()));
+      const userSetExists = await withRetry(() =>
+        this.client.exists(this.usersSetKey())
+      );
       if (!userSetExists) {
-        const pwdKeys: string[] = await withRetry(() => this.client.keys('u:*:pwd'));
+        const pwdKeys: string[] = await withRetry(() =>
+          this.client.keys('u:*:pwd')
+        );
         const userNames = pwdKeys
           .map((k) => {
             const match = k.match(/^u:(.+?):pwd$/);
@@ -440,7 +510,9 @@ export class UpstashRedisStorage implements IStorage {
           })
           .filter((u): u is string => typeof u === 'string');
         if (userNames.length > 0) {
-          await withRetry(() => this.client.sadd(this.usersSetKey(), userNames));
+          await withRetry(() =>
+            this.client.sadd(this.usersSetKey(), userNames)
+          );
           console.log(`迁移了 ${userNames.length} 个用户到 Set`);
         }
       }
@@ -459,13 +531,17 @@ export class UpstashRedisStorage implements IStorage {
   }
 
   async migratePasswords(): Promise<void> {
-    const migrated = await withRetry(() => this.client.get(this.pwdMigrationKey()));
+    const migrated = await withRetry(() =>
+      this.client.get(this.pwdMigrationKey())
+    );
     if (migrated === 'done') return;
 
     console.log('开始密码迁移：明文 → 加盐哈希...');
 
     try {
-      const pwdKeys: string[] = await withRetry(() => this.client.keys('u:*:pwd'));
+      const pwdKeys: string[] = await withRetry(() =>
+        this.client.keys('u:*:pwd')
+      );
       let count = 0;
 
       for (const key of pwdKeys) {

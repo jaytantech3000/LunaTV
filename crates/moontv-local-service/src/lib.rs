@@ -1715,6 +1715,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/playrecords", any(proxy_profile_sync_playrecords))
         .route("/api/favorites", any(proxy_profile_sync_favorites))
+        .route("/api/follows", any(proxy_profile_sync_follows))
         .route("/api/searchhistory", any(proxy_profile_sync_search_history))
         .route("/api/skipconfigs", any(proxy_profile_sync_skip_configs))
         .route("/api/admin/config", get(get_admin_config))
@@ -2125,6 +2126,13 @@ async fn proxy_profile_sync_playrecords(
 }
 
 async fn proxy_profile_sync_favorites(
+    State(state): State<AppState>,
+    request: Request,
+) -> AppResult<Response> {
+    proxy_profile_sync_passthrough(&state, request).await
+}
+
+async fn proxy_profile_sync_follows(
     State(state): State<AppState>,
     request: Request,
 ) -> AppResult<Response> {

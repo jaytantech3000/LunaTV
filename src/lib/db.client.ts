@@ -26,7 +26,7 @@ import {
   resolveSearchHistoryRawValue,
 } from './search-history';
 import { buildApiUrl } from './transport/endpoint';
-import { SkipConfig } from './types';
+import { type FollowRecord, SkipConfig } from './types';
 
 // 全局错误触发函数
 function triggerGlobalError(message: string) {
@@ -81,6 +81,7 @@ interface CacheData<T> {
 interface UserCacheStore {
   playRecords?: CacheData<Record<string, PlayRecord>>;
   favorites?: CacheData<Record<string, Favorite>>;
+  followRecords?: CacheData<Record<string, FollowRecord>>;
   searchHistory?: CacheData<string[]>;
   skipConfigs?: CacheData<Record<string, SkipConfig>>;
 }
@@ -88,6 +89,7 @@ interface UserCacheStore {
 // ---- 常量 ----
 const PLAY_RECORDS_KEY = 'moontv_play_records';
 const FAVORITES_KEY = 'moontv_favorites';
+const FOLLOWS_KEY = 'moontv_follows';
 const SEARCH_HISTORY_KEY = 'moontv_search_history';
 
 // 缓存相关常量
@@ -99,6 +101,7 @@ const USER_DATA_API_PATHS = {
   playRecords: '/playrecords',
   searchHistory: '/searchhistory',
   favorites: '/favorites',
+  follows: '/follows',
   skipConfigs: '/skipconfigs',
 } as const;
 
@@ -227,6 +230,11 @@ class HybridCacheManager {
     if (cache.favorites && now - cache.favorites.timestamp > maxAge) {
       delete cache.favorites;
     }
+
+    // 清理过期的追更缓存
+    if (cache.followRecords && now - cache.followRecords.timestamp > maxAge) {
+      delete cache.followRecords;
+    }
   }
 
   /**
@@ -318,6 +326,35 @@ class HybridCacheManager {
 
     const userCache = this.getUserCache(username);
     userCache.favorites = this.createCacheData(data);
+    this.saveUserCache(username, userCache);
+  }
+
+  /**
+   * 获取缓存的追更记录
+   */
+  getCachedFollowRecords(): Record<string, FollowRecord> | null {
+    const username = this.getCurrentUsername();
+    if (!username) return null;
+
+    const userCache = this.getUserCache(username);
+    const cached = userCache.followRecords;
+
+    if (cached && this.isCacheValid(cached)) {
+      return cached.data;
+    }
+
+    return null;
+  }
+
+  /**
+   * 缓存追更记录
+   */
+  cacheFollowRecords(data: Record<string, FollowRecord>): void {
+    const username = this.getCurrentUsername();
+    if (!username) return;
+
+    const userCache = this.getUserCache(username);
+    userCache.followRecords = this.createCacheData(data);
     this.saveUserCache(username, userCache);
   }
 
@@ -487,6 +524,31 @@ export function getCachedPlayRecordsSnapshot(): Record<
   }
 }
 
+export function getCachedFollowRecordsSnapshot(): Record<
+  string,
+  FollowRecord
+> | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  if (shouldUseRemoteUserDataStorage()) {
+    return cacheManager.getCachedFollowRecords();
+  }
+
+  try {
+    const raw = localStorage.getItem(FOLLOWS_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    return JSON.parse(raw) as Record<string, FollowRecord>;
+  } catch (err) {
+    console.error('读取追更记录快照失败:', err);
+    return null;
+  }
+}
+
 interface AuthenticatedRequestInit extends RequestInit {
   redirectOnUnauthorized?: boolean;
 }
@@ -527,7 +589,7 @@ function wasRedirectedToLogin(error: unknown): boolean {
  * 立即从数据库刷新对应类型的缓存以保持数据一致性
  */
 async function handleDatabaseOperationFailure(
-  dataType: 'playRecords' | 'favorites' | 'searchHistory',
+  dataType: 'playRecords' | 'favorites' | 'followRecords' | 'searchHistory',
   error: any
 ): Promise<void> {
   if (wasRedirectedToLogin(error) || isUnauthorizedRequestError(error)) {
@@ -557,6 +619,14 @@ async function handleDatabaseOperationFailure(
         );
         cacheManager.cacheFavorites(freshData);
         eventName = 'favoritesUpdated';
+        eventDetail = freshData;
+        break;
+      case 'followRecords':
+        freshData = await fetchFromApi<Record<string, FollowRecord>>(
+          USER_DATA_API_PATHS.follows
+        );
+        cacheManager.cacheFollowRecords(freshData);
+        eventName = 'followRecordsUpdated';
         eventDetail = freshData;
         break;
       case 'searchHistory':
@@ -1383,6 +1453,191 @@ export async function isFavorited(
 }
 
 /**
+ * 读取全部追更记录。
+ * 数据库存储模式下使用混合缓存策略：优先返回缓存数据，后台异步同步最新数据。
+ */
+export async function getAllFollowRecords(): Promise<
+  Record<string, FollowRecord>
+> {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  if (shouldUseRemoteUserDataStorage()) {
+    const cachedData = cacheManager.getCachedFollowRecords();
+
+    if (cachedData) {
+      fetchFromApi<Record<string, FollowRecord>>(USER_DATA_API_PATHS.follows)
+        .then((freshData) => {
+          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
+            cacheManager.cacheFollowRecords(freshData);
+            window.dispatchEvent(
+              new CustomEvent('followRecordsUpdated', {
+                detail: freshData,
+              })
+            );
+          }
+        })
+        .catch((err) => {
+          console.warn('后台同步追更记录失败:', err);
+        });
+
+      return cachedData;
+    }
+
+    try {
+      const freshData = await fetchFromApi<Record<string, FollowRecord>>(
+        USER_DATA_API_PATHS.follows
+      );
+      cacheManager.cacheFollowRecords(freshData);
+      return freshData;
+    } catch (err) {
+      console.error('获取追更记录失败:', err);
+      triggerGlobalError('获取追更记录失败');
+      return {};
+    }
+  }
+
+  try {
+    const raw = localStorage.getItem(FOLLOWS_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, FollowRecord>;
+  } catch (err) {
+    console.error('读取追更记录失败:', err);
+    triggerGlobalError('读取追更记录失败');
+    return {};
+  }
+}
+
+/**
+ * 获取单条追更记录。
+ */
+export async function getFollowRecord(
+  source: string,
+  id: string
+): Promise<FollowRecord | null> {
+  const key = generateStorageKey(source, id);
+  const allFollowRecords = await getAllFollowRecords();
+  return allFollowRecords[key] || null;
+}
+
+/**
+ * 保存追更记录。
+ * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
+ */
+export async function saveFollowRecord(
+  source: string,
+  id: string,
+  follow: FollowRecord
+): Promise<void> {
+  const key = generateStorageKey(source, id);
+
+  if (shouldUseRemoteUserDataStorage()) {
+    const cachedFollows = cacheManager.getCachedFollowRecords() || {};
+    cachedFollows[key] = follow;
+    cacheManager.cacheFollowRecords(cachedFollows);
+
+    window.dispatchEvent(
+      new CustomEvent('followRecordsUpdated', {
+        detail: cachedFollows,
+      })
+    );
+
+    try {
+      await fetchWithAuth(USER_DATA_API_PATHS.follows, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ key, follow }),
+      });
+    } catch (err) {
+      await handleDatabaseOperationFailure('followRecords', err);
+      triggerGlobalError('保存追更记录失败');
+      throw err;
+    }
+    return;
+  }
+
+  if (typeof window === 'undefined') {
+    console.warn('无法在服务端保存追更记录到 localStorage');
+    return;
+  }
+
+  try {
+    const allFollows = await getAllFollowRecords();
+    allFollows[key] = follow;
+    localStorage.setItem(FOLLOWS_KEY, JSON.stringify(allFollows));
+    window.dispatchEvent(
+      new CustomEvent('followRecordsUpdated', {
+        detail: allFollows,
+      })
+    );
+  } catch (err) {
+    console.error('保存追更记录失败:', err);
+    triggerGlobalError('保存追更记录失败');
+    throw err;
+  }
+}
+
+/**
+ * 删除追更记录。
+ * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
+ */
+export async function deleteFollowRecord(
+  source: string,
+  id: string
+): Promise<void> {
+  const key = generateStorageKey(source, id);
+
+  if (shouldUseRemoteUserDataStorage()) {
+    const cachedFollows = cacheManager.getCachedFollowRecords() || {};
+    delete cachedFollows[key];
+    cacheManager.cacheFollowRecords(cachedFollows);
+
+    window.dispatchEvent(
+      new CustomEvent('followRecordsUpdated', {
+        detail: cachedFollows,
+      })
+    );
+
+    try {
+      await fetchWithAuth(
+        `${USER_DATA_API_PATHS.follows}?key=${encodeURIComponent(key)}`,
+        {
+          method: 'DELETE',
+        }
+      );
+    } catch (err) {
+      await handleDatabaseOperationFailure('followRecords', err);
+      triggerGlobalError('删除追更记录失败');
+      throw err;
+    }
+    return;
+  }
+
+  if (typeof window === 'undefined') {
+    console.warn('无法在服务端删除追更记录到 localStorage');
+    return;
+  }
+
+  try {
+    const allFollows = await getAllFollowRecords();
+    delete allFollows[key];
+    localStorage.setItem(FOLLOWS_KEY, JSON.stringify(allFollows));
+    window.dispatchEvent(
+      new CustomEvent('followRecordsUpdated', {
+        detail: allFollows,
+      })
+    );
+  } catch (err) {
+    console.error('删除追更记录失败:', err);
+    triggerGlobalError('删除追更记录失败');
+    throw err;
+  }
+}
+
+/**
  * 清空全部播放记录
  * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
  */
@@ -1485,12 +1740,13 @@ export async function refreshAllCache(): Promise<void> {
 
   try {
     // 并行刷新所有数据
-    const [playRecords, favorites, searchHistory, skipConfigs] =
+    const [playRecords, favorites, followRecords, searchHistory, skipConfigs] =
       await Promise.allSettled([
         fetchFromApi<Record<string, PlayRecord>>(
           USER_DATA_API_PATHS.playRecords
         ),
         fetchFromApi<Record<string, Favorite>>(USER_DATA_API_PATHS.favorites),
+        fetchFromApi<Record<string, FollowRecord>>(USER_DATA_API_PATHS.follows),
         fetchFromApi<string[]>(USER_DATA_API_PATHS.searchHistory),
         fetchFromApi<Record<string, SkipConfig>>(
           USER_DATA_API_PATHS.skipConfigs
@@ -1511,6 +1767,15 @@ export async function refreshAllCache(): Promise<void> {
       window.dispatchEvent(
         new CustomEvent('favoritesUpdated', {
           detail: favorites.value,
+        })
+      );
+    }
+
+    if (followRecords.status === 'fulfilled') {
+      cacheManager.cacheFollowRecords(followRecords.value);
+      window.dispatchEvent(
+        new CustomEvent('followRecordsUpdated', {
+          detail: followRecords.value,
         })
       );
     }
@@ -1541,6 +1806,7 @@ export async function refreshAllCache(): Promise<void> {
 export function getCacheStatus(): {
   hasPlayRecords: boolean;
   hasFavorites: boolean;
+  hasFollowRecords: boolean;
   hasSearchHistory: boolean;
   hasSkipConfigs: boolean;
   username: string | null;
@@ -1549,6 +1815,7 @@ export function getCacheStatus(): {
     return {
       hasPlayRecords: false,
       hasFavorites: false,
+      hasFollowRecords: false,
       hasSearchHistory: false,
       hasSkipConfigs: false,
       username: null,
@@ -1559,6 +1826,7 @@ export function getCacheStatus(): {
   return {
     hasPlayRecords: !!cacheManager.getCachedPlayRecords(),
     hasFavorites: !!cacheManager.getCachedFavorites(),
+    hasFollowRecords: !!cacheManager.getCachedFollowRecords(),
     hasSearchHistory: !!cacheManager.getCachedSearchHistory(),
     hasSkipConfigs: !!cacheManager.getCachedSkipConfigs(),
     username: authInfo?.username || null,
@@ -1570,6 +1838,7 @@ export function getCacheStatus(): {
 export type CacheUpdateEvent =
   | 'playRecordsUpdated'
   | 'favoritesUpdated'
+  | 'followRecordsUpdated'
   | 'searchHistoryUpdated'
   | 'skipConfigsUpdated';
 
@@ -1615,6 +1884,7 @@ export async function preloadUserData(): Promise<void> {
   if (
     status.hasPlayRecords &&
     status.hasFavorites &&
+    status.hasFollowRecords &&
     status.hasSearchHistory &&
     status.hasSkipConfigs
   ) {

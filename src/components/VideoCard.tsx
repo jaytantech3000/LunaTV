@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any,react-hooks/exhaustive-deps,@typescript-eslint/no-empty-function */
 
 import {
+  Bell,
+  BellOff,
   Download,
   ExternalLink,
   Heart,
@@ -28,13 +30,22 @@ import {
   deleteFavorite,
   deletePlayRecord,
   generateStorageKey,
+  getCachedFollowRecordsSnapshot,
+  getFollowRecord,
   isFavorited,
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { getOfflineDownloadSupportState } from '@/lib/download/cache';
 import { resolveDownloadablePlaybackSources } from '@/lib/download/downloadable';
-import { SearchResult } from '@/lib/types';
+import {
+  canManageFollowUpdates,
+  disableFollowUpdatesWithFeedback,
+  enableFollowUpdatesWithFeedback,
+  hasNewEpisodes,
+  isDesktopFollowUpdatesEnabled,
+} from '@/lib/follow-updates';
+import { FollowRecord, SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 import { isAdultContentResult, isAdultSourceCandidate } from '@/lib/yellow';
 import { useLongPress } from '@/hooks/useLongPress';
@@ -74,6 +85,28 @@ export type VideoCardHandle = {
   setDoubanId: (id?: number) => void;
 };
 
+interface ResolvedFollowTarget {
+  source: string;
+  id: string;
+  title: string;
+  sourceName: string;
+  year: string;
+  cover: string;
+  episodes: number;
+}
+
+function emitFollowUpdatesError(message: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent('globalError', {
+      detail: { message },
+    })
+  );
+}
+
 const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
   function VideoCard(
     {
@@ -110,6 +143,10 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
     const [searchFavorited, setSearchFavorited] = useState<boolean | null>(
       null
     ); // 搜索结果的收藏状态
+    const [followRecord, setFollowRecord] = useState<FollowRecord | null>(null);
+    const [isFollowLoading, setIsFollowLoading] = useState(false);
+    const [resolvedFollowTarget, setResolvedFollowTarget] =
+      useState<ResolvedFollowTarget | null>(null);
     const [downloadDialogDetail, setDownloadDialogDetail] =
       useState<SearchResult | null>(null);
     const [downloadDialogAvailableSources, setDownloadDialogAvailableSources] =
@@ -180,6 +217,11 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         ? 'movie'
         : 'tv'
       : type;
+    const followLookupSource = resolvedFollowTarget?.source || actualSource;
+    const followLookupId = resolvedFollowTarget?.id || actualId;
+    const hasStableFollowLookupKey = Boolean(
+      followLookupSource && followLookupId
+    );
     const effectivePlaybackMode =
       origin === 'vod' ? playbackMode || 'online' : undefined;
     const shouldAllowAdultPlayback = useMemo(() => {
@@ -204,11 +246,30 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         title: actualTitle,
         source_name: sourceNameTokens,
       });
+    }, [actualSource, actualTitle, dynamicSourceNames, origin, source_name]);
+
+    useEffect(() => {
+      if (actualSource && actualId) {
+        setResolvedFollowTarget({
+          source: actualSource,
+          id: actualId,
+          title: actualTitle,
+          sourceName: source_name || '',
+          year: actualYear || '',
+          cover: actualPoster,
+          episodes: Math.max(1, actualEpisodes ?? 1),
+        });
+        return;
+      }
+
+      setResolvedFollowTarget(null);
     }, [
+      actualId,
+      actualEpisodes,
+      actualPoster,
       actualSource,
       actualTitle,
-      dynamicSourceNames,
-      origin,
+      actualYear,
       source_name,
     ]);
 
@@ -387,11 +448,222 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       return unsubscribe;
     }, [from, actualSource, actualId]);
 
+    useEffect(() => {
+      if (from !== 'douban' && !(from === 'search' && isAggregate)) {
+        return;
+      }
+
+      if (!followLookupSource || !followLookupId) {
+        if (from === 'search') {
+          setSearchFavorited(null);
+        } else {
+          setFavorited(false);
+        }
+        return;
+      }
+
+      let active = true;
+      const applyFavoriteState = (nextFavorited: boolean) => {
+        if (!active) {
+          return;
+        }
+
+        if (from === 'search') {
+          setSearchFavorited(nextFavorited);
+          return;
+        }
+
+        setFavorited(nextFavorited);
+      };
+
+      const fetchFavoriteStatus = async () => {
+        try {
+          const fav = await isFavorited(followLookupSource, followLookupId);
+          applyFavoriteState(fav);
+        } catch {
+          applyFavoriteState(false);
+        }
+      };
+
+      void fetchFavoriteStatus();
+
+      const storageKey = generateStorageKey(followLookupSource, followLookupId);
+      const unsubscribe = subscribeToDataUpdates<Record<string, unknown>>(
+        'favoritesUpdated',
+        (newFavorites) => {
+          applyFavoriteState(Boolean(newFavorites[storageKey]));
+        }
+      );
+
+      return () => {
+        active = false;
+        unsubscribe();
+      };
+    }, [
+      actualId,
+      actualSource,
+      followLookupId,
+      followLookupSource,
+      from,
+      isAggregate,
+    ]);
+
+    useEffect(() => {
+      const canFollow =
+        isDesktopFollowUpdatesEnabled() &&
+        canManageFollowUpdates({
+          source: actualSource,
+          id: actualId,
+          title: actualTitle,
+          origin,
+          from,
+          isAggregate,
+        });
+
+      if (!canFollow || !hasStableFollowLookupKey) {
+        setFollowRecord(null);
+        return;
+      }
+
+      let active = true;
+      const followSource = followLookupSource;
+      const followId = followLookupId;
+
+      if (!followSource || !followId) {
+        setFollowRecord(null);
+        return;
+      }
+
+      const storageKey = generateStorageKey(followSource, followId);
+      const snapshot = getCachedFollowRecordsSnapshot();
+
+      if (snapshot) {
+        setFollowRecord(snapshot[storageKey] || null);
+      }
+
+      const fetchFollowStatus = async () => {
+        try {
+          const follow = await getFollowRecord(followSource, followId);
+          if (active) {
+            setFollowRecord(follow);
+          }
+        } catch {
+          if (active) {
+            setFollowRecord(null);
+          }
+        }
+      };
+
+      void fetchFollowStatus();
+
+      const unsubscribe = subscribeToDataUpdates<Record<string, FollowRecord>>(
+        'followRecordsUpdated',
+        (newFollows) => {
+          setFollowRecord(newFollows[storageKey] || null);
+        }
+      );
+
+      return () => {
+        active = false;
+        unsubscribe();
+      };
+    }, [
+      actualId,
+      actualSource,
+      actualTitle,
+      followLookupId,
+      followLookupSource,
+      from,
+      hasStableFollowLookupKey,
+      isAggregate,
+      origin,
+    ]);
+
+    const resolveFollowTarget = useCallback(async () => {
+      if (resolvedFollowTarget) {
+        return resolvedFollowTarget;
+      }
+
+      if (actualSource && actualId) {
+        const stableTarget = {
+          source: actualSource,
+          id: actualId,
+          title: actualTitle,
+          sourceName: source_name || '',
+          year: actualYear || '',
+          cover: actualPoster,
+          episodes: Math.max(1, actualEpisodes ?? 1),
+        } satisfies ResolvedFollowTarget;
+        setResolvedFollowTarget(stableTarget);
+        return stableTarget;
+      }
+
+      if (!actualTitle.trim()) {
+        throw new Error('当前卡片缺少可用标题，暂时无法开启追更');
+      }
+
+      const { detail } = await resolveDownloadablePlaybackSources({
+        title: actualTitle.trim(),
+        year: actualYear || undefined,
+        searchType: actualSearchType || undefined,
+        query: actualQuery || undefined,
+        doubanId: actualDoubanId,
+        allowAdultCandidates: shouldAllowAdultPlayback,
+      });
+
+      if (!detail.source || !detail.id) {
+        throw new Error('当前卡片暂时无法定位到可追更片源');
+      }
+
+      const resolvedTarget = {
+        source: detail.source,
+        id: detail.id,
+        title: detail.title || actualTitle,
+        sourceName: detail.source_name || source_name || '',
+        year: detail.year || actualYear || '',
+        cover: detail.poster || actualPoster,
+        episodes: Math.max(1, detail.episodes?.length || actualEpisodes || 1),
+      } satisfies ResolvedFollowTarget;
+
+      setResolvedFollowTarget(resolvedTarget);
+      return resolvedTarget;
+    }, [
+      actualDoubanId,
+      actualId,
+      actualEpisodes,
+      actualPoster,
+      actualQuery,
+      resolvedFollowTarget,
+      actualSearchType,
+      actualSource,
+      actualTitle,
+      actualYear,
+      shouldAllowAdultPlayback,
+      source_name,
+    ]);
+
     const handleToggleFavorite = useCallback(
       async (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        if (from === 'douban' || !actualSource || !actualId) return;
+        if (
+          !actualSource &&
+          !actualId &&
+          (origin !== 'vod' || !actualTitle.trim())
+        ) {
+          return;
+        }
+
+        let favoriteTarget: ResolvedFollowTarget;
+
+        try {
+          favoriteTarget = await resolveFollowTarget();
+        } catch (error) {
+          emitFollowUpdatesError(
+            error instanceof Error ? error.message : '当前卡片暂时无法收藏'
+          );
+          return;
+        }
 
         try {
           // 确定当前收藏状态
@@ -400,7 +672,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
 
           if (currentFavorited) {
             // 如果已收藏，删除收藏
-            await deleteFavorite(actualSource, actualId);
+            await deleteFavorite(favoriteTarget.source, favoriteTarget.id);
             if (from === 'search') {
               setSearchFavorited(false);
             } else {
@@ -408,12 +680,12 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
             }
           } else {
             // 如果未收藏，添加收藏
-            await saveFavorite(actualSource, actualId, {
-              title: actualTitle,
-              source_name: source_name || '',
-              year: actualYear || '',
-              cover: actualPoster,
-              total_episodes: actualEpisodes ?? 1,
+            await saveFavorite(favoriteTarget.source, favoriteTarget.id, {
+              title: favoriteTarget.title,
+              source_name: favoriteTarget.sourceName,
+              year: favoriteTarget.year || '',
+              cover: favoriteTarget.cover || '',
+              total_episodes: favoriteTarget.episodes,
               save_time: Date.now(),
               search_title: actualQuery || actualTitle,
               playback_mode: origin === 'vod' ? 'online' : undefined,
@@ -431,18 +703,16 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         }
       },
       [
-        from,
-        actualSource,
         actualId,
-        actualTitle,
-        source_name,
-        actualYear,
-        actualPoster,
-        actualEpisodes,
         actualQuery,
+        actualSource,
+        actualTitle,
         favorited,
+        from,
         origin,
+        resolveFollowTarget,
         searchFavorited,
+        shouldAllowAdultPlayback,
       ]
     );
 
@@ -460,6 +730,72 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       },
       [from, actualSource, actualId, onDelete]
     );
+
+    const handleToggleFollowUpdates = useCallback(async () => {
+      const canFollow =
+        isDesktopFollowUpdatesEnabled() &&
+        canManageFollowUpdates({
+          source: actualSource,
+          id: actualId,
+          title: actualTitle,
+          origin,
+          from,
+          isAggregate,
+        });
+
+      if (!canFollow) {
+        return;
+      }
+
+      let followTarget: ResolvedFollowTarget;
+
+      try {
+        followTarget = await resolveFollowTarget();
+      } catch (error) {
+        emitFollowUpdatesError(
+          error instanceof Error ? error.message : '当前卡片暂时无法开启追更'
+        );
+        return;
+      }
+
+      try {
+        setIsFollowLoading(true);
+
+        if (followRecord) {
+          await disableFollowUpdatesWithFeedback(
+            followTarget.source,
+            followTarget.id
+          );
+          setFollowRecord(null);
+          return;
+        }
+
+        const nextFollowRecord = await enableFollowUpdatesWithFeedback({
+          source: followTarget.source,
+          id: followTarget.id,
+          title: followTarget.title,
+          sourceName: followTarget.sourceName,
+          year: followTarget.year || undefined,
+          cover: followTarget.cover || undefined,
+          searchTitle: actualQuery || actualTitle,
+        });
+        setFollowRecord(nextFollowRecord);
+      } catch {
+        // 具体失败提示由 follow-updates helper 统一发到全局错误提示。
+      } finally {
+        setIsFollowLoading(false);
+      }
+    }, [
+      actualId,
+      actualQuery,
+      actualSource,
+      actualTitle,
+      origin,
+      from,
+      isAggregate,
+      followRecord,
+      resolveFollowTarget,
+    ]);
 
     const handleClick = useCallback(() => {
       if (!destinationUrl || isNavigating) {
@@ -510,9 +846,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
 
       const supportState = getOfflineDownloadSupportState();
       if (!supportState.supported) {
-        setDownloadDialogError(
-          supportState.reason || '当前环境不支持离线下载'
-        );
+        setDownloadDialogError(supportState.reason || '当前环境不支持离线下载');
         return;
       }
 
@@ -563,33 +897,61 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       shouldAllowAdultPlayback,
     ]);
 
-    // 长按操作
-    const handleLongPress = useCallback(() => {
-      if (!showMobileActions) {
-        // 防止重复触发
-        // 立即显示菜单，避免等待数据加载导致动画卡顿
-        setShowMobileActions(true);
+    const showFollowUpdatesAction =
+      isDesktopFollowUpdatesEnabled() &&
+      canManageFollowUpdates({
+        source: actualSource,
+        id: actualId,
+        title: actualTitle,
+        origin,
+        from,
+        isAggregate,
+      });
+    const showFavoriteAction = Boolean(
+      (actualSource && actualId) || (origin === 'vod' && actualTitle.trim())
+    );
 
-        // 异步检查收藏状态，不阻塞菜单显示
-        if (
-          from === 'search' &&
-          !isAggregate &&
-          actualSource &&
-          actualId &&
-          searchFavorited === null
-        ) {
-          checkSearchFavoriteStatus();
-        }
+    const openActionSheet = useCallback(() => {
+      if (!showMobileActions) {
+        setShowMobileActions(true);
+      }
+
+      if (
+        from === 'search' &&
+        !isAggregate &&
+        actualSource &&
+        actualId &&
+        searchFavorited === null
+      ) {
+        void checkSearchFavoriteStatus();
+      }
+
+      if (
+        (showFavoriteAction || showFollowUpdatesAction) &&
+        !hasStableFollowLookupKey
+      ) {
+        void resolveFollowTarget().catch(() => {});
       }
     }, [
-      showMobileActions,
-      from,
-      isAggregate,
-      actualSource,
       actualId,
-      searchFavorited,
+      actualTitle,
+      actualSource,
       checkSearchFavoriteStatus,
+      from,
+      hasStableFollowLookupKey,
+      isAggregate,
+      origin,
+      resolveFollowTarget,
+      searchFavorited,
+      showFavoriteAction,
+      showFollowUpdatesAction,
+      showMobileActions,
     ]);
+
+    // 长按操作
+    const handleLongPress = useCallback(() => {
+      openActionSheet();
+    }, [openActionSheet]);
 
     // 长按手势hook
     const longPressProps = useLongPress({
@@ -646,6 +1008,14 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
 
     const showRatingBadge = config.showRating && !!rate;
     const showEpisodesBadge = !!actualEpisodes && actualEpisodes > 1;
+    const hasFollowNewEpisodes = hasNewEpisodes(followRecord);
+    const followBadgeTopClass = showRatingBadge
+      ? showEpisodesBadge
+        ? 'top-[4.5rem]'
+        : 'top-10'
+      : showEpisodesBadge
+      ? 'top-10'
+      : 'top-2';
 
     // 移动端操作菜单配置
     const mobileActions = useMemo(() => {
@@ -681,10 +1051,31 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         });
       }
 
+      if (showFollowUpdatesAction) {
+        actions.push({
+          id: 'follow-updates',
+          label: isFollowLoading
+            ? '追更处理中...'
+            : followRecord
+            ? '取消追更'
+            : '开启追更',
+          icon: isFollowLoading ? (
+            <Loader2 size={20} className='animate-spin' />
+          ) : followRecord ? (
+            <BellOff size={20} />
+          ) : (
+            <Bell size={20} />
+          ),
+          onClick: handleToggleFollowUpdates,
+          color: followRecord ? ('danger' as const) : ('default' as const),
+          disabled: isFollowLoading,
+        });
+      }
+
       // 聚合源信息 - 直接在菜单中展示，不需要单独的操作项
 
       // 收藏/取消收藏操作
-      if (config.showHeart && from !== 'douban' && actualSource && actualId) {
+      if (showFavoriteAction) {
         const currentFavorited =
           from === 'search' ? searchFavorited : favorited;
 
@@ -793,13 +1184,18 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       searchFavorited,
       actualDoubanId,
       isBangumi,
+      followRecord,
+      isFollowLoading,
       isAggregate,
       dynamicSourceNames,
       handleClick,
       handleOpenDownloadDialog,
+      handleToggleFollowUpdates,
       handleToggleFavorite,
       handleDeleteRecord,
       origin,
+      showFavoriteAction,
+      showFollowUpdatesAction,
     ]);
 
     const initialDownloadEpisodeIndex = Math.max(
@@ -853,18 +1249,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
             e.stopPropagation();
 
             // 右键弹出操作菜单
-            setShowMobileActions(true);
-
-            // 异步检查收藏状态，不阻塞菜单显示
-            if (
-              from === 'search' &&
-              !isAggregate &&
-              actualSource &&
-              actualId &&
-              searchFavorited === null
-            ) {
-              checkSearchFavoriteStatus();
-            }
+            openActionSheet();
 
             return false;
           }}
@@ -945,7 +1330,9 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
             {/* 悬浮遮罩 */}
             <div
               className={`absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent transition-opacity duration-300 ease-in-out ${
-                isNavigating ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                isNavigating
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100'
               }`}
               style={
                 {
@@ -1119,6 +1506,25 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                 {currentEpisode
                   ? `${currentEpisode}/${actualEpisodes}`
                   : actualEpisodes}
+              </div>
+            )}
+
+            {hasFollowNewEpisodes && (
+              <div
+                className={`absolute right-2 ${followBadgeTopClass} rounded-md border border-amber-300/70 bg-amber-500 px-2 py-1 text-[11px] font-bold tracking-[0.08em] text-white shadow-md transition-all duration-300 ease-out group-hover:scale-110`}
+                style={
+                  {
+                    WebkitUserSelect: 'none',
+                    userSelect: 'none',
+                    WebkitTouchCallout: 'none',
+                  } as React.CSSProperties
+                }
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  return false;
+                }}
+              >
+                NEW
               </div>
             )}
 
@@ -1433,65 +1839,66 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                 ></div>
               </div>
             </div>
-            {config.showSourceName && (source_name || shouldShowPlaybackModeBadge) && (
-              <span
-                className='mt-1 flex flex-wrap items-center justify-center gap-1 text-xs text-gray-500 dark:text-gray-400'
-                style={
-                  {
-                    WebkitUserSelect: 'none',
-                    userSelect: 'none',
-                    WebkitTouchCallout: 'none',
-                  } as React.CSSProperties
-                }
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  return false;
-                }}
-              >
-                {source_name && (
-                  <span
-                    className='inline-block border rounded px-2 py-0.5 border-gray-500/60 dark:border-gray-400/60 transition-all duration-300 ease-in-out group-hover:border-green-500/60 group-hover:text-green-600 dark:group-hover:text-green-400'
-                    style={
-                      {
-                        WebkitUserSelect: 'none',
-                        userSelect: 'none',
-                        WebkitTouchCallout: 'none',
-                      } as React.CSSProperties
-                    }
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      return false;
-                    }}
-                  >
-                    {origin === 'live' && (
-                      <Radio
-                        size={12}
-                        className='inline-block text-gray-500 dark:text-gray-400 mr-1.5'
-                      />
-                    )}
-                    {source_name}
-                  </span>
-                )}
-                {shouldShowPlaybackModeBadge && (
-                  <span
-                    className={`inline-block rounded border px-2 py-0.5 transition-all duration-300 ease-in-out ${playbackModeClassName}`}
-                    style={
-                      {
-                        WebkitUserSelect: 'none',
-                        userSelect: 'none',
-                        WebkitTouchCallout: 'none',
-                      } as React.CSSProperties
-                    }
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      return false;
-                    }}
-                  >
-                    {playbackModeLabel}
-                  </span>
-                )}
-              </span>
-            )}
+            {config.showSourceName &&
+              (source_name || shouldShowPlaybackModeBadge) && (
+                <span
+                  className='mt-1 flex flex-wrap items-center justify-center gap-1 text-xs text-gray-500 dark:text-gray-400'
+                  style={
+                    {
+                      WebkitUserSelect: 'none',
+                      userSelect: 'none',
+                      WebkitTouchCallout: 'none',
+                    } as React.CSSProperties
+                  }
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    return false;
+                  }}
+                >
+                  {source_name && (
+                    <span
+                      className='inline-block border rounded px-2 py-0.5 border-gray-500/60 dark:border-gray-400/60 transition-all duration-300 ease-in-out group-hover:border-green-500/60 group-hover:text-green-600 dark:group-hover:text-green-400'
+                      style={
+                        {
+                          WebkitUserSelect: 'none',
+                          userSelect: 'none',
+                          WebkitTouchCallout: 'none',
+                        } as React.CSSProperties
+                      }
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        return false;
+                      }}
+                    >
+                      {origin === 'live' && (
+                        <Radio
+                          size={12}
+                          className='inline-block text-gray-500 dark:text-gray-400 mr-1.5'
+                        />
+                      )}
+                      {source_name}
+                    </span>
+                  )}
+                  {shouldShowPlaybackModeBadge && (
+                    <span
+                      className={`inline-block rounded border px-2 py-0.5 transition-all duration-300 ease-in-out ${playbackModeClassName}`}
+                      style={
+                        {
+                          WebkitUserSelect: 'none',
+                          userSelect: 'none',
+                          WebkitTouchCallout: 'none',
+                        } as React.CSSProperties
+                      }
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        return false;
+                      }}
+                    >
+                      {playbackModeLabel}
+                    </span>
+                  )}
+                </span>
+              )}
           </div>
         </div>
 
