@@ -10,6 +10,7 @@ import {
   ChevronUp,
   Download,
   ExternalLink,
+  History,
   Loader2,
   Plus,
   RefreshCw,
@@ -44,6 +45,7 @@ import { CURRENT_VERSION } from '@/lib/version';
 import { UpdateStatus } from '@/lib/version_check';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
+import { DesktopReleaseHistoryDialog } from '@/components/DesktopReleaseHistoryDialog';
 
 interface VersionPanelProps {
   isOpen: boolean;
@@ -415,6 +417,7 @@ function renderChangelogEntry(
 
 export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
   const [mounted, setMounted] = useState(false);
+  const [isReleaseHistoryOpen, setIsReleaseHistoryOpen] = useState(false);
   const [remoteChangelog, setRemoteChangelog] = useState<
     RemoteChangelogEntry[]
   >([]);
@@ -455,6 +458,12 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
       return acquireScrollLock({
         lockHtml: true,
       });
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsReleaseHistoryOpen(false);
     }
   }, [isOpen]);
 
@@ -528,6 +537,14 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
     void installDownloadedUpdate();
   };
 
+  const openReleaseHistory = () => {
+    setIsReleaseHistoryOpen(true);
+  };
+
+  const closeReleaseHistory = () => {
+    setIsReleaseHistoryOpen(false);
+  };
+
   const handleChangelogLocaleChange = (value: string) => {
     const nextLocale = value === 'en' ? 'en' : 'zh-CN';
     setChangelogLocale(nextLocale);
@@ -568,13 +585,27 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
             ) : null}
           </div>
 
-          <button
-            onClick={onClose}
-            className='flex h-8 w-8 items-center justify-center rounded-full p-1 text-gray-500 transition-colors hover:bg-gray-100 dark:hover:bg-gray-800'
-            aria-label='关闭'
-          >
-            <X className='h-full w-full' />
-          </button>
+          <div className='flex items-center gap-2'>
+            {isDesktopTarget ? (
+              <button
+                type='button'
+                onClick={openReleaseHistory}
+                className='flex h-8 w-8 items-center justify-center rounded-full p-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200'
+                aria-label='版本列表'
+                title='版本列表'
+              >
+                <History className='h-4 w-4' />
+              </button>
+            ) : null}
+
+            <button
+              onClick={onClose}
+              className='flex h-8 w-8 items-center justify-center rounded-full p-1 text-gray-500 transition-colors hover:bg-gray-100 dark:hover:bg-gray-800'
+              aria-label='关闭'
+            >
+              <X className='h-full w-full' />
+            </button>
+          </div>
         </div>
 
         <div className='max-h-[calc(90vh-120px)] overflow-y-auto p-3 sm:p-6'>
@@ -810,6 +841,15 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
           </div>
         </div>
       </div>
+
+      {isDesktopTarget ? (
+        <DesktopReleaseHistoryDialog
+          isOpen={isReleaseHistoryOpen}
+          onClose={closeReleaseHistory}
+          currentVersion={CURRENT_VERSION}
+          updateState={updateState}
+        />
+      ) : null}
     </>
   );
 

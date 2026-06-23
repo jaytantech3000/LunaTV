@@ -12,12 +12,14 @@ use std::{
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tauri::{AppHandle, Manager, RunEvent, State};
+use tauri::{AppHandle, Manager, RunEvent, State, ipc::Channel};
+use tauri_plugin_updater::UpdaterExt;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::Command as TokioCommand,
     sync::Mutex as AsyncMutex,
 };
+use url::Url;
 
 const LOCAL_SERVICE_PORT: u16 = 8787;
 const LOCAL_SERVICE_HEALTH_PATH: &str = "/health";
@@ -127,6 +129,17 @@ struct LocalServiceDiagnosticsSaveResult {
     saved: bool,
     canceled: bool,
     path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "event", content = "data")]
+enum DesktopReleaseInstallEvent {
+    #[serde(rename_all = "camelCase")]
+    Started { content_length: Option<u64> },
+    #[serde(rename_all = "camelCase")]
+    Progress { chunk_length: usize },
+    Finished,
+    Installing,
 }
 
 #[derive(Serialize)]
@@ -468,6 +481,18 @@ fn change_desktop_password(
     change_desktop_password_impl(&app, username, new_password).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+async fn install_desktop_release(
+    app: AppHandle,
+    manifest_url: String,
+    version: String,
+    on_event: Channel<DesktopReleaseInstallEvent>,
+) -> Result<(), String> {
+    install_desktop_release_impl(&app, manifest_url, version, on_event)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 fn normalize_compile_time_value(value: Option<&'static str>) -> Option<String> {
     value
         .map(str::trim)
@@ -515,6 +540,7 @@ pub fn run() {
             get_desktop_auth_status,
             desktop_login,
             change_desktop_password,
+            install_desktop_release,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build LunaTV desktop shell");
@@ -2961,6 +2987,64 @@ fn normalize_required_string(value: String, error_message: &str) -> Result<Strin
     }
 
     Ok(normalized)
+}
+
+async fn install_desktop_release_impl(
+    app: &AppHandle,
+    manifest_url: String,
+    version: String,
+    on_event: Channel<DesktopReleaseInstallEvent>,
+) -> Result<()> {
+    let manifest_url = normalize_required_string(
+        manifest_url,
+        "desktop release manifest URL cannot be empty",
+    )?;
+    let version =
+        normalize_required_string(version, "desktop release version cannot be empty")?;
+    let manifest_url =
+        Url::parse(&manifest_url).context("desktop release manifest URL is invalid")?;
+    let expected_version = version.clone();
+
+    let updater = app
+        .updater_builder()
+        .version_comparator(move |_current, release| {
+            release.version.to_string() == expected_version
+        })
+        .endpoints(vec![manifest_url])?
+        .build()?;
+    let update = updater
+        .check()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("desktop release {version} is unavailable"))?;
+
+    if update.version != version {
+        anyhow::bail!(
+            "desktop release manifest resolved to unexpected version {}",
+            update.version
+        );
+    }
+
+    let mut first_chunk = true;
+    let bytes = update
+        .download(
+            |chunk_length, content_length| {
+                if first_chunk {
+                    first_chunk = false;
+                    let _ = on_event.send(DesktopReleaseInstallEvent::Started { content_length });
+                }
+
+                let _ = on_event.send(DesktopReleaseInstallEvent::Progress { chunk_length });
+            },
+            || {
+                let _ = on_event.send(DesktopReleaseInstallEvent::Finished);
+            },
+        )
+        .await?;
+
+    let _ = on_event.send(DesktopReleaseInstallEvent::Installing);
+    update.install(&bytes)?;
+    app.request_restart();
+    Ok(())
 }
 
 fn save_local_service_diagnostics_impl(

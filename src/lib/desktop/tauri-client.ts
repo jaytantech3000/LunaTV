@@ -54,6 +54,26 @@ export interface DesktopLocalServiceDiagnosticsSaveResult {
   path: string | null;
 }
 
+export type DesktopReleaseInstallEvent =
+  | {
+      event: 'Started';
+      data: {
+        contentLength?: number;
+      };
+    }
+  | {
+      event: 'Progress';
+      data: {
+        chunkLength: number;
+      };
+    }
+  | {
+      event: 'Finished';
+    }
+  | {
+      event: 'Installing';
+    };
+
 declare global {
   interface Window {
     __TAURI__?: unknown;
@@ -170,5 +190,32 @@ export function changeDesktopPassword(
   return invokeDesktopCommand<DesktopAuthStatus>('change_desktop_password', {
     username,
     newPassword,
+  });
+}
+
+export async function installDesktopRelease(
+  manifestUrl: string,
+  version: string,
+  onEvent?: (event: DesktopReleaseInstallEvent) => void
+): Promise<void> {
+  ensureDesktopTarget();
+
+  if (!isDesktopTauriRuntimeAvailable()) {
+    throw new Error(
+      'Desktop IPC is unavailable in browser preview. Run inside the Tauri shell.'
+    );
+  }
+
+  const { Channel, invoke } = await import('@tauri-apps/api/core');
+  const channel = new Channel<DesktopReleaseInstallEvent>();
+
+  if (onEvent) {
+    channel.onmessage = onEvent;
+  }
+
+  await invoke('install_desktop_release', {
+    manifestUrl,
+    version,
+    onEvent: channel,
   });
 }

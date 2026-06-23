@@ -1,5 +1,8 @@
 import { isNewerVersion } from '@/lib/app-update-version';
-import { isDesktopTauriRuntimeAvailable } from '@/lib/desktop/tauri-client';
+import {
+  installDesktopRelease,
+  isDesktopTauriRuntimeAvailable,
+} from '@/lib/desktop/tauri-client';
 import { getReleasePageUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -84,6 +87,13 @@ type RefreshDesktopUpdateTargetResult = 'unchanged' | 'refreshed' | 'blocked';
 
 interface DownloadLatestVersionOptions {
   skipTargetRefresh?: boolean;
+}
+
+export interface InstallDesktopReleaseVersionOptions {
+  manifestUrl: string;
+  version: string;
+  publishedAt?: string | null;
+  releaseNotes?: string | null;
 }
 
 let state: AppUpdateState = createInitialState();
@@ -499,8 +509,7 @@ export function isDesktopUpdaterAvailable(
   updateState: Pick<AppUpdateState, 'canUseDesktopUpdater' | 'source'>
 ) {
   return (
-    updateState.canUseDesktopUpdater &&
-    updateState.source === 'desktop-updater'
+    updateState.canUseDesktopUpdater && updateState.source === 'desktop-updater'
   );
 }
 
@@ -912,6 +921,222 @@ export async function installDownloadedUpdate() {
         statusMessage: '安装更新失败，请重试。',
         errorMessage:
           error instanceof Error ? error.message : '安装更新失败，请重试。',
+      });
+    }
+  })();
+
+  installPromise = nextPromise;
+
+  try {
+    await nextPromise;
+  } finally {
+    if (installPromise === nextPromise) {
+      installPromise = null;
+    }
+  }
+}
+
+export async function installDesktopReleaseVersion(
+  options: InstallDesktopReleaseVersionOptions
+) {
+  if (downloadPromise) {
+    await downloadPromise;
+  }
+
+  if (installPromise) {
+    await installPromise;
+    return;
+  }
+
+  const nextPromise = (async () => {
+    const targetVersion = options.version.trim();
+    const manifestUrl = options.manifestUrl.trim();
+    const publishedAt = options.publishedAt?.trim() || null;
+    const releaseNotes = options.releaseNotes?.trim() || null;
+    const autoDownloadEnabled = readAutoDownloadPreference();
+
+    clearPendingUpdate();
+    setDownloadedUpdate(null);
+
+    if (!targetVersion || !manifestUrl) {
+      patchState({
+        phase: 'error',
+        source: 'desktop-updater',
+        updateStatus: UpdateStatus.HAS_UPDATE,
+        latestVersion: targetVersion || null,
+        autoDownloadEnabled,
+        canUseDesktopUpdater: true,
+        canCheck: true,
+        canDownload: false,
+        canInstall: false,
+        isChecking: false,
+        isDownloading: false,
+        isInstalling: false,
+        isBusy: false,
+        progressPercent: null,
+        downloadedBytes: 0,
+        totalBytes: null,
+        publishedAt,
+        releaseNotes,
+        statusMessage: '所选版本信息不完整，无法执行安装。',
+        errorMessage: '所选版本信息不完整，无法执行安装。',
+      });
+      return;
+    }
+
+    if (!isDesktopTarget() || !isDesktopTauriRuntimeAvailable()) {
+      patchState({
+        phase: 'error',
+        source: 'desktop-updater',
+        updateStatus: UpdateStatus.HAS_UPDATE,
+        latestVersion: targetVersion,
+        autoDownloadEnabled,
+        canUseDesktopUpdater: false,
+        canCheck: true,
+        canDownload: false,
+        canInstall: false,
+        isChecking: false,
+        isDownloading: false,
+        isInstalling: false,
+        isBusy: false,
+        progressPercent: null,
+        downloadedBytes: 0,
+        totalBytes: null,
+        publishedAt,
+        releaseNotes,
+        statusMessage: '当前环境无法直接安装指定版本。',
+        errorMessage: '当前环境无法直接安装指定版本。',
+      });
+      return;
+    }
+
+    let downloadedBytes = 0;
+    let totalBytes: number | null = null;
+
+    patchState({
+      phase: 'downloading',
+      source: 'desktop-updater',
+      updateStatus: UpdateStatus.HAS_UPDATE,
+      latestVersion: targetVersion,
+      autoDownloadEnabled,
+      canUseDesktopUpdater: true,
+      canCheck: false,
+      canDownload: false,
+      canInstall: false,
+      isChecking: false,
+      isDownloading: true,
+      isInstalling: false,
+      isBusy: true,
+      progressPercent: 0,
+      downloadedBytes: 0,
+      totalBytes: null,
+      publishedAt,
+      releaseNotes,
+      statusMessage: `正在下载 v${targetVersion}...`,
+      errorMessage: null,
+    });
+
+    try {
+      await installDesktopRelease(manifestUrl, targetVersion, (event) => {
+        switch (event.event) {
+          case 'Started':
+            totalBytes = event.data.contentLength ?? null;
+            downloadedBytes = 0;
+            patchState({
+              phase: 'downloading',
+              progressPercent: 0,
+              downloadedBytes,
+              totalBytes,
+              statusMessage: `正在下载 v${targetVersion}...`,
+            });
+            break;
+          case 'Progress':
+            downloadedBytes += event.data.chunkLength;
+            patchState({
+              progressPercent: getDownloadProgressState(
+                downloadedBytes,
+                totalBytes
+              ),
+              downloadedBytes,
+              totalBytes,
+            });
+            break;
+          case 'Finished':
+            patchState({
+              progressPercent: totalBytes ? 100 : state.progressPercent,
+              downloadedBytes,
+              totalBytes,
+            });
+            break;
+          case 'Installing':
+            patchState({
+              phase: 'installing',
+              canCheck: false,
+              canDownload: false,
+              canInstall: false,
+              isChecking: false,
+              isDownloading: false,
+              isInstalling: true,
+              isBusy: true,
+              progressPercent: totalBytes ? 100 : state.progressPercent,
+              downloadedBytes,
+              totalBytes,
+              statusMessage: `正在安装 v${targetVersion}...`,
+              errorMessage: null,
+            });
+            break;
+          default:
+            break;
+        }
+      });
+
+      patchState({
+        phase: 'installing',
+        source: 'desktop-updater',
+        updateStatus: UpdateStatus.HAS_UPDATE,
+        latestVersion: targetVersion,
+        autoDownloadEnabled,
+        canUseDesktopUpdater: true,
+        canCheck: false,
+        canDownload: false,
+        canInstall: false,
+        isChecking: false,
+        isDownloading: false,
+        isInstalling: true,
+        isBusy: true,
+        progressPercent: totalBytes ? 100 : state.progressPercent,
+        downloadedBytes,
+        totalBytes,
+        publishedAt,
+        releaseNotes,
+        statusMessage: `正在完成 v${targetVersion} 安装...`,
+        errorMessage: null,
+      });
+    } catch (error) {
+      patchState({
+        phase: 'error',
+        source: 'desktop-updater',
+        updateStatus: UpdateStatus.HAS_UPDATE,
+        latestVersion: targetVersion,
+        autoDownloadEnabled,
+        canUseDesktopUpdater: true,
+        canCheck: true,
+        canDownload: false,
+        canInstall: false,
+        isChecking: false,
+        isDownloading: false,
+        isInstalling: false,
+        isBusy: false,
+        progressPercent: null,
+        downloadedBytes: 0,
+        totalBytes: null,
+        publishedAt,
+        releaseNotes,
+        statusMessage: `安装 v${targetVersion} 失败，请重试。`,
+        errorMessage:
+          error instanceof Error
+            ? error.message
+            : `安装 v${targetVersion} 失败，请重试。`,
       });
     }
   })();
