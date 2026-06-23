@@ -18,7 +18,10 @@ const mockRouter = {
   replace: jest.fn(),
 };
 
+let mockPathname = '/login';
+
 jest.mock('next/navigation', () => ({
+  usePathname: jest.fn(() => mockPathname),
   useRouter: jest.fn(() => mockRouter),
   useSearchParams: jest.fn(() => new URLSearchParams('redirect=%2Fdownloads')),
 }));
@@ -33,6 +36,10 @@ jest.mock('@/components/ThemeToggle', () => ({
   ThemeToggle: () => <div>ThemeToggle</div>,
 }));
 
+jest.mock('@/lib/navigation', () => ({
+  replaceWithDocumentNavigation: jest.fn(),
+}));
+
 jest.mock('@/lib/version_check', () => ({
   UpdateStatus: {
     FETCH_FAILED: 'fetch_failed',
@@ -42,6 +49,8 @@ jest.mock('@/lib/version_check', () => ({
   checkForUpdates: jest.fn(() => new Promise((_resolve) => undefined)),
 }));
 
+import { replaceWithDocumentNavigation } from '@/lib/navigation';
+
 import { LoginPageClient } from './LoginPageClient';
 
 describe('LoginPageClient', () => {
@@ -50,6 +59,7 @@ describe('LoginPageClient', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockPathname = '/login';
     document.cookie = 'auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
     global.fetch = jest.fn((input: RequestInfo | URL) => {
       const url = String(input);
@@ -77,7 +87,7 @@ describe('LoginPageClient', () => {
   it('shows transition feedback immediately after a successful login', async () => {
     render(<LoginPageClient />);
 
-    expect(mockRouter.prefetch).toHaveBeenCalledWith('/downloads');
+    expect(mockRouter.prefetch).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText('密码'), {
       target: { value: 'demo-password' },
@@ -102,6 +112,81 @@ describe('LoginPageClient', () => {
     await waitFor(() => {
       expect(mockRouter.replace).toHaveBeenCalledWith('/downloads');
     });
+  });
+
+  it('falls back to a document navigation when app-router redirect stays on the login page', async () => {
+    jest.useFakeTimers();
+
+    try {
+      render(<LoginPageClient />);
+
+      fireEvent.change(screen.getByLabelText('密码'), {
+        target: { value: 'demo-password' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '登录' }));
+
+      await act(async () => {
+        document.cookie = `auth=${encodeURIComponent(
+          JSON.stringify({ role: 'owner', username: 'owner' })
+        )}; path=/`;
+        resolveLoginResponse?.(new Response(null, { status: 200 }));
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(20);
+      });
+
+      expect(mockRouter.replace).toHaveBeenCalledWith('/downloads');
+
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+      });
+
+      expect(replaceWithDocumentNavigation).toHaveBeenCalledWith('/downloads');
+      expect(
+        screen.queryByText('页面跳转超时，请刷新后重试')
+      ).not.toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('cancels redirect fallback timers once navigation leaves the login page', async () => {
+    jest.useFakeTimers();
+
+    try {
+      const { rerender } = render(<LoginPageClient />);
+
+      fireEvent.change(screen.getByLabelText('密码'), {
+        target: { value: 'demo-password' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '登录' }));
+
+      await act(async () => {
+        document.cookie = `auth=${encodeURIComponent(
+          JSON.stringify({ role: 'owner', username: 'owner' })
+        )}; path=/`;
+        resolveLoginResponse?.(new Response(null, { status: 200 }));
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(20);
+      });
+
+      mockPathname = '/downloads';
+      rerender(<LoginPageClient />);
+
+      await act(async () => {
+        jest.advanceTimersByTime(9000);
+      });
+
+      expect(replaceWithDocumentNavigation).not.toHaveBeenCalled();
+      expect(
+        screen.queryByText('页面跳转超时，请刷新后重试')
+      ).not.toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('shows a domain-sync error when login succeeds but the auth cookie is missing', async () => {
