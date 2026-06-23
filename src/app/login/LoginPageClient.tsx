@@ -3,11 +3,12 @@
 'use client';
 
 import { AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { startTransition, useEffect, useState } from 'react';
 import { flushSync } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { replaceWithDocumentNavigation } from '@/lib/navigation';
 import { getProjectPageUrl } from '@/lib/release-urls';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
@@ -28,7 +29,8 @@ type LoginPhase = 'idle' | 'verifying' | 'redirecting';
 
 const AUTH_COOKIE_POLL_INTERVAL_MS = 50;
 const AUTH_COOKIE_WAIT_TIMEOUT_MS = 1000;
-const REDIRECT_FALLBACK_TIMEOUT_MS = 4000;
+const REDIRECT_HARD_NAVIGATION_TIMEOUT_MS = 1500;
+const REDIRECT_ERROR_TIMEOUT_MS = 8000;
 
 function wait(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -54,7 +56,6 @@ async function waitForBrowserAuthCookie(
 
   return Boolean(getAuthInfoFromBrowserCookie());
 }
-
 function VersionDisplay() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [isChecking, setIsChecking] = useState(true);
@@ -110,6 +111,7 @@ function VersionDisplay() {
 
 export function LoginPageClient() {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const redirectPath = resolveRedirectPath(searchParams);
   const [password, setPassword] = useState('');
@@ -133,23 +135,24 @@ export function LoginPageClient() {
   }, []);
 
   useEffect(() => {
-    router.prefetch(redirectPath);
-  }, [redirectPath, router]);
-
-  useEffect(() => {
-    if (!isRedirecting) {
+    if (!isRedirecting || pathname !== '/login') {
       return;
     }
 
-    const timeoutId = window.setTimeout(() => {
+    const hardRedirectTimeoutId = window.setTimeout(() => {
+      replaceWithDocumentNavigation(redirectPath);
+    }, REDIRECT_HARD_NAVIGATION_TIMEOUT_MS);
+
+    const errorTimeoutId = window.setTimeout(() => {
       setError('页面跳转超时，请刷新后重试');
       setLoginPhase('idle');
-    }, REDIRECT_FALLBACK_TIMEOUT_MS);
+    }, REDIRECT_ERROR_TIMEOUT_MS);
 
     return () => {
-      window.clearTimeout(timeoutId);
+      window.clearTimeout(hardRedirectTimeoutId);
+      window.clearTimeout(errorTimeoutId);
     };
-  }, [isRedirecting]);
+  }, [isRedirecting, pathname, redirectPath]);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
