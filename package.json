@@ -27,6 +27,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@headlessui/react": "^2.2.4",
     "@heroicons/react": "^2.2.0",
+    "@supabase/supabase-js": "^2.108.2",
     "@tanstack/react-virtual": "^3.13.19",
     "@types/crypto-js": "^4.2.2",
     "@upstash/redis": "^1.25.0",

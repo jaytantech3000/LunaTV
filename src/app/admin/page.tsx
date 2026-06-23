@@ -45,6 +45,7 @@ import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { isAdultSourceCandidate } from '@/lib/yellow';
 
+import DesktopDiagnosticsAdminPanel from '@/components/DesktopDiagnosticsAdminPanel';
 import DataMigration from '@/components/DataMigration';
 import PageLayout from '@/components/PageLayout';
 
@@ -5674,6 +5675,7 @@ function AdminPageClient() {
   const [role, setRole] = useState<'owner' | 'admin' | null>(null);
   const [showResetConfigModal, setShowResetConfigModal] = useState(false);
   const [expandedTabs, setExpandedTabs] = useState<{ [key: string]: boolean }>({
+    diagnostics: false,
     userConfig: false,
     videoSource: false,
     liveSource: false,
@@ -5918,6 +5920,20 @@ function AdminPageClient() {
                 <DataMigration onRefreshConfig={fetchConfig} />
               </CollapsibleTab>
             )}
+
+            <CollapsibleTab
+              title='桌面诊断'
+              icon={
+                <AlertTriangle
+                  size={20}
+                  className='text-gray-600 dark:text-gray-400'
+                />
+              }
+              isExpanded={expandedTabs.diagnostics}
+              onToggle={() => toggleTab('diagnostics')}
+            >
+              <DesktopDiagnosticsAdminPanel />
+            </CollapsibleTab>
           </div>
         </div>
       </div>

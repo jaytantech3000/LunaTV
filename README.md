@@ -360,32 +360,36 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 
 ## 环境变量
 
-| 变量                                | 说明                                       | 可选值                   | 默认值                                                                                                                     |
-| ----------------------------------- | ------------------------------------------ | ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| USERNAME                            | 站长账号                                   | 任意字符串               | 无默认，必填字段                                                                                                           |
-| PASSWORD                            | 站长密码                                   | 任意字符串               | 无默认，必填字段                                                                                                           |
-| SITE_BASE                           | 站点 url                                   | 形如 https://example.com | 空                                                                                                                         |
-| NEXT_PUBLIC_SITE_NAME               | 站点名称                                   | 任意字符串               | MoonTV                                                                                                                     |
-| ANNOUNCEMENT                        | 站点公告                                   | 任意字符串               | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
-| NEXT_PUBLIC_STORAGE_TYPE            | 播放记录/收藏的存储方式                    | redis、kvrocks、upstash  | 无默认，必填字段                                                                                                           |
-| KVROCKS_URL                         | kvrocks 连接 url                           | 连接 url                 | 空                                                                                                                         |
-| REDIS_URL                           | redis 连接 url                             | 连接 url                 | 空                                                                                                                         |
-| UPSTASH_URL                         | upstash redis 连接 url                     | 连接 url                 | 空                                                                                                                         |
-| UPSTASH_TOKEN                       | upstash redis 连接 token                   | 连接 token               | 空                                                                                                                         |
-| UPSTASH_REDIS_REST_URL              | Upstash 官方 REST URL（Vercel 集成常用）   | 连接 url                 | 空                                                                                                                         |
-| UPSTASH_REDIS_REST_TOKEN            | Upstash 官方 REST Token（Vercel 集成常用） | 连接 token               | 空                                                                                                                         |
-| KV_REST_API_URL                     | Vercel KV / Upstash 集成 REST URL          | 连接 url                 | 空                                                                                                                         |
-| KV_REST_API_TOKEN                   | Vercel KV / Upstash 集成 REST Token        | 连接 token               | 空                                                                                                                         |
-| NEXT_PUBLIC_SEARCH_MAX_PAGE         | 搜索接口可拉取的最大页数                   | 1-50                     | 5                                                                                                                          |
-| NEXT_PUBLIC_DOUBAN_PROXY_TYPE       | 豆瓣数据源请求方式                         | 见下方                   | direct                                                                                                                     |
-| NEXT_PUBLIC_DOUBAN_PROXY            | 自定义豆瓣数据代理 URL                     | url prefix               | (空)                                                                                                                       |
-| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE | 豆瓣图片代理类型                           | 见下方                   | direct                                                                                                                     |
-| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY      | 自定义豆瓣图片代理 URL                     | url prefix               | (空)                                                                                                                       |
-| NEXT_PUBLIC_DISABLE_YELLOW_FILTER   | 关闭色情内容过滤                           | true/false               | false                                                                                                                      |
-| NEXT_PUBLIC_FLUID_SEARCH            | 是否开启搜索接口流式输出                   | true/ false              | true                                                                                                                       |
-| NEXT_PUBLIC_RELEASE_REPOSITORY      | 版本面板和登录页跳转使用的 GitHub 仓库     | owner/repo               | MoonTechLab/LunaTV                                                                                                         |
-| NEXT_PUBLIC_RELEASE_BRANCH          | 远程变更日志使用的分支                     | 分支名                   | luna                                                                                                                       |
-| NEXT_PUBLIC_UPDATER_BRANCH          | 远程版本号文件使用的分支                   | 分支名                   | 跟随 NEXT_PUBLIC_RELEASE_BRANCH                                                                                            |
+| 变量                                          | 说明                                       | 可选值                   | 默认值                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------ | ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| USERNAME                                      | 站长账号                                   | 任意字符串               | 无默认，必填字段                                                                                                           |
+| PASSWORD                                      | 站长密码                                   | 任意字符串               | 无默认，必填字段                                                                                                           |
+| SITE_BASE                                     | 站点 url                                   | 形如 https://example.com | 空                                                                                                                         |
+| NEXT_PUBLIC_SITE_NAME                         | 站点名称                                   | 任意字符串               | MoonTV                                                                                                                     |
+| ANNOUNCEMENT                                  | 站点公告                                   | 任意字符串               | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
+| NEXT_PUBLIC_STORAGE_TYPE                      | 播放记录/收藏的存储方式                    | redis、kvrocks、upstash  | 无默认，必填字段                                                                                                           |
+| KVROCKS_URL                                   | kvrocks 连接 url                           | 连接 url                 | 空                                                                                                                         |
+| REDIS_URL                                     | redis 连接 url                             | 连接 url                 | 空                                                                                                                         |
+| UPSTASH_URL                                   | upstash redis 连接 url                     | 连接 url                 | 空                                                                                                                         |
+| UPSTASH_TOKEN                                 | upstash redis 连接 token                   | 连接 token               | 空                                                                                                                         |
+| UPSTASH_REDIS_REST_URL                        | Upstash 官方 REST URL（Vercel 集成常用）   | 连接 url                 | 空                                                                                                                         |
+| UPSTASH_REDIS_REST_TOKEN                      | Upstash 官方 REST Token（Vercel 集成常用） | 连接 token               | 空                                                                                                                         |
+| KV_REST_API_URL                               | Vercel KV / Upstash 集成 REST URL          | 连接 url                 | 空                                                                                                                         |
+| KV_REST_API_TOKEN                             | Vercel KV / Upstash 集成 REST Token        | 连接 token               | 空                                                                                                                         |
+| NEXT_PUBLIC_SEARCH_MAX_PAGE                   | 搜索接口可拉取的最大页数                   | 1-50                     | 5                                                                                                                          |
+| NEXT_PUBLIC_DOUBAN_PROXY_TYPE                 | 豆瓣数据源请求方式                         | 见下方                   | direct                                                                                                                     |
+| NEXT_PUBLIC_DOUBAN_PROXY                      | 自定义豆瓣数据代理 URL                     | url prefix               | (空)                                                                                                                       |
+| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE           | 豆瓣图片代理类型                           | 见下方                   | direct                                                                                                                     |
+| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY                | 自定义豆瓣图片代理 URL                     | url prefix               | (空)                                                                                                                       |
+| NEXT_PUBLIC_DISABLE_YELLOW_FILTER             | 关闭色情内容过滤                           | true/false               | false                                                                                                                      |
+| NEXT_PUBLIC_FLUID_SEARCH                      | 是否开启搜索接口流式输出                   | true/ false              | true                                                                                                                       |
+| NEXT_PUBLIC_RELEASE_REPOSITORY                | 版本面板和登录页跳转使用的 GitHub 仓库     | owner/repo               | MoonTechLab/LunaTV                                                                                                         |
+| NEXT_PUBLIC_RELEASE_BRANCH                    | 远程变更日志使用的分支                     | 分支名                   | luna                                                                                                                       |
+| NEXT_PUBLIC_UPDATER_BRANCH                    | 远程版本号文件使用的分支                   | 分支名                   | 跟随 NEXT_PUBLIC_RELEASE_BRANCH                                                                                            |
+| DESKTOP_DIAGNOSTICS_UPLOAD_ENABLED            | 是否启用桌面诊断日志远端上报               | true/false               | false                                                                                                                      |
+| DESKTOP_DIAGNOSTICS_SUPABASE_URL              | 桌面诊断专用 Supabase 项目地址             | https url                | 空                                                                                                                         |
+| DESKTOP_DIAGNOSTICS_SUPABASE_SERVICE_ROLE_KEY | 桌面诊断专用 Supabase Service Role Key     | service role key         | 空                                                                                                                         |
+| DESKTOP_DIAGNOSTICS_SUPABASE_BUCKET           | 桌面诊断原始脱敏日志的私有 bucket 名称     | bucket 名                | 空                                                                                                                         |
 
 NEXT_PUBLIC_DOUBAN_PROXY_TYPE 选项解释：
 
@@ -403,6 +407,12 @@ NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE 选项解释：
 - cmliussss-cdn-tencent：由浏览器请求豆瓣 CDN，该 CDN 由 [CMLiussss](https://github.com/cmliu) 搭建，并由腾讯云 cdn 提供加速
 - cmliussss-cdn-ali：由浏览器请求豆瓣 CDN，该 CDN 由 [CMLiussss](https://github.com/cmliu) 搭建，并由阿里云 cdn 提供加速
 - custom: 用户自定义 proxy，由 NEXT_PUBLIC_DOUBAN_IMAGE_PROXY 定义
+
+桌面诊断上报说明：
+
+- 仅在 `DESKTOP_DIAGNOSTICS_UPLOAD_ENABLED=true` 时启用 `/api/desktop/diagnostics/upload`
+- 需要预先在独立 Supabase 项目中创建 `desktop_diagnostics_reports` 表和私有 `desktop-diagnostics` bucket
+- `DESKTOP_DIAGNOSTICS_SUPABASE_SERVICE_ROLE_KEY` 只允许配置在服务端，不能进入桌面客户端或公开前端
 
 ## 客户端
 
