@@ -514,15 +514,16 @@ function renderReleaseNotesInline(text: string, keyPrefix: string) {
     }
 
     if (match[1] && match[2]) {
+      const href = match[2];
       nodes.push(
         <a
           key={`${keyPrefix}-markdown-link-${match.index}`}
-          href={match[2]}
+          href={href}
           target='_blank'
           rel='noopener noreferrer'
           onClick={(event) => {
             event.preventDefault();
-            void openExternalUrl(match[2]);
+            void openExternalUrl(href);
           }}
           className='break-all text-emerald-700 underline decoration-emerald-400/70 underline-offset-4 transition-colors hover:text-emerald-800 dark:text-emerald-300 dark:decoration-emerald-500/60 dark:hover:text-emerald-200'
         >
