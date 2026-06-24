@@ -314,4 +314,67 @@ describe('DesktopReleaseHistoryDialog', () => {
       ]);
     });
   });
+
+  it('opens a styled confirmation dialog and cancels without installing', async () => {
+    const onClose = jest.fn();
+
+    renderDialog({
+      onClose,
+      currentVersion: '200.0.0-beta.15',
+    });
+
+    fireEvent.click(
+      await screen.findByLabelText('\u5207\u6362\u5230 v200.0.0-beta.16')
+    );
+
+    expect(
+      await screen.findByTestId('desktop-release-confirm-dialog')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('\u786e\u8ba4\u5207\u6362\u7248\u672c')
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '\u53d6\u6d88' }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId('desktop-release-confirm-dialog')
+      ).not.toBeInTheDocument();
+    });
+
+    expect(mockInstallDesktopReleaseVersion).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('confirms rollback with the project dialog and installs the selected version', async () => {
+    const onClose = jest.fn();
+
+    renderDialog({
+      onClose,
+      currentVersion: '200.0.0-beta.16',
+    });
+
+    fireEvent.click(
+      await screen.findByLabelText('\u56de\u9000\u5230 v200.0.0-beta.15')
+    );
+
+    expect(
+      await screen.findByText('\u786e\u8ba4\u56de\u9000\u7248\u672c')
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: '\u786e\u8ba4\u56de\u9000' })
+    );
+
+    await waitFor(() => {
+      expect(mockInstallDesktopReleaseVersion).toHaveBeenCalledWith({
+        manifestUrl: 'https://example.com/beta-15/latest.json',
+        version: '200.0.0-beta.15',
+        publishedAt: '2026-06-19T04:01:04Z',
+        releaseNotes: null,
+      });
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

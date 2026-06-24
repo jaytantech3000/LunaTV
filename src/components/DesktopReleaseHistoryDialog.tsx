@@ -113,6 +113,27 @@ function sortReleaseSection(
   });
 }
 
+function getReleaseActionMeta(version: string, currentVersion: string) {
+  const isRollback = compareSemver(version, currentVersion) < 0;
+
+  return {
+    isRollback,
+    actionTitle: `${
+      isRollback ? '\u56de\u9000\u5230' : '\u5207\u6362\u5230'
+    } v${version}`,
+    dialogTitle: isRollback
+      ? '\u786e\u8ba4\u56de\u9000\u7248\u672c'
+      : '\u786e\u8ba4\u5207\u6362\u7248\u672c',
+    dialogMessage: isRollback
+      ? `\u5c06\u56de\u9000\u5230 v${version}\uff0c\u5e94\u7528\u4f1a\u9759\u9ed8\u5b89\u88c5\u5e76\u81ea\u52a8\u91cd\u542f\u3002`
+      : `\u5c06\u5207\u6362\u5230 v${version}\uff0c\u5e94\u7528\u4f1a\u9759\u9ed8\u5b89\u88c5\u5e76\u81ea\u52a8\u91cd\u542f\u3002`,
+    confirmText: isRollback
+      ? '\u786e\u8ba4\u56de\u9000'
+      : '\u7acb\u5373\u5207\u6362',
+    badgeText: isRollback ? '\u56de\u9000' : '\u5207\u6362',
+  };
+}
+
 function formatPublishedAt(value: string | null) {
   if (!value) {
     return '发布时间未知';
@@ -196,10 +217,10 @@ function VersionSection({
         const isFavorited = favoriteTagSet.has(release.tagName);
         const isActiveVersion =
           updateState.isBusy && updateState.latestVersion === release.version;
-        const actionTitle =
-          compareSemver(release.version, currentVersion) < 0
-            ? `回退到 v${release.version}`
-            : `切换到 v${release.version}`;
+        const actionTitle = getReleaseActionMeta(
+          release.version,
+          currentVersion
+        ).actionTitle;
         const favoriteTitle = isFavorited
           ? `取消收藏 v${release.version}`
           : `收藏 v${release.version}`;
@@ -323,8 +344,13 @@ export function DesktopReleaseHistoryDialog({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [releases, setReleases] = useState<DesktopReleaseHistoryItem[]>([]);
   const [favoriteTags, setFavoriteTags] = useState<string[]>([]);
+  const [pendingRelease, setPendingRelease] =
+    useState<DesktopReleaseHistoryItem | null>(null);
 
   const favoriteTagSet = useMemo(() => new Set(favoriteTags), [favoriteTags]);
+  const pendingReleaseAction = pendingRelease
+    ? getReleaseActionMeta(pendingRelease.version, currentVersion)
+    : null;
 
   const groupedReleases = useMemo(() => {
     const stable = sortReleaseSection(
@@ -360,6 +386,7 @@ export function DesktopReleaseHistoryDialog({
 
   useEffect(() => {
     if (!isOpen) {
+      setPendingRelease(null);
       return;
     }
 
@@ -408,24 +435,32 @@ export function DesktopReleaseHistoryDialog({
     });
   };
 
-  const handleSelectRelease = (release: DesktopReleaseHistoryItem) => {
-    const isRollback = compareSemver(release.version, currentVersion) < 0;
-    const confirmed = window.confirm(
-      isRollback
-        ? `将回退到 v${release.version}，应用会静默安装并自动重启。是否继续？`
-        : `将切换到 v${release.version}，应用会静默安装并自动重启。是否继续？`
-    );
+  const handleClose = () => {
+    setPendingRelease(null);
+    onClose();
+  };
 
-    if (!confirmed) {
+  const handleSelectRelease = (release: DesktopReleaseHistoryItem) => {
+    if (updateState.isBusy) {
       return;
     }
 
+    setPendingRelease(release);
+  };
+
+  const handleConfirmRelease = () => {
+    if (!pendingRelease) {
+      return;
+    }
+
+    const selectedRelease = pendingRelease;
+    setPendingRelease(null);
     onClose();
     void installDesktopReleaseVersion({
-      manifestUrl: release.manifestUrl,
-      version: release.version,
-      publishedAt: release.publishedAt,
-      releaseNotes: release.notes,
+      manifestUrl: selectedRelease.manifestUrl,
+      version: selectedRelease.version,
+      publishedAt: selectedRelease.publishedAt,
+      releaseNotes: selectedRelease.notes,
     });
   };
 
@@ -437,10 +472,15 @@ export function DesktopReleaseHistoryDialog({
     <>
       <div
         className='fixed inset-0 z-[1010] bg-black/45 backdrop-blur-sm'
-        onClick={onClose}
+        onClick={handleClose}
       />
 
-      <div className='fixed left-1/2 top-1/2 z-[1011] flex max-h-[88vh] w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900'>
+      <div
+        role='dialog'
+        aria-modal='true'
+        aria-label='\u7248\u672c\u5217\u8868'
+        className='fixed left-1/2 top-1/2 z-[1011] flex max-h-[88vh] w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900'
+      >
         <div className='flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800'>
           <div className='flex items-center gap-3'>
             <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-200'>
@@ -458,7 +498,7 @@ export function DesktopReleaseHistoryDialog({
 
           <button
             type='button'
-            onClick={onClose}
+            onClick={handleClose}
             className='inline-flex h-9 w-9 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200'
             aria-label='关闭版本列表'
           >
@@ -528,6 +568,101 @@ export function DesktopReleaseHistoryDialog({
           </div>
         </div>
       </div>
+
+      {pendingRelease && pendingReleaseAction ? (
+        <>
+          <div
+            className='fixed inset-0 z-[1012] bg-black/55 backdrop-blur-sm'
+            onClick={() => setPendingRelease(null)}
+          />
+          <div className='fixed left-1/2 top-1/2 z-[1013] w-full max-w-md -translate-x-1/2 -translate-y-1/2 px-4'>
+            <div
+              role='dialog'
+              aria-modal='true'
+              aria-label='\u786e\u8ba4\u7248\u672c\u5207\u6362'
+              data-testid='desktop-release-confirm-dialog'
+              className='overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900'
+            >
+              <div className='border-b border-gray-200 px-5 py-4 dark:border-gray-800'>
+                <div className='flex items-start gap-3'>
+                  <div
+                    className={`mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full ${
+                      pendingReleaseAction.isRollback
+                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200'
+                        : 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-200'
+                    }`}
+                  >
+                    <RotateCcw className='h-5 w-5' />
+                  </div>
+                  <div className='min-w-0 space-y-1'>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+                        {pendingReleaseAction.dialogTitle}
+                      </h3>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                          pendingReleaseAction.isRollback
+                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200'
+                            : 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-200'
+                        }`}
+                      >
+                        {pendingReleaseAction.badgeText}
+                      </span>
+                    </div>
+                    <p className='text-sm leading-6 text-gray-500 dark:text-gray-400'>
+                      {pendingReleaseAction.dialogMessage}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className='space-y-4 px-5 py-4'>
+                <div className='grid gap-3 sm:grid-cols-2'>
+                  <div className='rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/60'>
+                    <p className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
+                      {'\u5f53\u524d\u7248\u672c'}
+                    </p>
+                    <p className='mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100'>
+                      v{currentVersion}
+                    </p>
+                  </div>
+                  <div className='rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/60'>
+                    <p className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
+                      {'\u76ee\u6807\u7248\u672c'}
+                    </p>
+                    <p className='mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100'>
+                      v{pendingRelease.version}
+                    </p>
+                  </div>
+                </div>
+
+                <p className='rounded-xl border border-gray-200 bg-white/80 px-4 py-3 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-900/70 dark:text-gray-300'>
+                  {
+                    '\u5b89\u88c5\u5b8c\u6210\u540e\u4f1a\u81ea\u52a8\u91cd\u542f\uff0c\u6574\u4e2a\u6d41\u7a0b\u4f1a\u590d\u7528\u5f53\u524d\u7684\u684c\u9762\u66f4\u65b0\u903b\u8f91\u3002'
+                  }
+                </p>
+
+                <div className='flex flex-col-reverse gap-3 sm:flex-row sm:justify-end'>
+                  <button
+                    type='button'
+                    onClick={() => setPendingRelease(null)}
+                    className='inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800'
+                  >
+                    {'\u53d6\u6d88'}
+                  </button>
+                  <button
+                    type='button'
+                    onClick={handleConfirmRelease}
+                    className='inline-flex items-center justify-center rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200'
+                  >
+                    {pendingReleaseAction.confirmText}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
     </>,
     document.body
   );
