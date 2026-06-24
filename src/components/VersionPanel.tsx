@@ -44,6 +44,14 @@ import { useAppUpdateState } from '@/lib/use-app-update';
 import { CURRENT_VERSION } from '@/lib/version';
 import { UpdateStatus } from '@/lib/version_check';
 
+import {
+  AppButton,
+  AppDialogBackdrop,
+  AppDialogHeader,
+  AppDialogPanel,
+  AppIconButton,
+  AppSurfaceCard,
+} from '@/components/AppChrome';
 import CapsuleSwitch from '@/components/CapsuleSwitch';
 import { DesktopReleaseHistoryDialog } from '@/components/DesktopReleaseHistoryDialog';
 
@@ -553,20 +561,20 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
 
   const versionPanelContent = (
     <>
-      <div
-        className='fixed inset-0 z-[1000] bg-black/50 backdrop-blur-sm'
+      <AppDialogBackdrop
+        className='z-[1000] bg-black/50 backdrop-blur-sm'
         onClick={onClose}
         onTouchMove={(event) => event.preventDefault()}
         onWheel={(event) => event.preventDefault()}
         style={{ touchAction: 'none' }}
       />
 
-      <div
-        className='fixed left-1/2 top-1/2 z-[1001] max-h-[90vh] w-full max-w-xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl bg-white shadow-xl dark:bg-gray-900'
+      <AppDialogPanel
+        className='fixed left-1/2 top-1/2 z-[1001] max-h-[90vh] w-full max-w-xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[26px]'
         onTouchMove={(event) => event.stopPropagation()}
         style={{ touchAction: 'auto' }}
       >
-        <div className='flex items-center justify-between border-b border-gray-200 p-3 sm:p-6 dark:border-gray-700'>
+        <AppDialogHeader className='p-3 sm:p-6'>
           <div className='flex flex-wrap items-center gap-3'>
             <h3 className='text-lg font-bold text-gray-800 dark:text-gray-200 sm:text-xl'>
               版本信息
@@ -587,33 +595,27 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
 
           <div className='flex items-center gap-2'>
             {isDesktopTarget ? (
-              <button
-                type='button'
+              <AppIconButton
                 onClick={openReleaseHistory}
-                className='flex h-8 w-8 items-center justify-center rounded-full p-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200'
                 aria-label='版本列表'
                 title='版本列表'
               >
                 <History className='h-4 w-4' />
-              </button>
+              </AppIconButton>
             ) : null}
 
-            <button
-              onClick={onClose}
-              className='flex h-8 w-8 items-center justify-center rounded-full p-1 text-gray-500 transition-colors hover:bg-gray-100 dark:hover:bg-gray-800'
-              aria-label='关闭'
-            >
+            <AppIconButton onClick={onClose} aria-label='关闭'>
               <X className='h-full w-full' />
-            </button>
+            </AppIconButton>
           </div>
-        </div>
+        </AppDialogHeader>
 
         <div className='max-h-[calc(90vh-120px)] overflow-y-auto p-3 sm:p-6'>
           <div className='space-y-6'>
-            <div className='rounded-lg border border-gray-200 bg-gradient-to-r from-gray-50 to-gray-100/70 p-4 dark:border-gray-700 dark:from-gray-800/70 dark:to-gray-900/70'>
+            <AppSurfaceCard className='rounded-2xl bg-gradient-to-r from-gray-50 to-gray-100/70 p-4 dark:from-gray-800/70 dark:to-gray-900/70'>
               <div className='flex flex-col gap-3'>
                 <div className='flex items-start gap-3'>
-                  <div className='flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-200'>
+                  <div className='flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-200'>
                     {renderUpdateStatusIcon(updateState)}
                   </div>
 
@@ -671,23 +673,23 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                 ) : null}
 
                 {updateState.releaseNotes ? (
-                  <div className='rounded-md border border-gray-200 bg-white/80 p-3 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-300'>
+                  <AppSurfaceCard className='rounded-xl px-3 py-3 text-sm text-gray-600 dark:text-gray-300'>
                     {updateState.releaseNotes}
-                  </div>
+                  </AppSurfaceCard>
                 ) : null}
 
                 {updateState.errorMessage ? (
-                  <div className='rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200'>
+                  <div className='rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200'>
                     {updateState.errorMessage}
                   </div>
                 ) : null}
 
                 <div className='flex flex-col gap-2 sm:flex-row'>
-                  <button
-                    type='button'
+                  <AppButton
                     onClick={handleCheckUpdate}
                     disabled={updateState.isBusy}
-                    className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 sm:w-auto'
+                    variant='muted'
+                    className='w-full sm:w-auto'
                   >
                     {updateState.isChecking ? (
                       <Loader2 className='h-4 w-4 animate-spin' />
@@ -695,28 +697,28 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                       <RotateCw className='h-4 w-4' />
                     )}
                     检查更新
-                  </button>
+                  </AppButton>
 
                   {desktopUpdaterAvailable &&
                   updateState.phase === 'available' ? (
-                    <button
-                      type='button'
+                    <AppButton
                       onClick={handleDownloadUpdate}
                       disabled={updateState.isBusy}
-                      className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto'
+                      variant='accent'
+                      className='w-full sm:w-auto'
                     >
                       <Download className='h-4 w-4' />
                       下载最新版本
-                    </button>
+                    </AppButton>
                   ) : null}
 
                   {desktopUpdaterAvailable &&
                   updateState.phase === 'downloaded' ? (
-                    <button
-                      type='button'
+                    <AppButton
                       onClick={handleInstallUpdate}
                       disabled={updateState.isBusy}
-                      className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto'
+                      variant='accent'
+                      className='w-full sm:w-auto'
                     >
                       {updateState.isInstalling ? (
                         <Loader2 className='h-4 w-4 animate-spin' />
@@ -724,23 +726,22 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                         <CheckCircle2 className='h-4 w-4' />
                       )}
                       安装更新
-                    </button>
+                    </AppButton>
                   ) : null}
 
-                  <button
-                    type='button'
+                  <AppButton
                     onClick={openReleasePage}
-                    className='inline-flex w-full items-center justify-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-medium text-gray-700 ring-1 ring-gray-200 transition-colors hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-700 dark:hover:bg-gray-800 sm:w-auto'
+                    className='w-full sm:w-auto'
                   >
                     <ExternalLink className='h-4 w-4' />
                     打开发布页
-                  </button>
+                  </AppButton>
                 </div>
               </div>
-            </div>
+            </AppSurfaceCard>
 
             {isDesktopTarget ? (
-              <div
+              <AppSurfaceCard
                 className={`flex items-center justify-between rounded-lg border p-4 ${
                   desktopUpdaterAvailable
                     ? 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900/60'
@@ -776,7 +777,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     <div className='absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform peer-checked:translate-x-5'></div>
                   </div>
                 </label>
-              </div>
+              </AppSurfaceCard>
             ) : null}
 
             {updateState.updateStatus === UpdateStatus.HAS_UPDATE &&
@@ -840,7 +841,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
             </div>
           </div>
         </div>
-      </div>
+      </AppDialogPanel>
 
       {isDesktopTarget ? (
         <DesktopReleaseHistoryDialog

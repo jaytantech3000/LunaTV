@@ -25,6 +25,17 @@ import { isDesktopAppTarget } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { compareSemver } from '@/lib/semver';
 
+import {
+  AppButton,
+  AppDialogBackdrop,
+  AppDialogHeader,
+  AppDialogPanel,
+  AppDialogTitleBlock,
+  AppIconBadge,
+  AppIconButton,
+  AppSurfaceCard,
+} from '@/components/AppChrome';
+
 interface DesktopReleaseHistoryDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -204,7 +215,7 @@ function VersionSection({
 }) {
   if (!releases.length) {
     return (
-      <div className='rounded-xl border border-dashed border-gray-200 bg-gray-50/80 p-4 text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-400'>
+      <div className='rounded-2xl border border-dashed border-gray-200 bg-gray-50/80 p-4 text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-400'>
         {description}
       </div>
     );
@@ -229,7 +240,7 @@ function VersionSection({
           <div
             key={release.id}
             data-testid={`desktop-release-card-${release.tagName}`}
-            className={`rounded-xl border p-4 transition-colors ${
+            className={`rounded-2xl border p-4 shadow-sm transition-colors ${
               isCurrentVersion
                 ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/20'
                 : isFavorited
@@ -287,8 +298,7 @@ function VersionSection({
                 </button>
 
                 {release.htmlUrl ? (
-                  <button
-                    type='button'
+                  <AppIconButton
                     onClick={() =>
                       window.open(
                         release.htmlUrl || '',
@@ -296,12 +306,12 @@ function VersionSection({
                         'noopener,noreferrer'
                       )
                     }
-                    className='inline-flex h-9 w-9 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200'
+                    variant='ghost'
                     aria-label={`打开 v${release.version} 发布页`}
                     title='打开发布页'
                   >
                     <ExternalLink className='h-4 w-4' />
-                  </button>
+                  </AppIconButton>
                 ) : null}
 
                 <button
@@ -470,53 +480,44 @@ export function DesktopReleaseHistoryDialog({
 
   return createPortal(
     <>
-      <div
-        className='fixed inset-0 z-[1010] bg-black/45 backdrop-blur-sm'
+      <AppDialogBackdrop
+        className='z-[1010] bg-black/45 backdrop-blur-sm'
         onClick={handleClose}
       />
 
-      <div
+      <AppDialogPanel
         role='dialog'
         aria-modal='true'
         aria-label='\u7248\u672c\u5217\u8868'
-        className='fixed left-1/2 top-1/2 z-[1011] flex max-h-[88vh] w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900'
+        className='fixed left-1/2 top-1/2 z-[1011] flex max-h-[88vh] w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col'
       >
-        <div className='flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800'>
+        <AppDialogHeader>
           <div className='flex items-center gap-3'>
-            <div className='flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-200'>
+            <AppIconBadge>
               <History className='h-5 w-5' />
-            </div>
-            <div>
-              <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
-                版本列表
-              </h3>
-              <p className='text-sm text-gray-500 dark:text-gray-400'>
-                选择指定版本后，将按桌面更新链路静默安装并自动重启。
-              </p>
-            </div>
+            </AppIconBadge>
+            <AppDialogTitleBlock
+              title='版本列表'
+              subtitle='选择指定版本后，将按桌面更新链路静默安装并自动重启。'
+            />
           </div>
 
-          <button
-            type='button'
-            onClick={handleClose}
-            className='inline-flex h-9 w-9 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200'
-            aria-label='关闭版本列表'
-          >
+          <AppIconButton onClick={handleClose} aria-label='关闭版本列表'>
             <X className='h-5 w-5' />
-          </button>
-        </div>
+          </AppIconButton>
+        </AppDialogHeader>
 
-        <div className='flex-1 overflow-y-auto px-5 py-4'>
+        <div className='flex-1 overflow-y-auto px-5 py-5 sm:px-6'>
           <div className='space-y-6'>
             {errorMessage ? (
-              <div className='flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-100'>
+              <div className='flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-100'>
                 <AlertCircle className='mt-0.5 h-4 w-4 flex-shrink-0' />
                 <span>{errorMessage}</span>
               </div>
             ) : null}
 
             {isLoading ? (
-              <div className='flex min-h-[240px] items-center justify-center rounded-xl border border-gray-200 bg-gray-50/80 dark:border-gray-800 dark:bg-gray-800/30'>
+              <div className='flex min-h-[240px] items-center justify-center rounded-2xl border border-gray-200 bg-gray-50/80 dark:border-gray-800 dark:bg-gray-800/30'>
                 <div className='flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400'>
                   <Loader2 className='h-4 w-4 animate-spin' />
                   正在加载版本列表...
@@ -567,33 +568,30 @@ export function DesktopReleaseHistoryDialog({
             )}
           </div>
         </div>
-      </div>
+      </AppDialogPanel>
 
       {pendingRelease && pendingReleaseAction ? (
         <>
-          <div
-            className='fixed inset-0 z-[1012] bg-black/55 backdrop-blur-sm'
+          <AppDialogBackdrop
+            className='z-[1012]'
             onClick={() => setPendingRelease(null)}
           />
           <div className='fixed left-1/2 top-1/2 z-[1013] w-full max-w-md -translate-x-1/2 -translate-y-1/2 px-4'>
-            <div
+            <AppDialogPanel
               role='dialog'
               aria-modal='true'
               aria-label='\u786e\u8ba4\u7248\u672c\u5207\u6362'
               data-testid='desktop-release-confirm-dialog'
-              className='overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900'
+              className='overflow-hidden'
             >
-              <div className='border-b border-gray-200 px-5 py-4 dark:border-gray-800'>
+              <AppDialogHeader>
                 <div className='flex items-start gap-3'>
-                  <div
-                    className={`mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full ${
-                      pendingReleaseAction.isRollback
-                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200'
-                        : 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-200'
-                    }`}
+                  <AppIconBadge
+                    className='mt-0.5 flex-shrink-0'
+                    tone={pendingReleaseAction.isRollback ? 'amber' : 'sky'}
                   >
                     <RotateCcw className='h-5 w-5' />
-                  </div>
+                  </AppIconBadge>
                   <div className='min-w-0 space-y-1'>
                     <div className='flex flex-wrap items-center gap-2'>
                       <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
@@ -614,52 +612,50 @@ export function DesktopReleaseHistoryDialog({
                     </p>
                   </div>
                 </div>
-              </div>
+                <AppIconButton
+                  onClick={() => setPendingRelease(null)}
+                  aria-label='关闭版本确认'
+                >
+                  <X className='h-5 w-5' />
+                </AppIconButton>
+              </AppDialogHeader>
 
-              <div className='space-y-4 px-5 py-4'>
+              <div className='space-y-4 px-5 py-5 sm:px-6'>
                 <div className='grid gap-3 sm:grid-cols-2'>
-                  <div className='rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/60'>
+                  <AppSurfaceCard className='bg-gray-50/80 px-4 py-3 dark:bg-gray-800/60'>
                     <p className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
                       {'\u5f53\u524d\u7248\u672c'}
                     </p>
                     <p className='mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100'>
                       v{currentVersion}
                     </p>
-                  </div>
-                  <div className='rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/60'>
+                  </AppSurfaceCard>
+                  <AppSurfaceCard className='bg-gray-50/80 px-4 py-3 dark:bg-gray-800/60'>
                     <p className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
                       {'\u76ee\u6807\u7248\u672c'}
                     </p>
                     <p className='mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100'>
                       v{pendingRelease.version}
                     </p>
-                  </div>
+                  </AppSurfaceCard>
                 </div>
 
-                <p className='rounded-xl border border-gray-200 bg-white/80 px-4 py-3 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-900/70 dark:text-gray-300'>
+                <AppSurfaceCard className='px-4 py-3 text-sm text-gray-600 dark:text-gray-300'>
                   {
                     '\u5b89\u88c5\u5b8c\u6210\u540e\u4f1a\u81ea\u52a8\u91cd\u542f\uff0c\u6574\u4e2a\u6d41\u7a0b\u4f1a\u590d\u7528\u5f53\u524d\u7684\u684c\u9762\u66f4\u65b0\u903b\u8f91\u3002'
                   }
-                </p>
+                </AppSurfaceCard>
 
                 <div className='flex flex-col-reverse gap-3 sm:flex-row sm:justify-end'>
-                  <button
-                    type='button'
-                    onClick={() => setPendingRelease(null)}
-                    className='inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800'
-                  >
+                  <AppButton onClick={() => setPendingRelease(null)}>
                     {'\u53d6\u6d88'}
-                  </button>
-                  <button
-                    type='button'
-                    onClick={handleConfirmRelease}
-                    className='inline-flex items-center justify-center rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200'
-                  >
+                  </AppButton>
+                  <AppButton onClick={handleConfirmRelease} variant='primary'>
                     {pendingReleaseAction.confirmText}
-                  </button>
+                  </AppButton>
                 </div>
               </div>
-            </div>
+            </AppDialogPanel>
           </div>
         </>
       ) : null}

@@ -34,6 +34,17 @@ import {
   writeDesktopAppConfig,
 } from '@/lib/desktop/tauri-client';
 
+import {
+  AppButton,
+  AppDialogBackdrop,
+  AppDialogHeader,
+  AppDialogPanel,
+  AppDialogTitleBlock,
+  AppIconBadge,
+  AppIconButton,
+  AppSurfaceCard,
+} from '@/components/AppChrome';
+
 interface DesktopSettingsSectionProps {
   isOpen: boolean;
 }
@@ -232,31 +243,30 @@ function DiagnosticsModal({
   }
 
   return createPortal(
-    <div className='fixed inset-0 z-[1100] flex items-center justify-center bg-black/55 p-4'>
-      <div className='w-full max-w-3xl overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900'>
-        <div className='flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-700'>
-          <div>
-            <div className='text-base font-semibold text-gray-900 dark:text-gray-100'>
-              本地服务错误排查
-            </div>
-            <div className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-              自动检查 sidecar、端口、配置、数据目录，并收集试运行日志。
-            </div>
+    <AppDialogBackdrop className='z-[1100] flex items-center justify-center p-4'>
+      <AppDialogPanel className='w-full max-w-3xl overflow-hidden'>
+        <AppDialogHeader>
+          <div className='flex items-center gap-3'>
+            <AppIconBadge tone='amber'>
+              <Bug className='h-5 w-5' />
+            </AppIconBadge>
+            <AppDialogTitleBlock
+              title='本地服务错误排查'
+              subtitle='自动检查 sidecar、端口、配置、数据目录，并收集试运行日志。'
+            />
           </div>
-          <button
-            type='button'
+          <AppIconButton
             onClick={onClose}
             disabled={isDiagnosing || isExporting}
-            className='inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100'
             aria-label='关闭排查弹窗'
           >
             <X className='h-4 w-4' />
-          </button>
-        </div>
+          </AppIconButton>
+        </AppDialogHeader>
 
         <div className='max-h-[72vh] space-y-4 overflow-y-auto px-5 py-5'>
           {isDiagnosing ? (
-            <div className='flex min-h-[240px] flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-gray-300 bg-gray-50 px-6 py-10 text-center dark:border-gray-700 dark:bg-gray-800/40'>
+            <AppSurfaceCard className='flex min-h-[240px] flex-col items-center justify-center gap-4 rounded-2xl border-dashed bg-gray-50 px-6 py-10 text-center dark:bg-gray-800/40'>
               <RefreshCw className='h-8 w-8 animate-spin text-green-600 dark:text-green-400' />
               <div className='space-y-1'>
                 <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
@@ -266,7 +276,7 @@ function DiagnosticsModal({
                   正在自动检查启动条件并收集本地服务日志，请稍候。
                 </div>
               </div>
-            </div>
+            </AppSurfaceCard>
           ) : null}
 
           {!isDiagnosing && errorMessage ? (
@@ -277,7 +287,7 @@ function DiagnosticsModal({
 
           {!isDiagnosing && report ? (
             <>
-              <div className='rounded-xl border border-gray-200 bg-gray-50 px-4 py-4 dark:border-gray-700 dark:bg-gray-800/40'>
+              <AppSurfaceCard className='bg-gray-50 px-4 py-4 dark:bg-gray-800/40'>
                 <div className='flex flex-wrap items-center gap-2'>
                   <span
                     className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${levelPillClassName(
@@ -296,16 +306,16 @@ function DiagnosticsModal({
                 <div className='mt-1 text-sm leading-6 text-gray-600 dark:text-gray-300'>
                   {report.summary}
                 </div>
-              </div>
+              </AppSurfaceCard>
 
               <div className='space-y-3'>
                 <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
                   检查明细
                 </div>
                 {report.findings.map((finding) => (
-                  <div
+                  <AppSurfaceCard
                     key={`${finding.level}-${finding.title}`}
-                    className='rounded-xl border border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-900'
+                    className='px-4 py-4 dark:bg-gray-900'
                   >
                     <div className='flex flex-wrap items-center gap-2'>
                       <span
@@ -322,12 +332,12 @@ function DiagnosticsModal({
                     <div className='mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-600 dark:text-gray-300'>
                       {finding.detail}
                     </div>
-                  </div>
+                  </AppSurfaceCard>
                 ))}
               </div>
 
               {report.recommendations.length ? (
-                <div className='space-y-3 rounded-xl border border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-900'>
+                <AppSurfaceCard className='space-y-3 px-4 py-4 dark:bg-gray-900'>
                   <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
                     建议操作
                   </div>
@@ -341,7 +351,7 @@ function DiagnosticsModal({
                       </div>
                     ))}
                   </div>
-                </div>
+                </AppSurfaceCard>
               ) : null}
             </>
           ) : null}
@@ -361,24 +371,22 @@ function DiagnosticsModal({
           ) : null}
 
           <div className='flex flex-wrap items-center justify-between gap-3'>
-            <button
-              type='button'
+            <AppButton
               onClick={onRetry}
               disabled={isDiagnosing || isExporting}
-              className='inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800'
+              size='sm'
             >
               <RefreshCw
                 className={`h-3.5 w-3.5 ${isDiagnosing ? 'animate-spin' : ''}`}
               />
               重新排查
-            </button>
+            </AppButton>
 
             <div className='flex flex-wrap items-center gap-2'>
-              <button
-                type='button'
+              <AppButton
                 onClick={onExport}
                 disabled={isDiagnosing || isExporting || !report}
-                className='inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800'
+                size='sm'
               >
                 {isExporting ? (
                   <RefreshCw className='h-3.5 w-3.5 animate-spin' />
@@ -386,20 +394,20 @@ function DiagnosticsModal({
                   <Download className='h-3.5 w-3.5' />
                 )}
                 导出排查日志
-              </button>
-              <button
-                type='button'
+              </AppButton>
+              <AppButton
                 onClick={onClose}
                 disabled={isDiagnosing || isExporting}
-                className='inline-flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60'
+                size='sm'
+                variant='accent'
               >
                 关闭
-              </button>
+              </AppButton>
             </div>
           </div>
         </div>
-      </div>
-    </div>,
+      </AppDialogPanel>
+    </AppDialogBackdrop>,
     document.body
   );
 }
