@@ -12,9 +12,12 @@ import {
   ExternalLink,
   History,
   Loader2,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
   RotateCw,
+  Square,
   X,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
@@ -23,11 +26,14 @@ import { createPortal } from 'react-dom';
 
 import {
   type AppUpdateState,
+  cancelActiveUpdateDownload,
   checkForAppUpdates,
   downloadLatestVersion,
   getAutoDownloadDescription,
+  installDesktopReleaseVersion,
   installDownloadedUpdate,
   isDesktopUpdaterAvailable,
+  pauseActiveUpdateDownload,
   setAutoDownloadEnabled,
 } from '@/lib/app-update';
 import {
@@ -49,6 +55,8 @@ import {
   AppDialogBackdrop,
   AppDialogHeader,
   AppDialogPanel,
+  AppDialogTitleBlock,
+  AppIconBadge,
   AppIconButton,
   AppSurfaceCard,
 } from '@/components/AppChrome';
@@ -67,6 +75,8 @@ interface RemoteChangelogEntry {
   changed: string[];
   fixed: string[];
 }
+
+type PendingDownloadAction = 'pause' | 'cancel';
 
 const CHANGELOG_LOCALE_STORAGE_KEY = 'lunatv:version-panel:changelog-locale';
 
@@ -226,8 +236,67 @@ function formatBytes(bytes: number) {
   }`;
 }
 
+function getUpdateVersionLabel(version: string | null) {
+  return version ? `v${version}` : '目标版本';
+}
+
+function getDownloadActionButtonLabel(
+  updateState: Pick<
+    AppUpdateState,
+    | 'phase'
+    | 'downloadTargetKind'
+    | 'lastDownloadInterruption'
+    | 'latestVersion'
+  >
+) {
+  const versionLabel = getUpdateVersionLabel(updateState.latestVersion);
+
+  if (updateState.phase === 'paused') {
+    return updateState.downloadTargetKind === 'release'
+      ? `继续下载 ${versionLabel}`
+      : '继续下载最新版本';
+  }
+
+  if (updateState.lastDownloadInterruption === 'canceled') {
+    return updateState.downloadTargetKind === 'release'
+      ? `重新下载 ${versionLabel}`
+      : '重新下载最新版本';
+  }
+
+  return updateState.downloadTargetKind === 'release'
+    ? `下载 ${versionLabel}`
+    : '下载最新版本';
+}
+
+function getDownloadProgressLabel(
+  updateState: Pick<AppUpdateState, 'latestVersion' | 'progressPercent'>
+) {
+  if (updateState.progressPercent !== null) {
+    return `已下载 ${updateState.progressPercent}%`;
+  }
+
+  return `正在下载 ${getUpdateVersionLabel(updateState.latestVersion)}`;
+}
+
+function shouldHoldInterruptedDownloadState(
+  updateState: Pick<
+    AppUpdateState,
+    'phase' | 'downloadTargetKind' | 'lastDownloadInterruption'
+  >
+) {
+  return (
+    updateState.phase === 'paused' ||
+    (updateState.phase === 'available' &&
+      updateState.lastDownloadInterruption === 'canceled' &&
+      updateState.downloadTargetKind !== null)
+  );
+}
+
 function renderUpdateStatusIcon(
-  updateState: Pick<AppUpdateState, 'phase' | 'updateStatus' | 'errorMessage'>
+  updateState: Pick<
+    AppUpdateState,
+    'phase' | 'updateStatus' | 'errorMessage' | 'lastDownloadInterruption'
+  >
 ) {
   if (updateState.phase === 'checking' || updateState.phase === 'installing') {
     return <Loader2 className='h-5 w-5 animate-spin' />;
@@ -237,6 +306,10 @@ function renderUpdateStatusIcon(
     return (
       <Download className='h-5 w-5 text-emerald-600 dark:text-emerald-400' />
     );
+  }
+
+  if (updateState.phase === 'paused') {
+    return <Pause className='h-5 w-5 text-amber-600 dark:text-amber-300' />;
   }
 
   if (updateState.phase === 'error') {
@@ -257,6 +330,10 @@ function renderUpdateStatusIcon(
     );
   }
 
+  if (updateState.lastDownloadInterruption === 'canceled') {
+    return <Square className='h-5 w-5 text-rose-600 dark:text-rose-300' />;
+  }
+
   if (updateState.updateStatus === UpdateStatus.HAS_UPDATE) {
     return <Download className='h-5 w-5 text-amber-600 dark:text-amber-400' />;
   }
@@ -271,8 +348,36 @@ function renderUpdateStatusIcon(
 }
 
 function getUpdateStatusTitle(
-  updateState: Pick<AppUpdateState, 'phase' | 'updateStatus' | 'errorMessage'>
+  updateState: Pick<
+    AppUpdateState,
+    | 'phase'
+    | 'updateStatus'
+    | 'errorMessage'
+    | 'latestVersion'
+    | 'lastDownloadInterruption'
+  >
 ) {
+  const versionLabel = getUpdateVersionLabel(updateState.latestVersion);
+
+  if (updateState.phase === 'downloading' && updateState.latestVersion) {
+    return `正在下载 ${versionLabel}`;
+  }
+
+  if (updateState.phase === 'paused') {
+    return `${versionLabel} 下载已暂停`;
+  }
+
+  if (updateState.phase === 'installing' && updateState.latestVersion) {
+    return `正在安装 ${versionLabel}`;
+  }
+
+  if (updateState.phase === 'downloaded' && !updateState.errorMessage) {
+    return `${versionLabel} 已下载完成`;
+  }
+
+  if (updateState.lastDownloadInterruption === 'canceled') {
+    return `${versionLabel} 下载已取消`;
+  }
   if (updateState.phase === 'checking') {
     return '正在检查最新版本';
   }
@@ -426,6 +531,13 @@ function renderChangelogEntry(
 export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
   const [mounted, setMounted] = useState(false);
   const [isReleaseHistoryOpen, setIsReleaseHistoryOpen] = useState(false);
+  const [pendingDownloadAction, setPendingDownloadAction] =
+    useState<PendingDownloadAction | null>(null);
+  const [isApplyingDownloadAction, setIsApplyingDownloadAction] =
+    useState(false);
+  const [downloadActionError, setDownloadActionError] = useState<string | null>(
+    null
+  );
   const [remoteChangelog, setRemoteChangelog] = useState<
     RemoteChangelogEntry[]
   >([]);
@@ -445,6 +557,33 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
   );
   const autoDownloadDescription = getAutoDownloadDescription(updateState);
   const updateStatusTitle = getUpdateStatusTitle(updateState);
+  const activeDownloadVersionLabel = getUpdateVersionLabel(
+    updateState.latestVersion
+  );
+  const shouldShowDownloadActionButton =
+    desktopUpdaterAvailable &&
+    updateState.canDownload &&
+    (updateState.phase === 'available' || updateState.phase === 'paused');
+  const downloadActionButtonLabel = getDownloadActionButtonLabel(updateState);
+  const shouldKeepInterruptedDownloadTarget =
+    shouldHoldInterruptedDownloadState(updateState);
+  const pendingDownloadActionMeta = pendingDownloadAction
+    ? pendingDownloadAction === 'pause'
+      ? {
+          title: '确认暂停下载',
+          description: `将暂停 ${activeDownloadVersionLabel} 的下载。之后继续下载时，会重新开始当前版本的下载。`,
+          confirmText: '确认暂停',
+          badgeText: '暂停',
+          tone: 'amber' as const,
+        }
+      : {
+          title: '确认停止下载',
+          description: `将取消 ${activeDownloadVersionLabel} 的下载并清空当前进度，之后需要重新开始下载。`,
+          confirmText: '确认停止',
+          badgeText: '停止',
+          tone: 'rose' as const,
+        }
+    : null;
   const shouldShowUpdateStatusMessage =
     Boolean(updateState.statusMessage) &&
     updateState.phase !== 'checking' &&
@@ -472,8 +611,19 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
   useEffect(() => {
     if (!isOpen) {
       setIsReleaseHistoryOpen(false);
+      setPendingDownloadAction(null);
+      setIsApplyingDownloadAction(false);
+      setDownloadActionError(null);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (updateState.phase !== 'downloading') {
+      setPendingDownloadAction(null);
+      setIsApplyingDownloadAction(false);
+      setDownloadActionError(null);
+    }
+  }, [updateState.phase]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -481,9 +631,11 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
     }
 
     if (
+      shouldKeepInterruptedDownloadTarget ||
       updatePhaseRef.current === 'downloading' ||
       updatePhaseRef.current === 'downloaded' ||
-      updatePhaseRef.current === 'installing'
+      updatePhaseRef.current === 'installing' ||
+      updatePhaseRef.current === 'paused'
     ) {
       return;
     }
@@ -492,7 +644,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
       force: true,
       allowAutoDownload: true,
     });
-  }, [isOpen]);
+  }, [isOpen, shouldKeepInterruptedDownloadTarget]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -538,11 +690,69 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
   };
 
   const handleDownloadUpdate = () => {
+    if (
+      updateState.downloadTargetKind === 'release' &&
+      updateState.latestVersion &&
+      updateState.targetManifestUrl
+    ) {
+      void installDesktopReleaseVersion({
+        manifestUrl: updateState.targetManifestUrl,
+        version: updateState.latestVersion,
+        publishedAt: updateState.publishedAt,
+        releaseNotes: updateState.releaseNotes,
+      });
+      return;
+    }
+
     void downloadLatestVersion();
   };
 
   const handleInstallUpdate = () => {
     void installDownloadedUpdate();
+  };
+
+  const closeDownloadActionDialog = () => {
+    if (isApplyingDownloadAction) {
+      return;
+    }
+
+    setPendingDownloadAction(null);
+    setDownloadActionError(null);
+  };
+
+  const handleOpenPauseDownloadDialog = () => {
+    setDownloadActionError(null);
+    setPendingDownloadAction('pause');
+  };
+
+  const handleOpenCancelDownloadDialog = () => {
+    setDownloadActionError(null);
+    setPendingDownloadAction('cancel');
+  };
+
+  const handleConfirmDownloadAction = async () => {
+    if (!pendingDownloadAction || isApplyingDownloadAction) {
+      return;
+    }
+
+    setIsApplyingDownloadAction(true);
+    setDownloadActionError(null);
+
+    try {
+      if (pendingDownloadAction === 'pause') {
+        await pauseActiveUpdateDownload();
+      } else {
+        await cancelActiveUpdateDownload();
+      }
+
+      setPendingDownloadAction(null);
+    } catch (error) {
+      setDownloadActionError(
+        error instanceof Error ? error.message : '下载控制操作失败'
+      );
+    } finally {
+      setIsApplyingDownloadAction(false);
+    }
   };
 
   const openReleaseHistory = () => {
@@ -647,27 +857,45 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                 </div>
 
                 {updateState.phase === 'downloading' ? (
-                  <div className='space-y-2'>
-                    <div className='h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-800'>
-                      <div
-                        className='h-full rounded-full bg-emerald-500 transition-[width]'
-                        style={{
-                          width: `${updateState.progressPercent ?? 0}%`,
-                        }}
-                      />
+                  <div className='flex items-start gap-3'>
+                    <div className='min-w-0 flex-1 space-y-2'>
+                      <div className='h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-800'>
+                        <div
+                          className='h-full rounded-full bg-emerald-500 transition-[width]'
+                          style={{
+                            width: `${updateState.progressPercent ?? 0}%`,
+                          }}
+                        />
+                      </div>
+                      <div className='flex items-center justify-between gap-3 text-xs text-gray-500 dark:text-gray-400'>
+                        <span>{getDownloadProgressLabel(updateState)}</span>
+                        <span className='whitespace-nowrap'>
+                          {formatBytes(updateState.downloadedBytes)}
+                          {updateState.totalBytes
+                            ? ` / ${formatBytes(updateState.totalBytes)}`
+                            : ''}
+                        </span>
+                      </div>
                     </div>
-                    <div className='flex items-center justify-between text-xs text-gray-500 dark:text-gray-400'>
-                      <span>
-                        {updateState.progressPercent !== null
-                          ? `已下载 ${updateState.progressPercent}%`
-                          : '正在下载最新版'}
-                      </span>
-                      <span>
-                        {formatBytes(updateState.downloadedBytes)}
-                        {updateState.totalBytes
-                          ? ` / ${formatBytes(updateState.totalBytes)}`
-                          : ''}
-                      </span>
+                    <div className='flex items-center gap-2'>
+                      <AppIconButton
+                        onClick={handleOpenPauseDownloadDialog}
+                        disabled={isApplyingDownloadAction}
+                        variant='muted'
+                        aria-label='暂停下载'
+                        title='暂停下载'
+                      >
+                        <Pause className='h-4 w-4' />
+                      </AppIconButton>
+                      <AppIconButton
+                        onClick={handleOpenCancelDownloadDialog}
+                        disabled={isApplyingDownloadAction}
+                        variant='muted'
+                        aria-label='停止下载'
+                        title='停止下载'
+                      >
+                        <Square className='h-4 w-4' />
+                      </AppIconButton>
                     </div>
                   </div>
                 ) : null}
@@ -699,16 +927,22 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     检查更新
                   </AppButton>
 
-                  {desktopUpdaterAvailable &&
-                  updateState.phase === 'available' ? (
+                  {desktopUpdaterAvailable && shouldShowDownloadActionButton ? (
                     <AppButton
                       onClick={handleDownloadUpdate}
                       disabled={updateState.isBusy}
                       variant='accent'
                       className='w-full sm:w-auto'
                     >
-                      <Download className='h-4 w-4' />
-                      下载最新版本
+                      {updateState.phase === 'paused' ? (
+                        <Play className='h-4 w-4' />
+                      ) : updateState.lastDownloadInterruption ===
+                        'canceled' ? (
+                        <RotateCw className='h-4 w-4' />
+                      ) : (
+                        <Download className='h-4 w-4' />
+                      )}
+                      {downloadActionButtonLabel}
                     </AppButton>
                   ) : null}
 
@@ -842,6 +1076,117 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
           </div>
         </div>
       </AppDialogPanel>
+
+      {pendingDownloadAction && pendingDownloadActionMeta ? (
+        <>
+          <AppDialogBackdrop
+            className='z-[1002]'
+            onClick={closeDownloadActionDialog}
+          />
+          <div className='fixed left-1/2 top-1/2 z-[1003] w-full max-w-md -translate-x-1/2 -translate-y-1/2 px-4'>
+            <AppDialogPanel
+              role='dialog'
+              aria-modal='true'
+              aria-label='确认下载操作'
+            >
+              <AppDialogHeader>
+                <div className='flex items-start gap-3'>
+                  <AppIconBadge
+                    className='mt-0.5 flex-shrink-0'
+                    tone={pendingDownloadActionMeta.tone}
+                  >
+                    {pendingDownloadAction === 'pause' ? (
+                      <Pause className='h-5 w-5' />
+                    ) : (
+                      <Square className='h-5 w-5' />
+                    )}
+                  </AppIconBadge>
+                  <AppDialogTitleBlock
+                    title={
+                      <div className='flex flex-wrap items-center gap-2'>
+                        <span>{pendingDownloadActionMeta.title}</span>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                            pendingDownloadAction === 'pause'
+                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200'
+                              : 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-200'
+                          }`}
+                        >
+                          {pendingDownloadActionMeta.badgeText}
+                        </span>
+                      </div>
+                    }
+                    subtitle={pendingDownloadActionMeta.description}
+                  />
+                </div>
+                <AppIconButton
+                  onClick={closeDownloadActionDialog}
+                  disabled={isApplyingDownloadAction}
+                  aria-label='关闭下载确认'
+                >
+                  <X className='h-5 w-5' />
+                </AppIconButton>
+              </AppDialogHeader>
+
+              <div className='space-y-4 px-5 py-5 sm:px-6'>
+                <div className='grid gap-3 sm:grid-cols-2'>
+                  <AppSurfaceCard className='bg-gray-50/80 px-4 py-3 dark:bg-gray-800/60'>
+                    <p className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
+                      当前版本
+                    </p>
+                    <p className='mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100'>
+                      v{CURRENT_VERSION}
+                    </p>
+                  </AppSurfaceCard>
+                  <AppSurfaceCard className='bg-gray-50/80 px-4 py-3 dark:bg-gray-800/60'>
+                    <p className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
+                      目标版本
+                    </p>
+                    <p className='mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100'>
+                      {activeDownloadVersionLabel}
+                    </p>
+                  </AppSurfaceCard>
+                </div>
+
+                <AppSurfaceCard className='px-4 py-3 text-sm text-gray-600 dark:text-gray-300'>
+                  {pendingDownloadAction === 'pause'
+                    ? '暂停后可继续下载。当前实现会重新开始当前版本的下载。'
+                    : '停止后会清空当前下载进度，之后需要重新开始下载。'}
+                </AppSurfaceCard>
+
+                {downloadActionError ? (
+                  <div className='rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200'>
+                    {downloadActionError}
+                  </div>
+                ) : null}
+
+                <div className='flex flex-col-reverse gap-3 sm:flex-row sm:justify-end'>
+                  <AppButton
+                    onClick={closeDownloadActionDialog}
+                    disabled={isApplyingDownloadAction}
+                  >
+                    取消
+                  </AppButton>
+                  <AppButton
+                    onClick={() => void handleConfirmDownloadAction()}
+                    disabled={isApplyingDownloadAction}
+                    variant='primary'
+                  >
+                    {isApplyingDownloadAction ? (
+                      <Loader2 className='h-4 w-4 animate-spin' />
+                    ) : pendingDownloadAction === 'pause' ? (
+                      <Pause className='h-4 w-4' />
+                    ) : (
+                      <Square className='h-4 w-4' />
+                    )}
+                    {pendingDownloadActionMeta.confirmText}
+                  </AppButton>
+                </div>
+              </div>
+            </AppDialogPanel>
+          </div>
+        </>
+      ) : null}
 
       {isDesktopTarget ? (
         <DesktopReleaseHistoryDialog

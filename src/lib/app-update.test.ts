@@ -3,7 +3,12 @@ jest.mock('@/lib/app-update-version', () => ({
 }));
 
 jest.mock('@/lib/desktop/tauri-client', () => ({
+  cancelActiveDesktopUpdateDownload: jest.fn(),
+  downloadLatestDesktopUpdate: jest.fn(),
+  installDesktopRelease: jest.fn(),
+  installDownloadedDesktopUpdate: jest.fn(),
   isDesktopTauriRuntimeAvailable: jest.fn(() => true),
+  pauseActiveDesktopUpdateDownload: jest.fn(),
 }));
 
 jest.mock('@/lib/release-urls', () => ({
@@ -39,15 +44,16 @@ import {
 } from './app-update';
 import { UpdateStatus } from './version_check';
 
-function createState(
-  patch: Partial<AppUpdateState> = {}
-): AppUpdateState {
+function createState(patch: Partial<AppUpdateState> = {}): AppUpdateState {
   return {
     phase: 'idle',
     source: 'remote',
     updateStatus: null,
     currentVersion: '200.0.0-beta.12',
     latestVersion: null,
+    downloadTargetKind: null,
+    targetManifestUrl: null,
+    lastDownloadInterruption: null,
     autoDownloadEnabled: false,
     canUseDesktopUpdater: false,
     canCheck: true,
@@ -113,6 +119,37 @@ describe('app update messaging helpers', () => {
     expect(isDesktopUpdaterAvailable(state)).toBe(true);
     expect(getAutoDownloadDescription(state)).toBe(
       '检测到新版本后自动下载最新版，安装仍需你手动确认。'
+    );
+  });
+
+  it('describes a paused desktop download with the target version', () => {
+    const state = createState({
+      phase: 'paused',
+      source: 'desktop-updater',
+      updateStatus: UpdateStatus.HAS_UPDATE,
+      latestVersion: '200.0.0-beta.13',
+      downloadTargetKind: 'latest',
+      canUseDesktopUpdater: true,
+    });
+
+    expect(getAutoDownloadDescription(state)).toBe(
+      'v200.0.0-beta.13 下载已暂停，可继续下载。'
+    );
+  });
+
+  it('describes a canceled release download with the target version', () => {
+    const state = createState({
+      phase: 'available',
+      source: 'desktop-updater',
+      updateStatus: UpdateStatus.HAS_UPDATE,
+      latestVersion: '200.0.0-beta.10',
+      downloadTargetKind: 'release',
+      lastDownloadInterruption: 'canceled',
+      canUseDesktopUpdater: true,
+    });
+
+    expect(getAutoDownloadDescription(state)).toBe(
+      'v200.0.0-beta.10 下载已取消，可重新开始。'
     );
   });
 });

@@ -1,8 +1,10 @@
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher},
     fs,
+    hash::{Hash, Hasher},
+    io::ErrorKind,
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -11,13 +13,21 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use futures::StreamExt;
+use minisign_verify::{PublicKey, Signature};
+use reqwest::{
+    ClientBuilder, StatusCode,
+    header::{ACCEPT, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap, HeaderValue, RANGE},
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tauri::{AppHandle, Manager, RunEvent, State, ipc::Channel};
-use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_updater::{Update as DesktopUpdateHandle, UpdaterExt};
 use tokio::{
+    fs::{self as tokio_fs, OpenOptions as TokioOpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
     process::Command as TokioCommand,
-    sync::Mutex as AsyncMutex,
+    sync::{Mutex as AsyncMutex, watch},
 };
 use url::Url;
 
@@ -35,6 +45,9 @@ const LOCAL_SERVICE_HEALTH_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 const LOCAL_SERVICE_HEALTH_READ_TIMEOUT: Duration = Duration::from_millis(400);
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const DESKTOP_UPDATE_DOWNLOAD_DIR_NAME: &str = "update-downloads";
+const DESKTOP_UPDATER_USER_AGENT: &str =
+    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
 
@@ -43,6 +56,48 @@ struct DesktopRuntimeState {
     service_process: Mutex<Option<ServiceProcess>>,
     service_start_lock: AsyncMutex<()>,
     last_start_failure: Mutex<Option<LocalServiceStartupFailure>>,
+    active_update_download: Mutex<Option<ActiveDesktopUpdateDownload>>,
+    paused_update_download: Mutex<Option<PausedDesktopUpdateDownload>>,
+    downloaded_update: Mutex<Option<DownloadedDesktopUpdate>>,
+}
+
+struct ActiveDesktopUpdateDownload {
+    target_version: String,
+    command_tx: watch::Sender<DesktopUpdateDownloadCommand>,
+}
+
+#[derive(Clone)]
+struct DownloadedDesktopUpdate {
+    version: String,
+    update: DesktopUpdateHandle,
+    file_path: PathBuf,
+}
+
+#[derive(Clone)]
+struct PausedDesktopUpdateDownload {
+    version: String,
+    download_url: Url,
+    signature: String,
+    file_path: PathBuf,
+    total_bytes: Option<u64>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DesktopUpdateDownloadCommand {
+    Running,
+    Pause,
+    Cancel,
+}
+
+enum DesktopUpdateDownloadResult {
+    Completed {
+        file_path: PathBuf,
+    },
+    Paused {
+        file_path: PathBuf,
+        total_bytes: Option<u64>,
+    },
+    Canceled,
 }
 
 struct ServiceProcess {
@@ -135,12 +190,20 @@ struct LocalServiceDiagnosticsSaveResult {
 #[serde(tag = "event", content = "data")]
 enum DesktopReleaseInstallEvent {
     #[serde(rename_all = "camelCase")]
-    Started { content_length: Option<u64> },
+    Started {
+        content_length: Option<u64>,
+        downloaded_length: Option<u64>,
+    },
     #[serde(rename_all = "camelCase")]
-    Progress { chunk_length: usize },
+    Progress {
+        chunk_length: usize,
+    },
     Finished,
     Installing,
 }
+
+const DESKTOP_UPDATE_DOWNLOAD_PAUSED: &str = "desktop update download paused";
+const DESKTOP_UPDATE_DOWNLOAD_CANCELED: &str = "desktop update download canceled";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -484,12 +547,50 @@ fn change_desktop_password(
 #[tauri::command]
 async fn install_desktop_release(
     app: AppHandle,
+    state: State<'_, DesktopRuntimeState>,
     manifest_url: String,
     version: String,
     on_event: Channel<DesktopReleaseInstallEvent>,
 ) -> Result<(), String> {
-    install_desktop_release_impl(&app, manifest_url, version, on_event)
+    install_desktop_release_impl(&app, &state, manifest_url, version, on_event)
         .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn download_latest_desktop_update(
+    app: AppHandle,
+    state: State<'_, DesktopRuntimeState>,
+    version: String,
+    on_event: Channel<DesktopReleaseInstallEvent>,
+) -> Result<(), String> {
+    download_latest_desktop_update_impl(&app, &state, version, on_event)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn install_downloaded_desktop_update(
+    app: AppHandle,
+    state: State<'_, DesktopRuntimeState>,
+    version: Option<String>,
+) -> Result<(), String> {
+    install_downloaded_desktop_update_impl(&app, &state, version).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn pause_active_desktop_update_download(
+    state: State<'_, DesktopRuntimeState>,
+) -> Result<(), String> {
+    request_active_update_download_command(&state, DesktopUpdateDownloadCommand::Pause)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn cancel_active_desktop_update_download(
+    state: State<'_, DesktopRuntimeState>,
+) -> Result<(), String> {
+    request_active_update_download_command(&state, DesktopUpdateDownloadCommand::Cancel)
         .map_err(|error| error.to_string())
 }
 
@@ -540,6 +641,10 @@ pub fn run() {
             get_desktop_auth_status,
             desktop_login,
             change_desktop_password,
+            download_latest_desktop_update,
+            install_downloaded_desktop_update,
+            pause_active_desktop_update_download,
+            cancel_active_desktop_update_download,
             install_desktop_release,
         ])
         .build(tauri::generate_context!())
@@ -2989,18 +3094,724 @@ fn normalize_required_string(value: String, error_message: &str) -> Result<Strin
     Ok(normalized)
 }
 
+struct PreparedDesktopUpdateDownload {
+    file_path: PathBuf,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ParsedContentRange {
+    start: Option<u64>,
+    total: Option<u64>,
+}
+
+fn take_downloaded_update(state: &DesktopRuntimeState) -> Option<DownloadedDesktopUpdate> {
+    let mut downloaded_update = state
+        .downloaded_update
+        .lock()
+        .expect("downloaded update mutex poisoned");
+    downloaded_update.take()
+}
+
+fn read_downloaded_update(state: &DesktopRuntimeState) -> Option<DownloadedDesktopUpdate> {
+    let downloaded_update = state
+        .downloaded_update
+        .lock()
+        .expect("downloaded update mutex poisoned");
+    downloaded_update.clone()
+}
+
+fn clear_downloaded_update(state: &DesktopRuntimeState) {
+    if let Some(downloaded_update) = take_downloaded_update(state) {
+        remove_file_if_exists(&downloaded_update.file_path);
+    }
+}
+
+fn store_downloaded_update(
+    state: &DesktopRuntimeState,
+    version: String,
+    update: DesktopUpdateHandle,
+    file_path: PathBuf,
+) {
+    let mut downloaded_update = state
+        .downloaded_update
+        .lock()
+        .expect("downloaded update mutex poisoned");
+    let next_file_path = file_path.clone();
+    let previous = downloaded_update.replace(DownloadedDesktopUpdate {
+        version,
+        update,
+        file_path,
+    });
+    drop(downloaded_update);
+
+    if let Some(previous) = previous {
+        if previous.file_path != next_file_path {
+            remove_file_if_exists(&previous.file_path);
+        }
+    }
+}
+
+fn take_paused_update_download(state: &DesktopRuntimeState) -> Option<PausedDesktopUpdateDownload> {
+    let mut paused_update_download = state
+        .paused_update_download
+        .lock()
+        .expect("paused update download mutex poisoned");
+    paused_update_download.take()
+}
+
+fn clear_paused_update_download(state: &DesktopRuntimeState) {
+    if let Some(paused_update_download) = take_paused_update_download(state) {
+        remove_file_if_exists(&paused_update_download.file_path);
+    }
+}
+
+fn store_paused_update_download(
+    state: &DesktopRuntimeState,
+    paused_update_download: PausedDesktopUpdateDownload,
+) {
+    let mut paused_state = state
+        .paused_update_download
+        .lock()
+        .expect("paused update download mutex poisoned");
+    let next_file_path = paused_update_download.file_path.clone();
+    let previous = paused_state.replace(paused_update_download);
+    drop(paused_state);
+
+    if let Some(previous) = previous {
+        if previous.file_path != next_file_path {
+            remove_file_if_exists(&previous.file_path);
+        }
+    }
+}
+
+fn take_matching_paused_update_download(
+    state: &DesktopRuntimeState,
+    version: &str,
+    update: &DesktopUpdateHandle,
+) -> Option<PausedDesktopUpdateDownload> {
+    let paused_update_download = take_paused_update_download(state)?;
+
+    if paused_update_download.version == version
+        && paused_update_download.download_url == update.download_url
+        && paused_update_download.signature == update.signature
+    {
+        Some(paused_update_download)
+    } else {
+        remove_file_if_exists(&paused_update_download.file_path);
+        None
+    }
+}
+
+fn begin_active_update_download(
+    state: &DesktopRuntimeState,
+    target_version: &str,
+) -> Result<watch::Receiver<DesktopUpdateDownloadCommand>> {
+    let mut active_download = state
+        .active_update_download
+        .lock()
+        .expect("active update download mutex poisoned");
+
+    if active_download.is_some() {
+        anyhow::bail!("another desktop update download is already running");
+    }
+
+    let (command_tx, command_rx) = watch::channel(DesktopUpdateDownloadCommand::Running);
+    *active_download = Some(ActiveDesktopUpdateDownload {
+        target_version: target_version.to_string(),
+        command_tx,
+    });
+
+    Ok(command_rx)
+}
+
+fn finish_active_update_download(state: &DesktopRuntimeState, target_version: &str) {
+    let mut active_download = state
+        .active_update_download
+        .lock()
+        .expect("active update download mutex poisoned");
+
+    if active_download
+        .as_ref()
+        .map(|download| download.target_version == target_version)
+        .unwrap_or(false)
+    {
+        *active_download = None;
+    }
+}
+
+fn request_active_update_download_command(
+    state: &DesktopRuntimeState,
+    command: DesktopUpdateDownloadCommand,
+) -> Result<()> {
+    let active_download = state
+        .active_update_download
+        .lock()
+        .expect("active update download mutex poisoned");
+    let Some(active_download) = active_download.as_ref() else {
+        anyhow::bail!("no active desktop update download");
+    };
+
+    active_download
+        .command_tx
+        .send(command)
+        .map_err(|_| anyhow::anyhow!("failed to update desktop download state"))?;
+
+    Ok(())
+}
+
+fn current_download_command(
+    command_rx: &watch::Receiver<DesktopUpdateDownloadCommand>,
+) -> DesktopUpdateDownloadCommand {
+    *command_rx.borrow()
+}
+
+fn remove_file_if_exists(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!("failed to remove {}: {error}", path.display());
+        }
+    }
+}
+
+fn sanitize_download_file_fragment(value: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            sanitized.push(character.to_ascii_lowercase());
+        } else if matches!(character, '.' | '-' | '_') {
+            sanitized.push('-');
+        }
+    }
+
+    if sanitized.is_empty() {
+        "update".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn build_update_download_file_path(
+    app: &AppHandle,
+    version: &str,
+    download_url: &Url,
+) -> Result<PathBuf> {
+    let runtime_paths = resolve_runtime_paths(app)?;
+    let mut hasher = DefaultHasher::new();
+    version.hash(&mut hasher);
+    download_url.as_str().hash(&mut hasher);
+    let fingerprint = hasher.finish();
+    let file_name = format!(
+        "desktop-update-{}-{fingerprint:016x}.part",
+        sanitize_download_file_fragment(version)
+    );
+
+    Ok(runtime_paths
+        .data_dir
+        .join(DESKTOP_UPDATE_DOWNLOAD_DIR_NAME)
+        .join(file_name))
+}
+
+fn tauri_config_updater_pubkey() -> Option<String> {
+    let config_value: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.conf.json")).ok()?;
+    normalize_optional_string(
+        config_value
+            .get("plugins")
+            .and_then(|value| value.get("updater"))
+            .and_then(|value| value.get("pubkey"))
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+    )
+}
+
+fn configured_updater_pubkey() -> Option<String> {
+    compile_time_updater_pubkey().or_else(tauri_config_updater_pubkey)
+}
+
+fn decode_updater_base64_string(value: &str) -> Result<String> {
+    let decoded = BASE64_STANDARD
+        .decode(value)
+        .with_context(|| format!("failed to decode updater value: {value}"))?;
+
+    std::str::from_utf8(&decoded)
+        .map(ToOwned::to_owned)
+        .with_context(|| format!("updater value is not valid UTF-8: {value}"))
+}
+
+fn verify_update_signature_bytes(bytes: &[u8], signature: &str) -> Result<()> {
+    let pubkey = configured_updater_pubkey()
+        .ok_or_else(|| anyhow::anyhow!("desktop updater public key is unavailable"))?;
+    let pubkey_decoded = decode_updater_base64_string(&pubkey)?;
+    let signature_decoded = decode_updater_base64_string(signature)?;
+    let public_key = PublicKey::decode(&pubkey_decoded)
+        .context("failed to decode desktop updater public key")?;
+    let signature = Signature::decode(&signature_decoded)
+        .context("failed to decode desktop updater signature")?;
+
+    public_key
+        .verify(bytes, &signature, true)
+        .context("desktop updater signature verification failed")?;
+
+    Ok(())
+}
+
+async fn verify_update_signature_file(file_path: &Path, signature: &str) -> Result<()> {
+    let bytes = tokio_fs::read(file_path)
+        .await
+        .with_context(|| format!("failed to read {}", file_path.display()))?;
+
+    verify_update_signature_bytes(&bytes, signature)
+}
+
+fn parse_content_range_header(value: &str) -> Option<ParsedContentRange> {
+    let value = value.trim();
+    let value = value.strip_prefix("bytes")?.trim();
+
+    if let Some(total) = value.strip_prefix("*/") {
+        return Some(ParsedContentRange {
+            start: None,
+            total: total.trim().parse().ok(),
+        });
+    }
+
+    let (range_part, total_part) = value.split_once('/')?;
+    let (start_part, _) = range_part.trim().split_once('-')?;
+    Some(ParsedContentRange {
+        start: start_part.trim().parse().ok(),
+        total: total_part.trim().parse().ok(),
+    })
+}
+
+fn parse_response_content_range(response: &reqwest::Response) -> Option<ParsedContentRange> {
+    response
+        .headers()
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range_header)
+}
+
+fn parse_response_content_length(response: &reqwest::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse().ok())
+}
+
+fn add_download_lengths(left: u64, right: u64) -> Result<u64> {
+    left.checked_add(right)
+        .ok_or_else(|| anyhow::anyhow!("desktop update size overflow"))
+}
+
+fn resolve_response_total_bytes(
+    response: &reqwest::Response,
+    downloaded_bytes: u64,
+    previous_total_bytes: Option<u64>,
+) -> Result<Option<u64>> {
+    if response.status() == StatusCode::PARTIAL_CONTENT {
+        if let Some(content_range) = parse_response_content_range(response) {
+            if let Some(range_start) = content_range.start {
+                if range_start != downloaded_bytes {
+                    anyhow::bail!(
+                        "desktop update resume offset mismatch: expected {downloaded_bytes}, got {range_start}"
+                    );
+                }
+            }
+
+            if let Some(total) = content_range.total {
+                return Ok(Some(total));
+            }
+        }
+
+        if let Some(content_length) = parse_response_content_length(response) {
+            return Ok(Some(add_download_lengths(
+                downloaded_bytes,
+                content_length,
+            )?));
+        }
+
+        return Ok(previous_total_bytes);
+    }
+
+    Ok(parse_response_content_length(response))
+}
+
+fn build_update_download_client(update: &DesktopUpdateHandle) -> Result<reqwest::Client> {
+    let mut client_builder = ClientBuilder::new().user_agent(DESKTOP_UPDATER_USER_AGENT);
+
+    if let Some(timeout) = update.timeout {
+        client_builder = client_builder.timeout(timeout);
+    }
+
+    if update.no_proxy {
+        client_builder = client_builder.no_proxy();
+    } else if let Some(proxy) = update.proxy.as_ref() {
+        client_builder = client_builder.proxy(reqwest::Proxy::all(proxy.as_str())?);
+    }
+
+    client_builder
+        .build()
+        .context("failed to build desktop updater download client")
+}
+
+fn build_update_download_headers(
+    update: &DesktopUpdateHandle,
+    downloaded_bytes: u64,
+) -> Result<HeaderMap> {
+    let mut headers = update.headers.clone();
+
+    if !headers.contains_key(ACCEPT) {
+        headers.insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
+    }
+
+    if downloaded_bytes > 0 {
+        headers.insert(
+            RANGE,
+            HeaderValue::from_str(&format!("bytes={downloaded_bytes}-"))
+                .context("failed to build resumable update download range header")?,
+        );
+    }
+
+    Ok(headers)
+}
+
+async fn read_partial_download_length(file_path: &Path) -> Result<u64> {
+    match tokio_fs::metadata(file_path).await {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(0),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to inspect {}", file_path.display()))
+        }
+    }
+}
+
+async fn prepare_update_download(
+    app: &AppHandle,
+    state: &DesktopRuntimeState,
+    version: &str,
+    update: &DesktopUpdateHandle,
+) -> Result<PreparedDesktopUpdateDownload> {
+    if let Some(paused_update_download) =
+        take_matching_paused_update_download(state, version, update)
+    {
+        let downloaded_bytes =
+            read_partial_download_length(&paused_update_download.file_path).await?;
+
+        if let Some(total_bytes) = paused_update_download.total_bytes {
+            if downloaded_bytes > total_bytes {
+                remove_file_if_exists(&paused_update_download.file_path);
+                let file_path =
+                    build_update_download_file_path(app, version, &update.download_url)?;
+                return Ok(PreparedDesktopUpdateDownload {
+                    file_path,
+                    downloaded_bytes: 0,
+                    total_bytes: None,
+                });
+            }
+        }
+
+        return Ok(PreparedDesktopUpdateDownload {
+            file_path: paused_update_download.file_path,
+            downloaded_bytes,
+            total_bytes: paused_update_download.total_bytes,
+        });
+    }
+
+    let file_path = build_update_download_file_path(app, version, &update.download_url)?;
+    remove_file_if_exists(&file_path);
+
+    Ok(PreparedDesktopUpdateDownload {
+        file_path,
+        downloaded_bytes: 0,
+        total_bytes: None,
+    })
+}
+
+async fn open_update_download_file(
+    file_path: &Path,
+    downloaded_bytes: u64,
+) -> Result<tokio_fs::File> {
+    if let Some(parent) = file_path.parent() {
+        tokio_fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let mut options = TokioOpenOptions::new();
+    options.create(true).write(true);
+
+    if downloaded_bytes > 0 {
+        options.append(true);
+    } else {
+        options.truncate(true);
+    }
+
+    options
+        .open(file_path)
+        .await
+        .with_context(|| format!("failed to open {}", file_path.display()))
+}
+
+async fn download_update_with_control_inner(
+    update: &DesktopUpdateHandle,
+    prepared_download: PreparedDesktopUpdateDownload,
+    on_event: Channel<DesktopReleaseInstallEvent>,
+    mut command_rx: watch::Receiver<DesktopUpdateDownloadCommand>,
+) -> Result<DesktopUpdateDownloadResult> {
+    if let Some(total_bytes) = prepared_download.total_bytes {
+        if prepared_download.downloaded_bytes == total_bytes && total_bytes > 0 {
+            verify_update_signature_file(&prepared_download.file_path, &update.signature).await?;
+            let _ = on_event.send(DesktopReleaseInstallEvent::Started {
+                content_length: Some(total_bytes),
+                downloaded_length: Some(prepared_download.downloaded_bytes),
+            });
+            let _ = on_event.send(DesktopReleaseInstallEvent::Finished);
+            return Ok(DesktopUpdateDownloadResult::Completed {
+                file_path: prepared_download.file_path,
+            });
+        }
+    }
+
+    let client = build_update_download_client(update)?;
+    let headers = build_update_download_headers(update, prepared_download.downloaded_bytes)?;
+    let response = client
+        .get(update.download_url.clone())
+        .headers(headers)
+        .send()
+        .await
+        .context("failed to download desktop update")?;
+    let status = response.status();
+
+    if prepared_download.downloaded_bytes > 0 && status == StatusCode::RANGE_NOT_SATISFIABLE {
+        let total_bytes = parse_response_content_range(&response)
+            .and_then(|content_range| content_range.total)
+            .or(prepared_download.total_bytes);
+
+        if total_bytes == Some(prepared_download.downloaded_bytes) {
+            verify_update_signature_file(&prepared_download.file_path, &update.signature).await?;
+            let _ = on_event.send(DesktopReleaseInstallEvent::Started {
+                content_length: total_bytes,
+                downloaded_length: Some(prepared_download.downloaded_bytes),
+            });
+            let _ = on_event.send(DesktopReleaseInstallEvent::Finished);
+            return Ok(DesktopUpdateDownloadResult::Completed {
+                file_path: prepared_download.file_path,
+            });
+        }
+
+        anyhow::bail!("desktop update server rejected resuming the partial download");
+    }
+
+    if prepared_download.downloaded_bytes > 0 && status == StatusCode::OK {
+        anyhow::bail!("desktop update server does not support resumable downloads");
+    }
+
+    if !status.is_success() {
+        anyhow::bail!("desktop update request failed with status: {status}");
+    }
+
+    let total_bytes = resolve_response_total_bytes(
+        &response,
+        prepared_download.downloaded_bytes,
+        prepared_download.total_bytes,
+    )?;
+    let mut file = open_update_download_file(
+        &prepared_download.file_path,
+        prepared_download.downloaded_bytes,
+    )
+    .await?;
+    let mut downloaded_bytes = prepared_download.downloaded_bytes;
+    let mut stream = response.bytes_stream();
+    let _ = on_event.send(DesktopReleaseInstallEvent::Started {
+        content_length: total_bytes,
+        downloaded_length: Some(downloaded_bytes),
+    });
+
+    loop {
+        match current_download_command(&command_rx) {
+            DesktopUpdateDownloadCommand::Running => {}
+            DesktopUpdateDownloadCommand::Pause => {
+                file.flush().await?;
+                return Ok(DesktopUpdateDownloadResult::Paused {
+                    file_path: prepared_download.file_path,
+                    total_bytes,
+                });
+            }
+            DesktopUpdateDownloadCommand::Cancel => {
+                file.flush().await?;
+                return Ok(DesktopUpdateDownloadResult::Canceled);
+            }
+        }
+
+        tokio::select! {
+            changed = command_rx.changed() => {
+                if changed.is_err() {
+                    file.flush().await?;
+                    return Ok(DesktopUpdateDownloadResult::Canceled);
+                }
+            }
+            next_chunk = stream.next() => {
+                match next_chunk {
+                    Some(Ok(chunk)) => {
+                        file.write_all(&chunk).await?;
+                        downloaded_bytes = add_download_lengths(downloaded_bytes, chunk.len() as u64)?;
+                        let _ = on_event.send(DesktopReleaseInstallEvent::Progress {
+                            chunk_length: chunk.len(),
+                        });
+                    }
+                    Some(Err(error)) => return Err(error).context("failed while streaming desktop update"),
+                    None => break,
+                }
+            }
+        }
+    }
+
+    file.flush().await?;
+    verify_update_signature_file(&prepared_download.file_path, &update.signature).await?;
+    let _ = on_event.send(DesktopReleaseInstallEvent::Finished);
+
+    Ok(DesktopUpdateDownloadResult::Completed {
+        file_path: prepared_download.file_path,
+    })
+}
+
+async fn download_update_with_control(
+    app: &AppHandle,
+    state: &DesktopRuntimeState,
+    version: &str,
+    update: &DesktopUpdateHandle,
+    on_event: Channel<DesktopReleaseInstallEvent>,
+    command_rx: watch::Receiver<DesktopUpdateDownloadCommand>,
+) -> Result<DesktopUpdateDownloadResult> {
+    let prepared_download = prepare_update_download(app, state, version, update).await?;
+    let cleanup_path = prepared_download.file_path.clone();
+    let download_result =
+        download_update_with_control_inner(update, prepared_download, on_event, command_rx).await;
+
+    match download_result {
+        Ok(DesktopUpdateDownloadResult::Canceled) => {
+            remove_file_if_exists(&cleanup_path);
+            Ok(DesktopUpdateDownloadResult::Canceled)
+        }
+        Ok(result) => Ok(result),
+        Err(error) => {
+            remove_file_if_exists(&cleanup_path);
+            Err(error)
+        }
+    }
+}
+
+async fn resolve_latest_desktop_update(
+    app: &AppHandle,
+    expected_version: &str,
+) -> Result<DesktopUpdateHandle> {
+    let update = app
+        .updater_builder()
+        .build()?
+        .check()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("desktop update {expected_version} is unavailable"))?;
+
+    if update.version != expected_version {
+        anyhow::bail!(
+            "latest desktop update resolved to unexpected version {}",
+            update.version
+        );
+    }
+
+    Ok(update)
+}
+
+async fn download_latest_desktop_update_impl(
+    app: &AppHandle,
+    state: &DesktopRuntimeState,
+    version: String,
+    on_event: Channel<DesktopReleaseInstallEvent>,
+) -> Result<()> {
+    let version = normalize_required_string(version, "desktop update version cannot be empty")?;
+    let update = resolve_latest_desktop_update(app, &version).await?;
+    let command_rx = begin_active_update_download(state, &version)?;
+    clear_downloaded_update(state);
+
+    let download_result =
+        download_update_with_control(app, state, &version, &update, on_event, command_rx).await;
+    finish_active_update_download(state, &version);
+
+    match download_result? {
+        DesktopUpdateDownloadResult::Completed { file_path } => {
+            store_downloaded_update(state, version, update, file_path);
+            Ok(())
+        }
+        DesktopUpdateDownloadResult::Paused {
+            file_path,
+            total_bytes,
+        } => {
+            store_paused_update_download(
+                state,
+                PausedDesktopUpdateDownload {
+                    version,
+                    download_url: update.download_url.clone(),
+                    signature: update.signature.clone(),
+                    file_path,
+                    total_bytes,
+                },
+            );
+            anyhow::bail!(DESKTOP_UPDATE_DOWNLOAD_PAUSED);
+        }
+        DesktopUpdateDownloadResult::Canceled => {
+            clear_paused_update_download(state);
+            anyhow::bail!(DESKTOP_UPDATE_DOWNLOAD_CANCELED);
+        }
+    }
+}
+
+fn read_downloaded_update_bytes(file_path: &Path) -> Result<Vec<u8>> {
+    fs::read(file_path).with_context(|| format!("failed to read {}", file_path.display()))
+}
+
+fn install_downloaded_desktop_update_impl(
+    app: &AppHandle,
+    state: &DesktopRuntimeState,
+    version: Option<String>,
+) -> Result<()> {
+    let expected_version = normalize_optional_string(version);
+    let Some(downloaded_update) = read_downloaded_update(state) else {
+        anyhow::bail!("downloaded desktop update is unavailable");
+    };
+
+    if let Some(expected_version) = expected_version {
+        if downloaded_update.version != expected_version {
+            anyhow::bail!(
+                "downloaded desktop update version {} does not match {}",
+                downloaded_update.version,
+                expected_version
+            );
+        }
+    }
+
+    let bytes = read_downloaded_update_bytes(&downloaded_update.file_path)?;
+    verify_update_signature_bytes(&bytes, &downloaded_update.update.signature)?;
+    downloaded_update.update.install(&bytes)?;
+    clear_downloaded_update(state);
+    app.request_restart();
+    Ok(())
+}
+
 async fn install_desktop_release_impl(
     app: &AppHandle,
+    state: &DesktopRuntimeState,
     manifest_url: String,
     version: String,
     on_event: Channel<DesktopReleaseInstallEvent>,
 ) -> Result<()> {
-    let manifest_url = normalize_required_string(
-        manifest_url,
-        "desktop release manifest URL cannot be empty",
-    )?;
-    let version =
-        normalize_required_string(version, "desktop release version cannot be empty")?;
+    let manifest_url =
+        normalize_required_string(manifest_url, "desktop release manifest URL cannot be empty")?;
+    let version = normalize_required_string(version, "desktop release version cannot be empty")?;
     let manifest_url =
         Url::parse(&manifest_url).context("desktop release manifest URL is invalid")?;
     let expected_version = version.clone();
@@ -3024,27 +3835,45 @@ async fn install_desktop_release_impl(
         );
     }
 
-    let mut first_chunk = true;
-    let bytes = update
-        .download(
-            |chunk_length, content_length| {
-                if first_chunk {
-                    first_chunk = false;
-                    let _ = on_event.send(DesktopReleaseInstallEvent::Started { content_length });
-                }
+    let command_rx = begin_active_update_download(state, &version)?;
+    clear_downloaded_update(state);
 
-                let _ = on_event.send(DesktopReleaseInstallEvent::Progress { chunk_length });
-            },
-            || {
-                let _ = on_event.send(DesktopReleaseInstallEvent::Finished);
-            },
-        )
-        .await?;
+    let download_result =
+        download_update_with_control(app, state, &version, &update, on_event.clone(), command_rx)
+            .await;
+    finish_active_update_download(state, &version);
 
-    let _ = on_event.send(DesktopReleaseInstallEvent::Installing);
-    update.install(&bytes)?;
-    app.request_restart();
-    Ok(())
+    match download_result? {
+        DesktopUpdateDownloadResult::Completed { file_path } => {
+            let bytes = read_downloaded_update_bytes(&file_path)?;
+            verify_update_signature_bytes(&bytes, &update.signature)?;
+            let _ = on_event.send(DesktopReleaseInstallEvent::Installing);
+            update.install(&bytes)?;
+            remove_file_if_exists(&file_path);
+            app.request_restart();
+            Ok(())
+        }
+        DesktopUpdateDownloadResult::Paused {
+            file_path,
+            total_bytes,
+        } => {
+            store_paused_update_download(
+                state,
+                PausedDesktopUpdateDownload {
+                    version,
+                    download_url: update.download_url.clone(),
+                    signature: update.signature.clone(),
+                    file_path,
+                    total_bytes,
+                },
+            );
+            anyhow::bail!(DESKTOP_UPDATE_DOWNLOAD_PAUSED);
+        }
+        DesktopUpdateDownloadResult::Canceled => {
+            clear_paused_update_download(state);
+            anyhow::bail!(DESKTOP_UPDATE_DOWNLOAD_CANCELED);
+        }
+    }
 }
 
 fn save_local_service_diagnostics_impl(

@@ -2227,6 +2227,9 @@ name = "lunatv-desktop-shell"
 version = "200.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "futures",
+ "minisign-verify",
  "reqwest 0.12.28",
  "rfd",
  "serde",

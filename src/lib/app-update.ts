@@ -1,7 +1,12 @@
 import { isNewerVersion } from '@/lib/app-update-version';
 import {
+  type DesktopReleaseInstallEvent,
+  cancelActiveDesktopUpdateDownload,
+  downloadLatestDesktopUpdate,
   installDesktopRelease,
+  installDownloadedDesktopUpdate,
   isDesktopTauriRuntimeAvailable,
+  pauseActiveDesktopUpdateDownload,
 } from '@/lib/desktop/tauri-client';
 import { getReleasePageUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
@@ -27,9 +32,13 @@ export type AppUpdatePhase =
   | 'available'
   | 'up_to_date'
   | 'downloading'
+  | 'paused'
   | 'downloaded'
   | 'installing'
   | 'error';
+
+export type AppUpdateDownloadTargetKind = 'latest' | 'release';
+export type AppUpdateDownloadInterruption = 'paused' | 'canceled';
 
 export interface AppUpdateState {
   phase: AppUpdatePhase;
@@ -37,6 +46,9 @@ export interface AppUpdateState {
   updateStatus: UpdateStatus | null;
   currentVersion: string;
   latestVersion: string | null;
+  downloadTargetKind: AppUpdateDownloadTargetKind | null;
+  targetManifestUrl: string | null;
+  lastDownloadInterruption: AppUpdateDownloadInterruption | null;
   autoDownloadEnabled: boolean;
   canUseDesktopUpdater: boolean;
   canCheck: boolean;
@@ -57,22 +69,7 @@ export interface AppUpdateState {
 }
 
 type AppUpdateListener = (state: AppUpdateState) => void;
-type DesktopDownloadEvent =
-  | {
-      event: 'Started';
-      data: {
-        contentLength?: number;
-      };
-    }
-  | {
-      event: 'Progress';
-      data: {
-        chunkLength: number;
-      };
-    }
-  | {
-      event: 'Finished';
-    };
+type DesktopDownloadEvent = DesktopReleaseInstallEvent;
 type DesktopUpdaterHandle = {
   version: string;
   currentVersion: string;
@@ -104,6 +101,7 @@ let backgroundCheckStarted = false;
 let checkPromise: Promise<AppUpdateState> | null = null;
 let downloadPromise: Promise<AppUpdateState> | null = null;
 let installPromise: Promise<void> | null = null;
+let pendingDownloadControlAction: AppUpdateDownloadInterruption | null = null;
 
 function createInitialState(): AppUpdateState {
   return {
@@ -112,6 +110,9 @@ function createInitialState(): AppUpdateState {
     updateStatus: null,
     currentVersion: CURRENT_VERSION,
     latestVersion: null,
+    downloadTargetKind: null,
+    targetManifestUrl: null,
+    lastDownloadInterruption: null,
     autoDownloadEnabled: false,
     canUseDesktopUpdater: false,
     canCheck: true,
@@ -278,6 +279,95 @@ function getDownloadProgressState(
   return Math.min(100, Math.round((downloadedBytes / totalBytes) * 100));
 }
 
+function getVersionLabel(version: string | null | undefined) {
+  return version ? `v${version}` : '目标版本';
+}
+
+function buildPausedDownloadMessage(version: string | null | undefined) {
+  return `${getVersionLabel(version)} 下载已暂停，可继续下载。`;
+}
+
+function buildCanceledDownloadMessage(version: string | null | undefined) {
+  return `${getVersionLabel(version)} 下载已取消，可重新开始。`;
+}
+
+function applyPausedDownloadState(patch: {
+  version: string | null;
+  targetKind: AppUpdateDownloadTargetKind | null;
+  manifestUrl?: string | null;
+  publishedAt?: string | null;
+  releaseNotes?: string | null;
+  downloadedBytes?: number;
+  totalBytes?: number | null;
+}) {
+  const downloadedBytes = Math.max(0, patch.downloadedBytes ?? 0);
+  const totalBytes = patch.totalBytes ?? null;
+
+  patchState({
+    phase: 'paused',
+    source: 'desktop-updater',
+    updateStatus: UpdateStatus.HAS_UPDATE,
+    latestVersion: patch.version,
+    downloadTargetKind: patch.targetKind,
+    targetManifestUrl: patch.manifestUrl || null,
+    lastDownloadInterruption: 'paused',
+    canUseDesktopUpdater: true,
+    canCheck: true,
+    canDownload: true,
+    canInstall: false,
+    isChecking: false,
+    isDownloading: false,
+    isInstalling: false,
+    isBusy: false,
+    progressPercent: getDownloadProgressState(downloadedBytes, totalBytes),
+    downloadedBytes,
+    totalBytes,
+    publishedAt: patch.publishedAt || null,
+    releaseNotes: patch.releaseNotes || null,
+    statusMessage: buildPausedDownloadMessage(patch.version),
+    errorMessage: null,
+  });
+}
+
+function applyCanceledDownloadState(patch: {
+  version: string | null;
+  targetKind: AppUpdateDownloadTargetKind | null;
+  manifestUrl?: string | null;
+  publishedAt?: string | null;
+  releaseNotes?: string | null;
+}) {
+  patchState({
+    phase: 'available',
+    source: 'desktop-updater',
+    updateStatus: UpdateStatus.HAS_UPDATE,
+    latestVersion: patch.version,
+    downloadTargetKind: patch.targetKind,
+    targetManifestUrl: patch.manifestUrl || null,
+    lastDownloadInterruption: 'canceled',
+    canUseDesktopUpdater: true,
+    canCheck: true,
+    canDownload: true,
+    canInstall: false,
+    isChecking: false,
+    isDownloading: false,
+    isInstalling: false,
+    isBusy: false,
+    progressPercent: null,
+    downloadedBytes: 0,
+    totalBytes: null,
+    publishedAt: patch.publishedAt || null,
+    releaseNotes: patch.releaseNotes || null,
+    statusMessage: buildCanceledDownloadMessage(patch.version),
+    errorMessage: null,
+  });
+}
+
+function consumePendingDownloadControlAction() {
+  const action = pendingDownloadControlAction;
+  pendingDownloadControlAction = null;
+  return action;
+}
+
 function applyDownloadedDesktopUpdateState(
   nextUpdate: DesktopUpdaterHandle,
   autoDownloadEnabled: boolean
@@ -291,6 +381,9 @@ function applyDownloadedDesktopUpdateState(
     source: 'desktop-updater',
     updateStatus: UpdateStatus.HAS_UPDATE,
     latestVersion: nextUpdate.version,
+    downloadTargetKind: 'latest',
+    targetManifestUrl: null,
+    lastDownloadInterruption: null,
     autoDownloadEnabled,
     canUseDesktopUpdater: true,
     canCheck: true,
@@ -324,6 +417,9 @@ function applyAvailableDesktopUpdateState(
     source: 'desktop-updater',
     updateStatus: UpdateStatus.HAS_UPDATE,
     latestVersion: nextUpdate.version,
+    downloadTargetKind: 'latest',
+    targetManifestUrl: null,
+    lastDownloadInterruption: null,
     autoDownloadEnabled,
     canUseDesktopUpdater: true,
     canCheck: true,
@@ -375,6 +471,9 @@ async function refreshDesktopUpdateTargetIfNeeded(
         source: 'desktop-updater',
         updateStatus: UpdateStatus.HAS_UPDATE,
         latestVersion: remoteVersion,
+        downloadTargetKind: null,
+        targetManifestUrl: null,
+        lastDownloadInterruption: null,
         autoDownloadEnabled,
         canUseDesktopUpdater: true,
         canCheck: true,
@@ -411,6 +510,9 @@ async function refreshDesktopUpdateTargetIfNeeded(
       source: 'desktop-updater',
       updateStatus: UpdateStatus.HAS_UPDATE,
       latestVersion: remoteVersion,
+      downloadTargetKind: null,
+      targetManifestUrl: null,
+      lastDownloadInterruption: null,
       autoDownloadEnabled,
       canUseDesktopUpdater: true,
       canCheck: true,
@@ -442,6 +544,9 @@ function buildRemoteState(
       source: 'remote' as const,
       updateStatus: UpdateStatus.FETCH_FAILED,
       latestVersion: null,
+      downloadTargetKind: null,
+      targetManifestUrl: null,
+      lastDownloadInterruption: null,
       canUseDesktopUpdater: false,
       canDownload: false,
       canInstall: false,
@@ -472,6 +577,9 @@ function buildRemoteState(
     source: 'remote' as const,
     updateStatus,
     latestVersion: hasUpdate ? remoteVersion : CURRENT_VERSION,
+    downloadTargetKind: null,
+    targetManifestUrl: null,
+    lastDownloadInterruption: null,
     canUseDesktopUpdater: false,
     canDownload: false,
     canInstall: false,
@@ -518,7 +626,10 @@ export function getAutoDownloadDescription(
     AppUpdateState,
     | 'autoDownloadEnabled'
     | 'canUseDesktopUpdater'
+    | 'downloadTargetKind'
     | 'errorMessage'
+    | 'lastDownloadInterruption'
+    | 'latestVersion'
     | 'phase'
     | 'source'
     | 'updateStatus'
@@ -540,6 +651,17 @@ export function getAutoDownloadDescription(
 
   if (isAutoDownloadInProgress) {
     return '正在自动下载最新版，完成后可直接安装。';
+  }
+
+  if (desktopUpdaterAvailable && updateState.phase === 'paused') {
+    return buildPausedDownloadMessage(updateState.latestVersion);
+  }
+
+  if (
+    desktopUpdaterAvailable &&
+    updateState.lastDownloadInterruption === 'canceled'
+  ) {
+    return buildCanceledDownloadMessage(updateState.latestVersion);
   }
 
   if (isAutoInstallingUpdate) {
@@ -638,6 +760,11 @@ export async function checkForAppUpdates(options?: {
     return downloadPromise;
   }
 
+  if (state.phase === 'downloading' && installPromise) {
+    await installPromise;
+    return state;
+  }
+
   if (state.phase === 'installing' && installPromise) {
     await installPromise;
     return state;
@@ -650,6 +777,9 @@ export async function checkForAppUpdates(options?: {
   const nextPromise = (async () => {
     patchState({
       phase: 'checking',
+      downloadTargetKind: null,
+      targetManifestUrl: null,
+      lastDownloadInterruption: null,
       autoDownloadEnabled: readAutoDownloadPreference(),
       canCheck: true,
       canDownload: false,
@@ -737,15 +867,27 @@ export async function downloadLatestVersion(
       return state;
     }
 
-    let downloadedBytes = 0;
-    let totalBytes: number | null = null;
     const updateToDownload = pendingUpdate;
+    const isResumingPausedLatestDownload =
+      state.phase === 'paused' &&
+      state.downloadTargetKind === 'latest' &&
+      state.latestVersion === updateToDownload.version;
+    let downloadedBytes = isResumingPausedLatestDownload
+      ? state.downloadedBytes
+      : 0;
+    let totalBytes: number | null = isResumingPausedLatestDownload
+      ? state.totalBytes
+      : null;
+    pendingDownloadControlAction = null;
 
     patchState({
       phase: 'downloading',
       source: 'desktop-updater',
       updateStatus: UpdateStatus.HAS_UPDATE,
       latestVersion: updateToDownload.version,
+      downloadTargetKind: 'latest',
+      targetManifestUrl: null,
+      lastDownloadInterruption: null,
       canUseDesktopUpdater: true,
       canCheck: true,
       canDownload: false,
@@ -754,45 +896,52 @@ export async function downloadLatestVersion(
       isDownloading: true,
       isInstalling: false,
       isBusy: true,
-      progressPercent: 0,
-      downloadedBytes: 0,
-      totalBytes: null,
+      progressPercent: getDownloadProgressState(downloadedBytes, totalBytes),
+      downloadedBytes,
+      totalBytes,
       statusMessage: '正在下载最新版...',
       errorMessage: null,
     });
 
     try {
-      await updateToDownload.download((event: DesktopDownloadEvent) => {
-        switch (event.event) {
-          case 'Started':
-            totalBytes = event.data.contentLength ?? null;
-            downloadedBytes = 0;
-            patchState({
-              progressPercent: 0,
-              downloadedBytes,
-              totalBytes,
-            });
-            break;
-          case 'Progress':
-            downloadedBytes += event.data.chunkLength;
-            patchState({
-              progressPercent: getDownloadProgressState(
+      await downloadLatestDesktopUpdate(
+        updateToDownload.version,
+        (event: DesktopDownloadEvent) => {
+          switch (event.event) {
+            case 'Started':
+              totalBytes = event.data.contentLength ?? totalBytes;
+              downloadedBytes = event.data.downloadedLength ?? downloadedBytes;
+              patchState({
+                progressPercent: getDownloadProgressState(
+                  downloadedBytes,
+                  totalBytes
+                ),
                 downloadedBytes,
-                totalBytes
-              ),
-              downloadedBytes,
-              totalBytes,
-            });
-            break;
-          case 'Finished':
-            patchState({
-              progressPercent: totalBytes ? 100 : state.progressPercent,
-            });
-            break;
-          default:
-            break;
+                totalBytes,
+              });
+              break;
+            case 'Progress':
+              downloadedBytes += event.data.chunkLength;
+              patchState({
+                progressPercent: getDownloadProgressState(
+                  downloadedBytes,
+                  totalBytes
+                ),
+                downloadedBytes,
+                totalBytes,
+              });
+              break;
+            case 'Finished':
+              patchState({
+                progressPercent: 100,
+              });
+              break;
+            default:
+              break;
+          }
         }
-      });
+      );
+      pendingDownloadControlAction = null;
 
       setDownloadedUpdate(updateToDownload);
       if (pendingUpdate === updateToDownload) {
@@ -819,8 +968,39 @@ export async function downloadLatestVersion(
         errorMessage: null,
       });
     } catch (error) {
+      const controlAction = consumePendingDownloadControlAction();
+
+      if (controlAction === 'paused') {
+        applyPausedDownloadState({
+          version: updateToDownload.version,
+          targetKind: 'latest',
+          publishedAt: updateToDownload.date || null,
+          releaseNotes: updateToDownload.body?.trim() || null,
+          downloadedBytes,
+          totalBytes,
+        });
+        return state;
+      }
+
+      if (controlAction === 'canceled') {
+        applyCanceledDownloadState({
+          version: updateToDownload.version,
+          targetKind: 'latest',
+          publishedAt: updateToDownload.date || null,
+          releaseNotes: updateToDownload.body?.trim() || null,
+        });
+        return state;
+      }
+
       patchState({
         phase: 'available',
+        source: 'desktop-updater',
+        updateStatus: UpdateStatus.HAS_UPDATE,
+        latestVersion: updateToDownload.version,
+        downloadTargetKind: 'latest',
+        targetManifestUrl: null,
+        lastDownloadInterruption: null,
+        canUseDesktopUpdater: true,
         canCheck: true,
         canDownload: true,
         canInstall: false,
@@ -904,9 +1084,7 @@ export async function installDownloadedUpdate() {
     });
 
     try {
-      await updateToInstall.install();
-      const { relaunch } = await import('@tauri-apps/plugin-process');
-      await relaunch();
+      await installDownloadedDesktopUpdate(updateToInstall.version);
     } catch (error) {
       setDownloadedUpdate(updateToInstall);
       patchState({
@@ -936,6 +1114,42 @@ export async function installDownloadedUpdate() {
   }
 }
 
+async function requestActiveDownloadControl(
+  action: AppUpdateDownloadInterruption
+) {
+  if (state.phase !== 'downloading') {
+    return;
+  }
+
+  pendingDownloadControlAction = action;
+
+  try {
+    if (action === 'paused') {
+      await pauseActiveDesktopUpdateDownload();
+    } else {
+      await cancelActiveDesktopUpdateDownload();
+    }
+
+    const activePromise = downloadPromise || installPromise;
+    if (activePromise) {
+      await activePromise;
+    } else {
+      pendingDownloadControlAction = null;
+    }
+  } catch (error) {
+    pendingDownloadControlAction = null;
+    throw error;
+  }
+}
+
+export function pauseActiveUpdateDownload() {
+  return requestActiveDownloadControl('paused');
+}
+
+export function cancelActiveUpdateDownload() {
+  return requestActiveDownloadControl('canceled');
+}
+
 export async function installDesktopReleaseVersion(
   options: InstallDesktopReleaseVersionOptions
 ) {
@@ -957,6 +1171,7 @@ export async function installDesktopReleaseVersion(
 
     clearPendingUpdate();
     setDownloadedUpdate(null);
+    pendingDownloadControlAction = null;
 
     if (!targetVersion || !manifestUrl) {
       patchState({
@@ -964,6 +1179,9 @@ export async function installDesktopReleaseVersion(
         source: 'desktop-updater',
         updateStatus: UpdateStatus.HAS_UPDATE,
         latestVersion: targetVersion || null,
+        downloadTargetKind: 'release',
+        targetManifestUrl: manifestUrl || null,
+        lastDownloadInterruption: null,
         autoDownloadEnabled,
         canUseDesktopUpdater: true,
         canCheck: true,
@@ -990,6 +1208,9 @@ export async function installDesktopReleaseVersion(
         source: 'desktop-updater',
         updateStatus: UpdateStatus.HAS_UPDATE,
         latestVersion: targetVersion,
+        downloadTargetKind: 'release',
+        targetManifestUrl: manifestUrl,
+        lastDownloadInterruption: null,
         autoDownloadEnabled,
         canUseDesktopUpdater: false,
         canCheck: true,
@@ -1010,14 +1231,26 @@ export async function installDesktopReleaseVersion(
       return;
     }
 
-    let downloadedBytes = 0;
-    let totalBytes: number | null = null;
+    const isResumingPausedReleaseDownload =
+      state.phase === 'paused' &&
+      state.downloadTargetKind === 'release' &&
+      state.latestVersion === targetVersion &&
+      state.targetManifestUrl === manifestUrl;
+    let downloadedBytes = isResumingPausedReleaseDownload
+      ? state.downloadedBytes
+      : 0;
+    let totalBytes: number | null = isResumingPausedReleaseDownload
+      ? state.totalBytes
+      : null;
 
     patchState({
       phase: 'downloading',
       source: 'desktop-updater',
       updateStatus: UpdateStatus.HAS_UPDATE,
       latestVersion: targetVersion,
+      downloadTargetKind: 'release',
+      targetManifestUrl: manifestUrl,
+      lastDownloadInterruption: null,
       autoDownloadEnabled,
       canUseDesktopUpdater: true,
       canCheck: false,
@@ -1027,9 +1260,9 @@ export async function installDesktopReleaseVersion(
       isDownloading: true,
       isInstalling: false,
       isBusy: true,
-      progressPercent: 0,
-      downloadedBytes: 0,
-      totalBytes: null,
+      progressPercent: getDownloadProgressState(downloadedBytes, totalBytes),
+      downloadedBytes,
+      totalBytes,
       publishedAt,
       releaseNotes,
       statusMessage: `正在下载 v${targetVersion}...`,
@@ -1040,11 +1273,14 @@ export async function installDesktopReleaseVersion(
       await installDesktopRelease(manifestUrl, targetVersion, (event) => {
         switch (event.event) {
           case 'Started':
-            totalBytes = event.data.contentLength ?? null;
-            downloadedBytes = 0;
+            totalBytes = event.data.contentLength ?? totalBytes;
+            downloadedBytes = event.data.downloadedLength ?? downloadedBytes;
             patchState({
               phase: 'downloading',
-              progressPercent: 0,
+              progressPercent: getDownloadProgressState(
+                downloadedBytes,
+                totalBytes
+              ),
               downloadedBytes,
               totalBytes,
               statusMessage: `正在下载 v${targetVersion}...`,
@@ -1063,7 +1299,7 @@ export async function installDesktopReleaseVersion(
             break;
           case 'Finished':
             patchState({
-              progressPercent: totalBytes ? 100 : state.progressPercent,
+              progressPercent: 100,
               downloadedBytes,
               totalBytes,
             });
@@ -1095,6 +1331,9 @@ export async function installDesktopReleaseVersion(
         source: 'desktop-updater',
         updateStatus: UpdateStatus.HAS_UPDATE,
         latestVersion: targetVersion,
+        downloadTargetKind: 'release',
+        targetManifestUrl: manifestUrl,
+        lastDownloadInterruption: null,
         autoDownloadEnabled,
         canUseDesktopUpdater: true,
         canCheck: false,
@@ -1113,11 +1352,40 @@ export async function installDesktopReleaseVersion(
         errorMessage: null,
       });
     } catch (error) {
+      const controlAction = consumePendingDownloadControlAction();
+
+      if (controlAction === 'paused') {
+        applyPausedDownloadState({
+          version: targetVersion,
+          targetKind: 'release',
+          manifestUrl,
+          publishedAt,
+          releaseNotes,
+          downloadedBytes,
+          totalBytes,
+        });
+        return;
+      }
+
+      if (controlAction === 'canceled') {
+        applyCanceledDownloadState({
+          version: targetVersion,
+          targetKind: 'release',
+          manifestUrl,
+          publishedAt,
+          releaseNotes,
+        });
+        return;
+      }
+
       patchState({
         phase: 'error',
         source: 'desktop-updater',
         updateStatus: UpdateStatus.HAS_UPDATE,
         latestVersion: targetVersion,
+        downloadTargetKind: 'release',
+        targetManifestUrl: manifestUrl,
+        lastDownloadInterruption: null,
         autoDownloadEnabled,
         canUseDesktopUpdater: true,
         canCheck: true,
@@ -1162,6 +1430,7 @@ export function setAutoDownloadEnabled(enabled: boolean) {
     enabled &&
     state.canUseDesktopUpdater &&
     state.phase === 'available' &&
+    state.downloadTargetKind === 'latest' &&
     !state.isBusy
   ) {
     void downloadLatestVersion();

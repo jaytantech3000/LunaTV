@@ -59,6 +59,7 @@ export type DesktopReleaseInstallEvent =
       event: 'Started';
       data: {
         contentLength?: number;
+        downloadedLength?: number;
       };
     }
   | {
@@ -218,4 +219,45 @@ export async function installDesktopRelease(
     version,
     onEvent: channel,
   });
+}
+
+export async function downloadLatestDesktopUpdate(
+  version: string,
+  onEvent?: (event: DesktopReleaseInstallEvent) => void
+): Promise<void> {
+  ensureDesktopTarget();
+
+  if (!isDesktopTauriRuntimeAvailable()) {
+    throw new Error(
+      'Desktop IPC is unavailable in browser preview. Run inside the Tauri shell.'
+    );
+  }
+
+  const { Channel, invoke } = await import('@tauri-apps/api/core');
+  const channel = new Channel<DesktopReleaseInstallEvent>();
+
+  if (onEvent) {
+    channel.onmessage = onEvent;
+  }
+
+  await invoke('download_latest_desktop_update', {
+    version,
+    onEvent: channel,
+  });
+}
+
+export function installDownloadedDesktopUpdate(
+  version?: string
+): Promise<void> {
+  return invokeDesktopCommand<void>('install_downloaded_desktop_update', {
+    version,
+  });
+}
+
+export function pauseActiveDesktopUpdateDownload(): Promise<void> {
+  return invokeDesktopCommand<void>('pause_active_desktop_update_download');
+}
+
+export function cancelActiveDesktopUpdateDownload(): Promise<void> {
+  return invokeDesktopCommand<void>('cancel_active_desktop_update_download');
 }
