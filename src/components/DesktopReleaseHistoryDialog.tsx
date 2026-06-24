@@ -17,7 +17,11 @@ import {
   type AppUpdateState,
   installDesktopReleaseVersion,
 } from '@/lib/app-update';
-import { type DesktopReleaseHistoryItem } from '@/lib/desktop-release-history';
+import {
+  type DesktopReleaseHistoryItem,
+  fetchDesktopReleaseHistoryFromGithub,
+} from '@/lib/desktop-release-history';
+import { isDesktopAppTarget } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { compareSemver } from '@/lib/semver';
 
@@ -120,6 +124,44 @@ function formatPublishedAt(value: string | null) {
   }
 
   return new Date(timestamp).toLocaleString('zh-CN');
+}
+
+function isJsonResponse(response: Response) {
+  const contentType = response.headers.get('content-type');
+  return Boolean(contentType?.toLowerCase().includes('application/json'));
+}
+
+async function loadDesktopReleaseHistory(signal: AbortSignal) {
+  if (isDesktopAppTarget()) {
+    return fetchDesktopReleaseHistoryFromGithub({ signal });
+  }
+
+  try {
+    const response = await fetch('/api/desktop/releases', {
+      signal,
+      cache: 'no-store',
+    });
+
+    if (!isJsonResponse(response)) {
+      return fetchDesktopReleaseHistoryFromGithub({ signal });
+    }
+
+    const payload =
+      (await response.json()) as DesktopReleaseHistoryResponse | null;
+
+    if (!response.ok) {
+      throw new Error(payload?.error ?? `HTTP ${response.status}`);
+    }
+
+    const releases = payload?.releases;
+    return Array.isArray(releases) ? releases : [];
+  } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
+
+    return fetchDesktopReleaseHistoryFromGithub({ signal });
+  }
 }
 
 function VersionSection({
@@ -327,18 +369,8 @@ export function DesktopReleaseHistoryDialog({
 
     void (async () => {
       try {
-        const response = await fetch('/api/desktop/releases', {
-          signal: controller.signal,
-          cache: 'no-store',
-        });
-        const payload =
-          (await response.json()) as DesktopReleaseHistoryResponse;
-
-        if (!response.ok) {
-          throw new Error(payload.error || `HTTP ${response.status}`);
-        }
-
-        setReleases(Array.isArray(payload.releases) ? payload.releases : []);
+        const nextReleases = await loadDesktopReleaseHistory(controller.signal);
+        setReleases(nextReleases);
       } catch (error) {
         if (controller.signal.aborted) {
           return;

@@ -1,7 +1,9 @@
+import { getReleaseRepository } from '@/lib/release-urls';
 import { compareSemver } from '@/lib/semver';
 
 const DESKTOP_RELEASE_TAG_PREFIX = 'desktop-v';
 const DESKTOP_RELEASE_MANIFEST_NAME = 'latest.json';
+const GITHUB_API_BASE = 'https://api.github.com';
 
 export interface GithubReleaseAssetPayload {
   name?: string | null;
@@ -31,6 +33,35 @@ export interface DesktopReleaseHistoryItem {
   publishedAt: string | null;
   htmlUrl: string | null;
   manifestUrl: string;
+}
+
+function isRepositorySlug(value: string) {
+  return /^[^/\s]+\/[^/\s]+$/.test(value.trim());
+}
+
+function readGithubApiErrorMessage(payload: unknown, fallback: string) {
+  if (
+    typeof payload === 'object' &&
+    payload !== null &&
+    'message' in payload &&
+    typeof payload.message === 'string'
+  ) {
+    return payload.message;
+  }
+
+  return fallback;
+}
+
+function tryParseJson<T>(value: string): T | null {
+  if (!value.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value) as T;
+  } catch (_) {
+    return null;
+  }
 }
 
 export function extractDesktopReleaseVersion(
@@ -69,6 +100,49 @@ export function findDesktopReleaseManifestUrl(
   );
 
   return asset?.browser_download_url?.trim() || null;
+}
+
+export function getDesktopReleaseGithubApiUrl(
+  repository = getReleaseRepository()
+) {
+  return `${GITHUB_API_BASE}/repos/${repository}/releases?per_page=100`;
+}
+
+export async function fetchDesktopReleaseHistoryFromGithub({
+  signal,
+  repository = getReleaseRepository(),
+}: {
+  signal?: AbortSignal;
+  repository?: string;
+} = {}): Promise<DesktopReleaseHistoryItem[]> {
+  if (!isRepositorySlug(repository)) {
+    throw new Error('Invalid desktop release repository configuration.');
+  }
+
+  const response = await fetch(getDesktopReleaseGithubApiUrl(repository), {
+    signal,
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/vnd.github+json',
+    },
+  });
+  const responseText = await response.text();
+  const payload = tryParseJson<unknown>(responseText);
+
+  if (!response.ok) {
+    throw new Error(
+      `GitHub API error ${response.status}: ${readGithubApiErrorMessage(
+        payload,
+        responseText.slice(0, 500) || `HTTP ${response.status}`
+      )}`
+    );
+  }
+
+  if (!Array.isArray(payload)) {
+    throw new Error('Unexpected desktop release payload.');
+  }
+
+  return normalizeDesktopReleaseHistory(payload as GithubReleasePayload[]);
 }
 
 export function normalizeDesktopReleaseHistory(

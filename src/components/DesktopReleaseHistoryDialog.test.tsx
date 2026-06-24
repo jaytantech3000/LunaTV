@@ -18,6 +18,95 @@ jest.mock('@/lib/scroll-lock', () => ({
 
 import { DesktopReleaseHistoryDialog } from './DesktopReleaseHistoryDialog';
 
+function createJsonFetchResponse(payload: unknown, status = 200) {
+  const body = JSON.stringify(payload);
+
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {
+      get: (name: string) =>
+        name.toLowerCase() === 'content-type'
+          ? 'application/json; charset=utf-8'
+          : null,
+    },
+    text: async () => body,
+    json: async () => payload,
+  };
+}
+
+function createTextFetchResponse(
+  body: string,
+  {
+    status = 200,
+    contentType = 'text/html; charset=utf-8',
+  }: {
+    status?: number;
+    contentType?: string;
+  } = {}
+) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {
+      get: (name: string) =>
+        name.toLowerCase() === 'content-type' ? contentType : null,
+    },
+    text: async () => body,
+    json: async () => JSON.parse(body),
+  };
+}
+
+function createGithubReleasePayload() {
+  return [
+    {
+      id: 'beta-16',
+      tag_name: 'desktop-v200.0.0-beta.16',
+      name: 'Beta 16',
+      body: null,
+      prerelease: true,
+      published_at: '2026-06-19T05:01:04Z',
+      html_url: 'https://example.com/beta-16',
+      assets: [
+        {
+          name: 'latest.json',
+          browser_download_url: 'https://example.com/beta-16/latest.json',
+        },
+      ],
+    },
+    {
+      id: 'beta-15',
+      tag_name: 'desktop-v200.0.0-beta.15',
+      name: 'Beta 15',
+      body: null,
+      prerelease: true,
+      published_at: '2026-06-19T04:01:04Z',
+      html_url: 'https://example.com/beta-15',
+      assets: [
+        {
+          name: 'latest.json',
+          browser_download_url: 'https://example.com/beta-15/latest.json',
+        },
+      ],
+    },
+    {
+      id: 'beta-13',
+      tag_name: 'desktop-v200.0.0-beta.13',
+      name: 'Beta 13',
+      body: null,
+      prerelease: true,
+      published_at: '2026-06-19T02:01:04Z',
+      html_url: 'https://example.com/beta-13',
+      assets: [
+        {
+          name: 'latest.json',
+          browser_download_url: 'https://example.com/beta-13/latest.json',
+        },
+      ],
+    },
+  ];
+}
+
 function createUpdateState(
   patch: Partial<AppUpdateState> = {}
 ): AppUpdateState {
@@ -66,9 +155,9 @@ describe('DesktopReleaseHistoryDialog', () => {
   beforeEach(() => {
     localStorage.clear();
     mockInstallDesktopReleaseVersion.mockReset();
-    global.fetch = jest.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    delete window.RUNTIME_CONFIG;
+    global.fetch = jest.fn(async () =>
+      createJsonFetchResponse({
         releases: [
           {
             id: 'beta-16',
@@ -104,14 +193,71 @@ describe('DesktopReleaseHistoryDialog', () => {
             manifestUrl: 'https://example.com/beta-13/latest.json',
           },
         ],
-      }),
-    })) as unknown as typeof fetch;
+      })
+    ) as unknown as typeof fetch;
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
+    delete window.RUNTIME_CONFIG;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (global as any).fetch;
+  });
+
+  it('loads release history from GitHub in desktop mode', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+    };
+    const fetchMock = jest.fn(async () =>
+      createJsonFetchResponse(createGithubReleasePayload())
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderDialog();
+
+    expect(
+      await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15')
+    ).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://api.github.com/repos/jaytantech3000/LunaTV/releases?per_page=100',
+      expect.objectContaining({
+        cache: 'no-store',
+        headers: expect.objectContaining({
+          Accept: 'application/vnd.github+json',
+        }),
+      })
+    );
+  });
+
+  it('falls back to GitHub when the route returns HTML', async () => {
+    const fetchMock = jest.fn();
+    fetchMock.mockResolvedValueOnce(
+      createTextFetchResponse('<!DOCTYPE html><html></html>')
+    );
+    fetchMock.mockResolvedValueOnce(
+      createJsonFetchResponse(createGithubReleasePayload())
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderDialog();
+
+    expect(
+      await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15')
+    ).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/desktop/releases',
+      expect.objectContaining({
+        cache: 'no-store',
+      })
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://api.github.com/repos/jaytantech3000/LunaTV/releases?per_page=100',
+      expect.objectContaining({
+        cache: 'no-store',
+      })
+    );
   });
 
   it('shows a current tag for the running version', async () => {
