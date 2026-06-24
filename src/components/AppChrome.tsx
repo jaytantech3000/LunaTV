@@ -16,7 +16,7 @@ const buttonVariantClassName: Record<ButtonVariant, string> = {
   primary:
     'bg-gray-900 text-white hover:bg-gray-800 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200',
   secondary:
-    'border border-gray-200 bg-white/85 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900/70 dark:text-gray-200 dark:hover:bg-gray-800',
+    'border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800',
   muted:
     'bg-gray-100/90 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700',
   accent:
@@ -52,7 +52,7 @@ export function AppDialogPanel({ className, ...props }: DivProps) {
   return (
     <div
       className={cn(
-        'overflow-hidden rounded-[28px] border border-gray-200/80 bg-white/95 shadow-[0_28px_90px_rgba(15,23,42,0.24)] backdrop-blur-xl dark:border-gray-700/70 dark:bg-gray-900/92',
+        'overflow-hidden rounded-[28px] border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-900',
         className
       )}
       {...props}
@@ -64,7 +64,7 @@ export function AppDialogHeader({ className, ...props }: DivProps) {
   return (
     <div
       className={cn(
-        'flex items-start justify-between gap-4 border-b border-gray-200/80 px-5 py-4 dark:border-gray-800/80 sm:px-6',
+        'flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-800 sm:px-6',
         className
       )}
       {...props}
@@ -122,7 +122,7 @@ export function AppSurfaceCard({ className, ...props }: DivProps) {
   return (
     <div
       className={cn(
-        'rounded-2xl border border-gray-200/80 bg-white/85 shadow-sm backdrop-blur-sm dark:border-gray-700/80 dark:bg-gray-900/60',
+        'rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900/60',
         className
       )}
       {...props}

@@ -21,6 +21,7 @@ import {
   type DesktopReleaseHistoryItem,
   fetchDesktopReleaseHistoryFromGithub,
 } from '@/lib/desktop-release-history';
+import { openExternalUrl } from '@/lib/open-external-url';
 import { isDesktopAppTarget } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { compareSemver } from '@/lib/semver';
@@ -299,13 +300,7 @@ function VersionSection({
 
                 {release.htmlUrl ? (
                   <AppIconButton
-                    onClick={() =>
-                      window.open(
-                        release.htmlUrl || '',
-                        '_blank',
-                        'noopener,noreferrer'
-                      )
-                    }
+                    onClick={() => void openExternalUrl(release.htmlUrl || '')}
                     variant='ghost'
                     aria-label={`打开 v${release.version} 发布页`}
                     title='打开发布页'

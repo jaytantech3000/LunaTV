@@ -6,6 +6,7 @@ import type { ComponentProps } from 'react';
 import type { AppUpdateState } from '@/lib/app-update';
 
 const mockInstallDesktopReleaseVersion = jest.fn();
+const mockOpenExternalUrl = jest.fn();
 
 jest.mock('@/lib/app-update', () => ({
   installDesktopReleaseVersion: (...args: unknown[]) =>
@@ -14,6 +15,10 @@ jest.mock('@/lib/app-update', () => ({
 
 jest.mock('@/lib/scroll-lock', () => ({
   acquireScrollLock: jest.fn(() => jest.fn()),
+}));
+
+jest.mock('@/lib/open-external-url', () => ({
+  openExternalUrl: (...args: unknown[]) => mockOpenExternalUrl(...args),
 }));
 
 import { DesktopReleaseHistoryDialog } from './DesktopReleaseHistoryDialog';
@@ -158,6 +163,8 @@ describe('DesktopReleaseHistoryDialog', () => {
   beforeEach(() => {
     localStorage.clear();
     mockInstallDesktopReleaseVersion.mockReset();
+    mockOpenExternalUrl.mockReset();
+    mockOpenExternalUrl.mockResolvedValue(undefined);
     delete window.RUNTIME_CONFIG;
     global.fetch = jest.fn(async () =>
       createJsonFetchResponse({
@@ -315,6 +322,22 @@ describe('DesktopReleaseHistoryDialog', () => {
         'v200.0.0-beta.16',
         'v200.0.0-beta.15',
       ]);
+    });
+  });
+
+  it('opens the selected release page through the shared external-url helper', async () => {
+    renderDialog({
+      currentVersion: '200.0.0-beta.12',
+    });
+
+    fireEvent.click(
+      await screen.findByLabelText('打开 v200.0.0-beta.13 发布页')
+    );
+
+    await waitFor(() => {
+      expect(mockOpenExternalUrl).toHaveBeenCalledWith(
+        'https://example.com/beta-13'
+      );
     });
   });
 

@@ -594,6 +594,27 @@ fn cancel_active_desktop_update_download(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn clear_paused_desktop_update_download(
+    state: State<'_, DesktopRuntimeState>,
+) -> Result<(), String> {
+    clear_paused_update_download(&state);
+    Ok(())
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let url = normalize_required_string(url, "external URL cannot be empty")
+        .map_err(|error| error.to_string())?;
+    let parsed_url = Url::parse(&url).map_err(|error| error.to_string())?;
+
+    if !matches!(parsed_url.scheme(), "http" | "https") {
+        return Err("external URL must use http or https".into());
+    }
+
+    open_url_in_system_browser(parsed_url.as_str()).map_err(|error| error.to_string())
+}
+
 fn normalize_compile_time_value(value: Option<&'static str>) -> Option<String> {
     value
         .map(str::trim)
@@ -645,6 +666,8 @@ pub fn run() {
             install_downloaded_desktop_update,
             pause_active_desktop_update_download,
             cancel_active_desktop_update_download,
+            clear_paused_desktop_update_download,
+            open_external_url,
             install_desktop_release,
         ])
         .build(tauri::generate_context!())
@@ -3092,6 +3115,51 @@ fn normalize_required_string(value: String, error_message: &str) -> Result<Strin
     }
 
     Ok(normalized)
+}
+
+fn open_url_in_system_browser(url: &str) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("explorer.exe");
+        command
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        if !cfg!(debug_assertions) {
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        command
+            .spawn()
+            .with_context(|| format!("failed to open external URL {url}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to open external URL {url}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to open external URL {url}"))?;
+        return Ok(());
+    }
 }
 
 struct PreparedDesktopUpdateDownload {

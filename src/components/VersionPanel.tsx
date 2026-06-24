@@ -43,6 +43,7 @@ import {
   getLocalizedChangelogItems,
 } from '@/lib/changelog';
 import { DESKTOP_UPSTREAM_VERSION } from '@/lib/desktop-release';
+import { openExternalUrl } from '@/lib/open-external-url';
 import { getChangelogFileUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
@@ -76,7 +77,26 @@ interface RemoteChangelogEntry {
   fixed: string[];
 }
 
-type PendingDownloadAction = 'pause' | 'cancel';
+type PendingDownloadAction = 'cancel';
+
+type ReleaseNotesBlock =
+  | {
+      type: 'heading';
+      level: number;
+      content: string;
+    }
+  | {
+      type: 'list';
+      items: string[];
+    }
+  | {
+      type: 'paragraph';
+      lines: string[];
+    };
+
+const INLINE_MARKDOWN_PATTERN =
+  /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|\*\*([^*]+)\*\*|(https?:\/\/[^\s<]+)/g;
+const FULL_CHANGELOG_LINE_PATTERN = /^\**\s*full changelog\s*\**\s*:?\s*/i;
 
 const CHANGELOG_LOCALE_STORAGE_KEY = 'lunatv:version-panel:changelog-locale';
 
@@ -243,10 +263,7 @@ function getUpdateVersionLabel(version: string | null) {
 function getDownloadActionButtonLabel(
   updateState: Pick<
     AppUpdateState,
-    | 'phase'
-    | 'downloadTargetKind'
-    | 'lastDownloadInterruption'
-    | 'latestVersion'
+    'phase' | 'downloadTargetKind' | 'latestVersion'
   >
 ) {
   const versionLabel = getUpdateVersionLabel(updateState.latestVersion);
@@ -257,46 +274,67 @@ function getDownloadActionButtonLabel(
       : '继续下载最新版本';
   }
 
-  if (updateState.lastDownloadInterruption === 'canceled') {
-    return updateState.downloadTargetKind === 'release'
-      ? `重新下载 ${versionLabel}`
-      : '重新下载最新版本';
-  }
-
   return updateState.downloadTargetKind === 'release'
     ? `下载 ${versionLabel}`
     : '下载最新版本';
 }
 
 function getDownloadProgressLabel(
-  updateState: Pick<AppUpdateState, 'latestVersion' | 'progressPercent'>
+  updateState: Pick<
+    AppUpdateState,
+    'phase' | 'latestVersion' | 'progressPercent'
+  >
 ) {
   if (updateState.progressPercent !== null) {
     return `已下载 ${updateState.progressPercent}%`;
   }
 
+  if (updateState.phase === 'paused') {
+    return `已暂停 ${getUpdateVersionLabel(updateState.latestVersion)}`;
+  }
+
   return `正在下载 ${getUpdateVersionLabel(updateState.latestVersion)}`;
 }
 
-function shouldHoldInterruptedDownloadState(
-  updateState: Pick<
-    AppUpdateState,
-    'phase' | 'downloadTargetKind' | 'lastDownloadInterruption'
-  >
-) {
+function StopIcon({ className }: { className?: string }) {
+  return <Square className={className} fill='currentColor' />;
+}
+
+function PauseSolidIcon({ className }: { className?: string }) {
   return (
-    updateState.phase === 'paused' ||
-    (updateState.phase === 'available' &&
-      updateState.lastDownloadInterruption === 'canceled' &&
-      updateState.downloadTargetKind !== null)
+    <svg
+      viewBox='0 0 16 16'
+      aria-hidden='true'
+      className={className}
+      fill='currentColor'
+    >
+      <rect x='3' y='2.5' width='3.25' height='11' rx='1.25' />
+      <rect x='9.75' y='2.5' width='3.25' height='11' rx='1.25' />
+    </svg>
   );
 }
 
+function PlaySolidIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox='0 0 16 16'
+      aria-hidden='true'
+      className={className}
+      fill='currentColor'
+    >
+      <path d='M4.5 2.9A1 1 0 0 1 6 2.05l7.2 5.02a1.13 1.13 0 0 1 0 1.86L6 13.95A1 1 0 0 1 4.5 13.1z' />
+    </svg>
+  );
+}
+
+function shouldHoldInterruptedDownloadState(
+  updateState: Pick<AppUpdateState, 'phase'>
+) {
+  return updateState.phase === 'paused';
+}
+
 function renderUpdateStatusIcon(
-  updateState: Pick<
-    AppUpdateState,
-    'phase' | 'updateStatus' | 'errorMessage' | 'lastDownloadInterruption'
-  >
+  updateState: Pick<AppUpdateState, 'phase' | 'updateStatus' | 'errorMessage'>
 ) {
   if (updateState.phase === 'checking' || updateState.phase === 'installing') {
     return <Loader2 className='h-5 w-5 animate-spin' />;
@@ -330,10 +368,6 @@ function renderUpdateStatusIcon(
     );
   }
 
-  if (updateState.lastDownloadInterruption === 'canceled') {
-    return <Square className='h-5 w-5 text-rose-600 dark:text-rose-300' />;
-  }
-
   if (updateState.updateStatus === UpdateStatus.HAS_UPDATE) {
     return <Download className='h-5 w-5 text-amber-600 dark:text-amber-400' />;
   }
@@ -350,11 +384,7 @@ function renderUpdateStatusIcon(
 function getUpdateStatusTitle(
   updateState: Pick<
     AppUpdateState,
-    | 'phase'
-    | 'updateStatus'
-    | 'errorMessage'
-    | 'latestVersion'
-    | 'lastDownloadInterruption'
+    'phase' | 'updateStatus' | 'errorMessage' | 'latestVersion'
   >
 ) {
   const versionLabel = getUpdateVersionLabel(updateState.latestVersion);
@@ -375,9 +405,6 @@ function getUpdateStatusTitle(
     return `${versionLabel} 已下载完成`;
   }
 
-  if (updateState.lastDownloadInterruption === 'canceled') {
-    return `${versionLabel} 下载已取消`;
-  }
   if (updateState.phase === 'checking') {
     return '正在检查最新版本';
   }
@@ -452,6 +479,279 @@ function ChangeList({
         ))}
       </ul>
     </div>
+  );
+}
+
+function stripTrailingUrlPunctuation(value: string) {
+  const match = value.match(/[),.;!?]+$/);
+  if (!match) {
+    return {
+      href: value,
+      trailing: '',
+    };
+  }
+
+  return {
+    href: value.slice(0, -match[0].length),
+    trailing: match[0],
+  };
+}
+
+function renderReleaseNotesInline(text: string, keyPrefix: string) {
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  INLINE_MARKDOWN_PATTERN.lastIndex = 0;
+
+  while ((match = INLINE_MARKDOWN_PATTERN.exec(text))) {
+    if (match.index > lastIndex) {
+      nodes.push(
+        <span key={`${keyPrefix}-text-${lastIndex}`}>
+          {text.slice(lastIndex, match.index)}
+        </span>
+      );
+    }
+
+    if (match[1] && match[2]) {
+      nodes.push(
+        <a
+          key={`${keyPrefix}-markdown-link-${match.index}`}
+          href={match[2]}
+          target='_blank'
+          rel='noopener noreferrer'
+          onClick={(event) => {
+            event.preventDefault();
+            void openExternalUrl(match[2]);
+          }}
+          className='break-all text-emerald-700 underline decoration-emerald-400/70 underline-offset-4 transition-colors hover:text-emerald-800 dark:text-emerald-300 dark:decoration-emerald-500/60 dark:hover:text-emerald-200'
+        >
+          {match[1]}
+        </a>
+      );
+    } else if (match[3]) {
+      nodes.push(
+        <strong
+          key={`${keyPrefix}-strong-${match.index}`}
+          className='font-semibold text-gray-900 dark:text-gray-100'
+        >
+          {match[3]}
+        </strong>
+      );
+    } else if (match[4]) {
+      const { href, trailing } = stripTrailingUrlPunctuation(match[4]);
+      nodes.push(
+        <a
+          key={`${keyPrefix}-link-${match.index}`}
+          href={href}
+          target='_blank'
+          rel='noopener noreferrer'
+          onClick={(event) => {
+            event.preventDefault();
+            void openExternalUrl(href);
+          }}
+          className='break-all text-emerald-700 underline decoration-emerald-400/70 underline-offset-4 transition-colors hover:text-emerald-800 dark:text-emerald-300 dark:decoration-emerald-500/60 dark:hover:text-emerald-200'
+        >
+          {href}
+        </a>
+      );
+
+      if (trailing) {
+        nodes.push(
+          <span key={`${keyPrefix}-trail-${match.index}`}>{trailing}</span>
+        );
+      }
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(
+      <span key={`${keyPrefix}-text-${lastIndex}`}>
+        {text.slice(lastIndex)}
+      </span>
+    );
+  }
+
+  return nodes.length > 0 ? nodes : [text];
+}
+
+function shouldHideReleaseNotesLine(line: string) {
+  const normalizedLine = line
+    .replace(/^[*-]\s+/, '')
+    .replace(/\*\*/g, '')
+    .trim();
+
+  return (
+    FULL_CHANGELOG_LINE_PATTERN.test(normalizedLine) ||
+    /^https?:\/\/[^\s]+\/compare\//i.test(normalizedLine)
+  );
+}
+
+function parseReleaseNotes(
+  releaseNotes: string,
+  options?: {
+    hideChangelogLinks?: boolean;
+  }
+): ReleaseNotesBlock[] {
+  const normalized = releaseNotes.replace(/\r\n?/g, '\n').trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const blocks: ReleaseNotesBlock[] = [];
+  const paragraphLines: string[] = [];
+  const listItems: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraphLines.length === 0) {
+      return;
+    }
+
+    blocks.push({
+      type: 'paragraph',
+      lines: [...paragraphLines],
+    });
+    paragraphLines.length = 0;
+  };
+
+  const flushList = () => {
+    if (listItems.length === 0) {
+      return;
+    }
+
+    blocks.push({
+      type: 'list',
+      items: [...listItems],
+    });
+    listItems.length = 0;
+  };
+
+  for (const rawLine of normalized.split('\n')) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    if (options?.hideChangelogLinks && shouldHideReleaseNotesLine(line)) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      blocks.push({
+        type: 'heading',
+        level: headingMatch[1].length,
+        content: headingMatch[2].trim(),
+      });
+      continue;
+    }
+
+    const listMatch = line.match(/^[-*]\s+(.+)$/);
+    if (listMatch) {
+      flushParagraph();
+      listItems.push(listMatch[1].trim());
+      continue;
+    }
+
+    flushList();
+    paragraphLines.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+
+  return blocks;
+}
+
+function ReleaseNotesContent({
+  releaseNotes,
+  hideChangelogLinks = false,
+}: {
+  releaseNotes: string;
+  hideChangelogLinks?: boolean;
+}) {
+  const blocks = parseReleaseNotes(releaseNotes, {
+    hideChangelogLinks,
+  });
+  if (blocks.length === 0) {
+    return null;
+  }
+
+  return (
+    <AppSurfaceCard className='rounded-xl px-4 py-4 text-sm text-gray-600 dark:text-gray-300'>
+      <div className='space-y-3'>
+        {blocks.map((block, index) => {
+          if (block.type === 'heading') {
+            const headingClassName =
+              block.level <= 2
+                ? 'text-base font-semibold text-gray-900 dark:text-gray-100'
+                : 'text-sm font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400';
+
+            return (
+              <h5
+                key={`release-notes-heading-${index}`}
+                className={headingClassName}
+              >
+                {renderReleaseNotesInline(
+                  block.content,
+                  `release-notes-heading-${index}`
+                )}
+              </h5>
+            );
+          }
+
+          if (block.type === 'list') {
+            return (
+              <ul
+                key={`release-notes-list-${index}`}
+                className='space-y-2 text-sm leading-6 text-gray-700 dark:text-gray-300'
+              >
+                {block.items.map((item, itemIndex) => (
+                  <li
+                    key={`release-notes-list-${index}-${itemIndex}`}
+                    className='flex items-start gap-2'
+                  >
+                    <span className='mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500' />
+                    <span className='min-w-0 break-words'>
+                      {renderReleaseNotesInline(
+                        item,
+                        `release-notes-list-${index}-${itemIndex}`
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            );
+          }
+
+          return (
+            <p
+              key={`release-notes-paragraph-${index}`}
+              className='text-sm leading-6 text-gray-700 dark:text-gray-300'
+            >
+              {block.lines.map((line, lineIndex) => (
+                <span key={`release-notes-paragraph-${index}-${lineIndex}`}>
+                  {renderReleaseNotesInline(
+                    line,
+                    `release-notes-paragraph-${index}-${lineIndex}`
+                  )}
+                  {lineIndex < block.lines.length - 1 ? <br /> : null}
+                </span>
+              ))}
+            </p>
+          );
+        })}
+      </div>
+    </AppSurfaceCard>
   );
 }
 
@@ -563,26 +863,21 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
   const shouldShowDownloadActionButton =
     desktopUpdaterAvailable &&
     updateState.canDownload &&
-    (updateState.phase === 'available' || updateState.phase === 'paused');
+    updateState.phase === 'available';
   const downloadActionButtonLabel = getDownloadActionButtonLabel(updateState);
   const shouldKeepInterruptedDownloadTarget =
     shouldHoldInterruptedDownloadState(updateState);
+  const shouldShowDownloadProgress =
+    updateState.phase === 'downloading' || updateState.phase === 'paused';
+  const isPausedDownloadProgress = updateState.phase === 'paused';
   const pendingDownloadActionMeta = pendingDownloadAction
-    ? pendingDownloadAction === 'pause'
-      ? {
-          title: '确认暂停下载',
-          description: `将暂停 ${activeDownloadVersionLabel} 的下载。之后继续下载时，会重新开始当前版本的下载。`,
-          confirmText: '确认暂停',
-          badgeText: '暂停',
-          tone: 'amber' as const,
-        }
-      : {
-          title: '确认停止下载',
-          description: `将取消 ${activeDownloadVersionLabel} 的下载并清空当前进度，之后需要重新开始下载。`,
-          confirmText: '确认停止',
-          badgeText: '停止',
-          tone: 'rose' as const,
-        }
+    ? {
+        title: '确认停止下载',
+        description: '停止后会立即结束下载，并返回更新初始状态。',
+        confirmText: '确认停止',
+        badgeText: '停止',
+        tone: 'rose' as const,
+      }
     : null;
   const shouldShowUpdateStatusMessage =
     Boolean(updateState.statusMessage) &&
@@ -679,7 +974,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
   }, [changelogLocale, isOpen]);
 
   const openReleasePage = () => {
-    window.open(updateState.releasePageUrl, '_blank', 'noopener,noreferrer');
+    void openExternalUrl(updateState.releasePageUrl);
   };
 
   const handleCheckUpdate = () => {
@@ -720,9 +1015,32 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
     setDownloadActionError(null);
   };
 
-  const handleOpenPauseDownloadDialog = () => {
+  const handlePauseDownload = async () => {
+    if (isApplyingDownloadAction) {
+      return;
+    }
+
+    setIsApplyingDownloadAction(true);
     setDownloadActionError(null);
-    setPendingDownloadAction('pause');
+
+    try {
+      await pauseActiveUpdateDownload();
+    } catch (error) {
+      setDownloadActionError(
+        error instanceof Error ? error.message : '下载控制操作失败'
+      );
+    } finally {
+      setIsApplyingDownloadAction(false);
+    }
+  };
+
+  const handlePrimaryDownloadControl = () => {
+    if (isPausedDownloadProgress) {
+      handleDownloadUpdate();
+      return;
+    }
+
+    void handlePauseDownload();
   };
 
   const handleOpenCancelDownloadDialog = () => {
@@ -739,12 +1057,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
     setDownloadActionError(null);
 
     try {
-      if (pendingDownloadAction === 'pause') {
-        await pauseActiveUpdateDownload();
-      } else {
-        await cancelActiveUpdateDownload();
-      }
-
+      await cancelActiveUpdateDownload();
       setPendingDownloadAction(null);
     } catch (error) {
       setDownloadActionError(
@@ -856,7 +1169,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                   </div>
                 </div>
 
-                {updateState.phase === 'downloading' ? (
+                {shouldShowDownloadProgress ? (
                   <div className='flex items-start gap-3'>
                     <div className='min-w-0 flex-1 space-y-2'>
                       <div className='h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-800'>
@@ -879,31 +1192,55 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     </div>
                     <div className='flex items-center gap-2'>
                       <AppIconButton
-                        onClick={handleOpenPauseDownloadDialog}
+                        onClick={handlePrimaryDownloadControl}
                         disabled={isApplyingDownloadAction}
                         variant='muted'
-                        aria-label='暂停下载'
-                        title='暂停下载'
+                        className={
+                          isPausedDownloadProgress
+                            ? 'text-emerald-600 hover:bg-emerald-50/80 hover:text-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-200'
+                            : 'text-amber-600 hover:bg-amber-50/80 hover:text-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/20 dark:hover:text-amber-200'
+                        }
+                        aria-label={
+                          isPausedDownloadProgress ? '继续下载' : '暂停下载'
+                        }
+                        title={
+                          isPausedDownloadProgress ? '继续下载' : '暂停下载'
+                        }
                       >
-                        <Pause className='h-4 w-4' />
+                        {!isPausedDownloadProgress &&
+                        isApplyingDownloadAction ? (
+                          <Loader2 className='h-4 w-4 animate-spin' />
+                        ) : isPausedDownloadProgress ? (
+                          <PlaySolidIcon className='h-4 w-4' />
+                        ) : (
+                          <PauseSolidIcon className='h-4 w-4' />
+                        )}
                       </AppIconButton>
                       <AppIconButton
                         onClick={handleOpenCancelDownloadDialog}
                         disabled={isApplyingDownloadAction}
                         variant='muted'
+                        className='text-rose-600 hover:bg-rose-50/80 hover:text-rose-700 dark:text-rose-300 dark:hover:bg-rose-900/20 dark:hover:text-rose-200'
                         aria-label='停止下载'
                         title='停止下载'
                       >
-                        <Square className='h-4 w-4' />
+                        <StopIcon className='h-4 w-4' />
                       </AppIconButton>
                     </div>
                   </div>
                 ) : null}
 
                 {updateState.releaseNotes ? (
-                  <AppSurfaceCard className='rounded-xl px-3 py-3 text-sm text-gray-600 dark:text-gray-300'>
-                    {updateState.releaseNotes}
-                  </AppSurfaceCard>
+                  <ReleaseNotesContent
+                    releaseNotes={updateState.releaseNotes}
+                    hideChangelogLinks={shouldShowDownloadProgress}
+                  />
+                ) : null}
+
+                {downloadActionError ? (
+                  <div className='rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200'>
+                    {downloadActionError}
+                  </div>
                 ) : null}
 
                 {updateState.errorMessage ? (
@@ -936,9 +1273,6 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     >
                       {updateState.phase === 'paused' ? (
                         <Play className='h-4 w-4' />
-                      ) : updateState.lastDownloadInterruption ===
-                        'canceled' ? (
-                        <RotateCw className='h-4 w-4' />
                       ) : (
                         <Download className='h-4 w-4' />
                       )}
@@ -1095,23 +1429,13 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     className='mt-0.5 flex-shrink-0'
                     tone={pendingDownloadActionMeta.tone}
                   >
-                    {pendingDownloadAction === 'pause' ? (
-                      <Pause className='h-5 w-5' />
-                    ) : (
-                      <Square className='h-5 w-5' />
-                    )}
+                    <StopIcon className='h-5 w-5' />
                   </AppIconBadge>
                   <AppDialogTitleBlock
                     title={
                       <div className='flex flex-wrap items-center gap-2'>
                         <span>{pendingDownloadActionMeta.title}</span>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                            pendingDownloadAction === 'pause'
-                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200'
-                              : 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-200'
-                          }`}
-                        >
+                        <span className='rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-800 dark:bg-rose-900/30 dark:text-rose-200'>
                           {pendingDownloadActionMeta.badgeText}
                         </span>
                       </div>
@@ -1128,30 +1452,22 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                 </AppIconButton>
               </AppDialogHeader>
 
-              <div className='space-y-4 px-5 py-5 sm:px-6'>
-                <div className='grid gap-3 sm:grid-cols-2'>
-                  <AppSurfaceCard className='bg-gray-50/80 px-4 py-3 dark:bg-gray-800/60'>
-                    <p className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
-                      当前版本
-                    </p>
-                    <p className='mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100'>
-                      v{CURRENT_VERSION}
-                    </p>
-                  </AppSurfaceCard>
-                  <AppSurfaceCard className='bg-gray-50/80 px-4 py-3 dark:bg-gray-800/60'>
-                    <p className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
-                      目标版本
-                    </p>
-                    <p className='mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100'>
-                      {activeDownloadVersionLabel}
-                    </p>
-                  </AppSurfaceCard>
+              <div className='space-y-3 px-5 py-5 sm:px-6'>
+                <div className='flex flex-wrap items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50/80 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/60'>
+                  <span className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
+                    下载目标
+                  </span>
+                  <span className='rounded-full bg-rose-100 px-2.5 py-1 text-sm font-semibold text-rose-800 dark:bg-rose-900/30 dark:text-rose-100'>
+                    {activeDownloadVersionLabel}
+                  </span>
                 </div>
 
-                <AppSurfaceCard className='px-4 py-3 text-sm text-gray-600 dark:text-gray-300'>
-                  {pendingDownloadAction === 'pause'
-                    ? '暂停后可继续下载。当前实现会重新开始当前版本的下载。'
-                    : '停止后会清空当前下载进度，之后需要重新开始下载。'}
+                <AppSurfaceCard className='border-rose-200 bg-rose-50/70 px-4 py-3 dark:border-rose-900/40 dark:bg-rose-950/20'>
+                  <p className='text-sm leading-6 text-rose-900 dark:text-rose-50'>
+                    当前下载进度会被清空。如果之后还要安装{' '}
+                    {activeDownloadVersionLabel}
+                    ，需要从头重新下载。
+                  </p>
                 </AppSurfaceCard>
 
                 {downloadActionError ? (
@@ -1171,13 +1487,12 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                     onClick={() => void handleConfirmDownloadAction()}
                     disabled={isApplyingDownloadAction}
                     variant='primary'
+                    className='bg-rose-600 text-white hover:bg-rose-700 dark:bg-rose-500 dark:text-white dark:hover:bg-rose-400'
                   >
                     {isApplyingDownloadAction ? (
                       <Loader2 className='h-4 w-4 animate-spin' />
-                    ) : pendingDownloadAction === 'pause' ? (
-                      <Pause className='h-4 w-4' />
                     ) : (
-                      <Square className='h-4 w-4' />
+                      <StopIcon className='h-4 w-4' />
                     )}
                     {pendingDownloadActionMeta.confirmText}
                   </AppButton>

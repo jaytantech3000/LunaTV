@@ -261,3 +261,13 @@ export function pauseActiveDesktopUpdateDownload(): Promise<void> {
 export function cancelActiveDesktopUpdateDownload(): Promise<void> {
   return invokeDesktopCommand<void>('cancel_active_desktop_update_download');
 }
+
+export function clearPausedDesktopUpdateDownload(): Promise<void> {
+  return invokeDesktopCommand<void>('clear_paused_desktop_update_download');
+}
+
+export function openDesktopExternalUrl(url: string): Promise<void> {
+  return invokeDesktopCommand<void>('open_external_url', {
+    url,
+  });
+}
