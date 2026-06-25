@@ -22,7 +22,8 @@
 > - `moontv-sync` 与 `moontv-profile` 已落地，sync on 走远端 adapter，sync off 走 Rust 本地 profile store。
 > - 五个 profile 域（`playrecords` / `favorites` / `follows` / `searchhistory` / `skipconfigs`）在桌面本地模式下已经切到 Rust 真源。
 > - 为避免升级后丢失旧数据，桌面本地模式已补上一条 `localStorage -> Rust profile store` 的一次性兼容迁移链路。
-> - 当前剩余工作主要集中在 Phase 0 的协议文档收口，以及 Phase 6 的旧分支清理与诊断能力补齐。
+> - `profile-sync/status` 已补充稳定错误分类和同步域元数据，桌面管理页与诊断报告可以直接消费。
+> - 当前剩余工作主要集中在 Phase 6 的旧分支进一步收缩，以及更大范围的桌面 Rust 化主线继续推进。
 
 ## 1. 目标
 
