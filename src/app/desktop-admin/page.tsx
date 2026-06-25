@@ -9,8 +9,6 @@ import {
 } from 'lucide-react';
 import { Suspense, useEffect, useState } from 'react';
 
-import PageLayout from '@/components/PageLayout';
-import DesktopSettingsSection from '@/components/DesktopSettingsSection';
 import {
   BROWSER_AUTH_UPDATED_EVENT,
   getAuthInfoFromBrowserCookie,
@@ -26,12 +24,24 @@ import {
   getLocalServiceStatus,
   isDesktopTauriRuntimeAvailable,
 } from '@/lib/desktop/tauri-client';
+import { PROFILE_SYNC_USER_DATA_DOMAINS } from '@/lib/profile/contracts';
 import { getRuntimeConfig } from '@/lib/runtime-config';
+
+import DesktopSettingsSection from '@/components/DesktopSettingsSection';
+import PageLayout from '@/components/PageLayout';
 
 interface AuthInfo {
   username?: string;
   role?: 'owner' | 'admin' | 'user';
 }
+
+const PROFILE_SYNC_DOMAIN_LABELS: Record<string, string> = {
+  playrecords: '播放记录',
+  favorites: '收藏',
+  follows: '追更',
+  searchhistory: '搜索历史',
+  skipconfigs: '跳过片头片尾',
+};
 
 function StatusCard({
   icon: Icon,
@@ -71,25 +81,82 @@ function buildProfileSyncStatusValue(
     return '已启用但不可达';
   }
 
+  if (profileSyncStatus.errorKind === 'unauthorized') {
+    return '已连接但登录失效';
+  }
+
   return profileSyncStatus.authenticated ? '已连接并已登录' : '已连接';
+}
+
+function resolveProfileSyncDomainsText(
+  profileSyncStatus: DesktopProfileSyncStatus | null
+): string {
+  const domains =
+    profileSyncStatus?.syncDomains && profileSyncStatus.syncDomains.length > 0
+      ? profileSyncStatus.syncDomains
+      : [...PROFILE_SYNC_USER_DATA_DOMAINS];
+
+  return domains
+    .map((domain) => PROFILE_SYNC_DOMAIN_LABELS[domain] || domain)
+    .join('、');
+}
+
+function buildProfileSyncErrorHint(
+  errorKind?: DesktopProfileSyncStatus['errorKind']
+): string {
+  switch (errorKind) {
+    case 'invalid-base-url':
+      return '检查 profile_sync.api_base_url 是否是完整的 http/https 地址。';
+    case 'unreachable':
+      return '确认当前网络和远端 Web 站点可达。';
+    case 'unauthorized':
+      return '重新登录远端账号，确认远端会话仍有效。';
+    case 'protocol-incompatible':
+      return '升级桌面端或 Web 端，确保 profile sync 协议版本一致。';
+    case 'upstream-failure':
+      return '检查远端 Web 后端日志，确认 /api/server-config 与账号接口正常返回。';
+    default:
+      return '';
+  }
 }
 
 function buildProfileSyncStatusDetail(
   profileSyncStatus: DesktopProfileSyncStatus | null
 ): string {
+  const domainsText = resolveProfileSyncDomainsText(profileSyncStatus);
+
   if (!profileSyncStatus?.enabled) {
-    return '未配置 profile_sync.api_base_url，当前保持纯本地桌面模式。';
+    return `未配置 profile_sync.api_base_url，当前保持纯本地桌面模式。若后续启用远端同步，将同步：${domainsText}。`;
   }
 
   const modeText =
     profileSyncStatus.profileMode === 'shared-multi-user'
       ? '远端多用户'
-      : '远端单用户';
-  const errorText = profileSyncStatus.error
-    ? ` 最近错误：${profileSyncStatus.error}`
+      : profileSyncStatus.profileMode
+      ? '远端单用户'
+      : '远端模式待定';
+  const storageText = profileSyncStatus.storageType
+    ? `，远端存储：${profileSyncStatus.storageType}`
     : '';
+  const accountText = profileSyncStatus.username?.trim()
+    ? `，当前远端账号：${profileSyncStatus.username.trim()}`
+    : '';
+  const errorHint = buildProfileSyncErrorHint(profileSyncStatus.errorKind);
 
-  return `仅同步帐号、播放记录、收藏、搜索历史和跳过片头片尾；内容搜索、播放和代理继续本地处理。当前模式：${modeText}.${errorText}`;
+  const details = [
+    `仅同步 ${domainsText}；内容搜索、播放和代理继续本地处理。`,
+    `当前模式：${modeText}${storageText}${accountText}.`,
+  ];
+
+  if (profileSyncStatus.error) {
+    details.push(`最近错误：${profileSyncStatus.error}`);
+  }
+
+  if (errorHint) {
+    details.push(`建议：${errorHint}`);
+  }
+
+  return details.join(' ');
 }
 
 export default function DesktopAdminPage() {

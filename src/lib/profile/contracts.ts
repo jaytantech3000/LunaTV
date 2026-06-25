@@ -40,6 +40,17 @@ export const PROFILE_SESSION_API_PATHS = {
   logout: '/logout',
 } as const;
 
+export const PROFILE_SYNC_USER_DATA_DOMAINS = [
+  'playrecords',
+  'favorites',
+  'follows',
+  'searchhistory',
+  'skipconfigs',
+] as const;
+
+export type ProfileSyncUserDataDomain =
+  (typeof PROFILE_SYNC_USER_DATA_DOMAINS)[number];
+
 export const PROFILE_USER_DATA_API_PATHS = {
   playRecords: '/playrecords',
   searchHistory: '/searchhistory',

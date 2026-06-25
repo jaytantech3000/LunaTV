@@ -5,7 +5,16 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub const PROFILE_SYNC_USER_DATA_DOMAINS: [&str; 5] = [
+    "playrecords",
+    "favorites",
+    "follows",
+    "searchhistory",
+    "skipconfigs",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ProfileSyncErrorKind {
     NotConfigured,
     InvalidBaseUrl,
@@ -49,6 +58,8 @@ pub struct ProfileSyncStatusResponse {
     pub storage_type: Option<String>,
     pub profile_mode: Option<String>,
     pub error: Option<String>,
+    pub error_kind: Option<ProfileSyncErrorKind>,
+    pub sync_domains: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -196,6 +207,8 @@ impl ProfileSyncClient {
                 storage_type: None,
                 profile_mode: None,
                 error: None,
+                error_kind: None,
+                sync_domains: profile_sync_user_data_domains(),
             };
         };
 
@@ -209,6 +222,8 @@ impl ProfileSyncClient {
                 storage_type: server_config.storage_type,
                 profile_mode: server_config.profile_mode,
                 error: None,
+                error_kind: None,
+                sync_domains: profile_sync_user_data_domains(),
             },
             Err(error) => ProfileSyncStatusResponse {
                 enabled,
@@ -223,9 +238,18 @@ impl ProfileSyncClient {
                 storage_type: None,
                 profile_mode: None,
                 error: Some(error.message),
+                error_kind: Some(error.kind),
+                sync_domains: profile_sync_user_data_domains(),
             },
         }
     }
+}
+
+fn profile_sync_user_data_domains() -> Vec<String> {
+    PROFILE_SYNC_USER_DATA_DOMAINS
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect()
 }
 
 pub fn build_profile_sync_target_url(
@@ -289,8 +313,9 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::{
-        ProfileSyncClient, ProfileSyncErrorKind, ProfileSyncForwardRequest, ProfileSyncSession,
-        build_profile_sync_target_url, session_from_login_response,
+        PROFILE_SYNC_USER_DATA_DOMAINS, ProfileSyncClient, ProfileSyncErrorKind,
+        ProfileSyncForwardRequest, ProfileSyncSession, build_profile_sync_target_url,
+        session_from_login_response,
     };
 
     #[test]
@@ -404,6 +429,14 @@ mod tests {
         assert_eq!(payload.username.as_deref(), Some("demo"));
         assert_eq!(payload.role.as_deref(), Some("user"));
         assert_eq!(payload.error, None);
+        assert_eq!(payload.error_kind, None);
+        assert_eq!(
+            payload.sync_domains,
+            PROFILE_SYNC_USER_DATA_DOMAINS
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>()
+        );
 
         upstream.abort();
     }
@@ -417,6 +450,10 @@ mod tests {
         assert!(payload.enabled);
         assert!(!payload.reachable);
         assert!(!payload.authenticated);
+        assert_eq!(
+            payload.error_kind,
+            Some(ProfileSyncErrorKind::InvalidBaseUrl)
+        );
         assert!(
             payload
                 .error
@@ -446,6 +483,7 @@ mod tests {
             .await;
         assert!(payload.reachable);
         assert!(!payload.authenticated);
+        assert_eq!(payload.error_kind, Some(ProfileSyncErrorKind::Unauthorized));
         assert!(
             payload
                 .error

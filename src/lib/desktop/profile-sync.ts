@@ -2,6 +2,14 @@ import { clearAuthInfoInBrowser, setAuthInfoInBrowser } from '@/lib/auth';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 
+export type DesktopProfileSyncErrorKind =
+  | 'not-configured'
+  | 'invalid-base-url'
+  | 'unreachable'
+  | 'unauthorized'
+  | 'protocol-incompatible'
+  | 'upstream-failure';
+
 export interface DesktopProfileSyncStatus {
   enabled: boolean;
   reachable: boolean;
@@ -11,6 +19,8 @@ export interface DesktopProfileSyncStatus {
   storageType?: string | null;
   profileMode?: 'single-user-local' | 'shared-multi-user' | string | null;
   error?: string | null;
+  errorKind?: DesktopProfileSyncErrorKind | null;
+  syncDomains?: readonly string[] | null;
 }
 
 function normalizeRole(

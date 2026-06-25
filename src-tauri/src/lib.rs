@@ -33,6 +33,7 @@ use url::Url;
 
 const LOCAL_SERVICE_PORT: u16 = 8787;
 const LOCAL_SERVICE_HEALTH_PATH: &str = "/health";
+const LOCAL_SERVICE_PROFILE_SYNC_STATUS_PATH: &str = "/api/profile-sync/status";
 const LOCAL_SERVICE_BINARY_NAME: &str = "moontv-local-service";
 const LOCAL_SERVICE_CONFIG_FILE_NAME: &str = "desktop.config.json";
 const LOCAL_SERVICE_DB_FILE_NAME: &str = "moontv-desktop.sqlite3";
@@ -51,6 +52,13 @@ const DESKTOP_UPDATER_USER_AGENT: &str =
 const DESKTOP_UPDATER_NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 
 const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
+const PROFILE_SYNC_USER_DATA_DOMAINS: [&str; 5] = [
+    "playrecords",
+    "favorites",
+    "follows",
+    "searchhistory",
+    "skipconfigs",
+];
 
 #[derive(Default)]
 struct DesktopRuntimeState {
@@ -176,6 +184,22 @@ struct LocalServiceDiagnosticsReport {
     findings: Vec<LocalServiceDiagnosticFinding>,
     recommendations: Vec<String>,
     log_text: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalProfileSyncStatus {
+    enabled: bool,
+    reachable: bool,
+    authenticated: bool,
+    username: Option<String>,
+    role: Option<String>,
+    storage_type: Option<String>,
+    profile_mode: Option<String>,
+    error: Option<String>,
+    error_kind: Option<String>,
+    #[serde(default)]
+    sync_domains: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1103,6 +1127,270 @@ async fn local_service_health_check(base_url: &str) -> LocalServiceHealthCheck {
     }
 }
 
+fn extract_profile_sync_api_base_url(config_value: &serde_json::Value) -> Option<String> {
+    config_value
+        .get("profile_sync")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|profile_sync| profile_sync.get("api_base_url"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+}
+
+async fn fetch_local_profile_sync_status(base_url: &str) -> Result<LocalProfileSyncStatus> {
+    let endpoint = reqwest::Url::parse(&format!("{base_url}/"))
+        .context("local service base URL is invalid")?
+        .join(LOCAL_SERVICE_PROFILE_SYNC_STATUS_PATH.trim_start_matches('/'))
+        .context("failed to resolve local profile sync status endpoint")?;
+    let response = reqwest::Client::new()
+        .get(endpoint.clone())
+        .header(reqwest::header::ACCEPT, "application/json")
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .with_context(|| format!("failed to request {endpoint}"))?;
+    let status = response.status();
+    let body_text = response
+        .text()
+        .await
+        .context("failed to read local profile sync status response body")?;
+
+    if !status.is_success() {
+        anyhow::bail!(
+            "{endpoint} returned {status}: {}",
+            summarize_http_response_body(&body_text)
+        );
+    }
+
+    serde_json::from_str(&body_text)
+        .context("failed to parse local profile sync status response body")
+}
+
+fn append_profile_sync_status_log_lines(
+    log_lines: &mut Vec<String>,
+    profile_sync_status: &LocalProfileSyncStatus,
+) {
+    push_log_kv(
+        log_lines,
+        1,
+        "Enabled",
+        profile_sync_status.enabled.to_string(),
+    );
+    push_log_kv(
+        log_lines,
+        1,
+        "Reachable",
+        profile_sync_status.reachable.to_string(),
+    );
+    push_log_kv(
+        log_lines,
+        1,
+        "Authenticated",
+        profile_sync_status.authenticated.to_string(),
+    );
+    push_log_kv(
+        log_lines,
+        1,
+        "Username",
+        format_optional_text(profile_sync_status.username.as_deref()),
+    );
+    push_log_kv(
+        log_lines,
+        1,
+        "Role",
+        format_optional_text(profile_sync_status.role.as_deref()),
+    );
+    push_log_kv(
+        log_lines,
+        1,
+        "StorageType",
+        format_optional_text(profile_sync_status.storage_type.as_deref()),
+    );
+    push_log_kv(
+        log_lines,
+        1,
+        "ProfileMode",
+        format_optional_text(profile_sync_status.profile_mode.as_deref()),
+    );
+    push_log_kv(
+        log_lines,
+        1,
+        "ErrorKind",
+        format_optional_text(profile_sync_status.error_kind.as_deref()),
+    );
+    push_log_kv(
+        log_lines,
+        1,
+        "Error",
+        format_optional_text(profile_sync_status.error.as_deref()),
+    );
+    push_log_kv(
+        log_lines,
+        1,
+        "SyncDomains",
+        if profile_sync_status.sync_domains.is_empty() {
+            PROFILE_SYNC_USER_DATA_DOMAINS.join(", ")
+        } else {
+            profile_sync_status.sync_domains.join(", ")
+        },
+    );
+}
+
+fn profile_sync_status_diagnostic_level(
+    profile_sync_status: &LocalProfileSyncStatus,
+) -> DiagnosticLevel {
+    if !profile_sync_status.enabled {
+        return DiagnosticLevel::Ok;
+    }
+
+    if !profile_sync_status.reachable || profile_sync_status.error_kind.is_some() {
+        return DiagnosticLevel::Warning;
+    }
+
+    DiagnosticLevel::Ok
+}
+
+fn build_profile_sync_status_diagnostic_detail(
+    profile_sync_status: &LocalProfileSyncStatus,
+) -> String {
+    let domains_text = format_profile_sync_domain_labels(&profile_sync_status.sync_domains);
+
+    if !profile_sync_status.enabled {
+        return format!(
+            "未配置 profile_sync.api_base_url，当前保持纯本地 profile 模式。若后续启用远端同步，将同步：{domains_text}。"
+        );
+    }
+
+    let mode_text = match profile_sync_status.profile_mode.as_deref() {
+        Some("shared-multi-user") => "远端多用户",
+        Some(_) => "远端单用户",
+        None => "远端模式待定",
+    };
+    let storage_text = profile_sync_status
+        .storage_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("，远端存储：{value}"))
+        .unwrap_or_default();
+    let account_text = profile_sync_status
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            let role = profile_sync_status
+                .role
+                .as_deref()
+                .map(str::trim)
+                .filter(|role| !role.is_empty())
+                .unwrap_or("user");
+            format!("，远端账号：{value} ({role})")
+        })
+        .unwrap_or_default();
+    let state_text = if !profile_sync_status.reachable {
+        "远端不可达".to_string()
+    } else if profile_sync_status.error_kind.as_deref() == Some("unauthorized") {
+        "远端可达，但当前登录态已失效".to_string()
+    } else if profile_sync_status.authenticated {
+        "远端可达，当前已登录".to_string()
+    } else {
+        "远端可达，当前未登录".to_string()
+    };
+
+    let mut details = vec![
+        format!("同步域：{domains_text}。"),
+        format!("当前状态：{state_text}，模式：{mode_text}{storage_text}{account_text}。"),
+    ];
+
+    if let Some(error_kind) = profile_sync_status
+        .error_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        details.push(format!("错误分类：{error_kind}。"));
+    }
+
+    if let Some(error) = profile_sync_status
+        .error
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        details.push(format!("最近错误：{error}"));
+    }
+
+    details.join(" ")
+}
+
+fn collect_profile_sync_recommendations(
+    error_kind: Option<&str>,
+    recommendations: &mut BTreeSet<String>,
+) {
+    match error_kind {
+        Some("invalid-base-url") => {
+            recommendations.insert(
+                "检查 profile_sync.api_base_url 是否是可访问的 http/https 完整地址。".to_string(),
+            );
+        }
+        Some("unreachable") => {
+            recommendations.insert(
+                "确认当前网络和远端 Web 站点可达，必要时在浏览器中直接打开远端地址。".to_string(),
+            );
+        }
+        Some("unauthorized") => {
+            recommendations
+                .insert("重新登录远端账号，确认 Web 端登录接口和会话仍有效。".to_string());
+        }
+        Some("protocol-incompatible") => {
+            recommendations.insert(
+                "升级桌面端或 Web 端，使 /api/server-config 等 profile sync 协议保持兼容。"
+                    .to_string(),
+            );
+        }
+        Some("upstream-failure") => {
+            recommendations.insert(
+                "检查远端 Web 后端日志，确认 /api/server-config 与账号接口能够稳定返回 2xx。"
+                    .to_string(),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn format_profile_sync_domain_labels(domains: &[String]) -> String {
+    if domains.is_empty() {
+        return format_default_profile_sync_domain_labels();
+    }
+
+    domains
+        .iter()
+        .map(|domain| profile_sync_domain_label(domain))
+        .collect::<Vec<_>>()
+        .join("、")
+}
+
+fn format_default_profile_sync_domain_labels() -> String {
+    PROFILE_SYNC_USER_DATA_DOMAINS
+        .iter()
+        .map(|domain| profile_sync_domain_label(domain))
+        .collect::<Vec<_>>()
+        .join("、")
+}
+
+fn profile_sync_domain_label(domain: &str) -> String {
+    match domain {
+        "playrecords" => "播放记录".to_string(),
+        "favorites" => "收藏".to_string(),
+        "follows" => "追更".to_string(),
+        "searchhistory" => "搜索历史".to_string(),
+        "skipconfigs" => "跳过片头片尾".to_string(),
+        _ => domain.to_string(),
+    }
+}
+
 async fn run_local_service_diagnostics_impl(
     app: &AppHandle,
     state: &DesktopRuntimeState,
@@ -1270,13 +1558,17 @@ async fn run_local_service_diagnostics_impl(
     });
 
     let mut config_invalid = false;
+    let mut config_value = None::<serde_json::Value>;
     match fs::read_to_string(&paths.config_path) {
         Ok(contents) => match serde_json::from_str::<serde_json::Value>(&contents) {
-            Ok(_) => findings.push(LocalServiceDiagnosticFinding {
-                level: DiagnosticLevel::Ok,
-                title: "桌面配置文件".to_string(),
-                detail: "desktop.config.json 可读取且 JSON 格式有效。".to_string(),
-            }),
+            Ok(value) => {
+                config_value = Some(value);
+                findings.push(LocalServiceDiagnosticFinding {
+                    level: DiagnosticLevel::Ok,
+                    title: "桌面配置文件".to_string(),
+                    detail: "desktop.config.json 可读取且 JSON 格式有效。".to_string(),
+                });
+            }
             Err(error) => {
                 config_invalid = true;
                 findings.push(LocalServiceDiagnosticFinding {
@@ -1303,6 +1595,40 @@ async fn run_local_service_diagnostics_impl(
             });
         }
     }
+
+    let configured_profile_sync_api_base_url = config_value
+        .as_ref()
+        .and_then(extract_profile_sync_api_base_url);
+    log_lines.push("ProfileSync:".to_string());
+    push_log_kv(
+        &mut log_lines,
+        1,
+        "ConfiguredApiBaseUrl",
+        configured_profile_sync_api_base_url
+            .clone()
+            .unwrap_or_else(|| "not configured".to_string()),
+    );
+    push_log_kv(
+        &mut log_lines,
+        1,
+        "SyncDomains",
+        PROFILE_SYNC_USER_DATA_DOMAINS.join(", "),
+    );
+    findings.push(LocalServiceDiagnosticFinding {
+        level: DiagnosticLevel::Ok,
+        title: "账号同步配置".to_string(),
+        detail: if let Some(remote_base_url) = configured_profile_sync_api_base_url.as_deref() {
+            format!(
+                "已配置 profile_sync.api_base_url：{remote_base_url}。若启用账号同步，将同步：{}。",
+                format_default_profile_sync_domain_labels()
+            )
+        } else {
+            format!(
+                "未配置 profile_sync.api_base_url，当前保持纯本地 profile 模式。若后续启用远端同步，将同步：{}。",
+                format_default_profile_sync_domain_labels()
+            )
+        },
+    });
 
     let mut data_dir_unwritable = false;
     if let Err(error) = fs::create_dir_all(&paths.data_dir) {
@@ -1392,6 +1718,49 @@ async fn run_local_service_diagnostics_impl(
             format!("127.0.0.1:{LOCAL_SERVICE_PORT} 当前可用于绑定。")
         },
     });
+
+    if service_healthy {
+        match fetch_local_profile_sync_status(&base_url).await {
+            Ok(profile_sync_status) => {
+                append_profile_sync_status_log_lines(&mut log_lines, &profile_sync_status);
+                findings.push(LocalServiceDiagnosticFinding {
+                    level: profile_sync_status_diagnostic_level(&profile_sync_status),
+                    title: "账号同步状态".to_string(),
+                    detail: build_profile_sync_status_diagnostic_detail(&profile_sync_status),
+                });
+                collect_profile_sync_recommendations(
+                    profile_sync_status.error_kind.as_deref(),
+                    &mut recommendations,
+                );
+            }
+            Err(error) => {
+                push_log_kv(
+                    &mut log_lines,
+                    1,
+                    "StatusFetchError",
+                    error.to_string().replace('\n', " | "),
+                );
+                findings.push(LocalServiceDiagnosticFinding {
+                    level: DiagnosticLevel::Warning,
+                    title: "账号同步状态".to_string(),
+                    detail: format!(
+                        "本地服务已通过健康检查，但读取 {LOCAL_SERVICE_PROFILE_SYNC_STATUS_PATH} 失败：{error}"
+                    ),
+                });
+                recommendations.insert(
+                    "如果账号同步状态持续读取失败，请确认本地服务和桌面前端版本保持一致。"
+                        .to_string(),
+                );
+            }
+        }
+    } else if configured_profile_sync_api_base_url.is_some() {
+        findings.push(LocalServiceDiagnosticFinding {
+            level: DiagnosticLevel::Warning,
+            title: "账号同步状态".to_string(),
+            detail: "已配置 profile_sync.api_base_url，但本地服务当前未通过健康检查，本次无法确认远端可达性和登录状态。".to_string(),
+        });
+        recommendations.insert("先恢复本地服务，再重新执行排查以确认账号同步状态。".to_string());
+    }
 
     let trial_result = if let Some(path) = sidecar_path.as_ref() {
         let result = run_local_service_trial(path, &paths).await;
@@ -4251,10 +4620,11 @@ impl RuntimePaths {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_DESKTOP_OWNER_USERNAME, LOCAL_SERVICE_HEALTH_READ_TIMEOUT,
+        DEFAULT_DESKTOP_OWNER_USERNAME, LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus,
         LocalServiceStartupFailure, PortOccupant, SidecarTrialResult,
-        collect_diagnostics_error_text, describe_primary_port_issue,
-        ensure_default_desktop_owner_auth_value, local_service_health_check,
+        build_profile_sync_status_diagnostic_detail, collect_diagnostics_error_text,
+        describe_primary_port_issue, ensure_default_desktop_owner_auth_value,
+        extract_profile_sync_api_base_url, local_service_health_check,
         set_desktop_local_user_password_value, set_desktop_owner_password_value,
         summarize_trial_output,
     };
@@ -4336,6 +4706,19 @@ mod tests {
             config_value["profile_sync"]["api_base_url"],
             serde_json::Value::String("http://127.0.0.1:8787".to_string())
         );
+    }
+
+    #[test]
+    fn extracts_profile_sync_base_url_from_desktop_config() {
+        let config_value = serde_json::json!({
+            "profile_sync": {
+                "api_base_url": " https://sync.example.com/base "
+            }
+        });
+
+        let extracted = extract_profile_sync_api_base_url(&config_value);
+
+        assert_eq!(extracted, Some("https://sync.example.com/base".to_string()));
     }
 
     #[test]
@@ -4433,6 +4816,34 @@ mod tests {
         assert!(text.contains("request error"));
         assert!(text.contains("stdout"));
         assert!(text.contains("stderr"));
+    }
+
+    #[test]
+    fn profile_sync_diagnostic_detail_mentions_domains_and_error_kind() {
+        let status = LocalProfileSyncStatus {
+            enabled: true,
+            reachable: false,
+            authenticated: false,
+            username: Some("kid".to_string()),
+            role: Some("user".to_string()),
+            storage_type: Some("redis".to_string()),
+            profile_mode: Some("shared-multi-user".to_string()),
+            error: Some("远端账号同步后端不可达".to_string()),
+            error_kind: Some("unreachable".to_string()),
+            sync_domains: vec![
+                "playrecords".to_string(),
+                "favorites".to_string(),
+                "follows".to_string(),
+            ],
+        };
+
+        let detail = build_profile_sync_status_diagnostic_detail(&status);
+
+        assert!(detail.contains("播放记录"));
+        assert!(detail.contains("收藏"));
+        assert!(detail.contains("追更"));
+        assert!(detail.contains("unreachable"));
+        assert!(detail.contains("远端账号同步后端不可达"));
     }
 
     #[tokio::test(flavor = "current_thread")]

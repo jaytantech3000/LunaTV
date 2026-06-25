@@ -9335,6 +9335,20 @@ segment0.ts
         );
         assert_eq!(
             payload
+                .get("profileSync")
+                .and_then(|value| value.get("errorKind")),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            payload
+                .get("profileSync")
+                .and_then(|value| value.get("syncDomains"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(5)
+        );
+        assert_eq!(
+            payload
                 .get("localAuth")
                 .and_then(|value| value.get("username"))
                 .and_then(Value::as_str),
@@ -9360,6 +9374,57 @@ segment0.ts
                 .and_then(|value| value.get("ownerPasswordConfigured"))
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_sync_status_endpoint_exposes_error_kind_and_domains() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": "not a url"
+              },
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .body(Body::empty())
+                    .expect("profile sync status request"),
+            )
+            .await
+            .expect("profile sync status response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+
+        assert_eq!(payload.get("enabled").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            payload.get("reachable").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload.get("errorKind").and_then(Value::as_str),
+            Some("invalid-base-url")
+        );
+        assert_eq!(
+            payload
+                .get("syncDomains")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(5)
         );
     }
 

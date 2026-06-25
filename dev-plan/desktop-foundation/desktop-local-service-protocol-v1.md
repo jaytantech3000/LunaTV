@@ -96,7 +96,15 @@
     "siteName": "string"
   },
   "profileSync": {
-    "enabled": false
+    "enabled": false,
+    "errorKind": null,
+    "syncDomains": [
+      "playrecords",
+      "favorites",
+      "follows",
+      "searchhistory",
+      "skipconfigs"
+    ]
   },
   "localAuth": {
     "username": "owner",
@@ -128,7 +136,15 @@
   "role": null,
   "storageType": "redis",
   "profileMode": "shared-multi-user",
-  "error": null
+  "error": null,
+  "errorKind": null,
+  "syncDomains": [
+    "playrecords",
+    "favorites",
+    "follows",
+    "searchhistory",
+    "skipconfigs"
+  ]
 }
 ```
 
@@ -138,6 +154,13 @@
 - `enabled=false` 表示当前保持纯本地桌面模式
 - `authenticated=true` 表示本地服务当前持有一份可用于远端 profile sync 的会话
 - `storageType` / `profileMode` 在远端可达时反映远端 `GET /api/server-config` 的结果；远端不可达时允许返回 `null`
+- `errorKind` 用于稳定表达失败分类，当前约定值包括：
+  - `invalid-base-url`
+  - `unreachable`
+  - `unauthorized`
+  - `protocol-incompatible`
+  - `upstream-failure`
+- `syncDomains` 明确列出当前 profile sync 的正式同步域，方便 UI 和诊断报告直接消费
 
 ### GET `/api/server-config`
 
@@ -172,10 +195,12 @@
 说明：
 
 - 当启用账号同步时，这些接口由本地服务代理远端 Web 用户数据接口
-- 当未启用账号同步时，桌面前端回退到本地 profile 存储方案
+- 当未启用账号同步时，这些接口继续由本地服务处理，并落到 Rust 本地 profile store
 - 这五类接口共同构成当前桌面 profile sync 的正式同步域
 - 桌面版只同步用户资料，不同步媒体缓存、下载任务和资源站配置
 - sync 开启时，远端 Web 后端是这些同步域数据的真源；本地缓存只承担 UI 性能优化职责
+- sync 关闭时，Rust 本地 profile store 是这些资料域的真源；桌面前端通过统一 profile SDK 继续访问同一组 `/api/*` 接口
+- 已安装旧版本桌面端时，允许把历史浏览器 `localStorage` 中的 profile 数据一次性迁移到 Rust 本地 store
 
 ### `/api/admin/data_migration/export` `/api/admin/data_migration/import`
 

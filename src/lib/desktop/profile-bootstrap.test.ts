@@ -56,6 +56,14 @@ describe('desktop profile bootstrap helpers', () => {
         storageType: 'redis',
         profileMode: 'shared-multi-user',
         error: null,
+        errorKind: null,
+        syncDomains: [
+          'playrecords',
+          'favorites',
+          'follows',
+          'searchhistory',
+          'skipconfigs',
+        ],
       },
       localAuth: {
         username: 'owner',
@@ -93,6 +101,14 @@ describe('desktop profile bootstrap helpers', () => {
         storageType: 'redis',
         profileMode: 'shared-multi-user',
         error: null,
+        errorKind: null,
+        syncDomains: [
+          'playrecords',
+          'favorites',
+          'follows',
+          'searchhistory',
+          'skipconfigs',
+        ],
       },
       localAuth: {
         username: 'owner',
