@@ -36,6 +36,14 @@ function buildMergedDesktopPersistedSnapshot(
 ): PersistedDownloadStoreState {
   const remoteTasks = remoteSnapshot?.tasks;
   const remoteLibrary = remoteSnapshot?.library;
+  const nextTasks =
+    engineSnapshot?.tasks ??
+    (hasRecordEntries(remoteTasks)
+      ? remoteTasks ?? localSnapshot.tasks
+      : localSnapshot.tasks);
+  const nextLibrary = hasRecordEntries(remoteLibrary)
+    ? remoteLibrary ?? localSnapshot.library
+    : localSnapshot.library;
 
   return {
     maxConcurrentTasks:
@@ -43,12 +51,8 @@ function buildMergedDesktopPersistedSnapshot(
       remoteSnapshot?.maxConcurrentTasks ??
       localSnapshot.maxConcurrentTasks,
     ownerUsername: remoteSnapshot?.ownerUsername || localSnapshot.ownerUsername,
-    tasks:
-      engineSnapshot?.tasks ??
-      (hasRecordEntries(remoteTasks) ? remoteTasks : localSnapshot.tasks),
-    library: hasRecordEntries(remoteLibrary)
-      ? remoteLibrary
-      : localSnapshot.library,
+    tasks: nextTasks,
+    library: nextLibrary,
   };
 }
 
