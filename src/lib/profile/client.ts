@@ -25,20 +25,9 @@ import {
   PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS,
 } from './contracts';
 import { cacheManager, getCacheStatus } from './hybrid-cache';
-import {
-  readLocalFollowRecords,
-  writeLocalFollowRecords,
-} from './local-adapter';
-import {
-  deleteRemoteProfileResource,
-  fetchRemoteProfileJson as fetchFromApi,
-  isUnauthorizedRemoteProfileRequestError as isUnauthorizedRequestError,
-  postRemoteProfilePayload,
-  wasRemoteProfileRequestRedirectedToLogin as wasRedirectedToLogin,
-} from './remote-adapter';
+import { fetchRemoteProfileJson as fetchFromApi } from './remote-adapter';
 import { shouldUseRemoteProfileStorage } from './runtime';
 import { dispatchSearchHistoryUpdated } from './search-history-client';
-import { generateStorageKey } from './storage-key';
 import { type FollowRecord, SkipConfig } from '../types';
 
 export type { Favorite, PlayRecord } from './contracts';
@@ -49,6 +38,13 @@ export {
   isFavorited,
   saveFavorite,
 } from './favorites-client';
+export {
+  deleteFollowRecord,
+  getAllFollowRecords,
+  getCachedFollowRecordsSnapshot,
+  getFollowRecord,
+  saveFollowRecord,
+} from './follow-records-client';
 export { getCacheStatus } from './hybrid-cache';
 export {
   clearAllPlayRecords,
@@ -93,221 +89,9 @@ function dispatchDataUpdate<T>(
   dispatchProfileCacheUpdate(eventType, detail);
 }
 
-export function getCachedFollowRecordsSnapshot(): Record<
-  string,
-  FollowRecord
-> | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  if (shouldUseRemoteUserDataStorage()) {
-    return cacheManager.getCachedFollowRecords();
-  }
-
-  try {
-    return readLocalFollowRecords();
-  } catch (err) {
-    console.error('读取追更记录快照失败:', err);
-    return null;
-  }
-}
-
-// ---- 错误处理辅助函数 ----
-/**
- * 数据库操作失败时的通用错误处理
- * 立即从数据库刷新对应类型的缓存以保持数据一致性
- */
-async function handleDatabaseOperationFailure(
-  dataType: 'followRecords',
-  error: any
-): Promise<void> {
-  if (wasRedirectedToLogin(error) || isUnauthorizedRequestError(error)) {
-    return;
-  }
-
-  console.error(`数据库操作失败 (${dataType}):`, error);
-  triggerGlobalError(`数据库操作失败`);
-
-  try {
-    const freshData = await fetchFromApi<Record<string, FollowRecord>>(
-      USER_DATA_API_PATHS.follows
-    );
-    cacheManager.cacheFollowRecords(freshData);
-    dispatchDataUpdate('followRecordsUpdated', freshData);
-  } catch (refreshErr) {
-    if (
-      wasRedirectedToLogin(refreshErr) ||
-      isUnauthorizedRequestError(refreshErr)
-    ) {
-      return;
-    }
-
-    console.error(`刷新${dataType}缓存失败:`, refreshErr);
-    triggerGlobalError(`刷新${dataType}缓存失败`);
-  }
-}
-
 // 页面加载时清理过期缓存
 if (typeof window !== 'undefined') {
   setTimeout(() => cacheManager.clearExpiredCaches(), 1000);
-}
-
-/**
- * 读取全部追更记录。
- * 数据库存储模式下使用混合缓存策略：优先返回缓存数据，后台异步同步最新数据。
- */
-export async function getAllFollowRecords(): Promise<
-  Record<string, FollowRecord>
-> {
-  if (typeof window === 'undefined') {
-    return {};
-  }
-
-  if (shouldUseRemoteUserDataStorage()) {
-    const cachedData = cacheManager.getCachedFollowRecords();
-
-    if (cachedData) {
-      fetchFromApi<Record<string, FollowRecord>>(USER_DATA_API_PATHS.follows)
-        .then((freshData) => {
-          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
-            cacheManager.cacheFollowRecords(freshData);
-            dispatchDataUpdate('followRecordsUpdated', freshData);
-          }
-        })
-        .catch((err) => {
-          console.warn('后台同步追更记录失败:', err);
-        });
-
-      return cachedData;
-    }
-
-    try {
-      const freshData = await fetchFromApi<Record<string, FollowRecord>>(
-        USER_DATA_API_PATHS.follows
-      );
-      cacheManager.cacheFollowRecords(freshData);
-      return freshData;
-    } catch (err) {
-      console.error('获取追更记录失败:', err);
-      triggerGlobalError('获取追更记录失败');
-      return {};
-    }
-  }
-
-  try {
-    return readLocalFollowRecords();
-  } catch (err) {
-    console.error('读取追更记录失败:', err);
-    triggerGlobalError('读取追更记录失败');
-    return {};
-  }
-}
-
-/**
- * 获取单条追更记录。
- */
-export async function getFollowRecord(
-  source: string,
-  id: string
-): Promise<FollowRecord | null> {
-  const key = generateStorageKey(source, id);
-  const allFollowRecords = await getAllFollowRecords();
-  return allFollowRecords[key] || null;
-}
-
-/**
- * 保存追更记录。
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function saveFollowRecord(
-  source: string,
-  id: string,
-  follow: FollowRecord
-): Promise<void> {
-  const key = generateStorageKey(source, id);
-
-  if (shouldUseRemoteUserDataStorage()) {
-    const cachedFollows = cacheManager.getCachedFollowRecords() || {};
-    cachedFollows[key] = follow;
-    cacheManager.cacheFollowRecords(cachedFollows);
-
-    dispatchDataUpdate('followRecordsUpdated', cachedFollows);
-
-    try {
-      await postRemoteProfilePayload(USER_DATA_API_PATHS.follows, {
-        key,
-        follow,
-      });
-    } catch (err) {
-      await handleDatabaseOperationFailure('followRecords', err);
-      triggerGlobalError('保存追更记录失败');
-      throw err;
-    }
-    return;
-  }
-
-  if (typeof window === 'undefined') {
-    console.warn('无法在服务端保存追更记录到 localStorage');
-    return;
-  }
-
-  try {
-    const allFollows = await getAllFollowRecords();
-    allFollows[key] = follow;
-    writeLocalFollowRecords(allFollows);
-    dispatchDataUpdate('followRecordsUpdated', allFollows);
-  } catch (err) {
-    console.error('保存追更记录失败:', err);
-    triggerGlobalError('保存追更记录失败');
-    throw err;
-  }
-}
-
-/**
- * 删除追更记录。
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function deleteFollowRecord(
-  source: string,
-  id: string
-): Promise<void> {
-  const key = generateStorageKey(source, id);
-
-  if (shouldUseRemoteUserDataStorage()) {
-    const cachedFollows = cacheManager.getCachedFollowRecords() || {};
-    delete cachedFollows[key];
-    cacheManager.cacheFollowRecords(cachedFollows);
-
-    dispatchDataUpdate('followRecordsUpdated', cachedFollows);
-
-    try {
-      await deleteRemoteProfileResource(USER_DATA_API_PATHS.follows, {
-        key,
-      });
-    } catch (err) {
-      await handleDatabaseOperationFailure('followRecords', err);
-      triggerGlobalError('删除追更记录失败');
-      throw err;
-    }
-    return;
-  }
-
-  if (typeof window === 'undefined') {
-    console.warn('无法在服务端删除追更记录到 localStorage');
-    return;
-  }
-
-  try {
-    const allFollows = await getAllFollowRecords();
-    delete allFollows[key];
-    writeLocalFollowRecords(allFollows);
-    dispatchDataUpdate('followRecordsUpdated', allFollows);
-  } catch (err) {
-    console.error('删除追更记录失败:', err);
-    triggerGlobalError('删除追更记录失败');
-    throw err;
-  }
 }
 
 // ---------------- 混合缓存辅助函数 ----------------
