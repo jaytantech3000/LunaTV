@@ -243,7 +243,7 @@ describe('desktop download runtime task sdk', () => {
     );
   });
 
-  it('posts task mutations and clear-all commands to the local runtime endpoints', async () => {
+  it('posts task detail, mutations, bulk commands and clear-all requests to the local runtime endpoints', async () => {
     const task = buildDownloadTask({
       id: 'task/id 1',
       cacheIndexId: 'cache:task/id 1',
@@ -263,6 +263,9 @@ describe('desktop download runtime task sdk', () => {
 
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce(buildJsonResponse(snapshot))
+      .mockResolvedValueOnce(buildJsonResponse(task))
+      .mockResolvedValueOnce(buildJsonResponse(snapshot))
+      .mockResolvedValueOnce(buildJsonResponse(snapshot))
       .mockResolvedValueOnce(buildJsonResponse(snapshot))
       .mockResolvedValueOnce(buildJsonResponse(snapshot))
       .mockResolvedValueOnce(buildJsonResponse(snapshot))
@@ -270,8 +273,16 @@ describe('desktop download runtime task sdk', () => {
       .mockResolvedValueOnce(buildJsonResponse(clearedSnapshot));
 
     await desktopRuntime.postDesktopDownloadTask(task);
+    await expect(
+      desktopRuntime.getDesktopDownloadEngineTask(task.id)
+    ).resolves.toEqual(task);
     await desktopRuntime.pauseDesktopDownloadTask(task.id);
     await desktopRuntime.resumeDesktopDownloadTask(task.id);
+    await desktopRuntime.retryDesktopDownloadTask(task.id);
+    await desktopRuntime.postDesktopDownloadTaskBulkCommand('cancel', [
+      task.id,
+      'task-demo-2',
+    ]);
     await desktopRuntime.cancelDesktopDownloadTask(task.id);
     await desktopRuntime.deleteDesktopDownloadTask(task.id);
     await expect(
@@ -293,6 +304,15 @@ describe('desktop download runtime task sdk', () => {
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,
+      '/api/download-runtime/tasks/task%2Fid%201',
+      {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+      }
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      3,
       '/api/download-runtime/tasks/task%2Fid%201/pause',
       {
         method: 'POST',
@@ -301,7 +321,7 @@ describe('desktop download runtime task sdk', () => {
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      3,
+      4,
       '/api/download-runtime/tasks/task%2Fid%201/resume',
       {
         method: 'POST',
@@ -310,7 +330,32 @@ describe('desktop download runtime task sdk', () => {
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      4,
+      5,
+      '/api/download-runtime/tasks/task%2Fid%201/retry',
+      {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+      }
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      6,
+      '/api/download-runtime/tasks/bulk',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command: 'cancel',
+          taskIds: [task.id, 'task-demo-2'],
+        }),
+        cache: 'no-store',
+        credentials: 'omit',
+      }
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      7,
       '/api/download-runtime/tasks/task%2Fid%201/cancel',
       {
         method: 'POST',
@@ -319,7 +364,7 @@ describe('desktop download runtime task sdk', () => {
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      5,
+      8,
       '/api/download-runtime/tasks/task%2Fid%201',
       {
         method: 'DELETE',
@@ -328,7 +373,7 @@ describe('desktop download runtime task sdk', () => {
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      6,
+      9,
       '/api/download-runtime/tasks',
       {
         method: 'DELETE',

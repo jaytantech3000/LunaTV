@@ -1,12 +1,15 @@
 import {
+  type DesktopDownloadEngineBulkCommand,
   cancelDesktopDownloadTask,
   deleteDesktopDownloadTask,
   DesktopDownloadEngineSnapshot,
   getDesktopDownloadEngineSnapshot,
   pauseDesktopDownloadTask,
   postDesktopDownloadTask,
+  postDesktopDownloadTaskBulkCommand,
   putDesktopDownloadEngineSettings,
   resumeDesktopDownloadTask,
+  retryDesktopDownloadTask,
 } from './desktop-runtime';
 import { DownloadTask } from './types';
 
@@ -155,6 +158,14 @@ export async function resumeDesktopDownloadEngineTask(
   );
 }
 
+export async function retryDesktopDownloadEngineTask(
+  taskId: string
+): Promise<DesktopDownloadEngineSnapshot> {
+  return mutateDesktopDownloadEngineSnapshot(() =>
+    retryDesktopDownloadTask(taskId)
+  );
+}
+
 export async function cancelDesktopDownloadEngineTask(
   taskId: string
 ): Promise<DesktopDownloadEngineSnapshot> {
@@ -168,6 +179,15 @@ export async function deleteMirroredDesktopDownloadTask(
 ): Promise<DesktopDownloadEngineSnapshot> {
   return mutateDesktopDownloadEngineSnapshot(() =>
     deleteDesktopDownloadTask(taskId)
+  );
+}
+
+export async function postDesktopDownloadEngineTaskBulkCommand(
+  command: DesktopDownloadEngineBulkCommand,
+  taskIds: string[]
+): Promise<DesktopDownloadEngineSnapshot> {
+  return mutateDesktopDownloadEngineSnapshot(() =>
+    postDesktopDownloadTaskBulkCommand(command, taskIds)
   );
 }
 

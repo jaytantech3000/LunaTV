@@ -27,6 +27,7 @@
 > - Phase 2B 继续补上了图片代理入口：local service 新增 `/api/image-proxy`（兼容 `/image-proxy`），桌面端 `buildApiUrl('/image-proxy')` 在 `server` 模式下已可直接由 Rust 本地服务代抓 Douban 图片，不再只依赖 Next route。
 > - Phase 1 已从“下载引擎骨架”推进到“桌面 runtime 主执行器闭环”：`moontv-download` crate、`/api/download-runtime/tasks*` 协议、SQLite `app_metadata` 快照，以及 Rust worker 调度 / 执行链路都已落地。
 > - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot；SSE 不可用或断流时，桌面 SDK 会回退到 `/api/download-runtime/tasks` 轻量轮询。
+> - Phase 1 又补齐了一组关键控制面：local service 现已新增 `GET /api/download-runtime/tasks/:taskId`、`POST /api/download-runtime/tasks/:taskId/retry` 与 `POST /api/download-runtime/tasks/bulk`；桌面 `manager` 在 runtime 模式下也已把单任务 `error -> retry` 与 `pauseAll / resumeAll / cancelAll` 切到这组新接口。
 > - Phase 1 在桌面 runtime 模式下已由 Rust 接手 queued 任务调度、manifest candidate fallback、`/media/vod/*` 资源抓取与 cache/resource-index 写入；前端 `src/lib/download/manager.ts` 不再启动浏览器侧任务 runner。
 > - `src/components/DesktopDownloadStoreSync.tsx` 现在也会把 runtime `done` 任务回填到 `library`，避免已完成任务只停留在 snapshot 而不生成离线片库条目。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
@@ -232,11 +233,11 @@ Rust Shared Crates
 当前进展（2026-06-25）：
 
 - `crates/moontv-download` 已落地第一版任务模型、命令、事件、并发设置与快照恢复逻辑。
-- `crates/moontv-local-service` 已新增 `/api/download-runtime/tasks`、`/api/download-runtime/tasks/settings` 以及 `pause/resume/cancel/delete` 路由，形成桌面下载引擎的命令 + 状态查询 skeleton。
+- `crates/moontv-local-service` 现已补齐 `/api/download-runtime/tasks`、`/api/download-runtime/tasks/:taskId`、`/api/download-runtime/tasks/settings`、`/api/download-runtime/tasks/:taskId/{pause,resume,retry,cancel}` 与 `/api/download-runtime/tasks/bulk`，桌面下载引擎的任务 CRUD / 控制面协议已基本齐备。
 - 下载引擎快照现在通过 SQLite `app_metadata` 持久化；应用重启后，未完成的 `downloading` 任务会恢复为 `paused`，避免把旧运行态误当成仍在执行。
 - `src/lib/download/desktop-runtime.ts` 已补齐对应的桌面 SDK 封装，前端可以开始逐步改为消费这组新边界。
 - `src/components/DesktopDownloadStoreSync.tsx` 已开始把当前 TS 下载 store 中的 `tasks` / `maxConcurrentTasks` 镜像回 Rust download engine，形成“TS 执行 + Rust 状态面并行”的过渡态。
-- `src/lib/download/manager.ts` 的 `pause / resume / cancel` 与 `src/components/DownloadsClient.tsx` 的并发设置调整，已经开始显式命中 Rust runtime 命令边界；镜像同步现在主要承担兜底与快照修复角色。
+- `src/lib/download/manager.ts` 的 `pause / resume / retry / cancel`、`pauseAll / resumeAll / cancelAll` 与 `src/components/DownloadsClient.tsx` 的并发设置调整，已经开始显式命中 Rust runtime 命令边界；其中 runtime 模式下的批量控制已优先走 `/api/download-runtime/tasks/bulk`，镜像同步现在主要承担兜底与快照修复角色。
 - `src/lib/download/manager.ts` 现在也开始在任务创建、重新排队、运行中进度刷新、完成与失败这些生命周期节点上显式 upsert Rust runtime task snapshot，而不再只依赖 `DesktopDownloadStoreSync.tsx` 对整个 store 做旁路镜像。
 - 桌面启动时也开始优先读取 Rust download engine snapshot 回填任务状态与并发设置；这意味着 Rust 状态面已经不只是写入目标，也开始成为桌面下载 UI 的读端输入。
 - `crates/moontv-local-service` 现已新增 `/api/download-runtime/tasks/stream` SSE 订阅入口；`src/components/DesktopDownloadStoreSync.tsx` 会持续消费 Rust snapshot，把任务状态 / 进度实时合并回前端 store，同时避免把订阅回流再次镜像写回 Rust。

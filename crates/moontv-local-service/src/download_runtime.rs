@@ -73,6 +73,37 @@ struct DesktopDownloadRuntimeStorageInfoResponse {
     sqlite_path: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum DesktopDownloadTaskBulkCommand {
+    Pause,
+    Resume,
+    Retry,
+    Cancel,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopDownloadTaskBulkCommandRequest {
+    command: DesktopDownloadTaskBulkCommand,
+    #[serde(default)]
+    task_ids: Vec<String>,
+}
+
+impl DesktopDownloadTaskBulkCommandRequest {
+    fn into_parts(self) -> (DesktopDownloadTaskBulkCommand, Vec<String>) {
+        let task_ids = self
+            .task_ids
+            .into_iter()
+            .filter_map(|task_id| normalize_optional_string(Some(task_id)))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        (self.command, task_ids)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopDownloadResourceIndexRecord {
@@ -275,12 +306,9 @@ pub(crate) async fn fetch_download_runtime_cache_response(
 ) -> AppResult<Response> {
     let url = require_download_runtime_url(params.url.as_deref())?;
 
-    if let Some(response) = try_build_cached_download_response(
-        &state,
-        &Method::GET,
-        &request_headers,
-        &url,
-    )? {
+    if let Some(response) =
+        try_build_cached_download_response(&state, &Method::GET, &request_headers, &url)?
+    {
         return Ok(response);
     }
 
@@ -605,14 +633,17 @@ async fn parse_download_manifest_for_candidate(
         return Ok(DesktopDownloadManifestResolveResponse {
             root_manifest_url: candidate_url.to_string(),
             playback_manifest_url: candidate_url.to_string(),
-            resource_urls: resources.iter().map(|resource| resource.url.clone()).collect(),
+            resource_urls: resources
+                .iter()
+                .map(|resource| resource.url.clone())
+                .collect(),
             resources,
             is_master_playlist: false,
         });
     }
 
-    let playback_manifest_url =
-        select_download_playback_manifest_url(&root_manifest_text).ok_or_else(|| {
+    let playback_manifest_url = select_download_playback_manifest_url(&root_manifest_text)
+        .ok_or_else(|| {
             DownloadManifestError::invalid(
                 candidate_url,
                 format!("missing playable media playlist: {candidate_url}"),
@@ -639,7 +670,10 @@ async fn parse_download_manifest_for_candidate(
     Ok(DesktopDownloadManifestResolveResponse {
         root_manifest_url: candidate_url.to_string(),
         playback_manifest_url,
-        resource_urls: resources.iter().map(|resource| resource.url.clone()).collect(),
+        resource_urls: resources
+            .iter()
+            .map(|resource| resource.url.clone())
+            .collect(),
         resources,
         is_master_playlist: true,
     })
@@ -683,12 +717,15 @@ fn read_cached_download_manifest_text(
         return Ok(None);
     };
 
-    let Some(body) = state.read_cached_download_body(request_url).map_err(|error| {
-        DownloadManifestError::internal(
-            request_url,
-            format!("failed to read cached manifest body: {error}"),
-        )
-    })? else {
+    let Some(body) = state
+        .read_cached_download_body(request_url)
+        .map_err(|error| {
+            DownloadManifestError::internal(
+                request_url,
+                format!("failed to read cached manifest body: {error}"),
+            )
+        })?
+    else {
         return Ok(None);
     };
 
@@ -1085,8 +1122,7 @@ fn collect_download_media_playlist_resources(
             continue;
         }
 
-        if line.starts_with("#EXT-X-PRELOAD-HINT:")
-            || line.starts_with("#EXT-X-RENDITION-REPORT:")
+        if line.starts_with("#EXT-X-PRELOAD-HINT:") || line.starts_with("#EXT-X-RENDITION-REPORT:")
         {
             continue;
         }
@@ -1441,7 +1477,8 @@ async fn fetch_and_cache_download_runtime_resource(
         .await
         .map_err(|error| error.message)?;
     if !fetched_response.status.is_success() {
-        let detail = summarize_manifest_error_body(&String::from_utf8_lossy(&fetched_response.body));
+        let detail =
+            summarize_manifest_error_body(&String::from_utf8_lossy(&fetched_response.body));
         return Err(format!(
             "failed to fetch download resource: {url} ({}{})",
             fetched_response.status.as_u16(),
@@ -1463,7 +1500,10 @@ async fn fetch_and_cache_download_runtime_resource(
         .map_err(|error| error.to_string())
 }
 
-fn cleanup_download_runtime_cache_index(state: &AppState, cache_index_id: &str) -> Result<(), String> {
+fn cleanup_download_runtime_cache_index(
+    state: &AppState,
+    cache_index_id: &str,
+) -> Result<(), String> {
     let Some(resource_index) = state
         .read_resource_index(cache_index_id)
         .map_err(|error| error.to_string())?
@@ -1511,7 +1551,11 @@ async fn activate_queued_download_runtime_task(state: &AppState, task_id: &str) 
     };
 
     if let Err(error) = persist_download_engine_snapshot(state, snapshot).await {
-        state.download_runtime_active_tasks.lock().await.remove(task_id);
+        state
+            .download_runtime_active_tasks
+            .lock()
+            .await
+            .remove(task_id);
         return Err(error);
     }
 
@@ -1579,7 +1623,10 @@ async fn process_download_runtime_queue(state: AppState) -> AppResult<()> {
 pub(crate) fn schedule_download_runtime_processing(state: AppState) {
     tokio::spawn(async move {
         if let Err(error) = process_download_runtime_queue(state).await {
-            warn!("desktop download runtime scheduler failed: {}", error.message);
+            warn!(
+                "desktop download runtime scheduler failed: {}",
+                error.message
+            );
         }
     });
 }
@@ -1597,8 +1644,7 @@ async fn fail_download_runtime_task(
         task.status = DesktopDownloadTaskStatus::Error;
         task.error_message = Some(error_message.to_string());
         task.current_size_bytes = task.size_bytes;
-        task.estimated_total_size_bytes =
-            task.estimated_total_size_bytes.max(task.size_bytes);
+        task.estimated_total_size_bytes = task.estimated_total_size_bytes.max(task.size_bytes);
         task.download_speed_bytes_per_second = 0;
         task.updated_at = crate::current_timestamp_ms();
         task
@@ -1615,12 +1661,15 @@ async fn execute_download_runtime_task(state: &AppState, task_id: &str) -> Resul
         return Ok(());
     }
 
-    let manifest_candidate_urls = resolve_download_runtime_task_manifest_candidates(state, &initial_task).await;
-    let manifest_candidate_urls = normalize_download_manifest_candidate_urls(manifest_candidate_urls)
-        .map_err(|error| error.message)?;
-    let manifest_result = resolve_download_manifest_candidates(state, manifest_candidate_urls.clone())
-        .await
-        .map_err(|error| error.message)?;
+    let manifest_candidate_urls =
+        resolve_download_runtime_task_manifest_candidates(state, &initial_task).await;
+    let manifest_candidate_urls =
+        normalize_download_manifest_candidate_urls(manifest_candidate_urls)
+            .map_err(|error| error.message)?;
+    let manifest_result =
+        resolve_download_manifest_candidates(state, manifest_candidate_urls.clone())
+            .await
+            .map_err(|error| error.message)?;
 
     let Some(task_after_manifest) = read_download_runtime_task(state, task_id).await else {
         return Ok(());
@@ -1645,7 +1694,8 @@ async fn execute_download_runtime_task(state: &AppState, task_id: &str) -> Resul
         task
     })
     .await
-    .map_err(|error| error.message)? else {
+    .map_err(|error| error.message)?
+    else {
         return Ok(());
     };
     if !is_download_runtime_task_running(&task_after_manifest) {
@@ -1671,15 +1721,14 @@ async fn execute_download_runtime_task(state: &AppState, task_id: &str) -> Resul
             return Ok(());
         }
 
-        let cache_entry =
-            if let Some(cache_entry) = state
-                .read_cached_download_entry(&resource.url)
-                .map_err(|error| error.to_string())?
-            {
-                cache_entry
-            } else {
-                fetch_and_cache_download_runtime_resource(state, &resource.url).await?
-            };
+        let cache_entry = if let Some(cache_entry) = state
+            .read_cached_download_entry(&resource.url)
+            .map_err(|error| error.to_string())?
+        {
+            cache_entry
+        } else {
+            fetch_and_cache_download_runtime_resource(state, &resource.url).await?
+        };
 
         completed_size_bytes = completed_size_bytes.saturating_add(cache_entry.size_bytes);
         downloaded_resources = downloaded_resources.saturating_add(1);
@@ -1709,8 +1758,7 @@ async fn execute_download_runtime_task(state: &AppState, task_id: &str) -> Resul
             task.current_size_bytes = completed_size_bytes;
             task.estimated_total_size_bytes = estimated_total_size_bytes;
             task.download_speed_bytes_per_second = 0;
-            task.progress =
-                calculate_download_task_progress(downloaded_resources, total_resources);
+            task.progress = calculate_download_task_progress(downloaded_resources, total_resources);
             task.error_message = None;
             task.updated_at = crate::current_timestamp_ms();
             task
@@ -1750,7 +1798,11 @@ async fn run_download_runtime_task_worker(state: AppState, task_id: String) {
         }
     }
 
-    state.download_runtime_active_tasks.lock().await.remove(&task_id);
+    state
+        .download_runtime_active_tasks
+        .lock()
+        .await
+        .remove(&task_id);
     schedule_download_runtime_processing(state);
 }
 
@@ -1759,6 +1811,23 @@ pub(crate) async fn get_download_runtime_tasks(
 ) -> AppResult<Response> {
     let snapshot = state.download_engine.read().await.snapshot();
     no_store_json_response(&snapshot)
+}
+
+pub(crate) async fn get_download_runtime_task(
+    State(state): State<AppState>,
+    AxumPath(task_id): AxumPath<String>,
+) -> AppResult<Response> {
+    let task = state
+        .download_engine
+        .read()
+        .await
+        .snapshot()
+        .tasks
+        .get(&task_id)
+        .cloned()
+        .ok_or_else(download_runtime_task_not_found)?;
+
+    no_store_json_response(&task)
 }
 
 pub(crate) async fn clear_download_runtime_tasks(
@@ -1829,6 +1898,43 @@ pub(crate) async fn put_download_runtime_task_settings(
     Ok(response)
 }
 
+fn apply_download_runtime_task_bulk_command(
+    engine: &mut DesktopDownloadEngine,
+    task_id: &str,
+    command: DesktopDownloadTaskBulkCommand,
+) {
+    match command {
+        DesktopDownloadTaskBulkCommand::Pause => {
+            engine.pause_task(task_id);
+        }
+        DesktopDownloadTaskBulkCommand::Resume => {
+            engine.resume_task(task_id);
+        }
+        DesktopDownloadTaskBulkCommand::Retry => {
+            engine.retry_task(task_id);
+        }
+        DesktopDownloadTaskBulkCommand::Cancel => {
+            engine.cancel_task(task_id);
+        }
+    }
+}
+
+pub(crate) async fn post_download_runtime_task_bulk_command(
+    State(state): State<AppState>,
+    Json(request): Json<DesktopDownloadTaskBulkCommandRequest>,
+) -> AppResult<Response> {
+    let (command, task_ids) = request.into_parts();
+    let response = mutate_download_engine_snapshot(&state, move |engine| {
+        for task_id in &task_ids {
+            apply_download_runtime_task_bulk_command(engine, task_id, command);
+        }
+        Ok(engine.snapshot())
+    })
+    .await?;
+    schedule_download_runtime_processing(state);
+    Ok(response)
+}
+
 pub(crate) async fn pause_download_runtime_task(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,
@@ -1852,6 +1958,22 @@ pub(crate) async fn resume_download_runtime_task(
     let response = mutate_download_engine_snapshot(&state, move |engine| {
         let snapshot = engine
             .resume_task(&task_id)
+            .ok_or_else(download_runtime_task_not_found)?
+            .clone();
+        Ok(snapshot)
+    })
+    .await?;
+    schedule_download_runtime_processing(state);
+    Ok(response)
+}
+
+pub(crate) async fn retry_download_runtime_task(
+    State(state): State<AppState>,
+    AxumPath(task_id): AxumPath<String>,
+) -> AppResult<Response> {
+    let response = mutate_download_engine_snapshot(&state, move |engine| {
+        let snapshot = engine
+            .retry_task(&task_id)
             .ok_or_else(download_runtime_task_not_found)?
             .clone();
         Ok(snapshot)

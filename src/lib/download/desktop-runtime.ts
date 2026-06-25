@@ -31,8 +31,14 @@ export interface DesktopDownloadEngineSettingsUpdate {
 export type DesktopDownloadEngineCommand =
   | 'pause'
   | 'resume'
+  | 'retry'
   | 'cancel'
   | 'delete';
+
+export type DesktopDownloadEngineBulkCommand = Exclude<
+  DesktopDownloadEngineCommand,
+  'delete'
+>;
 
 export type DesktopDownloadTaskRemovedReason = 'cancelled' | 'deleted';
 
@@ -420,6 +426,26 @@ export async function getDesktopDownloadEngineSnapshot(): Promise<DesktopDownloa
   return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
 }
 
+export async function getDesktopDownloadEngineTask(
+  taskId: string
+): Promise<DownloadTask | undefined> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(
+    buildDesktopDownloadRuntimeUrl(`/tasks/${encodeURIComponent(taskId)}`),
+    {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
+
+  if (response.status === 404) {
+    return undefined;
+  }
+
+  return parseJsonResponse<DownloadTask>(response);
+}
+
 export async function clearDesktopDownloadEngineTasks(): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
   const response = await fetch(buildDesktopDownloadRuntimeUrl('/tasks'), {
@@ -427,6 +453,25 @@ export async function clearDesktopDownloadEngineTasks(): Promise<DesktopDownload
     cache: 'no-store',
     credentials: 'omit',
   });
+
+  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+}
+
+async function postDesktopDownloadTaskCommand(
+  taskId: string,
+  command: DesktopDownloadEngineBulkCommand
+): Promise<DesktopDownloadEngineSnapshot> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(
+    buildDesktopDownloadRuntimeUrl(
+      `/tasks/${encodeURIComponent(taskId)}/${command}`
+    ),
+    {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
 
   return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
 }
@@ -601,53 +646,44 @@ export async function postDesktopDownloadTask(
 export async function pauseDesktopDownloadTask(
   taskId: string
 ): Promise<DesktopDownloadEngineSnapshot> {
-  ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
-    buildDesktopDownloadRuntimeUrl(
-      `/tasks/${encodeURIComponent(taskId)}/pause`
-    ),
-    {
-      method: 'POST',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
-  );
-
-  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+  return postDesktopDownloadTaskCommand(taskId, 'pause');
 }
 
 export async function resumeDesktopDownloadTask(
   taskId: string
 ): Promise<DesktopDownloadEngineSnapshot> {
-  ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
-    buildDesktopDownloadRuntimeUrl(
-      `/tasks/${encodeURIComponent(taskId)}/resume`
-    ),
-    {
-      method: 'POST',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
-  );
+  return postDesktopDownloadTaskCommand(taskId, 'resume');
+}
 
-  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+export async function retryDesktopDownloadTask(
+  taskId: string
+): Promise<DesktopDownloadEngineSnapshot> {
+  return postDesktopDownloadTaskCommand(taskId, 'retry');
 }
 
 export async function cancelDesktopDownloadTask(
   taskId: string
 ): Promise<DesktopDownloadEngineSnapshot> {
+  return postDesktopDownloadTaskCommand(taskId, 'cancel');
+}
+
+export async function postDesktopDownloadTaskBulkCommand(
+  command: DesktopDownloadEngineBulkCommand,
+  taskIds: string[]
+): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
-    buildDesktopDownloadRuntimeUrl(
-      `/tasks/${encodeURIComponent(taskId)}/cancel`
-    ),
-    {
-      method: 'POST',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
-  );
+  const response = await fetch(buildDesktopDownloadRuntimeUrl('/tasks/bulk'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      command,
+      taskIds,
+    }),
+    cache: 'no-store',
+    credentials: 'omit',
+  });
 
   return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
 }

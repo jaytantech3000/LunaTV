@@ -21,6 +21,7 @@ pub enum DesktopDownloadTaskStatus {
 pub enum DesktopDownloadCommand {
     Pause,
     Resume,
+    Retry,
     Cancel,
     Delete,
 }
@@ -283,6 +284,7 @@ impl DesktopDownloadEngine {
                 DesktopDownloadTaskStatus::Paused | DesktopDownloadTaskStatus::Error
             ) {
                 task.status = DesktopDownloadTaskStatus::Queued;
+                task.error_message = None;
             }
             task.status
         };
@@ -291,6 +293,24 @@ impl DesktopDownloadEngine {
             task_id: task_id.to_string(),
             status: next_status,
             command: DesktopDownloadCommand::Resume,
+        });
+        Some(&self.snapshot)
+    }
+
+    pub fn retry_task(&mut self, task_id: &str) -> Option<&DesktopDownloadEngineSnapshot> {
+        let next_status = {
+            let task = self.snapshot.tasks.get_mut(task_id)?;
+            if task.status == DesktopDownloadTaskStatus::Error {
+                task.status = DesktopDownloadTaskStatus::Queued;
+                task.error_message = None;
+            }
+            task.status
+        };
+
+        self.snapshot.last_event = Some(DesktopDownloadEngineEvent::TaskStatusChanged {
+            task_id: task_id.to_string(),
+            status: next_status,
+            command: DesktopDownloadCommand::Retry,
         });
         Some(&self.snapshot)
     }
@@ -487,6 +507,42 @@ mod tests {
             Some(DesktopDownloadEngineEvent::TaskRemoved {
                 task_id: "task:demo:1".to_string(),
                 reason: DesktopDownloadTaskRemovedReason::Cancelled,
+            })
+        );
+    }
+
+    #[test]
+    fn retry_task_requeues_error_tasks_and_clears_error() {
+        let mut engine = DesktopDownloadEngine::new();
+        let mut task = build_task(DesktopDownloadTaskStatus::Error);
+        task.error_message = Some("network failed".to_string());
+
+        engine.upsert_task(task).expect("task should upsert");
+        engine.retry_task("task:demo:1").expect("task should retry");
+
+        assert_eq!(
+            engine
+                .snapshot()
+                .tasks
+                .get("task:demo:1")
+                .expect("task should exist")
+                .status,
+            DesktopDownloadTaskStatus::Queued
+        );
+        assert_eq!(
+            engine
+                .snapshot()
+                .tasks
+                .get("task:demo:1")
+                .and_then(|task| task.error_message.as_deref()),
+            None
+        );
+        assert_eq!(
+            engine.snapshot().last_event,
+            Some(DesktopDownloadEngineEvent::TaskStatusChanged {
+                task_id: "task:demo:1".to_string(),
+                status: DesktopDownloadTaskStatus::Queued,
+                command: DesktopDownloadCommand::Retry,
             })
         );
     }

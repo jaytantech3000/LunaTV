@@ -82,15 +82,17 @@ use download_runtime::{
     clear_download_runtime_tasks, delete_download_runtime_cache,
     delete_download_runtime_resource_index, delete_download_runtime_task,
     fetch_download_runtime_cache_response, get_download_runtime_cache_meta,
-    get_download_runtime_cache_response,
-    get_download_runtime_resource_index, get_download_runtime_storage_info,
-    get_download_runtime_store_snapshot, get_download_runtime_tasks, pause_download_runtime_task,
-    post_download_runtime_task, put_download_runtime_cache, put_download_runtime_resource_index,
+    get_download_runtime_cache_response, get_download_runtime_resource_index,
+    get_download_runtime_storage_info, get_download_runtime_store_snapshot,
+    get_download_runtime_task, get_download_runtime_tasks, pause_download_runtime_task,
+    post_download_runtime_task, post_download_runtime_task_bulk_command,
+    put_download_runtime_cache, put_download_runtime_resource_index,
     put_download_runtime_store_snapshot, put_download_runtime_task_settings,
-    resolve_download_runtime_manifest, resume_download_runtime_task,
-    schedule_download_runtime_processing,
-    stream_download_runtime_tasks,
+    resolve_download_runtime_manifest, resume_download_runtime_task, retry_download_runtime_task,
+    schedule_download_runtime_processing, stream_download_runtime_tasks,
 };
+use image_proxy::get_image_proxy;
+use live_proxy::{get_live_key, get_live_logo, get_live_m3u8, get_live_precheck, get_live_segment};
 use profile_sync::{
     build_profile_sync_status_payload, get_profile_bootstrap, get_profile_sync_server_config,
     get_profile_sync_status, proxy_profile_sync_change_password, proxy_profile_sync_favorites,
@@ -98,8 +100,6 @@ use profile_sync::{
     proxy_profile_sync_passthrough, proxy_profile_sync_playrecords,
     proxy_profile_sync_search_history, proxy_profile_sync_skip_configs,
 };
-use live_proxy::{get_live_key, get_live_logo, get_live_m3u8, get_live_precheck, get_live_segment};
-use image_proxy::get_image_proxy;
 use vod_proxy::{get_vod_key, get_vod_m3u8, get_vod_segment};
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -1753,6 +1753,10 @@ pub fn build_router(state: AppState) -> Router {
             put(put_download_runtime_task_settings),
         )
         .route(
+            "/api/download-runtime/tasks/bulk",
+            post(post_download_runtime_task_bulk_command),
+        )
+        .route(
             "/api/download-runtime/tasks/{task_id}/pause",
             post(pause_download_runtime_task),
         )
@@ -1761,12 +1765,16 @@ pub fn build_router(state: AppState) -> Router {
             post(resume_download_runtime_task),
         )
         .route(
+            "/api/download-runtime/tasks/{task_id}/retry",
+            post(retry_download_runtime_task),
+        )
+        .route(
             "/api/download-runtime/tasks/{task_id}/cancel",
             post(cancel_download_runtime_task),
         )
         .route(
             "/api/download-runtime/tasks/{task_id}",
-            delete(delete_download_runtime_task),
+            get(get_download_runtime_task).delete(delete_download_runtime_task),
         )
         .route("/api/playrecords", any(proxy_profile_sync_playrecords))
         .route("/api/favorites", any(proxy_profile_sync_favorites))
@@ -10590,9 +10598,7 @@ segment0.ts
                         Response::builder()
                             .status(StatusCode::OK)
                             .header(CONTENT_TYPE, "application/vnd.apple.mpegurl")
-                            .body(Body::from(
-                                "#EXTM3U\n#EXTINF:4.0,\nsegment-0001.ts\n",
-                            ))
+                            .body(Body::from("#EXTM3U\n#EXTINF:4.0,\nsegment-0001.ts\n"))
                             .expect("successful retry response")
                     }
                 }
@@ -10947,6 +10953,308 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn download_runtime_task_detail_retry_and_bulk_commands() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let error_task_id = "task-error";
+        let queued_task_id = "task-bulk-queued";
+        let paused_task_id = "task-bulk-paused";
+        let mut error_payload = build_download_runtime_task_payload(error_task_id, "error");
+        error_payload["errorMessage"] = Value::String("network failed".to_string());
+
+        let error_create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(error_payload.to_string()))
+                    .expect("download runtime error task create request"),
+            )
+            .await
+            .expect("download runtime error task create response");
+
+        assert_eq!(error_create_response.status(), StatusCode::OK);
+
+        let detail_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/download-runtime/tasks/{error_task_id}"))
+                    .body(Body::empty())
+                    .expect("download runtime task detail request"),
+            )
+            .await
+            .expect("download runtime task detail response");
+
+        assert_eq!(detail_response.status(), StatusCode::OK);
+        let detail_payload = read_json_body(detail_response).await;
+        assert_eq!(
+            detail_payload.get("id").and_then(Value::as_str),
+            Some(error_task_id)
+        );
+        assert_eq!(
+            detail_payload.get("status").and_then(Value::as_str),
+            Some("error")
+        );
+        assert_eq!(
+            detail_payload.get("errorMessage").and_then(Value::as_str),
+            Some("network failed")
+        );
+
+        let retry_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/download-runtime/tasks/{error_task_id}/retry"))
+                    .body(Body::empty())
+                    .expect("download runtime retry request"),
+            )
+            .await
+            .expect("download runtime retry response");
+
+        assert_eq!(retry_response.status(), StatusCode::OK);
+        let retry_payload = read_json_body(retry_response).await;
+        assert_eq!(
+            retry_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(error_task_id))
+                .and_then(|task| task.get("status"))
+                .and_then(Value::as_str),
+            Some("queued")
+        );
+        assert!(
+            retry_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(error_task_id))
+                .and_then(|task| task.get("errorMessage"))
+                .is_none()
+        );
+        assert_eq!(
+            retry_payload
+                .get("lastEvent")
+                .and_then(|event| event.get("command"))
+                .and_then(Value::as_str),
+            Some("retry")
+        );
+
+        for (task_id, status) in [(queued_task_id, "queued"), (paused_task_id, "paused")] {
+            let create_response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/download-runtime/tasks")
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            build_download_runtime_task_payload(task_id, status).to_string(),
+                        ))
+                        .expect("download runtime bulk seed request"),
+                )
+                .await
+                .expect("download runtime bulk seed response");
+
+            assert_eq!(create_response.status(), StatusCode::OK);
+        }
+
+        let bulk_pause_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks/bulk")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "command": "pause",
+                            "taskIds": [queued_task_id, "missing-task"],
+                        })
+                        .to_string(),
+                    ))
+                    .expect("download runtime bulk pause request"),
+            )
+            .await
+            .expect("download runtime bulk pause response");
+
+        assert_eq!(bulk_pause_response.status(), StatusCode::OK);
+        let bulk_pause_payload = read_json_body(bulk_pause_response).await;
+        assert_eq!(
+            bulk_pause_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(queued_task_id))
+                .and_then(|task| task.get("status"))
+                .and_then(Value::as_str),
+            Some("paused")
+        );
+        assert_eq!(
+            bulk_pause_payload
+                .get("lastEvent")
+                .and_then(|event| event.get("command"))
+                .and_then(Value::as_str),
+            Some("pause")
+        );
+
+        let bulk_resume_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks/bulk")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "command": "resume",
+                            "taskIds": [paused_task_id],
+                        })
+                        .to_string(),
+                    ))
+                    .expect("download runtime bulk resume request"),
+            )
+            .await
+            .expect("download runtime bulk resume response");
+
+        assert_eq!(bulk_resume_response.status(), StatusCode::OK);
+        let bulk_resume_payload = read_json_body(bulk_resume_response).await;
+        assert_eq!(
+            bulk_resume_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(paused_task_id))
+                .and_then(|task| task.get("status"))
+                .and_then(Value::as_str),
+            Some("queued")
+        );
+        assert_eq!(
+            bulk_resume_payload
+                .get("lastEvent")
+                .and_then(|event| event.get("command"))
+                .and_then(Value::as_str),
+            Some("resume")
+        );
+
+        let mut bulk_error_payload = build_download_runtime_task_payload(error_task_id, "error");
+        bulk_error_payload["errorMessage"] = Value::String("retry me".to_string());
+        let bulk_error_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(bulk_error_payload.to_string()))
+                    .expect("download runtime bulk retry seed request"),
+            )
+            .await
+            .expect("download runtime bulk retry seed response");
+
+        assert_eq!(bulk_error_response.status(), StatusCode::OK);
+
+        let bulk_retry_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks/bulk")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "command": "retry",
+                            "taskIds": [error_task_id],
+                        })
+                        .to_string(),
+                    ))
+                    .expect("download runtime bulk retry request"),
+            )
+            .await
+            .expect("download runtime bulk retry response");
+
+        assert_eq!(bulk_retry_response.status(), StatusCode::OK);
+        let bulk_retry_payload = read_json_body(bulk_retry_response).await;
+        assert_eq!(
+            bulk_retry_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(error_task_id))
+                .and_then(|task| task.get("status"))
+                .and_then(Value::as_str),
+            Some("queued")
+        );
+        assert!(
+            bulk_retry_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(error_task_id))
+                .and_then(|task| task.get("errorMessage"))
+                .is_none()
+        );
+        assert_eq!(
+            bulk_retry_payload
+                .get("lastEvent")
+                .and_then(|event| event.get("command"))
+                .and_then(Value::as_str),
+            Some("retry")
+        );
+
+        let bulk_cancel_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks/bulk")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "command": "cancel",
+                            "taskIds": [queued_task_id, paused_task_id],
+                        })
+                        .to_string(),
+                    ))
+                    .expect("download runtime bulk cancel request"),
+            )
+            .await
+            .expect("download runtime bulk cancel response");
+
+        assert_eq!(bulk_cancel_response.status(), StatusCode::OK);
+        let bulk_cancel_payload = read_json_body(bulk_cancel_response).await;
+        let remaining_tasks = bulk_cancel_payload
+            .get("tasks")
+            .and_then(Value::as_object)
+            .expect("remaining task map");
+        assert!(!remaining_tasks.contains_key(queued_task_id));
+        assert!(!remaining_tasks.contains_key(paused_task_id));
+        assert_eq!(
+            bulk_cancel_payload
+                .get("lastEvent")
+                .and_then(|event| event.get("reason"))
+                .and_then(Value::as_str),
+            Some("cancelled")
+        );
+
+        let missing_detail_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/download-runtime/tasks/{queued_task_id}"))
+                    .body(Body::empty())
+                    .expect("download runtime missing task detail request"),
+            )
+            .await
+            .expect("download runtime missing task detail response");
+
+        assert_eq!(missing_detail_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn download_runtime_worker_executes_queued_tasks_and_persists_cached_resources() {
         let upstream = spawn_mock_server(mock_upstream_router()).await;
         let temp_dir = TestDir::new();
@@ -11004,22 +11312,18 @@ segment0.ts
             Some("queued")
         );
 
-        let done_payload = wait_for_download_runtime_task_status(app.clone(), task_id, "done").await;
+        let done_payload =
+            wait_for_download_runtime_task_status(app.clone(), task_id, "done").await;
         let done_task = done_payload
             .get("tasks")
             .and_then(|tasks| tasks.get(task_id))
             .cloned()
             .expect("completed runtime task payload");
         assert_eq!(
-            done_task
-                .get("downloadedResources")
-                .and_then(Value::as_u64),
+            done_task.get("downloadedResources").and_then(Value::as_u64),
             Some(3)
         );
-        assert_eq!(
-            done_task.get("progress").and_then(Value::as_u64),
-            Some(100)
-        );
+        assert_eq!(done_task.get("progress").and_then(Value::as_u64), Some(100));
 
         let cache_index_id = form_urlencoded::byte_serialize(format!("cache:{task_id}").as_bytes())
             .collect::<String>();
@@ -11055,9 +11359,7 @@ segment0.ts
         let cache_meta_response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!(
-                        "/api/download-runtime/cache/meta?url={cached_url}"
-                    ))
+                    .uri(format!("/api/download-runtime/cache/meta?url={cached_url}"))
                     .body(Body::empty())
                     .expect("download runtime cache meta request"),
             )

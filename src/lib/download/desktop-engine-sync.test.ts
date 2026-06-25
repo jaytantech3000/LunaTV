@@ -5,7 +5,9 @@ import {
   clearDesktopDownloadEngineSnapshotCache,
   deleteMirroredDesktopDownloadTask,
   pauseDesktopDownloadEngineTask,
+  postDesktopDownloadEngineTaskBulkCommand,
   resumeDesktopDownloadEngineTask,
+  retryDesktopDownloadEngineTask,
   syncDesktopDownloadEngineSettings,
   syncDesktopDownloadEngineState,
   upsertDesktopDownloadEngineTask,
@@ -16,8 +18,10 @@ import {
   getDesktopDownloadEngineSnapshot,
   pauseDesktopDownloadTask,
   postDesktopDownloadTask,
+  postDesktopDownloadTaskBulkCommand,
   putDesktopDownloadEngineSettings,
   resumeDesktopDownloadTask,
+  retryDesktopDownloadTask,
 } from './desktop-runtime';
 import type { DownloadTask } from './types';
 
@@ -26,9 +30,11 @@ jest.mock('./desktop-runtime', () => ({
   deleteDesktopDownloadTask: jest.fn(),
   getDesktopDownloadEngineSnapshot: jest.fn(),
   pauseDesktopDownloadTask: jest.fn(),
+  postDesktopDownloadTaskBulkCommand: jest.fn(),
   postDesktopDownloadTask: jest.fn(),
   putDesktopDownloadEngineSettings: jest.fn(),
   resumeDesktopDownloadTask: jest.fn(),
+  retryDesktopDownloadTask: jest.fn(),
 }));
 
 function buildDownloadTask(partial: Partial<DownloadTask> = {}): DownloadTask {
@@ -327,6 +333,30 @@ describe('desktop download engine sync', () => {
         command: 'resume',
       },
     };
+    const retriedSnapshot = {
+      maxConcurrentTasks: 3,
+      tasks: {
+        [resumedTask.id]: resumedTask,
+      },
+      lastEvent: {
+        type: 'taskStatusChanged',
+        taskId: resumedTask.id,
+        status: 'queued',
+        command: 'retry',
+      },
+    };
+    const bulkSnapshot = {
+      maxConcurrentTasks: 3,
+      tasks: {
+        [resumedTask.id]: resumedTask,
+      },
+      lastEvent: {
+        type: 'taskStatusChanged',
+        taskId: resumedTask.id,
+        status: 'queued',
+        command: 'resume',
+      },
+    };
     const cancelledSnapshot = {
       maxConcurrentTasks: 3,
       tasks: {},
@@ -356,6 +386,10 @@ describe('desktop download engine sync', () => {
 
     (pauseDesktopDownloadTask as jest.Mock).mockResolvedValue(pausedSnapshot);
     (resumeDesktopDownloadTask as jest.Mock).mockResolvedValue(resumedSnapshot);
+    (retryDesktopDownloadTask as jest.Mock).mockResolvedValue(retriedSnapshot);
+    (postDesktopDownloadTaskBulkCommand as jest.Mock).mockResolvedValue(
+      bulkSnapshot
+    );
     (cancelDesktopDownloadTask as jest.Mock).mockResolvedValue(
       cancelledSnapshot
     );
@@ -371,6 +405,12 @@ describe('desktop download engine sync', () => {
       resumeDesktopDownloadEngineTask(resumedTask.id)
     ).resolves.toEqual(resumedSnapshot);
     await expect(
+      retryDesktopDownloadEngineTask(resumedTask.id)
+    ).resolves.toEqual(retriedSnapshot);
+    await expect(
+      postDesktopDownloadEngineTaskBulkCommand('resume', [resumedTask.id])
+    ).resolves.toEqual(bulkSnapshot);
+    await expect(
       cancelDesktopDownloadEngineTask(resumedTask.id)
     ).resolves.toEqual(cancelledSnapshot);
     await expect(
@@ -382,6 +422,10 @@ describe('desktop download engine sync', () => {
 
     expect(pauseDesktopDownloadTask).toHaveBeenCalledWith(pausedTask.id);
     expect(resumeDesktopDownloadTask).toHaveBeenCalledWith(resumedTask.id);
+    expect(retryDesktopDownloadTask).toHaveBeenCalledWith(resumedTask.id);
+    expect(postDesktopDownloadTaskBulkCommand).toHaveBeenCalledWith('resume', [
+      resumedTask.id,
+    ]);
     expect(cancelDesktopDownloadTask).toHaveBeenCalledWith(resumedTask.id);
     expect(deleteDesktopDownloadTask).toHaveBeenCalledWith(resumedTask.id);
     expect(putDesktopDownloadEngineSettings).toHaveBeenCalledWith({

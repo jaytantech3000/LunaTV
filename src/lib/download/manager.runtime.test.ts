@@ -40,7 +40,11 @@ jest.mock('./desktop-engine-sync', () => ({
   cancelDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
   deleteMirroredDesktopDownloadTask: jest.fn().mockResolvedValue(undefined),
   pauseDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
+  postDesktopDownloadEngineTaskBulkCommand: jest
+    .fn()
+    .mockResolvedValue(undefined),
   resumeDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
+  retryDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
   upsertDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
 }));
 
@@ -48,7 +52,9 @@ import {
   cancelDesktopDownloadEngineTask,
   deleteMirroredDesktopDownloadTask,
   pauseDesktopDownloadEngineTask,
+  postDesktopDownloadEngineTaskBulkCommand,
   resumeDesktopDownloadEngineTask,
+  retryDesktopDownloadEngineTask,
   upsertDesktopDownloadEngineTask,
 } from './desktop-engine-sync';
 import {
@@ -137,6 +143,9 @@ describe('download manager desktop runtime command bridge', () => {
   const mockParseManifestForDownloadWithFallback = jest.mocked(
     parseManifestForDownloadWithFallback
   );
+  const mockPostDesktopDownloadEngineTaskBulkCommand = jest.mocked(
+    postDesktopDownloadEngineTaskBulkCommand
+  );
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -176,7 +185,7 @@ describe('download manager desktop runtime command bridge', () => {
     resetDownloadStore();
   });
 
-  it('mirrors pause, resume and cancel actions into the desktop runtime', async () => {
+  it('mirrors pause, resume, retry and cancel actions into the desktop runtime', async () => {
     const task = buildDownloadTask();
     useDownloadStore.setState({
       tasks: {
@@ -205,6 +214,23 @@ describe('download manager desktop runtime command bridge', () => {
 
     useDownloadStore.setState({
       tasks: {
+        [task.id]: {
+          ...task,
+          status: 'error',
+          errorMessage: 'temporary failure',
+        },
+      },
+    });
+
+    await downloadManager.resumeTask(task.id);
+    expect(useDownloadStore.getState().tasks[task.id]?.status).toBe('queued');
+    expect(useDownloadStore.getState().tasks[task.id]?.errorMessage).toBe(
+      undefined
+    );
+    expect(retryDesktopDownloadEngineTask).toHaveBeenCalledWith(task.id);
+
+    useDownloadStore.setState({
+      tasks: {
         [task.id]: task,
       },
     });
@@ -212,6 +238,111 @@ describe('download manager desktop runtime command bridge', () => {
     await downloadManager.cancelTask(task.id);
     expect(useDownloadStore.getState().tasks[task.id]).toBeUndefined();
     expect(cancelDesktopDownloadEngineTask).toHaveBeenCalledWith(task.id);
+  });
+
+  it('uses bulk runtime commands for pause-all, resume-all and cancel-all flows', async () => {
+    const queuedTask = buildDownloadTask({
+      id: 'task-queued',
+      cacheIndexId: 'cache:task-queued',
+      status: 'queued',
+    });
+    const downloadingTask = buildDownloadTask({
+      id: 'task-downloading',
+      cacheIndexId: 'cache:task-downloading',
+      status: 'downloading',
+    });
+    const pausedTask = buildDownloadTask({
+      id: 'task-paused',
+      cacheIndexId: 'cache:task-paused',
+      status: 'paused',
+    });
+    const errorTask = buildDownloadTask({
+      id: 'task-error',
+      cacheIndexId: 'cache:task-error',
+      status: 'error',
+      errorMessage: 'retry me',
+    });
+    const doneTask = buildDownloadTask({
+      id: 'task-done',
+      cacheIndexId: 'cache:task-done',
+      status: 'done',
+      progress: 100,
+    });
+
+    useDownloadStore.setState({
+      tasks: {
+        [queuedTask.id]: queuedTask,
+        [downloadingTask.id]: downloadingTask,
+        [pausedTask.id]: pausedTask,
+        [errorTask.id]: errorTask,
+        [doneTask.id]: doneTask,
+      },
+    });
+
+    await downloadManager.pauseAllTasks();
+
+    expect(useDownloadStore.getState().tasks[queuedTask.id]?.status).toBe(
+      'paused'
+    );
+    expect(useDownloadStore.getState().tasks[downloadingTask.id]?.status).toBe(
+      'paused'
+    );
+    expect(mockPostDesktopDownloadEngineTaskBulkCommand).toHaveBeenCalledWith(
+      'pause',
+      [queuedTask.id, downloadingTask.id]
+    );
+    expect(pauseDesktopDownloadEngineTask).not.toHaveBeenCalled();
+
+    mockPostDesktopDownloadEngineTaskBulkCommand.mockClear();
+    useDownloadStore.setState({
+      tasks: {
+        [pausedTask.id]: pausedTask,
+        [errorTask.id]: errorTask,
+        [doneTask.id]: doneTask,
+      },
+    });
+
+    await downloadManager.resumeAllTasks();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useDownloadStore.getState().tasks[pausedTask.id]?.status).toBe(
+      'queued'
+    );
+    expect(useDownloadStore.getState().tasks[errorTask.id]?.status).toBe(
+      'queued'
+    );
+    expect(
+      useDownloadStore.getState().tasks[errorTask.id]?.errorMessage
+    ).toBeUndefined();
+    expect(
+      mockPostDesktopDownloadEngineTaskBulkCommand
+    ).toHaveBeenNthCalledWith(1, 'resume', [pausedTask.id]);
+    expect(
+      mockPostDesktopDownloadEngineTaskBulkCommand
+    ).toHaveBeenNthCalledWith(2, 'retry', [errorTask.id]);
+    expect(resumeDesktopDownloadEngineTask).not.toHaveBeenCalled();
+    expect(retryDesktopDownloadEngineTask).not.toHaveBeenCalled();
+
+    mockPostDesktopDownloadEngineTaskBulkCommand.mockClear();
+    useDownloadStore.setState({
+      tasks: {
+        [queuedTask.id]: queuedTask,
+        [pausedTask.id]: pausedTask,
+        [doneTask.id]: doneTask,
+      },
+    });
+
+    await downloadManager.cancelAllTasks();
+
+    expect(useDownloadStore.getState().tasks[queuedTask.id]).toBeUndefined();
+    expect(useDownloadStore.getState().tasks[pausedTask.id]).toBeUndefined();
+    expect(useDownloadStore.getState().tasks[doneTask.id]?.status).toBe('done');
+    expect(mockPostDesktopDownloadEngineTaskBulkCommand).toHaveBeenCalledWith(
+      'cancel',
+      [queuedTask.id, pausedTask.id]
+    );
+    expect(cancelDesktopDownloadEngineTask).not.toHaveBeenCalled();
   });
 
   it('mirrors deleting a completed episode into the desktop runtime', async () => {
@@ -339,7 +470,9 @@ describe('download manager desktop runtime command bridge', () => {
 
     expect(useDownloadStore.getState().tasks[task.id]).toBeUndefined();
     expect(pauseDesktopDownloadEngineTask).not.toHaveBeenCalled();
+    expect(postDesktopDownloadEngineTaskBulkCommand).not.toHaveBeenCalled();
     expect(resumeDesktopDownloadEngineTask).not.toHaveBeenCalled();
+    expect(retryDesktopDownloadEngineTask).not.toHaveBeenCalled();
     expect(cancelDesktopDownloadEngineTask).not.toHaveBeenCalled();
     expect(upsertDesktopDownloadEngineTask).not.toHaveBeenCalled();
   });

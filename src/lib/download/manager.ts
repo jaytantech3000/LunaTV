@@ -14,7 +14,9 @@ import {
   cancelDesktopDownloadEngineTask,
   deleteMirroredDesktopDownloadTask,
   pauseDesktopDownloadEngineTask,
+  postDesktopDownloadEngineTaskBulkCommand,
   resumeDesktopDownloadEngineTask,
+  retryDesktopDownloadEngineTask,
   upsertDesktopDownloadEngineTask,
 } from './desktop-engine-sync';
 import {
@@ -1652,7 +1654,9 @@ class DownloadManager {
     );
     this.schedulePendingTasks();
     syncDesktopDownloadEngineCommand(() =>
-      resumeDesktopDownloadEngineTask(taskId)
+      task.status === 'error'
+        ? retryDesktopDownloadEngineTask(taskId)
+        : resumeDesktopDownloadEngineTask(taskId)
     );
   }
 
@@ -1665,17 +1669,88 @@ class DownloadManager {
       .filter((task) => ['queued', 'downloading'].includes(task.status))
       .map((task) => task.id);
 
-    await Promise.all(candidateTaskIds.map((taskId) => this.pauseTask(taskId)));
+    if (candidateTaskIds.length === 0) {
+      return;
+    }
+
+    if (!isDesktopLocalDownloadRuntimeEnabled()) {
+      await Promise.all(
+        candidateTaskIds.map((taskId) => this.pauseTask(taskId))
+      );
+      return;
+    }
+
+    candidateTaskIds.forEach((taskId) => {
+      const runner = this.runners.get(taskId);
+      if (runner) {
+        runner.mode = 'paused';
+        runner.controllers.forEach((controller) => controller.abort());
+      }
+
+      clearScheduledDesktopTaskUpsert(taskId);
+      this.setTaskStatus(
+        taskId,
+        'paused',
+        {
+          errorMessage: undefined,
+        },
+        {
+          syncDesktopRuntime: 'none',
+        }
+      );
+    });
+    this.schedulePendingTasks();
+    syncDesktopDownloadEngineCommand(() =>
+      postDesktopDownloadEngineTaskBulkCommand('pause', candidateTaskIds)
+    );
   }
 
   async resumeAllTasks(): Promise<void> {
-    const candidateTaskIds = Object.values(useDownloadStore.getState().tasks)
-      .filter((task) => ['paused', 'error'].includes(task.status))
-      .map((task) => task.id);
+    const candidateTasks = Object.values(
+      useDownloadStore.getState().tasks
+    ).filter((task) => ['paused', 'error'].includes(task.status));
 
-    await Promise.all(
-      candidateTaskIds.map((taskId) => this.resumeTask(taskId))
-    );
+    if (candidateTasks.length === 0) {
+      return;
+    }
+
+    if (!isDesktopLocalDownloadRuntimeEnabled()) {
+      await Promise.all(candidateTasks.map((task) => this.resumeTask(task.id)));
+      return;
+    }
+
+    const pausedTaskIds: string[] = [];
+    const errorTaskIds: string[] = [];
+
+    candidateTasks.forEach((task) => {
+      if (task.status === 'error') {
+        errorTaskIds.push(task.id);
+      } else {
+        pausedTaskIds.push(task.id);
+      }
+
+      clearScheduledDesktopTaskUpsert(task.id);
+      this.setTaskStatus(
+        task.id,
+        'queued',
+        {
+          errorMessage: undefined,
+        },
+        {
+          syncDesktopRuntime: 'none',
+        }
+      );
+    });
+    this.schedulePendingTasks();
+    syncDesktopDownloadEngineCommand(async () => {
+      if (pausedTaskIds.length > 0) {
+        await postDesktopDownloadEngineTaskBulkCommand('resume', pausedTaskIds);
+      }
+
+      if (errorTaskIds.length > 0) {
+        await postDesktopDownloadEngineTaskBulkCommand('retry', errorTaskIds);
+      }
+    });
   }
 
   async cancelTask(taskId: string): Promise<void> {
@@ -1705,13 +1780,40 @@ class DownloadManager {
   }
 
   async cancelAllTasks(): Promise<void> {
-    const candidateTaskIds = Object.values(useDownloadStore.getState().tasks)
-      .filter((task) => task.status !== 'done')
-      .map((task) => task.id);
+    const candidateTasks = Object.values(
+      useDownloadStore.getState().tasks
+    ).filter((task) => task.status !== 'done');
 
-    for (const taskId of candidateTaskIds) {
-      await this.cancelTask(taskId);
+    if (candidateTasks.length === 0) {
+      return;
     }
+
+    if (!isDesktopLocalDownloadRuntimeEnabled()) {
+      for (const taskId of candidateTasks.map((task) => task.id)) {
+        await this.cancelTask(taskId);
+      }
+      return;
+    }
+
+    candidateTasks.forEach((task) => {
+      const runner = this.runners.get(task.id);
+      if (runner) {
+        runner.mode = 'cancelled';
+        runner.controllers.forEach((controller) => controller.abort());
+        removeTask(task.id);
+        return;
+      }
+
+      removeTask(task.id);
+      this.removeTaskResourcesInBackground(task);
+    });
+    this.schedulePendingTasks();
+    syncDesktopDownloadEngineCommand(() =>
+      postDesktopDownloadEngineTaskBulkCommand(
+        'cancel',
+        candidateTasks.map((task) => task.id)
+      )
+    );
   }
 
   async deleteEpisode(contentId: string, episodeIndex: number): Promise<void> {

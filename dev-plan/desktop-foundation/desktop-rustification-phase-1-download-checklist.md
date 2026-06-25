@@ -182,18 +182,19 @@
 
 ### C. 在本地服务补齐任务 CRUD 与控制接口
 
-- [ ] 提供任务创建、列表、详情、暂停、继续、取消、重试接口
-- [ ] 提供批量控制接口，覆盖下载页的全部开始、全部暂停、全部停止
+- [x] 提供任务创建、列表、详情、暂停、继续、取消、重试接口
+- [x] 提供批量控制接口，覆盖下载页的全部暂停、全部继续 / 重试、全部停止
 - [ ] 统一错误码和错误消息，避免前端依赖字符串猜测
 - [ ] 保持旧有 cache/index/store 接口兼容
 
 当前进展（2026-06-25）：
 
 - `crates/moontv-local-service/src/download_runtime.rs` 已接手 download runtime 的 cache / resource-index / store / tasks 路由、SSE 事件流与缓存响应辅助；`lib.rs` 主要保留 `AppState` 持久化方法与路由装配，避免继续把下载逻辑堆回单文件 facade。
+- [x] task 控制面现已补齐 `GET /api/download-runtime/tasks/:taskId`、`POST /api/download-runtime/tasks/:taskId/retry` 与 `POST /api/download-runtime/tasks/bulk`；现有 `create/list/settings/pause/resume/cancel/delete` 路由也已继续保留。
 - [x] 桌面 manifest 的 fallback、抓取、playlist 解析、资源展开与缓存已新增 Rust runtime 主路径：`/api/download-runtime/manifest/resolve`，桌面 `src/lib/download/manifest.ts` 仅保留 Web / 非 runtime fallback。
 - [x] 桌面资源抓取新增 Rust runtime 主路径：`/api/download-runtime/cache/fetch` 会直接解析 `/media/vod/*` / `/api/proxy/vod/*` URL、在 local service 内抓取资源并写入 runtime cache；桌面 `src/lib/download/manager.ts` 在 runtime 开启时不再自己执行资源 `fetch + putDownloadResponse`。
 - `crates/moontv-local-service/src/download_runtime.rs` 现已新增 runtime scheduler/worker，负责 queued 任务并发调度、manifest candidate fallback、resource-index 写入、资源 cache 抓取，以及进度 / `done` / `error` 状态持久化，并会在路由启动与任务变更后自动触发调度。
-- `src/lib/download/manager.ts` 在桌面 runtime 开启时不再启动浏览器侧任务 runner，主要保留任务创建 / 控制、Web / 非 runtime fallback 与兼容层。
+- `src/lib/download/manager.ts` 在桌面 runtime 开启时不再启动浏览器侧任务 runner，主要保留任务创建 / 控制、Web / 非 runtime fallback 与兼容层；其中单任务 `error -> retry` 与 `pauseAll / resumeAll / cancelAll` 已显式切到 runtime `retry` / `bulk` 接口。
 - `src/components/DesktopDownloadStoreSync.tsx` 现在会把 runtime `done` 任务回填到 `library`，并把自身进一步收缩成“启动修复 + sidecar snapshot 持久化”角色。
 
 ### D. 建立下载事件流
