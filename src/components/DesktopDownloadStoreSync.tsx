@@ -5,7 +5,6 @@ import { useEffect } from 'react';
 import { syncDesktopDownloadEngineState } from '@/lib/download/desktop-engine-sync';
 import {
   clearDesktopDownloadStoreSnapshot,
-  DesktopDownloadEngineSnapshot,
   getDesktopDownloadStoreSnapshot,
   isDesktopLocalDownloadRuntimeEnabled,
   putDesktopDownloadStoreSnapshot,
@@ -29,7 +28,6 @@ export default function DesktopDownloadStoreSync() {
     let active = true;
     let initialized = false;
     let skipNextPersist = false;
-    let lastEngineSnapshot: DesktopDownloadEngineSnapshot | null = null;
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
     const flushSnapshot = async () => {
@@ -54,13 +52,10 @@ export default function DesktopDownloadStoreSync() {
       }
 
       try {
-        lastEngineSnapshot = await syncDesktopDownloadEngineState(
-          {
-            maxConcurrentTasks: state.maxConcurrentTasks,
-            tasks: state.tasks,
-          },
-          lastEngineSnapshot
-        );
+        await syncDesktopDownloadEngineState({
+          maxConcurrentTasks: state.maxConcurrentTasks,
+          tasks: state.tasks,
+        });
       } catch (_) {
         // Ignore download engine mirror failures and keep local state intact.
       }
@@ -95,13 +90,10 @@ export default function DesktopDownloadStoreSync() {
         }
 
         const nextState = useDownloadStore.getState();
-        lastEngineSnapshot = await syncDesktopDownloadEngineState(
-          {
-            maxConcurrentTasks: nextState.maxConcurrentTasks,
-            tasks: nextState.tasks,
-          },
-          lastEngineSnapshot
-        ).catch(() => null);
+        await syncDesktopDownloadEngineState({
+          maxConcurrentTasks: nextState.maxConcurrentTasks,
+          tasks: nextState.tasks,
+        }).catch(() => undefined);
       } finally {
         if (active) {
           initialized = true;

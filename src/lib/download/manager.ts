@@ -10,6 +10,13 @@ import {
   hasCachedDownload,
   putDownloadResponse,
 } from './cache';
+import {
+  cancelDesktopDownloadEngineTask,
+  deleteMirroredDesktopDownloadTask,
+  pauseDesktopDownloadEngineTask,
+  resumeDesktopDownloadEngineTask,
+} from './desktop-engine-sync';
+import { isDesktopLocalDownloadRuntimeEnabled } from './desktop-runtime';
 import { parseManifestForDownloadWithFallback } from './manifest';
 import { normalizeVodEpisodeUrlForDownload } from './normalize';
 import {
@@ -137,6 +144,16 @@ function calculateProgress(
     100,
     Math.round((downloadedResources / totalResources) * 100)
   );
+}
+
+function syncDesktopDownloadEngineCommand(
+  operation: () => Promise<unknown>
+): void {
+  if (!isDesktopLocalDownloadRuntimeEnabled()) {
+    return;
+  }
+
+  void operation().catch(() => undefined);
 }
 
 function upsertTask(task: DownloadTask): void {
@@ -557,7 +574,10 @@ export function mergeLibraryItem(
     ),
     poster: pickPreferredTextValue(task.poster, previousItem?.poster),
     adultGroupPoster: previousItem?.adultGroupPoster?.trim() || undefined,
-    remarks: pickPreferredOptionalTextValue(task.remarks, previousItem?.remarks),
+    remarks: pickPreferredOptionalTextValue(
+      task.remarks,
+      previousItem?.remarks
+    ),
     year: pickPreferredTextValue(task.year, previousItem?.year),
     desc: pickPreferredOptionalTextValue(task.desc, previousItem?.desc),
     typeName: pickPreferredOptionalTextValue(
@@ -879,10 +899,8 @@ class DownloadManager {
           existingTask.searchType,
           task.searchType
         ) !== existingTask.searchType ||
-        pickPreferredOptionalTextValue(
-          existingTask.remarks,
-          task.remarks
-        ) !== existingTask.remarks
+        pickPreferredOptionalTextValue(existingTask.remarks, task.remarks) !==
+          existingTask.remarks
       ) {
         patchTask(existingTask.id, (currentTask) => ({
           ...currentTask,
@@ -1554,6 +1572,9 @@ class DownloadManager {
 
     if (!content) {
       removeTask(taskId);
+      syncDesktopDownloadEngineCommand(() =>
+        deleteMirroredDesktopDownloadTask(taskId)
+      );
       return;
     }
 
@@ -1565,6 +1586,9 @@ class DownloadManager {
     );
 
     removeTask(taskId);
+    syncDesktopDownloadEngineCommand(() =>
+      deleteMirroredDesktopDownloadTask(taskId)
+    );
 
     if (targetEpisode) {
       await this.removeTaskResources(targetEpisode);
@@ -1602,6 +1626,9 @@ class DownloadManager {
       errorMessage: undefined,
     });
     this.schedulePendingTasks();
+    syncDesktopDownloadEngineCommand(() =>
+      pauseDesktopDownloadEngineTask(taskId)
+    );
   }
 
   async resumeTask(taskId: string): Promise<void> {
@@ -1618,6 +1645,9 @@ class DownloadManager {
       errorMessage: undefined,
     });
     this.schedulePendingTasks();
+    syncDesktopDownloadEngineCommand(() =>
+      resumeDesktopDownloadEngineTask(taskId)
+    );
   }
 
   refreshScheduling(): void {
@@ -1654,12 +1684,18 @@ class DownloadManager {
       runner.controllers.forEach((controller) => controller.abort());
       useDownloadStore.getState().removeTask(taskId);
       this.schedulePendingTasks();
+      syncDesktopDownloadEngineCommand(() =>
+        cancelDesktopDownloadEngineTask(taskId)
+      );
       return;
     }
 
     useDownloadStore.getState().removeTask(taskId);
     this.removeTaskResourcesInBackground(task);
     this.schedulePendingTasks();
+    syncDesktopDownloadEngineCommand(() =>
+      cancelDesktopDownloadEngineTask(taskId)
+    );
   }
 
   async cancelAllTasks(): Promise<void> {
@@ -1686,6 +1722,9 @@ class DownloadManager {
     const content = library[contentId];
     if (!content) {
       removeTask(taskId);
+      syncDesktopDownloadEngineCommand(() =>
+        deleteMirroredDesktopDownloadTask(taskId)
+      );
       return;
     }
 
@@ -1697,6 +1736,9 @@ class DownloadManager {
     );
 
     removeTask(taskId);
+    syncDesktopDownloadEngineCommand(() =>
+      deleteMirroredDesktopDownloadTask(taskId)
+    );
 
     if (targetEpisode) {
       this.removeTaskResourcesInBackground(targetEpisode);

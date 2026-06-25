@@ -12,6 +12,13 @@ import {
   buildAdultDownloadGroupingQuery,
   filterAdultGroupingSearchResults,
 } from '@/lib/download/adult';
+import { syncDesktopDownloadEngineSettings } from '@/lib/download/desktop-engine-sync';
+import {
+  type DesktopDownloadRuntimeStorageInfoResponse,
+  getDesktopDownloadRuntimeLabel,
+  getDesktopDownloadRuntimeStorageInfo,
+  isDesktopLocalDownloadRuntimeEnabled,
+} from '@/lib/download/desktop-runtime';
 import {
   formatBytes,
   formatTaskSizeProgress,
@@ -21,12 +28,6 @@ import {
   getTaskEstimatedTotalSizeBytes,
 } from '@/lib/download/format';
 import { downloadManager } from '@/lib/download/manager';
-import {
-  type DesktopDownloadRuntimeStorageInfoResponse,
-  getDesktopDownloadRuntimeStorageInfo,
-  getDesktopDownloadRuntimeLabel,
-  isDesktopLocalDownloadRuntimeEnabled,
-} from '@/lib/download/desktop-runtime';
 import {
   normalizeVodDetailForPlayback,
   normalizeVodSearchResultsForPlayback,
@@ -4219,6 +4220,9 @@ export default function DownloadsClient() {
     const nextValue = Number(event.target.value);
     setMaxConcurrentTasks(nextValue);
     downloadManager.refreshScheduling();
+    if (isDesktopLocalDownloadRuntimeEnabled()) {
+      void syncDesktopDownloadEngineSettings(nextValue).catch(() => undefined);
+    }
   };
 
   const handleApplyBulkAction = async (

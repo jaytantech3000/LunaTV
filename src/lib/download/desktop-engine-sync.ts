@@ -1,9 +1,12 @@
 import {
+  cancelDesktopDownloadTask,
   deleteDesktopDownloadTask,
   DesktopDownloadEngineSnapshot,
   getDesktopDownloadEngineSnapshot,
+  pauseDesktopDownloadTask,
   postDesktopDownloadTask,
   putDesktopDownloadEngineSettings,
+  resumeDesktopDownloadTask,
 } from './desktop-runtime';
 import { DownloadTask } from './types';
 
@@ -11,6 +14,9 @@ export interface DesktopDownloadEngineSyncState {
   maxConcurrentTasks: number;
   tasks: Record<string, DownloadTask>;
 }
+
+let desktopDownloadEngineSnapshotCache: DesktopDownloadEngineSnapshot | null =
+  null;
 
 function buildTaskFingerprint(task: DownloadTask): string {
   return JSON.stringify([
@@ -60,16 +66,91 @@ export function areDesktopDownloadTasksEquivalent(
   return buildTaskFingerprint(left) === buildTaskFingerprint(right);
 }
 
+function rememberDesktopDownloadEngineSnapshot(
+  snapshot: DesktopDownloadEngineSnapshot
+): DesktopDownloadEngineSnapshot {
+  desktopDownloadEngineSnapshotCache = snapshot;
+  return snapshot;
+}
+
+async function mutateDesktopDownloadEngineSnapshot(
+  mutation: () => Promise<DesktopDownloadEngineSnapshot>
+): Promise<DesktopDownloadEngineSnapshot> {
+  return rememberDesktopDownloadEngineSnapshot(await mutation());
+}
+
+async function resolveDesktopDownloadEngineSnapshot(
+  previousSnapshot?: DesktopDownloadEngineSnapshot | null
+): Promise<DesktopDownloadEngineSnapshot> {
+  if (previousSnapshot) {
+    return rememberDesktopDownloadEngineSnapshot(previousSnapshot);
+  }
+
+  if (desktopDownloadEngineSnapshotCache) {
+    return desktopDownloadEngineSnapshotCache;
+  }
+
+  return rememberDesktopDownloadEngineSnapshot(
+    await getDesktopDownloadEngineSnapshot()
+  );
+}
+
+export function clearDesktopDownloadEngineSnapshotCache(): void {
+  desktopDownloadEngineSnapshotCache = null;
+}
+
+export async function syncDesktopDownloadEngineSettings(
+  maxConcurrentTasks: number
+): Promise<DesktopDownloadEngineSnapshot> {
+  return mutateDesktopDownloadEngineSnapshot(() =>
+    putDesktopDownloadEngineSettings({
+      maxConcurrentTasks,
+    })
+  );
+}
+
+export async function pauseDesktopDownloadEngineTask(
+  taskId: string
+): Promise<DesktopDownloadEngineSnapshot> {
+  return mutateDesktopDownloadEngineSnapshot(() =>
+    pauseDesktopDownloadTask(taskId)
+  );
+}
+
+export async function resumeDesktopDownloadEngineTask(
+  taskId: string
+): Promise<DesktopDownloadEngineSnapshot> {
+  return mutateDesktopDownloadEngineSnapshot(() =>
+    resumeDesktopDownloadTask(taskId)
+  );
+}
+
+export async function cancelDesktopDownloadEngineTask(
+  taskId: string
+): Promise<DesktopDownloadEngineSnapshot> {
+  return mutateDesktopDownloadEngineSnapshot(() =>
+    cancelDesktopDownloadTask(taskId)
+  );
+}
+
+export async function deleteMirroredDesktopDownloadTask(
+  taskId: string
+): Promise<DesktopDownloadEngineSnapshot> {
+  return mutateDesktopDownloadEngineSnapshot(() =>
+    deleteDesktopDownloadTask(taskId)
+  );
+}
+
 export async function syncDesktopDownloadEngineState(
   nextState: DesktopDownloadEngineSyncState,
   previousSnapshot?: DesktopDownloadEngineSnapshot | null
 ): Promise<DesktopDownloadEngineSnapshot> {
-  let snapshot = previousSnapshot || (await getDesktopDownloadEngineSnapshot());
+  let snapshot = await resolveDesktopDownloadEngineSnapshot(previousSnapshot);
 
   if (snapshot.maxConcurrentTasks !== nextState.maxConcurrentTasks) {
-    snapshot = await putDesktopDownloadEngineSettings({
-      maxConcurrentTasks: nextState.maxConcurrentTasks,
-    });
+    snapshot = await syncDesktopDownloadEngineSettings(
+      nextState.maxConcurrentTasks
+    );
   }
 
   for (const task of Object.values(nextState.tasks)) {
@@ -77,7 +158,9 @@ export async function syncDesktopDownloadEngineState(
       continue;
     }
 
-    snapshot = await postDesktopDownloadTask(task);
+    snapshot = await mutateDesktopDownloadEngineSnapshot(() =>
+      postDesktopDownloadTask(task)
+    );
   }
 
   const staleTaskIds = Object.keys(snapshot.tasks).filter(
@@ -85,7 +168,7 @@ export async function syncDesktopDownloadEngineState(
   );
 
   for (const taskId of staleTaskIds) {
-    snapshot = await deleteDesktopDownloadTask(taskId);
+    snapshot = await deleteMirroredDesktopDownloadTask(taskId);
   }
 
   return snapshot;

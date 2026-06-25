@@ -224,6 +224,7 @@ Rust Shared Crates
 - 下载引擎快照现在通过 SQLite `app_metadata` 持久化；应用重启后，未完成的 `downloading` 任务会恢复为 `paused`，避免把旧运行态误当成仍在执行。
 - `src/lib/download/desktop-runtime.ts` 已补齐对应的桌面 SDK 封装，前端可以开始逐步改为消费这组新边界。
 - `src/components/DesktopDownloadStoreSync.tsx` 已开始把当前 TS 下载 store 中的 `tasks` / `maxConcurrentTasks` 镜像回 Rust download engine，形成“TS 执行 + Rust 状态面并行”的过渡态。
+- `src/lib/download/manager.ts` 的 `pause / resume / cancel` 与 `src/components/DownloadsClient.tsx` 的并发设置调整，已经开始显式命中 Rust runtime 命令边界；镜像同步现在主要承担兜底与快照修复角色。
 - `src/lib/download/manager.ts` 仍然是当前桌面下载的真实执行器，所以这一阶段只完成了“边界收口”和“状态恢复骨架”，还没有切走主下载流程。
 
 ### 验收标准

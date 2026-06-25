@@ -52,7 +52,13 @@ jest.mock('@/lib/download/desktop-runtime', () => {
   };
 });
 
+jest.mock('@/lib/download/desktop-engine-sync', () => ({
+  syncDesktopDownloadEngineSettings: jest.fn().mockResolvedValue(undefined),
+}));
+
+import * as desktopEngineSync from '@/lib/download/desktop-engine-sync';
 import * as desktopRuntime from '@/lib/download/desktop-runtime';
+
 import DownloadsClient, { DownloadedContentDialog } from './DownloadsClient';
 import { SiteProvider } from './SiteProvider';
 
@@ -103,6 +109,9 @@ describe('DownloadedContentDialog', () => {
   const mockIsDesktopLocalDownloadRuntimeEnabled = jest.mocked(
     desktopRuntime.isDesktopLocalDownloadRuntimeEnabled
   );
+  const mockSyncDesktopDownloadEngineSettings = jest.mocked(
+    desktopEngineSync.syncDesktopDownloadEngineSettings
+  );
 
   beforeEach(() => {
     mockRouter.push.mockReset();
@@ -131,6 +140,8 @@ describe('DownloadedContentDialog', () => {
     mockGetDesktopDownloadRuntimeStorageInfo.mockReset();
     mockGetDesktopDownloadRuntimeLabel.mockReturnValue('浏览器离线缓存');
     mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(false);
+    mockSyncDesktopDownloadEngineSettings.mockReset();
+    mockSyncDesktopDownloadEngineSettings.mockResolvedValue(undefined as never);
   });
 
   it('still closes after enabling local title grouping from the dialog menu', async () => {
@@ -718,5 +729,37 @@ describe('DownloadedContentDialog', () => {
       )
     ).toBeInTheDocument();
     expect(screen.queryByText('当前浏览器离线缓存')).not.toBeInTheDocument();
+  });
+
+  it('pushes concurrency changes to the desktop runtime when enabled', async () => {
+    mockGetDesktopDownloadRuntimeLabel.mockReturnValue('桌面本地下载运行时');
+    mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(true);
+    mockGetDesktopDownloadRuntimeStorageInfo.mockResolvedValue({
+      runtimeKind: 'desktop-local',
+      rootDir: 'C:\\Users\\jay\\.lunatv-desktop\\download-runtime',
+      cacheBodyDir:
+        'C:\\Users\\jay\\.lunatv-desktop\\download-runtime\\cache-body',
+      cacheMetaDir:
+        'C:\\Users\\jay\\.lunatv-desktop\\download-runtime\\cache-meta',
+      resourceIndexDir:
+        'C:\\Users\\jay\\.lunatv-desktop\\download-runtime\\resource-index',
+      sqlitePath: 'C:\\Users\\jay\\.lunatv-desktop\\moontv-desktop.sqlite3',
+    });
+
+    render(
+      <SiteProvider siteName='LunaTV'>
+        <DownloadsClient />
+      </SiteProvider>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '下载设置' }));
+    fireEvent.change(screen.getByLabelText('同时下载数量'), {
+      target: { value: '5' },
+    });
+
+    await waitFor(() => {
+      expect(mockSyncDesktopDownloadEngineSettings).toHaveBeenCalledWith(5);
+    });
+    expect(useDownloadStore.getState().maxConcurrentTasks).toBe(5);
   });
 });
