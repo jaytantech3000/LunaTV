@@ -31,11 +31,9 @@ import {
   readLocalFavorites,
   readLocalFollowRecords,
   readLocalPlayRecords,
-  readLocalSkipConfigs,
   writeLocalFavorites,
   writeLocalFollowRecords,
   writeLocalPlayRecords,
-  writeLocalSkipConfigs,
 } from './local-adapter';
 import {
   deleteRemoteProfileResource,
@@ -46,6 +44,7 @@ import {
 } from './remote-adapter';
 import { shouldUseRemoteProfileStorage } from './runtime';
 import { dispatchSearchHistoryUpdated } from './search-history-client';
+import { generateStorageKey } from './storage-key';
 import { decodeSearchHistoryValues } from '../search-history';
 import { type FollowRecord, SkipConfig } from '../types';
 
@@ -57,6 +56,13 @@ export {
   deleteSearchHistory,
   getSearchHistory,
 } from './search-history-client';
+export {
+  deleteSkipConfig,
+  getAllSkipConfigs,
+  getSkipConfig,
+  saveSkipConfig,
+} from './skip-config-client';
+export { generateStorageKey } from './storage-key';
 
 // 全局错误触发函数
 function triggerGlobalError(message: string) {
@@ -194,13 +200,6 @@ async function handleDatabaseOperationFailure(
 // 页面加载时清理过期缓存
 if (typeof window !== 'undefined') {
   setTimeout(() => cacheManager.clearExpiredCaches(), 1000);
-}
-
-/**
- * 生成存储key
- */
-export function generateStorageKey(source: string, id: string): string {
-  return `${source}+${id}`;
 }
 
 // ---- API ----
@@ -914,229 +913,4 @@ export async function preloadUserData(): Promise<void> {
     console.warn('预加载用户数据失败:', err);
     triggerGlobalError('预加载用户数据失败');
   });
-}
-
-// ---------------- 跳过片头片尾配置相关 API ----------------
-
-/**
- * 获取跳过片头片尾配置。
- * 数据库存储模式下使用混合缓存策略：优先返回缓存数据，后台异步同步最新数据。
- */
-export async function getSkipConfig(
-  source: string,
-  id: string
-): Promise<SkipConfig | null> {
-  // 服务器端渲染阶段直接返回空
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  const key = generateStorageKey(source, id);
-
-  // 数据库存储模式：使用混合缓存策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 优先从缓存获取数据
-    const cachedData = cacheManager.getCachedSkipConfigs();
-
-    if (cachedData) {
-      // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, SkipConfig>>(USER_DATA_API_PATHS.skipConfigs)
-        .then((freshData) => {
-          // 只有数据真正不同时才更新缓存
-          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
-            cacheManager.cacheSkipConfigs(freshData);
-            // 触发数据更新事件
-            dispatchDataUpdate('skipConfigsUpdated', freshData);
-          }
-        })
-        .catch((err) => {
-          console.warn('后台同步跳过片头片尾配置失败:', err);
-        });
-
-      return cachedData[key] || null;
-    } else {
-      // 缓存为空，直接从 API 获取并缓存
-      try {
-        const freshData = await fetchFromApi<Record<string, SkipConfig>>(
-          USER_DATA_API_PATHS.skipConfigs
-        );
-        cacheManager.cacheSkipConfigs(freshData);
-        return freshData[key] || null;
-      } catch (err) {
-        console.error('获取跳过片头片尾配置失败:', err);
-        triggerGlobalError('获取跳过片头片尾配置失败');
-        return null;
-      }
-    }
-  }
-
-  // localStorage 模式
-  try {
-    const configs = readLocalSkipConfigs();
-    return configs[key] || null;
-  } catch (err) {
-    console.error('读取跳过片头片尾配置失败:', err);
-    triggerGlobalError('读取跳过片头片尾配置失败');
-    return null;
-  }
-}
-
-/**
- * 保存跳过片头片尾配置。
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function saveSkipConfig(
-  source: string,
-  id: string,
-  config: SkipConfig
-): Promise<void> {
-  const key = generateStorageKey(source, id);
-
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    const cachedConfigs = cacheManager.getCachedSkipConfigs() || {};
-    cachedConfigs[key] = config;
-    cacheManager.cacheSkipConfigs(cachedConfigs);
-
-    // 触发立即更新事件
-    dispatchDataUpdate('skipConfigsUpdated', cachedConfigs);
-
-    // 异步同步到数据库
-    try {
-      await postRemoteProfilePayload(USER_DATA_API_PATHS.skipConfigs, {
-        key,
-        config,
-      });
-    } catch (err) {
-      console.error('保存跳过片头片尾配置失败:', err);
-      triggerGlobalError('保存跳过片头片尾配置失败');
-    }
-    return;
-  }
-
-  // localStorage 模式
-  if (typeof window === 'undefined') {
-    console.warn('无法在服务端保存跳过片头片尾配置到 localStorage');
-    return;
-  }
-
-  try {
-    const configs = readLocalSkipConfigs();
-    configs[key] = config;
-    writeLocalSkipConfigs(configs);
-    dispatchDataUpdate('skipConfigsUpdated', configs);
-  } catch (err) {
-    console.error('保存跳过片头片尾配置失败:', err);
-    triggerGlobalError('保存跳过片头片尾配置失败');
-    throw err;
-  }
-}
-
-/**
- * 获取所有跳过片头片尾配置。
- * 数据库存储模式下使用混合缓存策略：优先返回缓存数据，后台异步同步最新数据。
- */
-export async function getAllSkipConfigs(): Promise<Record<string, SkipConfig>> {
-  // 服务器端渲染阶段直接返回空
-  if (typeof window === 'undefined') {
-    return {};
-  }
-
-  // 数据库存储模式：使用混合缓存策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 优先从缓存获取数据
-    const cachedData = cacheManager.getCachedSkipConfigs();
-
-    if (cachedData) {
-      // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, SkipConfig>>(USER_DATA_API_PATHS.skipConfigs)
-        .then((freshData) => {
-          // 只有数据真正不同时才更新缓存
-          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
-            cacheManager.cacheSkipConfigs(freshData);
-            // 触发数据更新事件
-            dispatchDataUpdate('skipConfigsUpdated', freshData);
-          }
-        })
-        .catch((err) => {
-          console.warn('后台同步跳过片头片尾配置失败:', err);
-          triggerGlobalError('后台同步跳过片头片尾配置失败');
-        });
-
-      return cachedData;
-    } else {
-      // 缓存为空，直接从 API 获取并缓存
-      try {
-        const freshData = await fetchFromApi<Record<string, SkipConfig>>(
-          USER_DATA_API_PATHS.skipConfigs
-        );
-        cacheManager.cacheSkipConfigs(freshData);
-        return freshData;
-      } catch (err) {
-        console.error('获取跳过片头片尾配置失败:', err);
-        triggerGlobalError('获取跳过片头片尾配置失败');
-        return {};
-      }
-    }
-  }
-
-  // localStorage 模式
-  try {
-    return readLocalSkipConfigs();
-  } catch (err) {
-    console.error('读取跳过片头片尾配置失败:', err);
-    triggerGlobalError('读取跳过片头片尾配置失败');
-    return {};
-  }
-}
-
-/**
- * 删除跳过片头片尾配置。
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function deleteSkipConfig(
-  source: string,
-  id: string
-): Promise<void> {
-  const key = generateStorageKey(source, id);
-
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    const cachedConfigs = cacheManager.getCachedSkipConfigs() || {};
-    delete cachedConfigs[key];
-    cacheManager.cacheSkipConfigs(cachedConfigs);
-
-    // 触发立即更新事件
-    dispatchDataUpdate('skipConfigsUpdated', cachedConfigs);
-
-    // 异步同步到数据库
-    try {
-      await deleteRemoteProfileResource(USER_DATA_API_PATHS.skipConfigs, {
-        key,
-      });
-    } catch (err) {
-      console.error('删除跳过片头片尾配置失败:', err);
-      triggerGlobalError('删除跳过片头片尾配置失败');
-    }
-    return;
-  }
-
-  // localStorage 模式
-  if (typeof window === 'undefined') {
-    console.warn('无法在服务端删除跳过片头片尾配置到 localStorage');
-    return;
-  }
-
-  try {
-    const configs = readLocalSkipConfigs();
-    delete configs[key];
-    writeLocalSkipConfigs(configs);
-    dispatchDataUpdate('skipConfigsUpdated', configs);
-  } catch (err) {
-    console.error('删除跳过片头片尾配置失败:', err);
-    triggerGlobalError('删除跳过片头片尾配置失败');
-    throw err;
-  }
 }
