@@ -314,4 +314,55 @@ describe('DesktopDownloadStoreSync', () => {
     view.unmount();
     expect(runtimeSubscriptionUnsubscribe).toHaveBeenCalledTimes(1);
   });
+
+  it('persists local store changes without re-mirroring the entire task set back to rust', async () => {
+    const localTask = buildDownloadTask({
+      id: 'demo:local:1',
+      cacheIndexId: 'cache:demo:local:1',
+      status: 'queued',
+      progress: 10,
+    });
+
+    mockGetDesktopDownloadStoreSnapshot.mockResolvedValue(null);
+    mockGetDesktopDownloadEngineSnapshot.mockResolvedValue({
+      maxConcurrentTasks: 3,
+      tasks: {},
+      lastEvent: null,
+    });
+
+    render(<DesktopDownloadStoreSync />);
+
+    await waitFor(() => {
+      expect(runtimeSnapshotHandler).not.toBeNull();
+      expect(mockSyncDesktopDownloadEngineState).toHaveBeenCalledTimes(1);
+    });
+
+    mockPutDesktopDownloadStoreSnapshot.mockClear();
+    mockSyncDesktopDownloadEngineState.mockClear();
+
+    act(() => {
+      useDownloadStore.setState({
+        tasks: {
+          [localTask.id]: localTask,
+        },
+      });
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+
+    expect(mockPutDesktopDownloadStoreSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockPutDesktopDownloadStoreSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tasks: {
+          [localTask.id]: expect.objectContaining({
+            id: localTask.id,
+            status: 'queued',
+          }),
+        },
+      })
+    );
+    expect(mockSyncDesktopDownloadEngineState).not.toHaveBeenCalled();
+  });
 });

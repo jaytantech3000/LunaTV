@@ -133,15 +133,6 @@ export default function DesktopDownloadStoreSync() {
       } catch (_) {
         // Ignore sidecar snapshot write failures and keep local state intact.
       }
-
-      try {
-        await syncDesktopDownloadEngineState({
-          maxConcurrentTasks: state.maxConcurrentTasks,
-          tasks: state.tasks,
-        });
-      } catch (_) {
-        // Ignore download engine mirror failures and keep local state intact.
-      }
     };
 
     const applyRuntimeSnapshot = (
