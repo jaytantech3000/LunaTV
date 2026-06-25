@@ -51,6 +51,9 @@ use hyper::server::conn::http1;
 use hyper_util::{rt::TokioIo, service::TowerToHyperService};
 use md5::Md5;
 use moontv_storage::sqlite::{DesktopSqlite, SqliteDatabaseInfo};
+use moontv_sync::{
+    ProfileSyncClient, ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncStatusResponse,
+};
 use rand::Rng;
 use regex::Regex;
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
@@ -68,9 +71,9 @@ use url::{Url, form_urlencoded};
 mod profile_sync;
 
 use profile_sync::{
-    build_profile_sync_status_payload, build_profile_sync_target_url,
-    proxy_profile_sync_change_password, proxy_profile_sync_login, proxy_profile_sync_logout,
-    proxy_profile_sync_passthrough, response_from_upstream,
+    build_profile_sync_status_payload, proxy_profile_sync_change_password,
+    proxy_profile_sync_login, proxy_profile_sync_logout, proxy_profile_sync_passthrough,
+    response_from_upstream,
 };
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -291,7 +294,7 @@ pub struct AppState {
     sqlite_path: PathBuf,
     sqlite: DesktopSqlite,
     client: reqwest::Client,
-    profile_sync_client: reqwest::Client,
+    profile_sync: ProfileSyncClient,
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
     bangumi_api_base_url: String,
     douban_api_base_url: String,
@@ -363,10 +366,12 @@ impl AppState {
             sqlite_path,
             sqlite,
             client: reqwest::Client::new(),
-            profile_sync_client: reqwest::Client::builder()
-                .cookie_store(true)
-                .build()
-                .expect("failed to build profile sync http client"),
+            profile_sync: ProfileSyncClient::new(
+                reqwest::Client::builder()
+                    .cookie_store(true)
+                    .build()
+                    .expect("failed to build profile sync http client"),
+            ),
             profile_sync_session: Arc::new(RwLock::new(None)),
             bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
             douban_api_base_url: DEFAULT_DOUBAN_API_BASE_URL.to_string(),
@@ -958,26 +963,6 @@ struct RuntimePublicConfigResponse {
     custom_categories: Vec<RuntimeCustomCategory>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct ProfileSyncSession {
-    username: String,
-    role: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileSyncStatusResponse {
-    enabled: bool,
-    reachable: bool,
-    authenticated: bool,
-    username: Option<String>,
-    role: Option<String>,
-    storage_type: Option<String>,
-    profile_mode: Option<String>,
-    error: Option<String>,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalAuthStatusResponse {
@@ -994,20 +979,6 @@ struct ProfileBootstrapResponse {
     runtime: RuntimePublicConfigResponse,
     profile_sync: ProfileSyncStatusResponse,
     local_auth: LocalAuthStatusResponse,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct RemoteServerConfigResponse {
-    storage_type: Option<String>,
-    profile_mode: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteLoginResponse {
-    ok: Option<bool>,
-    username: Option<String>,
-    role: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1908,13 +1879,22 @@ async fn get_profile_sync_server_config(State(state): State<AppState>) -> AppRes
         return Ok(response);
     };
 
-    let target_url = build_profile_sync_target_url(remote_base_url, "/api/server-config")?;
     let upstream_response = state
-        .profile_sync_client
-        .get(target_url)
-        .send()
+        .profile_sync
+        .send(
+            Some(remote_base_url),
+            ProfileSyncForwardRequest::get("/api/server-config"),
+        )
         .await
-        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+        .map_err(|error| match error.kind {
+            moontv_sync::ProfileSyncErrorKind::InvalidBaseUrl => {
+                AppError::bad_request(error.message)
+            }
+            moontv_sync::ProfileSyncErrorKind::NotConfigured => {
+                AppError::new(StatusCode::NOT_IMPLEMENTED, error.message)
+            }
+            _ => AppError::new(StatusCode::BAD_GATEWAY, error.message),
+        })?;
 
     response_from_upstream(upstream_response).await
 }

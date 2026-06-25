@@ -19,6 +19,7 @@ hyper.workspace = true
 hyper-util.workspace = true
 md-5 = "0.10.6"
 moontv-storage = { path = "../moontv-storage" }
+moontv-sync = { path = "../moontv-sync" }
 rand = "0.9.4"
 regex.workspace = true
 reqwest.workspace = true

@@ -1,5 +1,10 @@
 [workspace]
-members = ["src-tauri", "crates/moontv-local-service", "crates/moontv-storage"]
+members = [
+    "src-tauri",
+    "crates/moontv-local-service",
+    "crates/moontv-storage",
+    "crates/moontv-sync",
+]
 resolver = "2"
 
 [workspace.package]

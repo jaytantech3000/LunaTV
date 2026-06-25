@@ -2346,6 +2346,7 @@ dependencies = [
  "hyper-util",
  "md-5",
  "moontv-storage",
+ "moontv-sync",
  "rand",
  "regex",
  "reqwest 0.12.28",
@@ -2368,6 +2369,19 @@ dependencies = [
  "anyhow",
  "rusqlite",
  "serde_json",
+]
+
+[[package]]
+name = "moontv-sync"
+version = "200.0.1"
+dependencies = [
+ "axum",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
 ]
 
 [[package]]
