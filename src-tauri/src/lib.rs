@@ -48,6 +48,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DESKTOP_UPDATE_DOWNLOAD_DIR_NAME: &str = "update-downloads";
 const DESKTOP_UPDATER_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+const DESKTOP_UPDATER_NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 
 const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
 
@@ -117,6 +118,15 @@ struct LocalServiceStatus {
     config_path: String,
     data_dir: String,
     sqlite_path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopAvailableUpdate {
+    version: String,
+    current_version: String,
+    date: Option<String>,
+    body: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -558,6 +568,26 @@ async fn install_desktop_release(
 }
 
 #[tauri::command]
+async fn check_desktop_update(app: AppHandle) -> Result<Option<DesktopAvailableUpdate>, String> {
+    check_desktop_update_impl(&app)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn download_desktop_release(
+    app: AppHandle,
+    state: State<'_, DesktopRuntimeState>,
+    manifest_url: String,
+    version: String,
+    on_event: Channel<DesktopReleaseInstallEvent>,
+) -> Result<(), String> {
+    download_desktop_release_impl(&app, &state, manifest_url, version, on_event)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn download_latest_desktop_update(
     app: AppHandle,
     state: State<'_, DesktopRuntimeState>,
@@ -662,6 +692,8 @@ pub fn run() {
             get_desktop_auth_status,
             desktop_login,
             change_desktop_password,
+            check_desktop_update,
+            download_desktop_release,
             download_latest_desktop_update,
             install_downloaded_desktop_update,
             pause_active_desktop_update_download,
@@ -3509,8 +3541,30 @@ fn resolve_response_total_bytes(
     Ok(parse_response_content_length(response))
 }
 
+fn is_direct_github_update_url(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+
+    matches!(
+        host,
+        "github.com"
+            | "raw.githubusercontent.com"
+            | "objects.githubusercontent.com"
+            | "release-assets.githubusercontent.com"
+    ) || host.ends_with(".githubusercontent.com")
+}
+
+fn should_use_direct_update_timeout(update: &DesktopUpdateHandle) -> bool {
+    is_direct_github_update_url(&update.download_url)
+}
+
 fn build_update_download_client(update: &DesktopUpdateHandle) -> Result<reqwest::Client> {
     let mut client_builder = ClientBuilder::new().user_agent(DESKTOP_UPDATER_USER_AGENT);
+
+    if should_use_direct_update_timeout(update) {
+        client_builder = client_builder.connect_timeout(DESKTOP_UPDATER_NETWORK_TIMEOUT);
+    }
 
     if let Some(timeout) = update.timeout {
         client_builder = client_builder.timeout(timeout);
@@ -3647,12 +3701,16 @@ async fn download_update_with_control_inner(
 
     let client = build_update_download_client(update)?;
     let headers = build_update_download_headers(update, prepared_download.downloaded_bytes)?;
-    let response = client
-        .get(update.download_url.clone())
-        .headers(headers)
-        .send()
-        .await
-        .context("failed to download desktop update")?;
+    let use_direct_timeout = should_use_direct_update_timeout(update);
+    let request = client.get(update.download_url.clone()).headers(headers);
+    let response = if use_direct_timeout {
+        tokio::time::timeout(DESKTOP_UPDATER_NETWORK_TIMEOUT, request.send())
+            .await
+            .context("timed out while waiting for desktop update response")?
+    } else {
+        request.send().await
+    }
+    .context("failed to download desktop update")?;
     let status = response.status();
 
     if prepared_download.downloaded_bytes > 0 && status == StatusCode::RANGE_NOT_SATISFIABLE {
@@ -3723,8 +3781,16 @@ async fn download_update_with_control_inner(
                     return Ok(DesktopUpdateDownloadResult::Canceled);
                 }
             }
-            next_chunk = stream.next() => {
-                match next_chunk {
+            next_chunk = async {
+                if use_direct_timeout {
+                    tokio::time::timeout(DESKTOP_UPDATER_NETWORK_TIMEOUT, stream.next())
+                        .await
+                        .context("timed out while waiting for desktop update data")
+                } else {
+                    Ok(stream.next().await)
+                }
+            } => {
+                match next_chunk? {
                     Some(Ok(chunk)) => {
                         file.write_all(&chunk).await?;
                         downloaded_bytes = add_download_lengths(downloaded_bytes, chunk.len() as u64)?;
@@ -3774,14 +3840,41 @@ async fn download_update_with_control(
     }
 }
 
+fn to_desktop_available_update(update: DesktopUpdateHandle) -> DesktopAvailableUpdate {
+    DesktopAvailableUpdate {
+        version: update.version,
+        current_version: update.current_version,
+        date: update.date.map(|date| date.to_string()),
+        body: update.body,
+    }
+}
+
+async fn load_latest_desktop_update(app: &AppHandle) -> Result<Option<DesktopUpdateHandle>> {
+    let mut update = app
+        .updater_builder()
+        .timeout(DESKTOP_UPDATER_NETWORK_TIMEOUT)
+        .build()?
+        .check()
+        .await?;
+
+    if let Some(next_update) = update.as_mut() {
+        next_update.timeout = None;
+    }
+
+    Ok(update)
+}
+
+async fn check_desktop_update_impl(app: &AppHandle) -> Result<Option<DesktopAvailableUpdate>> {
+    Ok(load_latest_desktop_update(app)
+        .await?
+        .map(to_desktop_available_update))
+}
+
 async fn resolve_latest_desktop_update(
     app: &AppHandle,
     expected_version: &str,
 ) -> Result<DesktopUpdateHandle> {
-    let update = app
-        .updater_builder()
-        .build()?
-        .check()
+    let update = load_latest_desktop_update(app)
         .await?
         .ok_or_else(|| anyhow::anyhow!("desktop update {expected_version} is unavailable"))?;
 
@@ -3795,6 +3888,37 @@ async fn resolve_latest_desktop_update(
     Ok(update)
 }
 
+async fn resolve_desktop_release_update(
+    app: &AppHandle,
+    manifest_url: Url,
+    version: &str,
+) -> Result<DesktopUpdateHandle> {
+    let expected_version = version.to_string();
+    let updater = app
+        .updater_builder()
+        .timeout(DESKTOP_UPDATER_NETWORK_TIMEOUT)
+        .version_comparator(move |_current, release| {
+            release.version.to_string() == expected_version
+        })
+        .endpoints(vec![manifest_url])?
+        .build()?;
+    let mut update = updater
+        .check()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("desktop release {version} is unavailable"))?;
+
+    if update.version != version {
+        anyhow::bail!(
+            "desktop release manifest resolved to unexpected version {}",
+            update.version
+        );
+    }
+
+    update.timeout = None;
+
+    Ok(update)
+}
+
 async fn download_latest_desktop_update_impl(
     app: &AppHandle,
     state: &DesktopRuntimeState,
@@ -3803,6 +3927,54 @@ async fn download_latest_desktop_update_impl(
 ) -> Result<()> {
     let version = normalize_required_string(version, "desktop update version cannot be empty")?;
     let update = resolve_latest_desktop_update(app, &version).await?;
+    let command_rx = begin_active_update_download(state, &version)?;
+    clear_downloaded_update(state);
+
+    let download_result =
+        download_update_with_control(app, state, &version, &update, on_event, command_rx).await;
+    finish_active_update_download(state, &version);
+
+    match download_result? {
+        DesktopUpdateDownloadResult::Completed { file_path } => {
+            store_downloaded_update(state, version, update, file_path);
+            Ok(())
+        }
+        DesktopUpdateDownloadResult::Paused {
+            file_path,
+            total_bytes,
+        } => {
+            store_paused_update_download(
+                state,
+                PausedDesktopUpdateDownload {
+                    version,
+                    download_url: update.download_url.clone(),
+                    signature: update.signature.clone(),
+                    file_path,
+                    total_bytes,
+                },
+            );
+            anyhow::bail!(DESKTOP_UPDATE_DOWNLOAD_PAUSED);
+        }
+        DesktopUpdateDownloadResult::Canceled => {
+            clear_paused_update_download(state);
+            anyhow::bail!(DESKTOP_UPDATE_DOWNLOAD_CANCELED);
+        }
+    }
+}
+
+async fn download_desktop_release_impl(
+    app: &AppHandle,
+    state: &DesktopRuntimeState,
+    manifest_url: String,
+    version: String,
+    on_event: Channel<DesktopReleaseInstallEvent>,
+) -> Result<()> {
+    let manifest_url =
+        normalize_required_string(manifest_url, "desktop release manifest URL cannot be empty")?;
+    let version = normalize_required_string(version, "desktop release version cannot be empty")?;
+    let manifest_url =
+        Url::parse(&manifest_url).context("desktop release manifest URL is invalid")?;
+    let update = resolve_desktop_release_update(app, manifest_url, &version).await?;
     let command_rx = begin_active_update_download(state, &version)?;
     clear_downloaded_update(state);
 
@@ -3882,26 +4054,7 @@ async fn install_desktop_release_impl(
     let version = normalize_required_string(version, "desktop release version cannot be empty")?;
     let manifest_url =
         Url::parse(&manifest_url).context("desktop release manifest URL is invalid")?;
-    let expected_version = version.clone();
-
-    let updater = app
-        .updater_builder()
-        .version_comparator(move |_current, release| {
-            release.version.to_string() == expected_version
-        })
-        .endpoints(vec![manifest_url])?
-        .build()?;
-    let update = updater
-        .check()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("desktop release {version} is unavailable"))?;
-
-    if update.version != version {
-        anyhow::bail!(
-            "desktop release manifest resolved to unexpected version {}",
-            update.version
-        );
-    }
+    let update = resolve_desktop_release_update(app, manifest_url, &version).await?;
 
     let command_rx = begin_active_update_download(state, &version)?;
     clear_downloaded_update(state);

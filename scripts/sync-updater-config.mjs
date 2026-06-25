@@ -5,6 +5,8 @@ import path from 'node:path';
 
 import { readDesktopReleaseMetadata } from './desktop-release-utils.mjs';
 
+const DEFAULT_DESKTOP_RELEASE_PROXY_BASE_URL = 'https://hkcu.qzz.io';
+
 function readEnvValue(name) {
   const value = process.env[name]?.trim();
   return value ? value : null;
@@ -27,13 +29,37 @@ function getUpdaterBranch(metadata) {
   );
 }
 
+function normalizeBaseUrl(value) {
+  const normalized = value?.trim();
+  return normalized ? normalized.replace(/\/+$/, '') : '';
+}
+
+function getDesktopReleaseProxyBaseUrl() {
+  return (
+    normalizeBaseUrl(
+      readEnvValue('LUNATV_DESKTOP_RELEASE_PROXY_BASE_URL') ||
+        readEnvValue('NEXT_PUBLIC_DESKTOP_RELEASE_PROXY_BASE_URL') ||
+        readEnvValue('SITE_BASE')
+    ) || DEFAULT_DESKTOP_RELEASE_PROXY_BASE_URL
+  );
+}
+
 async function main() {
   const projectRoot = process.cwd();
   const configPath = path.join(projectRoot, 'src-tauri', 'tauri.conf.json');
   const metadata = await readDesktopReleaseMetadata(projectRoot);
   const repository = getReleaseRepository(metadata);
   const updaterBranch = getUpdaterBranch(metadata);
-  const endpoint = `https://raw.githubusercontent.com/${repository}/${updaterBranch}/latest.json`;
+  const desktopReleaseProxyBaseUrl = getDesktopReleaseProxyBaseUrl();
+  const directEndpoint = `https://raw.githubusercontent.com/${repository}/${updaterBranch}/latest.json`;
+  const proxyEndpoint = desktopReleaseProxyBaseUrl
+    ? `${desktopReleaseProxyBaseUrl}/api/desktop/updater/latest?repo=${encodeURIComponent(
+        repository
+      )}&branch=${encodeURIComponent(updaterBranch)}`
+    : '';
+  const endpoints = Array.from(
+    new Set([directEndpoint, proxyEndpoint].filter(Boolean))
+  );
   const content = await fs.readFile(configPath, 'utf8');
   const config = JSON.parse(content);
 
@@ -45,7 +71,7 @@ async function main() {
     config.plugins.updater = {};
   }
 
-  config.plugins.updater.endpoints = [endpoint];
+  config.plugins.updater.endpoints = endpoints;
 
   await fs.writeFile(
     configPath,
@@ -53,7 +79,7 @@ async function main() {
     'utf8'
   );
 
-  console.log(`Synced updater endpoint: ${endpoint}`);
+  console.log(`Synced updater endpoints: ${endpoints.join(', ')}`);
 }
 
 main().catch((error) => {

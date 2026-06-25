@@ -4,6 +4,7 @@ import { compareSemver } from '@/lib/semver';
 const DESKTOP_RELEASE_TAG_PREFIX = 'desktop-v';
 const DESKTOP_RELEASE_MANIFEST_NAME = 'latest.json';
 const GITHUB_API_BASE = 'https://api.github.com';
+const DESKTOP_RELEASE_HISTORY_REQUEST_TIMEOUT_MS = 3000;
 
 export interface GithubReleaseAssetPayload {
   name?: string | null;
@@ -64,6 +65,32 @@ function tryParseJson<T>(value: string): T | null {
   }
 }
 
+function createTimedAbortSignal(parentSignal?: AbortSignal) {
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => {
+    controller.abort();
+  }, DESKTOP_RELEASE_HISTORY_REQUEST_TIMEOUT_MS);
+  const abortFromParent = () => {
+    controller.abort();
+  };
+
+  if (parentSignal?.aborted) {
+    abortFromParent();
+  } else if (parentSignal) {
+    parentSignal.addEventListener('abort', abortFromParent, {
+      once: true,
+    });
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup() {
+      globalThis.clearTimeout(timeoutId);
+      parentSignal?.removeEventListener('abort', abortFromParent);
+    },
+  };
+}
+
 export function extractDesktopReleaseVersion(
   tagName: string | null | undefined
 ) {
@@ -119,30 +146,36 @@ export async function fetchDesktopReleaseHistoryFromGithub({
     throw new Error('Invalid desktop release repository configuration.');
   }
 
-  const response = await fetch(getDesktopReleaseGithubApiUrl(repository), {
-    signal,
-    cache: 'no-store',
-    headers: {
-      Accept: 'application/vnd.github+json',
-    },
-  });
-  const responseText = await response.text();
-  const payload = tryParseJson<unknown>(responseText);
+  const request = createTimedAbortSignal(signal);
 
-  if (!response.ok) {
-    throw new Error(
-      `GitHub API error ${response.status}: ${readGithubApiErrorMessage(
-        payload,
-        responseText.slice(0, 500) || `HTTP ${response.status}`
-      )}`
-    );
+  try {
+    const response = await fetch(getDesktopReleaseGithubApiUrl(repository), {
+      signal: request.signal,
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/vnd.github+json',
+      },
+    });
+    const responseText = await response.text();
+    const payload = tryParseJson<unknown>(responseText);
+
+    if (!response.ok) {
+      throw new Error(
+        `GitHub API error ${response.status}: ${readGithubApiErrorMessage(
+          payload,
+          responseText.slice(0, 500) || `HTTP ${response.status}`
+        )}`
+      );
+    }
+
+    if (!Array.isArray(payload)) {
+      throw new Error('Unexpected desktop release payload.');
+    }
+
+    return normalizeDesktopReleaseHistory(payload as GithubReleasePayload[]);
+  } finally {
+    request.cleanup();
   }
-
-  if (!Array.isArray(payload)) {
-    throw new Error('Unexpected desktop release payload.');
-  }
-
-  return normalizeDesktopReleaseHistory(payload as GithubReleasePayload[]);
 }
 
 export function normalizeDesktopReleaseHistory(

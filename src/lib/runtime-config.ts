@@ -14,6 +14,7 @@ export interface AppRuntimeConfig {
   APP_TARGET?: 'web' | 'desktop';
   STORAGE_TYPE?: string;
   PROFILE_MODE?: 'single-user-local' | 'shared-multi-user';
+  DESKTOP_RELEASE_PROXY_BASE_URL?: string;
   DOUBAN_PROXY_TYPE?: string;
   DOUBAN_PROXY?: string;
   DOUBAN_IMAGE_PROXY_TYPE?: string;

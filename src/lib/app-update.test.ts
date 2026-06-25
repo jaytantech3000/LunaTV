@@ -1,16 +1,12 @@
-const mockUpdaterCheck = jest.fn();
-
 jest.mock('@/lib/app-update-version', () => ({
   isNewerVersion: jest.fn(),
 }));
 
-jest.mock('@tauri-apps/plugin-updater', () => ({
-  check: (...args: unknown[]) => mockUpdaterCheck(...args),
-}));
-
 jest.mock('@/lib/desktop/tauri-client', () => ({
   cancelActiveDesktopUpdateDownload: jest.fn(),
+  checkDesktopUpdate: jest.fn(),
   clearPausedDesktopUpdateDownload: jest.fn(),
+  downloadDesktopRelease: jest.fn(),
   downloadLatestDesktopUpdate: jest.fn(),
   installDesktopRelease: jest.fn(),
   installDownloadedDesktopUpdate: jest.fn(),
@@ -19,6 +15,13 @@ jest.mock('@/lib/desktop/tauri-client', () => ({
 }));
 
 jest.mock('@/lib/release-urls', () => ({
+  getDesktopReleaseTagName: jest.fn((version: string) => `desktop-v${version}`),
+  getDesktopUpdaterManifestProxyUrl: jest.fn(
+    ({ tagName }: { tagName?: string }) =>
+      tagName
+        ? `https://proxy.example.com/api/desktop/updater/latest?repo=jaytantech3000%2FLunaTV&tag=${tagName}`
+        : ''
+  ),
   getReleasePageUrl: jest.fn(() => 'https://example.com/releases'),
 }));
 
@@ -44,7 +47,9 @@ jest.mock('@/lib/version_check', () => ({
 
 import {
   cancelActiveDesktopUpdateDownload,
+  checkDesktopUpdate,
   clearPausedDesktopUpdateDownload,
+  downloadDesktopRelease,
   downloadLatestDesktopUpdate,
   installDesktopRelease,
   pauseActiveDesktopUpdateDownload,
@@ -129,7 +134,9 @@ function createState(patch: Partial<AppUpdateState> = {}): AppUpdateState {
 describe('app update messaging helpers', () => {
   beforeEach(async () => {
     localStorage.clear();
-    mockUpdaterCheck.mockReset();
+    (
+      checkDesktopUpdate as jest.MockedFunction<typeof checkDesktopUpdate>
+    ).mockReset();
     (
       cancelActiveDesktopUpdateDownload as jest.MockedFunction<
         typeof cancelActiveDesktopUpdateDownload
@@ -138,6 +145,11 @@ describe('app update messaging helpers', () => {
     (
       clearPausedDesktopUpdateDownload as jest.MockedFunction<
         typeof clearPausedDesktopUpdateDownload
+      >
+    ).mockReset();
+    (
+      downloadDesktopRelease as jest.MockedFunction<
+        typeof downloadDesktopRelease
       >
     ).mockReset();
     (
@@ -153,7 +165,9 @@ describe('app update messaging helpers', () => {
         typeof pauseActiveDesktopUpdateDownload
       >
     ).mockReset();
-    mockUpdaterCheck.mockResolvedValue(null);
+    (
+      checkDesktopUpdate as jest.MockedFunction<typeof checkDesktopUpdate>
+    ).mockResolvedValue(null);
     (
       clearPausedDesktopUpdateDownload as jest.MockedFunction<
         typeof clearPausedDesktopUpdateDownload
@@ -263,7 +277,9 @@ describe('app update messaging helpers', () => {
         typeof cancelActiveDesktopUpdateDownload
       >;
 
-    mockUpdaterCheck.mockResolvedValue(update);
+    (
+      checkDesktopUpdate as jest.MockedFunction<typeof checkDesktopUpdate>
+    ).mockResolvedValue(update);
     mockedDownloadLatestDesktopUpdate.mockImplementation(
       () => deferred.promise
     );
@@ -300,7 +316,7 @@ describe('app update messaging helpers', () => {
       errorMessage: null,
       statusMessage: '发现新版本，可直接下载最新版。',
     });
-    expect(mockUpdaterCheck).toHaveBeenCalledTimes(2);
+    expect(checkDesktopUpdate).toHaveBeenCalledTimes(2);
     expect(phases).not.toContain('checking');
   });
 
@@ -319,7 +335,9 @@ describe('app update messaging helpers', () => {
         typeof cancelActiveDesktopUpdateDownload
       >;
 
-    mockUpdaterCheck.mockResolvedValue(update);
+    (
+      checkDesktopUpdate as jest.MockedFunction<typeof checkDesktopUpdate>
+    ).mockResolvedValue(update);
     mockedInstallDesktopRelease.mockImplementation(
       async (_manifestUrl, _version, _onEvent) => deferred.promise
     );
@@ -349,7 +367,94 @@ describe('app update messaging helpers', () => {
       errorMessage: null,
       statusMessage: '发现新版本，可直接下载最新版。',
     });
-    expect(mockUpdaterCheck).toHaveBeenCalledTimes(1);
+    expect(checkDesktopUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries latest downloads through the proxy after a direct GitHub failure', async () => {
+    const update = createDesktopUpdate({
+      version: '200.0.0-beta.13',
+      body: 'Latest release notes',
+    });
+    const mockedDownloadLatestDesktopUpdate =
+      downloadLatestDesktopUpdate as jest.MockedFunction<
+        typeof downloadLatestDesktopUpdate
+      >;
+    const mockedDownloadDesktopRelease =
+      downloadDesktopRelease as jest.MockedFunction<
+        typeof downloadDesktopRelease
+      >;
+
+    (
+      checkDesktopUpdate as jest.MockedFunction<typeof checkDesktopUpdate>
+    ).mockResolvedValue(update);
+    mockedDownloadLatestDesktopUpdate.mockRejectedValueOnce(
+      new Error('network timeout while downloading from github')
+    );
+    mockedDownloadDesktopRelease.mockResolvedValue(undefined);
+
+    await checkForAppUpdates({
+      force: true,
+      allowAutoDownload: false,
+    });
+
+    await downloadLatestVersion({
+      skipTargetRefresh: true,
+    });
+
+    expect(mockedDownloadLatestDesktopUpdate).toHaveBeenCalledTimes(1);
+    expect(mockedDownloadDesktopRelease).toHaveBeenCalledWith(
+      'https://proxy.example.com/api/desktop/updater/latest?repo=jaytantech3000%2FLunaTV&tag=desktop-v200.0.0-beta.13',
+      '200.0.0-beta.13',
+      expect.any(Function)
+    );
+    expect(getAppUpdateState()).toMatchObject({
+      phase: 'downloaded',
+      source: 'desktop-updater',
+      latestVersion: '200.0.0-beta.13',
+      canInstall: true,
+      errorMessage: null,
+    });
+  });
+
+  it('retries release installs through the proxy after a direct GitHub failure', async () => {
+    const mockedInstallDesktopRelease =
+      installDesktopRelease as jest.MockedFunction<
+        typeof installDesktopRelease
+      >;
+
+    mockedInstallDesktopRelease
+      .mockRejectedValueOnce(
+        new Error('connection reset while downloading from github')
+      )
+      .mockResolvedValueOnce(undefined);
+
+    await installDesktopReleaseVersion({
+      manifestUrl: 'https://example.com/releases/beta-10/latest.json',
+      version: '200.0.0-beta.10',
+      publishedAt: '2026-06-10',
+      releaseNotes: 'Pinned release notes',
+    });
+
+    expect(mockedInstallDesktopRelease).toHaveBeenNthCalledWith(
+      1,
+      'https://example.com/releases/beta-10/latest.json',
+      '200.0.0-beta.10',
+      expect.any(Function)
+    );
+    expect(mockedInstallDesktopRelease).toHaveBeenNthCalledWith(
+      2,
+      'https://proxy.example.com/api/desktop/updater/latest?repo=jaytantech3000%2FLunaTV&tag=desktop-v200.0.0-beta.10',
+      '200.0.0-beta.10',
+      expect.any(Function)
+    );
+    expect(getAppUpdateState()).toMatchObject({
+      phase: 'installing',
+      source: 'desktop-updater',
+      latestVersion: '200.0.0-beta.10',
+      targetManifestUrl:
+        'https://proxy.example.com/api/desktop/updater/latest?repo=jaytantech3000%2FLunaTV&tag=desktop-v200.0.0-beta.10',
+      errorMessage: null,
+    });
   });
 
   it('clears paused downloads before restoring the base updater state', async () => {
@@ -371,7 +476,9 @@ describe('app update messaging helpers', () => {
         typeof pauseActiveDesktopUpdateDownload
       >;
 
-    mockUpdaterCheck.mockResolvedValue(update);
+    (
+      checkDesktopUpdate as jest.MockedFunction<typeof checkDesktopUpdate>
+    ).mockResolvedValue(update);
     mockedDownloadLatestDesktopUpdate.mockImplementation(
       () => deferred.promise
     );

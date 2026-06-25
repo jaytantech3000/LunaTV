@@ -22,6 +22,7 @@ import {
   fetchDesktopReleaseHistoryFromGithub,
 } from '@/lib/desktop-release-history';
 import { openExternalUrl } from '@/lib/open-external-url';
+import { getDesktopReleaseHistoryProxyUrl } from '@/lib/release-urls';
 import { isDesktopAppTarget } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { compareSemver } from '@/lib/semver';
@@ -164,30 +165,63 @@ function isJsonResponse(response: Response) {
   return Boolean(contentType?.toLowerCase().includes('application/json'));
 }
 
+async function fetchDesktopReleaseHistoryFromProxy(
+  url: string,
+  signal: AbortSignal
+) {
+  const response = await fetch(url, {
+    signal,
+    cache: 'no-store',
+  });
+
+  if (!isJsonResponse(response)) {
+    throw new Error('Unexpected desktop release proxy response.');
+  }
+
+  const payload =
+    (await response.json()) as DesktopReleaseHistoryResponse | null;
+
+  if (!response.ok) {
+    throw new Error(payload?.error ?? `HTTP ${response.status}`);
+  }
+
+  const releases = payload?.releases;
+  return Array.isArray(releases) ? releases : [];
+}
+
 async function loadDesktopReleaseHistory(signal: AbortSignal) {
+  const desktopReleaseProxyUrl = getDesktopReleaseHistoryProxyUrl();
+
   if (isDesktopAppTarget()) {
+    try {
+      return await fetchDesktopReleaseHistoryFromGithub({ signal });
+    } catch (error) {
+      if (signal.aborted) {
+        throw error;
+      }
+    }
+
+    if (desktopReleaseProxyUrl) {
+      try {
+        return await fetchDesktopReleaseHistoryFromProxy(
+          desktopReleaseProxyUrl,
+          signal
+        );
+      } catch (error) {
+        if (signal.aborted) {
+          throw error;
+        }
+      }
+    }
+
     return fetchDesktopReleaseHistoryFromGithub({ signal });
   }
 
   try {
-    const response = await fetch('/api/desktop/releases', {
-      signal,
-      cache: 'no-store',
-    });
-
-    if (!isJsonResponse(response)) {
-      return fetchDesktopReleaseHistoryFromGithub({ signal });
-    }
-
-    const payload =
-      (await response.json()) as DesktopReleaseHistoryResponse | null;
-
-    if (!response.ok) {
-      throw new Error(payload?.error ?? `HTTP ${response.status}`);
-    }
-
-    const releases = payload?.releases;
-    return Array.isArray(releases) ? releases : [];
+    return await fetchDesktopReleaseHistoryFromProxy(
+      '/api/desktop/releases',
+      signal
+    );
   } catch (error) {
     if (signal.aborted) {
       throw error;

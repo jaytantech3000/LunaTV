@@ -4,7 +4,14 @@ import {
   type GithubReleasePayload,
   normalizeDesktopReleaseHistory,
 } from '@/lib/desktop-release-history';
-import { getReleaseRepository } from '@/lib/release-urls';
+import {
+  isRepositorySlug,
+  normalizeRepositorySlug,
+} from '@/lib/desktop-updater-proxy';
+import {
+  getDesktopUpdaterManifestProxyUrl,
+  getReleaseRepository,
+} from '@/lib/release-urls';
 
 export const runtime = 'nodejs';
 
@@ -19,10 +26,6 @@ function buildResponse(payload: unknown, status = 200) {
   });
 }
 
-function isRepositorySlug(value: string) {
-  return /^[^/\s]+\/[^/\s]+$/.test(value.trim());
-}
-
 function buildGithubHeaders() {
   return {
     Accept: 'application/vnd.github+json',
@@ -31,8 +34,11 @@ function buildGithubHeaders() {
   };
 }
 
-export async function GET() {
-  const repository = getReleaseRepository();
+export async function GET(request: Request) {
+  const requestUrl = new URL(request.url);
+  const repository =
+    normalizeRepositorySlug(requestUrl.searchParams.get('repo')) ||
+    getReleaseRepository();
   if (!isRepositorySlug(repository)) {
     return buildResponse(
       {
@@ -75,7 +81,15 @@ export async function GET() {
     }
 
     return buildResponse({
-      releases: normalizeDesktopReleaseHistory(payload),
+      releases: normalizeDesktopReleaseHistory(payload).map((release) => ({
+        ...release,
+        manifestUrl:
+          getDesktopUpdaterManifestProxyUrl({
+            baseUrl: requestUrl.origin,
+            repository,
+            tagName: release.tagName,
+          }) || release.manifestUrl,
+      })),
     });
   } catch (error) {
     return buildResponse(

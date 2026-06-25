@@ -14,6 +14,8 @@ import {
 import { AppRuntimeConfig } from '@/lib/runtime-config';
 import { CURRENT_VERSION } from '@/lib/version';
 
+const DEFAULT_DESKTOP_RELEASE_PROXY_BASE_URL = 'https://hkcu.qzz.io';
+
 export interface SitePresentation {
   siteName: string;
   announcement: string;
@@ -86,6 +88,11 @@ export async function buildPublicRuntimeConfig(
     APP_TARGET: appTarget,
     STORAGE_TYPE: storageType,
     PROFILE_MODE: getProfileMode(storageType),
+    DESKTOP_RELEASE_PROXY_BASE_URL:
+      process.env.NEXT_PUBLIC_DESKTOP_RELEASE_PROXY_BASE_URL ||
+      process.env.SITE_BASE ||
+      (appTarget === 'desktop' ? DEFAULT_DESKTOP_RELEASE_PROXY_BASE_URL : '') ||
+      '',
     DOUBAN_PROXY_TYPE:
       process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent',
     DOUBAN_PROXY: process.env.NEXT_PUBLIC_DOUBAN_PROXY || '',

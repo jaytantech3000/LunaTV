@@ -239,6 +239,87 @@ describe('DesktopReleaseHistoryDialog', () => {
     );
   });
 
+  it('still prefers GitHub in desktop mode when a proxy is configured', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+      DESKTOP_RELEASE_PROXY_BASE_URL: 'https://proxy.example.com/',
+    };
+    const fetchMock = jest.fn(async () =>
+      createJsonFetchResponse(createGithubReleasePayload())
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderDialog({
+      currentVersion: '200.0.0-beta.12',
+    });
+
+    expect(
+      await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15')
+    ).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://api.github.com/repos/jaytantech3000/LunaTV/releases?per_page=100',
+      expect.objectContaining({
+        cache: 'no-store',
+        headers: expect.objectContaining({
+          Accept: 'application/vnd.github+json',
+        }),
+      })
+    );
+  });
+
+  it('falls back to the configured desktop proxy when GitHub fails in desktop mode', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+      DESKTOP_RELEASE_PROXY_BASE_URL: 'https://proxy.example.com/',
+    };
+    const fetchMock = jest.fn();
+    fetchMock.mockRejectedValueOnce(new Error('network timeout'));
+    fetchMock.mockResolvedValueOnce(
+      createJsonFetchResponse({
+        releases: [
+          {
+            id: 'beta-16',
+            version: '200.0.0-beta.16',
+            tagName: 'desktop-v200.0.0-beta.16',
+            name: 'Beta 16',
+            notes: null,
+            prerelease: true,
+            publishedAt: '2026-06-19T05:01:04Z',
+            htmlUrl: 'https://example.com/beta-16',
+            manifestUrl:
+              'https://proxy.example.com/api/desktop/updater/latest?repo=jaytantech3000%2FLunaTV&tag=desktop-v200.0.0-beta.16',
+          },
+        ],
+      })
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderDialog({
+      currentVersion: '200.0.0-beta.12',
+    });
+
+    expect(
+      await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.16')
+    ).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      1,
+      'https://api.github.com/repos/jaytantech3000/LunaTV/releases?per_page=100',
+      expect.objectContaining({
+        cache: 'no-store',
+        headers: expect.objectContaining({
+          Accept: 'application/vnd.github+json',
+        }),
+      })
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://proxy.example.com/api/desktop/releases?repo=jaytantech3000%2FLunaTV',
+      expect.objectContaining({
+        cache: 'no-store',
+      })
+    );
+  });
+
   it('falls back to GitHub when the route returns HTML', async () => {
     const fetchMock = jest.fn();
     fetchMock.mockResolvedValueOnce(

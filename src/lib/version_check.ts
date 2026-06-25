@@ -1,8 +1,13 @@
 /* eslint-disable no-console */
 
-import { getVersionFileUrl } from '@/lib/release-urls';
+import {
+  getDesktopUpdaterVersionProxyUrl,
+  getVersionFileUrl,
+} from '@/lib/release-urls';
 import { compareSemver } from '@/lib/semver';
 import { CURRENT_VERSION } from '@/lib/version';
+
+const REMOTE_VERSION_FETCH_TIMEOUT_MS = 3000;
 
 export enum UpdateStatus {
   HAS_UPDATE = 'has_update',
@@ -10,7 +15,13 @@ export enum UpdateStatus {
   FETCH_FAILED = 'fetch_failed',
 }
 
-const VERSION_CHECK_URLS = [getVersionFileUrl()];
+function getVersionCheckUrls() {
+  return Array.from(
+    new Set(
+      [getVersionFileUrl(), getDesktopUpdaterVersionProxyUrl()].filter(Boolean)
+    )
+  );
+}
 
 export async function checkForUpdates(
   currentVersion = CURRENT_VERSION
@@ -29,7 +40,7 @@ export async function checkForUpdates(
 }
 
 export async function fetchLatestRemoteVersion(): Promise<string | null> {
-  for (const url of VERSION_CHECK_URLS) {
+  for (const url of getVersionCheckUrls()) {
     const version = await fetchVersionFromUrl(url);
     if (version) {
       return version;
@@ -40,9 +51,13 @@ export async function fetchLatestRemoteVersion(): Promise<string | null> {
 }
 
 async function fetchVersionFromUrl(url: string): Promise<string | null> {
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(
+    () => controller.abort(),
+    REMOTE_VERSION_FETCH_TIMEOUT_MS
+  );
+
   try {
-    const controller = new AbortController();
-    const timeoutId = globalThis.setTimeout(() => controller.abort(), 5000);
     const timestamp = Date.now();
     const urlWithTimestamp = url.includes('?')
       ? `${url}&_t=${timestamp}`
@@ -56,8 +71,6 @@ async function fetchVersionFromUrl(url: string): Promise<string | null> {
       },
     });
 
-    globalThis.clearTimeout(timeoutId);
-
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -67,6 +80,8 @@ async function fetchVersionFromUrl(url: string): Promise<string | null> {
   } catch (error) {
     console.warn(`Failed to fetch remote version from ${url}:`, error);
     return null;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
   }
 }
 
