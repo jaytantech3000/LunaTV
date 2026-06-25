@@ -7,6 +7,8 @@ import type { AppUpdateState } from '@/lib/app-update';
 
 const mockInstallDesktopReleaseVersion = jest.fn();
 const mockOpenExternalUrl = jest.fn();
+const mockFetchDesktopReleaseHistoryPayload = jest.fn();
+const mockIsDesktopTauriRuntimeAvailable = jest.fn(() => true);
 
 jest.mock('@/lib/app-update', () => ({
   installDesktopReleaseVersion: (...args: unknown[]) =>
@@ -19,6 +21,12 @@ jest.mock('@/lib/scroll-lock', () => ({
 
 jest.mock('@/lib/open-external-url', () => ({
   openExternalUrl: (...args: unknown[]) => mockOpenExternalUrl(...args),
+}));
+
+jest.mock('@/lib/desktop/tauri-client', () => ({
+  fetchDesktopReleaseHistoryPayload: (...args: unknown[]) =>
+    mockFetchDesktopReleaseHistoryPayload(...args),
+  isDesktopTauriRuntimeAvailable: () => mockIsDesktopTauriRuntimeAvailable(),
 }));
 
 import { DesktopReleaseHistoryDialog } from './DesktopReleaseHistoryDialog';
@@ -164,7 +172,13 @@ describe('DesktopReleaseHistoryDialog', () => {
     localStorage.clear();
     mockInstallDesktopReleaseVersion.mockReset();
     mockOpenExternalUrl.mockReset();
+    mockFetchDesktopReleaseHistoryPayload.mockReset();
+    mockIsDesktopTauriRuntimeAvailable.mockReset();
     mockOpenExternalUrl.mockResolvedValue(undefined);
+    mockFetchDesktopReleaseHistoryPayload.mockResolvedValue(
+      createGithubReleasePayload()
+    );
+    mockIsDesktopTauriRuntimeAvailable.mockReturnValue(true);
     delete window.RUNTIME_CONFIG;
     global.fetch = jest.fn(async () =>
       createJsonFetchResponse({
@@ -214,40 +228,27 @@ describe('DesktopReleaseHistoryDialog', () => {
     delete (global as any).fetch;
   });
 
-  it('loads release history from GitHub in desktop mode', async () => {
+  it('loads release history through the desktop shell in desktop mode', async () => {
     window.RUNTIME_CONFIG = {
       APP_TARGET: 'desktop',
     };
-    const fetchMock = jest.fn(async () =>
-      createJsonFetchResponse(createGithubReleasePayload())
-    );
-    global.fetch = fetchMock as unknown as typeof fetch;
 
     renderDialog();
 
     expect(
       await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15')
     ).toBeInTheDocument();
-    expect(global.fetch).toHaveBeenCalledWith(
-      'https://api.github.com/repos/jaytantech3000/LunaTV/releases?per_page=100',
-      expect.objectContaining({
-        cache: 'no-store',
-        headers: expect.objectContaining({
-          Accept: 'application/vnd.github+json',
-        }),
-      })
+    expect(mockFetchDesktopReleaseHistoryPayload).toHaveBeenCalledWith(
+      'jaytantech3000/LunaTV'
     );
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it('still prefers GitHub in desktop mode when a proxy is configured', async () => {
+  it('still prefers the desktop shell in desktop mode when a proxy is configured', async () => {
     window.RUNTIME_CONFIG = {
       APP_TARGET: 'desktop',
       DESKTOP_RELEASE_PROXY_BASE_URL: 'https://proxy.example.com/',
     };
-    const fetchMock = jest.fn(async () =>
-      createJsonFetchResponse(createGithubReleasePayload())
-    );
-    global.fetch = fetchMock as unknown as typeof fetch;
 
     renderDialog({
       currentVersion: '200.0.0-beta.12',
@@ -256,24 +257,21 @@ describe('DesktopReleaseHistoryDialog', () => {
     expect(
       await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15')
     ).toBeInTheDocument();
-    expect(global.fetch).toHaveBeenCalledWith(
-      'https://api.github.com/repos/jaytantech3000/LunaTV/releases?per_page=100',
-      expect.objectContaining({
-        cache: 'no-store',
-        headers: expect.objectContaining({
-          Accept: 'application/vnd.github+json',
-        }),
-      })
+    expect(mockFetchDesktopReleaseHistoryPayload).toHaveBeenCalledWith(
+      'jaytantech3000/LunaTV'
     );
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it('falls back to the configured desktop proxy when GitHub fails in desktop mode', async () => {
+  it('falls back to the configured desktop proxy when the desktop shell request fails', async () => {
     window.RUNTIME_CONFIG = {
       APP_TARGET: 'desktop',
       DESKTOP_RELEASE_PROXY_BASE_URL: 'https://proxy.example.com/',
     };
+    mockFetchDesktopReleaseHistoryPayload.mockRejectedValueOnce(
+      new Error('network timeout')
+    );
     const fetchMock = jest.fn();
-    fetchMock.mockRejectedValueOnce(new Error('network timeout'));
     fetchMock.mockResolvedValueOnce(
       createJsonFetchResponse({
         releases: [
@@ -301,21 +299,40 @@ describe('DesktopReleaseHistoryDialog', () => {
     expect(
       await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.16')
     ).toBeInTheDocument();
-    expect(global.fetch).toHaveBeenNthCalledWith(
-      1,
+    expect(mockFetchDesktopReleaseHistoryPayload).toHaveBeenCalledWith(
+      'jaytantech3000/LunaTV'
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://proxy.example.com/api/desktop/releases?repo=jaytantech3000%2FLunaTV',
+      expect.objectContaining({
+        cache: 'no-store',
+      })
+    );
+  });
+
+  it('falls back to GitHub when the desktop shell is unavailable and no proxy is configured', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+    };
+    mockIsDesktopTauriRuntimeAvailable.mockReturnValue(false);
+    const fetchMock = jest.fn(async () =>
+      createJsonFetchResponse(createGithubReleasePayload())
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderDialog();
+
+    expect(
+      await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15')
+    ).toBeInTheDocument();
+    expect(mockFetchDesktopReleaseHistoryPayload).not.toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenCalledWith(
       'https://api.github.com/repos/jaytantech3000/LunaTV/releases?per_page=100',
       expect.objectContaining({
         cache: 'no-store',
         headers: expect.objectContaining({
           Accept: 'application/vnd.github+json',
         }),
-      })
-    );
-    expect(global.fetch).toHaveBeenNthCalledWith(
-      2,
-      'https://proxy.example.com/api/desktop/releases?repo=jaytantech3000%2FLunaTV',
-      expect.objectContaining({
-        cache: 'no-store',
       })
     );
   });

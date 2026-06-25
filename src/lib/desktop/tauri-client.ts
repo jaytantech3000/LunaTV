@@ -1,3 +1,4 @@
+import type { GithubReleasePayload } from '@/lib/desktop-release-history';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
 export interface DesktopLocalServiceStatus {
@@ -204,6 +205,25 @@ export function changeDesktopPassword(
 export function checkDesktopUpdate(): Promise<DesktopAvailableUpdate | null> {
   return invokeDesktopCommand<DesktopAvailableUpdate | null>(
     'check_desktop_update'
+  );
+}
+
+export function fetchLatestRemoteVersionFromDesktop(
+  urls: readonly string[]
+): Promise<string | null> {
+  return invokeDesktopCommand<string | null>('fetch_latest_remote_version', {
+    urls,
+  });
+}
+
+export function fetchDesktopReleaseHistoryPayload(
+  repository: string
+): Promise<GithubReleasePayload[]> {
+  return invokeDesktopCommand<GithubReleasePayload[]>(
+    'fetch_desktop_release_history',
+    {
+      repository,
+    }
   );
 }
 

@@ -1,9 +1,11 @@
 /* eslint-disable no-console */
 
+import { fetchLatestRemoteVersionFromDesktop } from '@/lib/desktop/tauri-client';
 import {
   getDesktopUpdaterVersionProxyUrl,
   getVersionFileUrl,
 } from '@/lib/release-urls';
+import { getRuntimeConfig } from '@/lib/runtime-config';
 import { compareSemver } from '@/lib/semver';
 import { CURRENT_VERSION } from '@/lib/version';
 
@@ -23,6 +25,10 @@ function getVersionCheckUrls() {
   );
 }
 
+function isDesktopTarget() {
+  return getRuntimeConfig().APP_TARGET === 'desktop';
+}
+
 export async function checkForUpdates(
   currentVersion = CURRENT_VERSION
 ): Promise<UpdateStatus> {
@@ -40,7 +46,20 @@ export async function checkForUpdates(
 }
 
 export async function fetchLatestRemoteVersion(): Promise<string | null> {
-  for (const url of getVersionCheckUrls()) {
+  const urls = getVersionCheckUrls();
+
+  if (isDesktopTarget()) {
+    try {
+      return await fetchLatestRemoteVersionFromDesktop(urls);
+    } catch (error) {
+      console.warn(
+        'Failed to fetch latest remote version through desktop shell:',
+        error
+      );
+    }
+  }
+
+  for (const url of urls) {
     const version = await fetchVersionFromUrl(url);
     if (version) {
       return version;

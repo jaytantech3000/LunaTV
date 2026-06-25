@@ -50,6 +50,7 @@ const DESKTOP_UPDATE_DOWNLOAD_DIR_NAME: &str = "update-downloads";
 const DESKTOP_UPDATER_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 const DESKTOP_UPDATER_NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
+const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 
 const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
 const PROFILE_SYNC_USER_DATA_DOMAINS: [&str; 5] = [
@@ -135,6 +136,33 @@ struct DesktopAvailableUpdate {
     current_version: String,
     date: Option<String>,
     body: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum GithubReleaseIdentifier {
+    String(String),
+    Number(u64),
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct GithubReleaseAssetPayload {
+    name: Option<String>,
+    browser_download_url: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct GithubReleasePayload {
+    id: Option<GithubReleaseIdentifier>,
+    tag_name: Option<String>,
+    name: Option<String>,
+    body: Option<String>,
+    draft: Option<bool>,
+    prerelease: Option<bool>,
+    published_at: Option<String>,
+    created_at: Option<String>,
+    html_url: Option<String>,
+    assets: Option<Vec<GithubReleaseAssetPayload>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -599,6 +627,22 @@ async fn check_desktop_update(app: AppHandle) -> Result<Option<DesktopAvailableU
 }
 
 #[tauri::command]
+async fn fetch_latest_remote_version(urls: Vec<String>) -> Result<Option<String>, String> {
+    fetch_latest_remote_version_impl(urls)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn fetch_desktop_release_history(
+    repository: String,
+) -> Result<Vec<GithubReleasePayload>, String> {
+    fetch_desktop_release_history_impl(repository)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn download_desktop_release(
     app: AppHandle,
     state: State<'_, DesktopRuntimeState>,
@@ -717,6 +761,8 @@ pub fn run() {
             desktop_login,
             change_desktop_password,
             check_desktop_update,
+            fetch_latest_remote_version,
+            fetch_desktop_release_history,
             download_desktop_release,
             download_latest_desktop_update,
             install_downloaded_desktop_update,
@@ -4218,6 +4264,159 @@ fn to_desktop_available_update(update: DesktopUpdateHandle) -> DesktopAvailableU
     }
 }
 
+fn normalize_release_repository_slug(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
+        return None;
+    }
+
+    let mut parts = trimmed.split('/');
+    let owner = parts.next()?;
+    let repository = parts.next()?;
+    if owner.is_empty() || repository.is_empty() || parts.next().is_some() {
+        return None;
+    }
+
+    Some(trimmed.to_string())
+}
+
+fn append_cache_busting_query(url: &Url) -> Url {
+    let mut url = url.clone();
+    let timestamp = current_timestamp_ms().to_string();
+    url.query_pairs_mut().append_pair("_t", &timestamp);
+    url
+}
+
+fn build_release_history_api_url(repository: &str) -> String {
+    format!("{GITHUB_API_BASE_URL}/repos/{repository}/releases?per_page=100")
+}
+
+#[derive(Deserialize)]
+struct GithubApiErrorPayload {
+    message: Option<String>,
+}
+
+fn read_github_api_error_message(body_text: &str) -> Option<String> {
+    serde_json::from_str::<GithubApiErrorPayload>(body_text)
+        .ok()
+        .and_then(|payload| payload.message)
+        .map(|message| message.trim().to_string())
+        .filter(|message| !message.is_empty())
+}
+
+fn build_github_api_error_fallback(body_text: &str, status: StatusCode) -> String {
+    let trimmed = body_text.trim();
+    if trimmed.is_empty() {
+        return format!("HTTP {status}");
+    }
+
+    let excerpt = trimmed.chars().take(500).collect::<String>();
+    if excerpt.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        excerpt
+    }
+}
+
+async fn fetch_latest_remote_version_impl(urls: Vec<String>) -> Result<Option<String>> {
+    let client = reqwest::Client::builder()
+        .timeout(DESKTOP_UPDATER_NETWORK_TIMEOUT)
+        .build()
+        .context("failed to build desktop version check client")?;
+
+    for raw_url in urls {
+        let normalized_url = raw_url.trim();
+        if normalized_url.is_empty() {
+            continue;
+        }
+
+        let parsed_url = match Url::parse(normalized_url) {
+            Ok(url) => url,
+            Err(error) => {
+                tracing::warn!("ignored invalid desktop version URL {normalized_url}: {error}");
+                continue;
+            }
+        };
+        let request_url = append_cache_busting_query(&parsed_url);
+        let response = match client
+            .get(request_url.clone())
+            .header(ACCEPT, "text/plain")
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    "failed to fetch remote version from {}: {error}",
+                    parsed_url
+                );
+                continue;
+            }
+        };
+
+        if !response.status().is_success() {
+            tracing::warn!(
+                "failed to fetch remote version from {}: HTTP {}",
+                parsed_url,
+                response.status()
+            );
+            continue;
+        }
+
+        let version = match response.text().await {
+            Ok(body_text) => body_text.trim().to_string(),
+            Err(error) => {
+                tracing::warn!(
+                    "failed to read remote version response from {}: {error}",
+                    parsed_url
+                );
+                continue;
+            }
+        };
+
+        if !version.is_empty() {
+            return Ok(Some(version));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn fetch_desktop_release_history_impl(
+    repository: String,
+) -> Result<Vec<GithubReleasePayload>> {
+    let repository = normalize_release_repository_slug(&repository)
+        .ok_or_else(|| anyhow::anyhow!("invalid desktop release repository configuration"))?;
+    let client = reqwest::Client::builder()
+        .timeout(DESKTOP_UPDATER_NETWORK_TIMEOUT)
+        .build()
+        .context("failed to build desktop release history client")?;
+    let response = client
+        .get(build_release_history_api_url(&repository))
+        .header(ACCEPT, "application/vnd.github+json")
+        .header(reqwest::header::USER_AGENT, DESKTOP_UPDATER_USER_AGENT)
+        .send()
+        .await
+        .context("failed to fetch desktop release history")?;
+    let status = response.status();
+    let body_text = response
+        .text()
+        .await
+        .context("failed to read desktop release history response")?;
+
+    if !status.is_success() {
+        anyhow::bail!(
+            "GitHub API error {}: {}",
+            status,
+            read_github_api_error_message(&body_text)
+                .unwrap_or_else(|| build_github_api_error_fallback(&body_text, status))
+        );
+    }
+
+    serde_json::from_str::<Vec<GithubReleasePayload>>(&body_text)
+        .context("unexpected desktop release payload")
+}
+
 async fn load_latest_desktop_update(app: &AppHandle) -> Result<Option<DesktopUpdateHandle>> {
     let mut update = app
         .updater_builder()
@@ -4621,18 +4820,19 @@ impl RuntimePaths {
 mod tests {
     use super::{
         DEFAULT_DESKTOP_OWNER_USERNAME, LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus,
-        LocalServiceStartupFailure, PortOccupant, SidecarTrialResult,
+        LocalServiceStartupFailure, PortOccupant, SidecarTrialResult, append_cache_busting_query,
         build_profile_sync_status_diagnostic_detail, collect_diagnostics_error_text,
         describe_primary_port_issue, ensure_default_desktop_owner_auth_value,
         extract_profile_sync_api_base_url, local_service_health_check,
-        set_desktop_local_user_password_value, set_desktop_owner_password_value,
-        summarize_trial_output,
+        normalize_release_repository_slug, set_desktop_local_user_password_value,
+        set_desktop_owner_password_value, summarize_trial_output,
     };
     use std::time::Duration;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+    use url::Url;
 
     #[test]
     fn injects_default_owner_username_without_forcing_password() {
@@ -4719,6 +4919,38 @@ mod tests {
         let extracted = extract_profile_sync_api_base_url(&config_value);
 
         assert_eq!(extracted, Some("https://sync.example.com/base".to_string()));
+    }
+
+    #[test]
+    fn normalizes_release_repository_slug_when_owner_and_repo_are_present() {
+        assert_eq!(
+            normalize_release_repository_slug(" jaytantech3000/LunaTV "),
+            Some("jaytantech3000/LunaTV".to_string())
+        );
+        assert_eq!(normalize_release_repository_slug("jaytantech3000"), None);
+        assert_eq!(
+            normalize_release_repository_slug("jaytantech3000 / LunaTV"),
+            None
+        );
+    }
+
+    #[test]
+    fn appends_cache_busting_query_without_dropping_existing_params() {
+        let url = Url::parse("https://example.com/VERSION.txt?branch=desktop").unwrap();
+
+        let request_url = append_cache_busting_query(&url);
+        let query_pairs = request_url.query_pairs().collect::<Vec<_>>();
+
+        assert!(
+            query_pairs
+                .iter()
+                .any(|(key, value)| key == "branch" && value == "desktop")
+        );
+        assert!(
+            query_pairs
+                .iter()
+                .any(|(key, value)| key == "_t" && !value.is_empty())
+        );
     }
 
     #[test]

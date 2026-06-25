@@ -13,6 +13,7 @@
 > - 桌面本地五个 profile 域已经从浏览器 `localStorage` 真源切到 Rust 本地 store，并带有旧数据兼容迁移。
 > - `src/lib/db.client.ts` 已退化为 `src/lib/profile/client.ts` 的兼容出口，桌面 profile 读写主路径不再依赖旧 Web 存储实现。
 > - profile sync 状态接口现已带稳定错误分类与同步域元数据，桌面诊断报告也能直接展示这部分状态。
+> - Phase 4 已开始收口一块可落地的桌面后台能力：桌面模式下的版本检查与 release history 拉取现已优先走 Tauri / Rust 命令，浏览器侧只保留 Web / 预览态 fallback。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
 
 ## 目标
@@ -56,7 +57,7 @@
 
 - 视频下载任务调度、暂停/继续、并发与重试：`src/lib/download/manager.ts`
 - 播放源搜索与详情聚合：`src/lib/playback-source-prefetch.ts`
-- 版本检查与部分远程 release 查询：`src/lib/version_check.ts`、`src/lib/desktop-release-history.ts`
+- 版本比较与少量 release 元数据归一化仍在 TypeScript；桌面模式下的远程版本检查与 release history 抓取已切到 Tauri / Rust：`src/lib/version_check.ts`、`src/lib/desktop-release-history.ts`
 - 桌面前端仍然大量依赖 `fetch` 与 `src/app/api/*`
 - 媒体代理在桌面版虽然已能通过本地服务承接，但协议和适配仍有 TS/Next 历史包袱
 
@@ -305,6 +306,11 @@ Rust Shared Crates
 - 本地导入导出
 - 配置订阅与远程配置拉取
 - 管理后台中真正需要留在桌面的部分
+
+当前进展（2026-06-25）：
+
+- 这一阶段已经落下第一刀：桌面模式下的远程 `VERSION.txt` 检查与 GitHub desktop release history 获取，不再优先依赖前端 `fetch`，而是通过 Tauri 命令转到 Rust 执行。
+- Web 路径、浏览器预览态与桌面代理地址仍保留兼容 fallback，因此这一步是“收口主路径”而不是“一次性删除全部 TS/Next 兼容层”。
 
 ### 验收标准
 

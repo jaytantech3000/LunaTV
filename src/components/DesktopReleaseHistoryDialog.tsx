@@ -18,11 +18,19 @@ import {
   installDesktopReleaseVersion,
 } from '@/lib/app-update';
 import {
+  fetchDesktopReleaseHistoryPayload,
+  isDesktopTauriRuntimeAvailable,
+} from '@/lib/desktop/tauri-client';
+import {
   type DesktopReleaseHistoryItem,
   fetchDesktopReleaseHistoryFromGithub,
+  normalizeDesktopReleaseHistory,
 } from '@/lib/desktop-release-history';
 import { openExternalUrl } from '@/lib/open-external-url';
-import { getDesktopReleaseHistoryProxyUrl } from '@/lib/release-urls';
+import {
+  getDesktopReleaseHistoryProxyUrl,
+  getReleaseRepository,
+} from '@/lib/release-urls';
 import { isDesktopAppTarget } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { compareSemver } from '@/lib/semver';
@@ -189,15 +197,25 @@ async function fetchDesktopReleaseHistoryFromProxy(
   return Array.isArray(releases) ? releases : [];
 }
 
+async function fetchDesktopReleaseHistoryFromDesktopShell() {
+  const payload = await fetchDesktopReleaseHistoryPayload(
+    getReleaseRepository()
+  );
+
+  return normalizeDesktopReleaseHistory(payload);
+}
+
 async function loadDesktopReleaseHistory(signal: AbortSignal) {
   const desktopReleaseProxyUrl = getDesktopReleaseHistoryProxyUrl();
 
   if (isDesktopAppTarget()) {
-    try {
-      return await fetchDesktopReleaseHistoryFromGithub({ signal });
-    } catch (error) {
-      if (signal.aborted) {
-        throw error;
+    if (isDesktopTauriRuntimeAvailable()) {
+      try {
+        return await fetchDesktopReleaseHistoryFromDesktopShell();
+      } catch (error) {
+        if (signal.aborted) {
+          throw error;
+        }
       }
     }
 
@@ -437,6 +455,9 @@ export function DesktopReleaseHistoryDialog({
     void (async () => {
       try {
         const nextReleases = await loadDesktopReleaseHistory(controller.signal);
+        if (controller.signal.aborted) {
+          return;
+        }
         setReleases(nextReleases);
       } catch (error) {
         if (controller.signal.aborted) {
