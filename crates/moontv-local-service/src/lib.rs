@@ -75,11 +75,11 @@ mod profile_local;
 mod profile_sync;
 
 use profile_sync::{
-    build_profile_sync_status_payload, get_profile_sync_server_config,
-    proxy_profile_sync_change_password, proxy_profile_sync_favorites, proxy_profile_sync_follows,
-    proxy_profile_sync_login, proxy_profile_sync_logout, proxy_profile_sync_passthrough,
-    proxy_profile_sync_playrecords, proxy_profile_sync_search_history,
-    proxy_profile_sync_skip_configs,
+    build_profile_sync_status_payload, get_profile_bootstrap, get_profile_sync_server_config,
+    get_profile_sync_status, proxy_profile_sync_change_password, proxy_profile_sync_favorites,
+    proxy_profile_sync_follows, proxy_profile_sync_login, proxy_profile_sync_logout,
+    proxy_profile_sync_passthrough, proxy_profile_sync_playrecords,
+    proxy_profile_sync_search_history, proxy_profile_sync_skip_configs,
 };
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -1016,7 +1016,7 @@ struct LocalAuthStatusResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProfileBootstrapResponse {
+pub(crate) struct ProfileBootstrapResponse {
     app_target: &'static str,
     runtime: RuntimePublicConfigResponse,
     profile_sync: ProfileSyncStatusResponse,
@@ -1926,29 +1926,6 @@ async fn get_runtime_public_config(State(state): State<AppState>) -> AppResult<R
     no_store_json_response(&payload)
 }
 
-async fn get_profile_bootstrap(State(state): State<AppState>) -> AppResult<Response> {
-    let config = state
-        .load_config()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let payload = ProfileBootstrapResponse {
-        app_target: "desktop",
-        runtime: build_runtime_public_config_response(&config),
-        profile_sync: build_profile_sync_status_payload(&state, &config).await,
-        local_auth: build_local_auth_status_payload(&state)
-            .map_err(|error| AppError::internal(error.to_string()))?,
-    };
-
-    no_store_json_response(&payload)
-}
-
-async fn get_profile_sync_status(State(state): State<AppState>) -> AppResult<Response> {
-    let config = state
-        .load_config()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let payload = build_profile_sync_status_payload(&state, &config).await;
-    no_store_json_response(&payload)
-}
-
 async fn put_download_runtime_cache(
     State(state): State<AppState>,
     Query(params): Query<DesktopDownloadCacheQueryParams>,
@@ -2297,6 +2274,19 @@ fn build_local_auth_status_payload(state: &AppState) -> Result<LocalAuthStatusRe
         password_required: owner_password_configured || multi_user,
         multi_user,
         owner_password_configured,
+    })
+}
+
+pub(crate) async fn build_profile_bootstrap_response(
+    state: &AppState,
+    config: &ServiceConfig,
+) -> AppResult<ProfileBootstrapResponse> {
+    Ok(ProfileBootstrapResponse {
+        app_target: "desktop",
+        runtime: build_runtime_public_config_response(config),
+        profile_sync: build_profile_sync_status_payload(state, config).await,
+        local_auth: build_local_auth_status_payload(state)
+            .map_err(|error| AppError::internal(error.to_string()))?,
     })
 }
 

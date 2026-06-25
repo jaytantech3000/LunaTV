@@ -14,7 +14,10 @@ use moontv_sync::{
 };
 
 use crate::profile_local;
-use crate::{AppError, AppResult, AppState, ServiceConfig};
+use crate::{
+    AppError, AppResult, AppState, ServiceConfig, build_profile_bootstrap_response,
+    no_store_json_response,
+};
 
 fn should_proxy_profile_user_data(state: &AppState) -> AppResult<bool> {
     state
@@ -127,6 +130,24 @@ pub(crate) async fn build_profile_sync_status_payload(
             session.as_ref(),
         )
         .await
+}
+
+pub(crate) async fn get_profile_bootstrap(State(state): State<AppState>) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let payload = build_profile_bootstrap_response(&state, &config).await?;
+
+    no_store_json_response(&payload)
+}
+
+pub(crate) async fn get_profile_sync_status(State(state): State<AppState>) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let payload = build_profile_sync_status_payload(&state, &config).await;
+
+    no_store_json_response(&payload)
 }
 
 pub(crate) async fn get_profile_sync_server_config(
