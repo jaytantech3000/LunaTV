@@ -16,7 +16,6 @@
 
 import {
   dispatchProfileCacheUpdate,
-  dispatchProfileSearchHistoryUpdated,
   subscribeToProfileCacheUpdates,
 } from './cache';
 import {
@@ -29,42 +28,35 @@ import { cacheManager, getCacheStatus } from './hybrid-cache';
 import {
   clearLocalFavorites,
   clearLocalPlayRecords,
-  clearLocalSearchHistoryValues,
-  LOCAL_SEARCH_HISTORY_LIMIT,
   readLocalFavorites,
   readLocalFollowRecords,
   readLocalPlayRecords,
-  readLocalSearchHistoryValues,
   readLocalSkipConfigs,
   writeLocalFavorites,
   writeLocalFollowRecords,
   writeLocalPlayRecords,
-  writeLocalSearchHistoryValues,
   writeLocalSkipConfigs,
 } from './local-adapter';
 import {
   deleteRemoteProfileResource,
+  fetchRemoteProfileJson as fetchFromApi,
+  isUnauthorizedRemoteProfileRequestError as isUnauthorizedRequestError,
   postRemoteProfilePayload,
+  wasRemoteProfileRequestRedirectedToLogin as wasRedirectedToLogin,
 } from './remote-adapter';
 import { shouldUseRemoteProfileStorage } from './runtime';
-import {
-  type ProfileRequestInit,
-  fetchProfileResponse,
-  isUnauthorizedProfileRequestError,
-  wasProfileRequestRedirectedToLogin,
-} from './session';
-import {
-  type SearchHistoryEntry,
-  type SearchHistoryMode,
-  decodeSearchHistoryValue,
-  decodeSearchHistoryValues,
-  encodeSearchHistoryValue,
-  resolveSearchHistoryRawValue,
-} from '../search-history';
+import { dispatchSearchHistoryUpdated } from './search-history-client';
+import { decodeSearchHistoryValues } from '../search-history';
 import { type FollowRecord, SkipConfig } from '../types';
 
 export type { Favorite, PlayRecord } from './contracts';
 export { getCacheStatus } from './hybrid-cache';
+export {
+  addSearchHistory,
+  clearSearchHistory,
+  deleteSearchHistory,
+  getSearchHistory,
+} from './search-history-client';
 
 // 全局错误触发函数
 function triggerGlobalError(message: string) {
@@ -86,28 +78,6 @@ function dispatchDataUpdate<T>(
   detail: T
 ): void {
   dispatchProfileCacheUpdate(eventType, detail);
-}
-
-function dispatchSearchHistoryUpdated(rawHistory: string[]): void {
-  dispatchProfileSearchHistoryUpdated(rawHistory);
-}
-
-function shouldReplaceSearchHistoryValue(
-  rawHistoryValue: string,
-  keyword: string,
-  mode?: SearchHistoryMode
-): boolean {
-  const entry = decodeSearchHistoryValue(rawHistoryValue);
-
-  if (!entry || entry.keyword !== keyword) {
-    return false;
-  }
-
-  if (!mode) {
-    return !entry.mode;
-  }
-
-  return !entry.mode || entry.mode === mode;
 }
 
 export function getCachedPlayRecordsSnapshot(): Record<
@@ -148,14 +118,6 @@ export function getCachedFollowRecordsSnapshot(): Record<
     console.error('读取追更记录快照失败:', err);
     return null;
   }
-}
-
-function isUnauthorizedRequestError(error: unknown): boolean {
-  return isUnauthorizedProfileRequestError(error);
-}
-
-function wasRedirectedToLogin(error: unknown): boolean {
-  return wasProfileRequestRedirectedToLogin(error);
 }
 
 // ---- 错误处理辅助函数 ----
@@ -229,99 +191,9 @@ async function handleDatabaseOperationFailure(
   }
 }
 
-async function refreshSearchHistorySilently(): Promise<void> {
-  try {
-    const freshData = await fetchFromApi<string[]>(
-      USER_DATA_API_PATHS.searchHistory,
-      {
-        redirectOnUnauthorized: false,
-      }
-    );
-    cacheManager.cacheSearchHistory(freshData);
-    dispatchSearchHistoryUpdated(freshData);
-  } catch (error) {
-    if (wasRedirectedToLogin(error) || isUnauthorizedRequestError(error)) {
-      return;
-    }
-
-    console.warn('刷新搜索历史缓存失败:', error);
-  }
-}
-
-async function handleSearchHistoryOperationFailure(
-  operation: string,
-  error: unknown
-): Promise<void> {
-  if (wasRedirectedToLogin(error) || isUnauthorizedRequestError(error)) {
-    return;
-  }
-
-  console.warn(`搜索历史${operation}失败:`, error);
-  await refreshSearchHistorySilently();
-}
-
 // 页面加载时清理过期缓存
 if (typeof window !== 'undefined') {
   setTimeout(() => cacheManager.clearExpiredCaches(), 1000);
-}
-
-// ---- 工具函数 ----
-/**
- * 通用的 fetch 函数，处理 401 状态码自动跳转登录
- */
-async function fetchWithAuth(
-  url: string,
-  options?: ProfileRequestInit
-): Promise<Response> {
-  return fetchProfileResponse(url, options);
-
-  /*
-  if (!res.ok) {
-    // 如果是 401 未授权，跳转到登录页面
-    if (res.status === 401) {
-      if (!redirectOnUnauthorized) {
-        throw new DatabaseRequestError(
-          `请求 ${requestUrl} 失败: ${res.status}`,
-          {
-            status: res.status,
-          }
-        );
-      }
-
-      // 调用 logout 接口
-      try {
-        await purgeOfflineDownloads();
-        await fetch(buildApiUrl(USER_DATA_API_PATHS.logout), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        });
-      } catch (error) {
-        console.error('注销请求失败:', error);
-      }
-      const currentUrl = window.location.pathname + window.location.search;
-      const loginUrl = new URL('/login', window.location.origin);
-      loginUrl.searchParams.set('redirect', currentUrl);
-      window.location.href = loginUrl.toString();
-      throw new DatabaseRequestError('用户未授权，已跳转到登录页面', {
-        status: res.status,
-        redirectedToLogin: true,
-      });
-    }
-
-    throw new DatabaseRequestError(`请求 ${requestUrl} 失败: ${res.status}`, {
-      status: res.status,
-    });
-  }
-  return res;
-  */
-}
-
-async function fetchFromApi<T>(
-  path: string,
-  options?: ProfileRequestInit
-): Promise<T> {
-  const response = await fetchWithAuth(path, options);
-  return (await response.json()) as T;
 }
 
 /**
@@ -492,240 +364,6 @@ export async function deletePlayRecord(
     console.error('删除播放记录失败:', err);
     triggerGlobalError('删除播放记录失败');
     throw err;
-  }
-}
-
-/* ---------------- 搜索历史相关 API ---------------- */
-
-/**
- * 获取搜索历史。
- * 数据库存储模式下使用混合缓存策略：优先返回缓存数据，后台异步同步最新数据。
- */
-export async function getSearchHistory(): Promise<SearchHistoryEntry[]> {
-  // 服务器端渲染阶段直接返回空
-  if (typeof window === 'undefined') {
-    return [];
-  }
-
-  // 数据库存储模式：使用混合缓存策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 优先从缓存获取数据
-    const cachedData = cacheManager.getCachedSearchHistory();
-
-    if (cachedData) {
-      // 返回缓存数据，同时后台异步更新
-      fetchFromApi<string[]>(USER_DATA_API_PATHS.searchHistory, {
-        redirectOnUnauthorized: false,
-      })
-        .then((freshData) => {
-          // 只有数据真正不同时才更新缓存
-          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
-            cacheManager.cacheSearchHistory(freshData);
-            dispatchSearchHistoryUpdated(freshData);
-          }
-        })
-        .catch((err) => {
-          if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
-            return;
-          }
-
-          console.warn('后台同步搜索历史失败:', err);
-        });
-
-      return decodeSearchHistoryValues(cachedData);
-    } else {
-      // 缓存为空，直接从 API 获取并缓存
-      try {
-        const freshData = await fetchFromApi<string[]>(
-          USER_DATA_API_PATHS.searchHistory,
-          {
-            redirectOnUnauthorized: false,
-          }
-        );
-        cacheManager.cacheSearchHistory(freshData);
-        return decodeSearchHistoryValues(freshData);
-      } catch (err) {
-        console.error('获取搜索历史失败:', err);
-        return [];
-      }
-    }
-  }
-
-  // localStorage 模式
-  try {
-    return decodeSearchHistoryValues(readLocalSearchHistoryValues());
-  } catch (err) {
-    console.error('读取搜索历史失败:', err);
-    triggerGlobalError('读取搜索历史失败');
-    return [];
-  }
-}
-
-/**
- * 将关键字添加到搜索历史。
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function addSearchHistory(
-  keyword: string,
-  mode?: SearchHistoryMode
-): Promise<void> {
-  const trimmed = keyword.trim();
-  const encodedKeyword = encodeSearchHistoryValue(trimmed, mode);
-
-  if (!encodedKeyword) return;
-
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    const cachedHistory = cacheManager.getCachedSearchHistory() || [];
-    const newHistory = [
-      encodedKeyword,
-      ...cachedHistory.filter(
-        (value) => !shouldReplaceSearchHistoryValue(value, trimmed, mode)
-      ),
-    ];
-    // 限制长度
-    if (newHistory.length > LOCAL_SEARCH_HISTORY_LIMIT) {
-      newHistory.length = LOCAL_SEARCH_HISTORY_LIMIT;
-    }
-    cacheManager.cacheSearchHistory(newHistory);
-
-    // 触发立即更新事件
-    dispatchSearchHistoryUpdated(newHistory);
-
-    // 异步同步到数据库
-    try {
-      await postRemoteProfilePayload(
-        USER_DATA_API_PATHS.searchHistory,
-        {
-          keyword: encodedKeyword,
-        },
-        {
-          redirectOnUnauthorized: false,
-        }
-      );
-    } catch (err) {
-      await handleSearchHistoryOperationFailure('保存', err);
-    }
-    return;
-  }
-
-  // localStorage 模式
-  if (typeof window === 'undefined') return;
-
-  try {
-    const history = readLocalSearchHistoryValues();
-    const newHistory = [
-      encodedKeyword,
-      ...history.filter(
-        (value) => !shouldReplaceSearchHistoryValue(value, trimmed, mode)
-      ),
-    ];
-    // 限制长度
-    if (newHistory.length > LOCAL_SEARCH_HISTORY_LIMIT) {
-      newHistory.length = LOCAL_SEARCH_HISTORY_LIMIT;
-    }
-    writeLocalSearchHistoryValues(newHistory);
-    dispatchSearchHistoryUpdated(newHistory);
-  } catch (err) {
-    console.error('保存搜索历史失败:', err);
-    triggerGlobalError('保存搜索历史失败');
-  }
-}
-
-/**
- * 清空搜索历史。
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function clearSearchHistory(): Promise<void> {
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    cacheManager.cacheSearchHistory([]);
-
-    // 触发立即更新事件
-    dispatchSearchHistoryUpdated([]);
-
-    // 异步同步到数据库
-    try {
-      await deleteRemoteProfileResource(
-        USER_DATA_API_PATHS.searchHistory,
-        undefined,
-        {
-          redirectOnUnauthorized: false,
-        }
-      );
-    } catch (err) {
-      await handleSearchHistoryOperationFailure('清空', err);
-    }
-    return;
-  }
-
-  // localStorage 模式
-  if (typeof window === 'undefined') return;
-  clearLocalSearchHistoryValues();
-  dispatchSearchHistoryUpdated([]);
-}
-
-/**
- * 删除单条搜索历史。
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function deleteSearchHistory(
-  entry: SearchHistoryEntry | string
-): Promise<void> {
-  const rawValue = resolveSearchHistoryRawValue(entry);
-  const trimmedKeyword =
-    typeof entry === 'string' ? entry.trim() : entry.keyword.trim();
-
-  if (!rawValue || !trimmedKeyword) return;
-
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    const cachedHistory = cacheManager.getCachedSearchHistory() || [];
-    const newHistory = cachedHistory.filter((value) =>
-      typeof entry === 'string'
-        ? !shouldReplaceSearchHistoryValue(value, trimmedKeyword)
-        : value !== rawValue
-    );
-    cacheManager.cacheSearchHistory(newHistory);
-
-    // 触发立即更新事件
-    dispatchSearchHistoryUpdated(newHistory);
-
-    // 异步同步到数据库
-    try {
-      await deleteRemoteProfileResource(
-        USER_DATA_API_PATHS.searchHistory,
-        {
-          keyword: rawValue,
-        },
-        {
-          redirectOnUnauthorized: false,
-        }
-      );
-    } catch (err) {
-      await handleSearchHistoryOperationFailure('删除', err);
-    }
-    return;
-  }
-
-  // localStorage 模式
-  if (typeof window === 'undefined') return;
-
-  try {
-    const history = readLocalSearchHistoryValues();
-    const newHistory = history.filter((value) =>
-      typeof entry === 'string'
-        ? !shouldReplaceSearchHistoryValue(value, trimmedKeyword)
-        : value !== rawValue
-    );
-    writeLocalSearchHistoryValues(newHistory);
-    dispatchSearchHistoryUpdated(newHistory);
-  } catch (err) {
-    console.error('删除搜索历史失败:', err);
-    triggerGlobalError('删除搜索历史失败');
   }
 }
 
