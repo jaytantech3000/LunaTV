@@ -57,7 +57,8 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
             <main
               className='flex-1 md:min-h-0 mb-14 mt-12 md:mb-0 md:mt-0'
               style={{
-                paddingBottom: 'calc(3.5rem + env(safe-area-inset-bottom))',
+                paddingBottom:
+                  'calc(3.5rem + var(--music-player-safe-offset, 0px) + env(safe-area-inset-bottom))',
               }}
             >
               {children}

@@ -99,4 +99,18 @@ describe('Sidebar', () => {
 
     expect(await screen.findByText('追更')).toBeInTheDocument();
   });
+
+  it('shows the music entry when web music is enabled', async () => {
+    window.RUNTIME_CONFIG = {
+      ENABLE_WEB_MUSIC: true,
+    };
+
+    render(
+      <SiteProvider siteName='LunaTV'>
+        <Sidebar activePath='/music' />
+      </SiteProvider>
+    );
+
+    expect(await screen.findByText('音乐')).toBeInTheDocument();
+  });
 });

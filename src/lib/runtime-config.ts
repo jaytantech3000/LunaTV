@@ -23,6 +23,7 @@ export interface AppRuntimeConfig {
   CUSTOM_CATEGORIES?: RuntimeCustomCategory[];
   FLUID_SEARCH?: boolean;
   ENABLE_WEB_LIVE?: boolean;
+  ENABLE_WEB_MUSIC?: boolean;
   API_BASE_URL?: string;
   MEDIA_PROXY_BASE_URL?: string;
   ENABLE_ADMIN_PANEL?: boolean;

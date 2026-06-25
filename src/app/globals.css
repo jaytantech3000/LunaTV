@@ -15,6 +15,7 @@
 
 :root {
   --foreground-rgb: 255, 255, 255;
+  --music-player-safe-offset: 0px;
 }
 
 html,

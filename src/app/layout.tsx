@@ -12,6 +12,7 @@ import {
 
 import DesktopRuntimeSync from '@/components/DesktopRuntimeSync';
 import DesktopUpdateBootstrap from '@/components/DesktopUpdateBootstrap';
+import MusicPlayerRoot from '@/components/music/MusicPlayerRoot';
 
 import { GlobalErrorIndicator } from '../components/GlobalErrorIndicator';
 import { SiteProvider } from '../components/SiteProvider';
@@ -107,6 +108,10 @@ function buildDesktopRuntimeBootstrapScript() {
         ENABLE_WEB_LIVE: coalesce(
           payload.enableWebLive,
           coalesce(current.ENABLE_WEB_LIVE, false)
+        ),
+        ENABLE_WEB_MUSIC: coalesce(
+          payload.enableWebMusic,
+          coalesce(current.ENABLE_WEB_MUSIC, false)
         ),
         PLAYER_AUDIO_SPIKE_PROTECTION: nextAudioLevel !== 'off',
         PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: nextAudioLevel,
@@ -235,6 +240,7 @@ export default async function RootLayout({
             adultContentFilterEnabled={!runtimeConfig.DISABLE_YELLOW_FILTER}
           >
             {children}
+            <MusicPlayerRoot />
             <GlobalErrorIndicator />
           </SiteProvider>
         </ThemeProvider>

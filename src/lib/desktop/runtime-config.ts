@@ -21,6 +21,7 @@ export interface DesktopRuntimePublicConfigPayload {
   disableYellowFilter?: boolean;
   fluidSearch?: boolean;
   enableWebLive?: boolean;
+  enableWebMusic?: boolean;
   playerAudioSpikeProtection?: boolean;
   playerAudioDynamicProtection?: boolean;
   playerAudioFixedCeiling?: boolean;
@@ -92,8 +93,7 @@ export function mergeDesktopRuntimePublicConfig(
     audioSpikeProtectionLevel !== 'off'
   );
   const audioFixedCeiling = normalizeBooleanSetting(
-    payload.playerAudioFixedCeiling ??
-      currentConfig.PLAYER_AUDIO_FIXED_CEILING,
+    payload.playerAudioFixedCeiling ?? currentConfig.PLAYER_AUDIO_FIXED_CEILING,
     audioSpikeProtectionLevel !== 'off'
   );
 
@@ -113,6 +113,8 @@ export function mergeDesktopRuntimePublicConfig(
     FLUID_SEARCH: payload.fluidSearch ?? currentConfig.FLUID_SEARCH ?? true,
     ENABLE_WEB_LIVE:
       payload.enableWebLive ?? currentConfig.ENABLE_WEB_LIVE ?? false,
+    ENABLE_WEB_MUSIC:
+      payload.enableWebMusic ?? currentConfig.ENABLE_WEB_MUSIC ?? false,
     PLAYER_AUDIO_SPIKE_PROTECTION: audioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: audioSpikeProtectionLevel,
     PLAYER_AUDIO_DYNAMIC_PROTECTION: audioDynamicProtection,

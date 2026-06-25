@@ -38,6 +38,19 @@ export function isAdminPanelEnabled(): boolean {
   return !(process.env.NEXT_PUBLIC_API_BASE_URL || '').trim();
 }
 
+function isWebMusicEnabled(appTarget: AppRuntimeConfig['APP_TARGET']): boolean {
+  const explicitFlag = process.env.NEXT_PUBLIC_ENABLE_WEB_MUSIC;
+  if (explicitFlag === 'true') {
+    return true;
+  }
+
+  if (explicitFlag === 'false') {
+    return false;
+  }
+
+  return appTarget !== 'desktop';
+}
+
 export async function resolveSitePresentation(
   config?: AdminConfig
 ): Promise<SitePresentation> {
@@ -105,6 +118,7 @@ export async function buildPublicRuntimeConfig(
     CUSTOM_CATEGORIES: [],
     FLUID_SEARCH: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
     ENABLE_WEB_LIVE: false,
+    ENABLE_WEB_MUSIC: isWebMusicEnabled(appTarget),
     API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || '',
     MEDIA_PROXY_BASE_URL:
       process.env.NEXT_PUBLIC_MEDIA_PROXY_BASE_URL ||
