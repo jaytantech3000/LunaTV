@@ -2330,6 +2330,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "moontv-download"
+version = "200.0.1"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "moontv-local-service"
 version = "200.0.1"
 dependencies = [
@@ -2346,6 +2353,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "md-5",
+ "moontv-download",
  "moontv-profile",
  "moontv-storage",
  "moontv-sync",

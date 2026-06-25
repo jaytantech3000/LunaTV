@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "src-tauri",
+    "crates/moontv-download",
     "crates/moontv-local-service",
     "crates/moontv-profile",
     "crates/moontv-storage",

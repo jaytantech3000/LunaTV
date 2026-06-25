@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
-    extract::{FromRequest, Multipart, OriginalUri, Query, Request, State},
+    extract::{FromRequest, Multipart, OriginalUri, Path as AxumPath, Query, Request, State},
     http::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
         header::{
@@ -50,6 +50,10 @@ use hyper::server::conn::http1;
 #[cfg(target_os = "windows")]
 use hyper_util::{rt::TokioIo, service::TowerToHyperService};
 use md5::Md5;
+use moontv_download::{
+    DesktopDownloadEngine, DesktopDownloadEngineSettingsUpdate, DesktopDownloadEngineSnapshot,
+    DesktopDownloadTask,
+};
 use moontv_profile::LocalDesktopProfileStore;
 use moontv_storage::sqlite::{DesktopSqlite, SqliteDatabaseInfo};
 use moontv_sync::{
@@ -90,6 +94,7 @@ const DOWNLOAD_RUNTIME_CACHE_BODY_DIR_NAME: &str = "cache-body";
 const DOWNLOAD_RUNTIME_CACHE_META_DIR_NAME: &str = "cache-meta";
 const DOWNLOAD_RUNTIME_RESOURCE_INDEX_DIR_NAME: &str = "resource-index";
 const DOWNLOAD_RUNTIME_STORE_FILE_NAME: &str = "download-store.json";
+const DOWNLOAD_ENGINE_SNAPSHOT_METADATA_KEY: &str = "desktop:download-engine-snapshot";
 const DEFAULT_CACHE_TIME: u64 = 7200;
 const DEFAULT_SEARCH_MAX_PAGES: usize = 5;
 const DEFAULT_SEARCH_TIMEOUT_MS: u64 = 8_000;
@@ -296,6 +301,7 @@ pub struct AppState {
     sqlite_path: PathBuf,
     sqlite: DesktopSqlite,
     client: reqwest::Client,
+    download_engine: Arc<RwLock<DesktopDownloadEngine>>,
     profile_sync: ProfileSyncClient,
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
     bangumi_api_base_url: String,
@@ -358,6 +364,13 @@ impl AppState {
                 sqlite_path.display()
             )
         })?;
+        let download_engine = DesktopDownloadEngine::from_snapshot(
+            sqlite
+                .read_app_metadata::<DesktopDownloadEngineSnapshot>(
+                    DOWNLOAD_ENGINE_SNAPSHOT_METADATA_KEY,
+                )?
+                .unwrap_or_default(),
+        );
 
         Ok(Self {
             host,
@@ -368,6 +381,7 @@ impl AppState {
             sqlite_path,
             sqlite,
             client: reqwest::Client::new(),
+            download_engine: Arc::new(RwLock::new(download_engine)),
             profile_sync: ProfileSyncClient::new(
                 reqwest::Client::builder()
                     .cookie_store(true)
@@ -405,6 +419,14 @@ impl AppState {
 
     fn profile_store(&self) -> LocalDesktopProfileStore {
         LocalDesktopProfileStore::new(self.sqlite.clone())
+    }
+
+    fn write_download_engine_snapshot(
+        &self,
+        snapshot: &DesktopDownloadEngineSnapshot,
+    ) -> Result<()> {
+        self.sqlite
+            .write_app_metadata(DOWNLOAD_ENGINE_SNAPSHOT_METADATA_KEY, snapshot)
     }
 
     fn download_runtime_dir(&self) -> PathBuf {
@@ -1728,6 +1750,30 @@ pub fn build_router(state: AppState) -> Router {
                 .put(put_download_runtime_store_snapshot)
                 .delete(clear_download_runtime_store_snapshot),
         )
+        .route(
+            "/api/download-runtime/tasks",
+            get(get_download_runtime_tasks).post(post_download_runtime_task),
+        )
+        .route(
+            "/api/download-runtime/tasks/settings",
+            put(put_download_runtime_task_settings),
+        )
+        .route(
+            "/api/download-runtime/tasks/{task_id}/pause",
+            post(pause_download_runtime_task),
+        )
+        .route(
+            "/api/download-runtime/tasks/{task_id}/resume",
+            post(resume_download_runtime_task),
+        )
+        .route(
+            "/api/download-runtime/tasks/{task_id}/cancel",
+            post(cancel_download_runtime_task),
+        )
+        .route(
+            "/api/download-runtime/tasks/{task_id}",
+            delete(delete_download_runtime_task),
+        )
         .route("/api/playrecords", any(proxy_profile_sync_playrecords))
         .route("/api/favorites", any(proxy_profile_sync_favorites))
         .route("/api/follows", any(proxy_profile_sync_follows))
@@ -2102,6 +2148,115 @@ async fn clear_download_runtime_store_snapshot(
         "ok": true,
         "deleted": deleted,
     }))
+}
+
+fn download_runtime_task_not_found() -> AppError {
+    AppError::new(StatusCode::NOT_FOUND, "download runtime task not found")
+}
+
+async fn write_download_engine_snapshot_response(
+    state: &AppState,
+    snapshot: DesktopDownloadEngineSnapshot,
+) -> AppResult<Response> {
+    state
+        .write_download_engine_snapshot(&snapshot)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    no_store_json_response(&snapshot)
+}
+
+async fn mutate_download_engine_snapshot<F>(state: &AppState, mutator: F) -> AppResult<Response>
+where
+    F: FnOnce(&mut DesktopDownloadEngine) -> AppResult<DesktopDownloadEngineSnapshot>,
+{
+    let snapshot = {
+        let mut engine = state.download_engine.write().await;
+        mutator(&mut engine)?
+    };
+
+    write_download_engine_snapshot_response(state, snapshot).await
+}
+
+async fn get_download_runtime_tasks(State(state): State<AppState>) -> AppResult<Response> {
+    let snapshot = state.download_engine.read().await.snapshot();
+    no_store_json_response(&snapshot)
+}
+
+async fn post_download_runtime_task(
+    State(state): State<AppState>,
+    Json(task): Json<DesktopDownloadTask>,
+) -> AppResult<Response> {
+    mutate_download_engine_snapshot(&state, move |engine| {
+        let snapshot = engine
+            .upsert_task(task)
+            .map_err(AppError::bad_request)?
+            .clone();
+        Ok(snapshot)
+    })
+    .await
+}
+
+async fn put_download_runtime_task_settings(
+    State(state): State<AppState>,
+    Json(settings): Json<DesktopDownloadEngineSettingsUpdate>,
+) -> AppResult<Response> {
+    mutate_download_engine_snapshot(&state, move |engine| {
+        Ok(engine.update_settings(settings).clone())
+    })
+    .await
+}
+
+async fn pause_download_runtime_task(
+    State(state): State<AppState>,
+    AxumPath(task_id): AxumPath<String>,
+) -> AppResult<Response> {
+    mutate_download_engine_snapshot(&state, move |engine| {
+        let snapshot = engine
+            .pause_task(&task_id)
+            .ok_or_else(download_runtime_task_not_found)?
+            .clone();
+        Ok(snapshot)
+    })
+    .await
+}
+
+async fn resume_download_runtime_task(
+    State(state): State<AppState>,
+    AxumPath(task_id): AxumPath<String>,
+) -> AppResult<Response> {
+    mutate_download_engine_snapshot(&state, move |engine| {
+        let snapshot = engine
+            .resume_task(&task_id)
+            .ok_or_else(download_runtime_task_not_found)?
+            .clone();
+        Ok(snapshot)
+    })
+    .await
+}
+
+async fn cancel_download_runtime_task(
+    State(state): State<AppState>,
+    AxumPath(task_id): AxumPath<String>,
+) -> AppResult<Response> {
+    mutate_download_engine_snapshot(&state, move |engine| {
+        engine
+            .cancel_task(&task_id)
+            .ok_or_else(download_runtime_task_not_found)?;
+        Ok(engine.snapshot())
+    })
+    .await
+}
+
+async fn delete_download_runtime_task(
+    State(state): State<AppState>,
+    AxumPath(task_id): AxumPath<String>,
+) -> AppResult<Response> {
+    mutate_download_engine_snapshot(&state, move |engine| {
+        engine
+            .delete_task(&task_id)
+            .ok_or_else(download_runtime_task_not_found)?;
+        Ok(engine.snapshot())
+    })
+    .await
 }
 
 async fn proxy_profile_sync_playrecords(
@@ -12236,6 +12391,347 @@ segment0.ts
         );
 
         upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn download_runtime_task_snapshot_persists_across_state_restart() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {}
+            }),
+        );
+        let data_dir = temp_dir.path.join("data");
+        let sqlite_path = temp_dir.path.join("data/moontv.sqlite3");
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path.clone(),
+            data_dir.clone(),
+            sqlite_path.clone(),
+        ));
+
+        let settings_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/download-runtime/tasks/settings")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "maxConcurrentTasks": 9
+                        })
+                        .to_string(),
+                    ))
+                    .expect("download runtime settings request"),
+            )
+            .await
+            .expect("download runtime settings response");
+
+        assert_eq!(settings_response.status(), StatusCode::OK);
+        let settings_payload = read_json_body(settings_response).await;
+        assert_eq!(
+            settings_payload
+                .get("maxConcurrentTasks")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+
+        let task_id = "task-demo-1";
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        build_download_runtime_task_payload(task_id, "downloading").to_string(),
+                    ))
+                    .expect("download runtime create request"),
+            )
+            .await
+            .expect("download runtime create response");
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let create_payload = read_json_body(create_response).await;
+        assert_eq!(
+            create_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(task_id))
+                .and_then(|task| task.get("status"))
+                .and_then(Value::as_str),
+            Some("downloading")
+        );
+
+        let restarted_app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            data_dir,
+            sqlite_path,
+        ));
+
+        let snapshot_response = restarted_app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/download-runtime/tasks")
+                    .body(Body::empty())
+                    .expect("download runtime snapshot request"),
+            )
+            .await
+            .expect("download runtime snapshot response");
+
+        assert_eq!(snapshot_response.status(), StatusCode::OK);
+        let snapshot_payload = read_json_body(snapshot_response).await;
+        assert_eq!(
+            snapshot_payload
+                .get("maxConcurrentTasks")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            snapshot_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(task_id))
+                .and_then(|task| task.get("status"))
+                .and_then(Value::as_str),
+            Some("paused")
+        );
+    }
+
+    #[tokio::test]
+    async fn download_runtime_task_commands_update_snapshot() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let task_id = "task-demo-2";
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        build_download_runtime_task_payload(task_id, "queued").to_string(),
+                    ))
+                    .expect("download runtime create request"),
+            )
+            .await
+            .expect("download runtime create response");
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+
+        let pause_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/download-runtime/tasks/{task_id}/pause"))
+                    .body(Body::empty())
+                    .expect("download runtime pause request"),
+            )
+            .await
+            .expect("download runtime pause response");
+
+        assert_eq!(pause_response.status(), StatusCode::OK);
+        let pause_payload = read_json_body(pause_response).await;
+        assert_eq!(
+            pause_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(task_id))
+                .and_then(|task| task.get("status"))
+                .and_then(Value::as_str),
+            Some("paused")
+        );
+        assert_eq!(
+            pause_payload
+                .get("lastEvent")
+                .and_then(|event| event.get("type"))
+                .and_then(Value::as_str),
+            Some("taskStatusChanged")
+        );
+        assert_eq!(
+            pause_payload
+                .get("lastEvent")
+                .and_then(|event| event.get("command"))
+                .and_then(Value::as_str),
+            Some("pause")
+        );
+
+        let resume_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/download-runtime/tasks/{task_id}/resume"))
+                    .body(Body::empty())
+                    .expect("download runtime resume request"),
+            )
+            .await
+            .expect("download runtime resume response");
+
+        assert_eq!(resume_response.status(), StatusCode::OK);
+        let resume_payload = read_json_body(resume_response).await;
+        assert_eq!(
+            resume_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(task_id))
+                .and_then(|task| task.get("status"))
+                .and_then(Value::as_str),
+            Some("queued")
+        );
+        assert_eq!(
+            resume_payload
+                .get("lastEvent")
+                .and_then(|event| event.get("command"))
+                .and_then(Value::as_str),
+            Some("resume")
+        );
+
+        let missing_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks/missing/pause")
+                    .body(Body::empty())
+                    .expect("download runtime missing pause request"),
+            )
+            .await
+            .expect("download runtime missing pause response");
+
+        assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+        let missing_payload = read_json_body(missing_response).await;
+        assert_eq!(
+            missing_payload.get("error").and_then(Value::as_str),
+            Some("download runtime task not found")
+        );
+
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/download-runtime/tasks/{task_id}"))
+                    .body(Body::empty())
+                    .expect("download runtime delete request"),
+            )
+            .await
+            .expect("download runtime delete response");
+
+        assert_eq!(delete_response.status(), StatusCode::OK);
+        let delete_payload = read_json_body(delete_response).await;
+        assert_eq!(
+            delete_payload
+                .get("tasks")
+                .and_then(Value::as_object)
+                .map(|tasks| tasks.len()),
+            Some(0)
+        );
+        assert_eq!(
+            delete_payload
+                .get("lastEvent")
+                .and_then(|event| event.get("reason"))
+                .and_then(Value::as_str),
+            Some("deleted")
+        );
+
+        let recreate_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        build_download_runtime_task_payload(task_id, "queued").to_string(),
+                    ))
+                    .expect("download runtime recreate request"),
+            )
+            .await
+            .expect("download runtime recreate response");
+
+        assert_eq!(recreate_response.status(), StatusCode::OK);
+
+        let cancel_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/download-runtime/tasks/{task_id}/cancel"))
+                    .body(Body::empty())
+                    .expect("download runtime cancel request"),
+            )
+            .await
+            .expect("download runtime cancel response");
+
+        assert_eq!(cancel_response.status(), StatusCode::OK);
+        let cancel_payload = read_json_body(cancel_response).await;
+        assert_eq!(
+            cancel_payload
+                .get("tasks")
+                .and_then(Value::as_object)
+                .map(|tasks| tasks.len()),
+            Some(0)
+        );
+        assert_eq!(
+            cancel_payload
+                .get("lastEvent")
+                .and_then(|event| event.get("reason"))
+                .and_then(Value::as_str),
+            Some("cancelled")
+        );
+    }
+
+    fn build_download_runtime_task_payload(task_id: &str, status: &str) -> Value {
+        json!({
+          "id": task_id,
+          "contentId": "demo:1",
+          "source": "demo",
+          "sourceName": "Demo Source",
+          "vodId": "1",
+          "episodeIndex": 0,
+          "title": "Demo Title",
+          "searchTitle": "Demo Search",
+          "searchType": "tv",
+          "poster": "https://img.example.com/demo.jpg",
+          "remarks": "Demo remarks",
+          "year": "2026",
+          "desc": "Demo description",
+          "typeName": "tv",
+          "doubanId": 1001,
+          "episodeTitle": "第1集",
+          "originalM3u8Url": "https://cdn.example.com/root.m3u8",
+          "entryManifestUrl": "https://cdn.example.com/root.m3u8",
+          "manifestCandidateUrls": ["https://cdn.example.com/root.m3u8"],
+          "playbackManifestUrl": "https://cdn.example.com/playback.m3u8",
+          "cacheIndexId": format!("cache:{task_id}"),
+          "status": status,
+          "progress": 12,
+          "totalResources": 20,
+          "downloadedResources": 3,
+          "sizeBytes": 1024,
+          "currentSizeBytes": 2048,
+          "estimatedTotalSizeBytes": 4096,
+          "downloadSpeedBytesPerSecond": 512,
+          "createdAt": 100,
+          "updatedAt": 200
+        })
     }
 
     fn mock_vod_api_response(params: &BTreeMap<String, String>) -> Response {

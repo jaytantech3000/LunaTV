@@ -16,6 +16,7 @@
 > - Phase 4 已开始收口一块可落地的桌面后台能力：桌面模式下的版本检查与 release history 拉取现已优先走 Tauri / Rust 命令，浏览器侧只保留 Web / 预览态 fallback。
 > - 桌面 release history 的过滤、manifest 解析与排序也已下沉到 Tauri / Rust，桌面前端直接消费最终 `DesktopReleaseHistoryItem`。
 > - Phase 2A 也开始落下第一刀：桌面模式下的 `searchPlaybackSources` 已优先走 local service 新增的 `/api/playback/search-sources`，把查询组合、候选聚合和结果预筛选从前端下沉到 Rust。
+> - Phase 1 也已经开始落下“先搭骨架、不切主流程”的第一刀：新增 `moontv-download` crate，桌面本地服务补齐 `/api/download-runtime/tasks*` 命令 / 状态查询 skeleton，并把下载引擎快照持久化到 SQLite `app_metadata`。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
 
 ## 目标
@@ -52,7 +53,7 @@
 ### 已经 Rust 化的部分
 
 - Tauri 壳已经负责本地服务启停、配置读写、诊断、认证和更新入口，见 `src-tauri/src/lib.rs`
-- 桌面本地下载运行时已经存在，提供缓存、资源索引、快照存储接口，见 `crates/moontv-local-service/src/lib.rs`
+- 桌面本地下载运行时已经存在，提供缓存、资源索引、下载 engine 快照存储，以及 `tasks/settings/pause/resume/cancel/delete` 命令骨架，见 `crates/moontv-local-service/src/lib.rs`
 - 应用更新下载已经走桌面 Rust 链路，并支持断点续传
 
 ### 仍在 TypeScript 的关键后台逻辑
@@ -215,6 +216,14 @@ Rust Shared Crates
 3. 支持 Rust 下载器与 TS 下载器并行存在一段时间
 4. 桌面版切到 Rust 下载器
 5. 删除桌面路径中的 TS 下载执行逻辑
+
+当前进展（2026-06-25）：
+
+- `crates/moontv-download` 已落地第一版任务模型、命令、事件、并发设置与快照恢复逻辑。
+- `crates/moontv-local-service` 已新增 `/api/download-runtime/tasks`、`/api/download-runtime/tasks/settings` 以及 `pause/resume/cancel/delete` 路由，形成桌面下载引擎的命令 + 状态查询 skeleton。
+- 下载引擎快照现在通过 SQLite `app_metadata` 持久化；应用重启后，未完成的 `downloading` 任务会恢复为 `paused`，避免把旧运行态误当成仍在执行。
+- `src/lib/download/desktop-runtime.ts` 已补齐对应的桌面 SDK 封装，前端可以开始逐步改为消费这组新边界。
+- `src/lib/download/manager.ts` 仍然是当前桌面下载的真实执行器，所以这一阶段只完成了“边界收口”和“状态恢复骨架”，还没有切走主下载流程。
 
 ### 验收标准
 

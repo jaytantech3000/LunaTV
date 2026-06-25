@@ -1,7 +1,7 @@
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { buildApiUrl } from '@/lib/transport/endpoint';
 
-import { ResourceIndexRecord } from './types';
+import { DownloadTask, ResourceIndexRecord } from './types';
 
 const DESKTOP_LOCAL_DOWNLOAD_RUNTIME_ENABLED =
   process.env.NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME === 'true';
@@ -21,6 +21,46 @@ export interface DesktopDownloadRuntimeStorageInfoResponse {
   cacheMetaDir: string;
   resourceIndexDir: string;
   sqlitePath: string;
+}
+
+export interface DesktopDownloadEngineSettingsUpdate {
+  maxConcurrentTasks: number;
+}
+
+export type DesktopDownloadEngineCommand =
+  | 'pause'
+  | 'resume'
+  | 'cancel'
+  | 'delete';
+
+export type DesktopDownloadTaskRemovedReason = 'cancelled' | 'deleted';
+
+export type DesktopDownloadEngineEvent =
+  | {
+      type: 'taskUpserted';
+      taskId: string;
+      status: DownloadTask['status'];
+    }
+  | {
+      type: 'taskStatusChanged';
+      taskId: string;
+      status: DownloadTask['status'];
+      command: DesktopDownloadEngineCommand;
+    }
+  | {
+      type: 'taskRemoved';
+      taskId: string;
+      reason: DesktopDownloadTaskRemovedReason;
+    }
+  | {
+      type: 'maxConcurrentTasksChanged';
+      maxConcurrentTasks: number;
+    };
+
+export interface DesktopDownloadEngineSnapshot {
+  maxConcurrentTasks: number;
+  tasks: Record<string, DownloadTask>;
+  lastEvent?: DesktopDownloadEngineEvent | null;
 }
 
 function ensureDesktopLocalDownloadRuntime(): void {
@@ -291,4 +331,122 @@ export async function clearDesktopDownloadStoreSnapshot(): Promise<void> {
   });
 
   await parseJsonResponse(response);
+}
+
+export async function getDesktopDownloadEngineSnapshot(): Promise<DesktopDownloadEngineSnapshot> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(buildDesktopDownloadRuntimeUrl('/tasks'), {
+    method: 'GET',
+    cache: 'no-store',
+    credentials: 'omit',
+  });
+
+  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+}
+
+export async function putDesktopDownloadEngineSettings(
+  settings: DesktopDownloadEngineSettingsUpdate
+): Promise<DesktopDownloadEngineSnapshot> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(
+    buildDesktopDownloadRuntimeUrl('/tasks/settings'),
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(settings),
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
+
+  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+}
+
+export async function postDesktopDownloadTask(
+  task: DownloadTask
+): Promise<DesktopDownloadEngineSnapshot> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(buildDesktopDownloadRuntimeUrl('/tasks'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(task),
+    cache: 'no-store',
+    credentials: 'omit',
+  });
+
+  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+}
+
+export async function pauseDesktopDownloadTask(
+  taskId: string
+): Promise<DesktopDownloadEngineSnapshot> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(
+    buildDesktopDownloadRuntimeUrl(
+      `/tasks/${encodeURIComponent(taskId)}/pause`
+    ),
+    {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
+
+  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+}
+
+export async function resumeDesktopDownloadTask(
+  taskId: string
+): Promise<DesktopDownloadEngineSnapshot> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(
+    buildDesktopDownloadRuntimeUrl(
+      `/tasks/${encodeURIComponent(taskId)}/resume`
+    ),
+    {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
+
+  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+}
+
+export async function cancelDesktopDownloadTask(
+  taskId: string
+): Promise<DesktopDownloadEngineSnapshot> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(
+    buildDesktopDownloadRuntimeUrl(
+      `/tasks/${encodeURIComponent(taskId)}/cancel`
+    ),
+    {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
+
+  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+}
+
+export async function deleteDesktopDownloadTask(
+  taskId: string
+): Promise<DesktopDownloadEngineSnapshot> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(
+    buildDesktopDownloadRuntimeUrl(`/tasks/${encodeURIComponent(taskId)}`),
+    {
+      method: 'DELETE',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
+
+  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
 }
