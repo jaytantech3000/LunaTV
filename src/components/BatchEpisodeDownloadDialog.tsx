@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { downloadManager } from '@/lib/download/manager';
+import { downloadClient } from '@/lib/download/client';
 import {
   buildDownloadContentId,
   buildDownloadTaskId,
@@ -81,8 +81,7 @@ function getBatchFeedbackMessage(
     return '没有可处理的剧集。';
   }
 
-  const suffix =
-    skippedCount > 0 ? '（已下载、已在队列中或当前不可下载）' : '';
+  const suffix = skippedCount > 0 ? '（已下载、已在队列中或当前不可下载）' : '';
 
   return `${parts.join('，')}${suffix}。`;
 }
@@ -388,7 +387,7 @@ export default function BatchEpisodeDownloadDialog({
       setActionError(null);
       setIsStartingBatchDownload(true);
 
-      const result = await downloadManager.restartBatchEpisodeDownloads({
+      const result = await downloadClient.restartBatchEpisodeDownloads({
         detail,
         episodeIndexes: selectedEpisodeIndexes,
         availableSources,

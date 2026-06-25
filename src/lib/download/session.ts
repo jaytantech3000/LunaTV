@@ -3,12 +3,12 @@ import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { useDownloadStore } from '@/stores/downloadStore';
 
 import { clearDownloadCache } from './cache';
+import { downloadClient } from './client';
 import { clearDesktopDownloadEngineSnapshotCache } from './desktop-engine-sync';
 import {
   clearDesktopDownloadEngineTasks,
   clearDesktopDownloadStoreSnapshot,
 } from './desktop-runtime';
-import { downloadManager } from './manager';
 import { clearResourceIndexes } from './resource-index';
 
 export function getCurrentDownloadOwner(): string | null {
@@ -16,7 +16,7 @@ export function getCurrentDownloadOwner(): string | null {
 }
 
 export async function purgeOfflineDownloads(): Promise<void> {
-  downloadManager.abortAll();
+  downloadClient.abortAll();
 
   await Promise.allSettled([
     clearDownloadCache(),

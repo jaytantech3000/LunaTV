@@ -33,8 +33,8 @@ jest.mock('@/lib/download/downloadable', () => ({
   resolveDownloadablePlaybackSources: jest.fn(),
 }));
 
-jest.mock('@/lib/download/manager', () => ({
-  downloadManager: {
+jest.mock('@/lib/download/client', () => ({
+  downloadClient: {
     startEpisodeDownload: jest.fn(),
     pauseTask: jest.fn(),
     resumeTask: jest.fn(),
@@ -146,9 +146,7 @@ describe('CurrentEpisodeDownloadControl', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument();
 
-    fireEvent.click(
-      screen.getByRole('button', { name: '收起离线下载详情' })
-    );
+    fireEvent.click(screen.getByRole('button', { name: '收起离线下载详情' }));
 
     await waitFor(() => {
       expect(screen.queryByText('离线下载详情')).not.toBeInTheDocument();

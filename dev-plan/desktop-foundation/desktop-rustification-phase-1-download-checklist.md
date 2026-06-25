@@ -166,10 +166,15 @@
 
 ### A. 冻结前端访问边界
 
-- [ ] 明确桌面下载页、当前集下载控件、批量下载弹窗只能通过统一下载 SDK 访问运行时
-- [ ] 停止新增直接依赖 `downloadManager` 的桌面 UI 调用点
+- [x] 明确桌面下载页、当前集下载控件、批量下载弹窗只能通过统一下载 SDK 访问运行时
+- [x] 停止新增直接依赖 `downloadManager` 的桌面 UI 调用点
 - [ ] 为桌面模式保留“执行器选择开关”，便于 pre 阶段灰度切换
 - [ ] 保证 Web 版路径不被桌面下载器迁移误伤
+
+当前进展（2026-06-25）：
+
+- `src/lib/download/client.ts` 已落地为统一 facade，`DownloadsClient`、`CurrentEpisodeDownloadControl`、`BatchEpisodeDownloadDialog` 与 `src/lib/download/session.ts` 均改为通过这层访问下载执行能力。
+- ESLint 现已禁止 `src/app/*` 与 `src/components/*` 的非测试代码直接 import `@/lib/download/manager`，避免桌面 UI 新增绕过 facade 的调用点。
 
 ### B. 定义 Rust 下载任务模型与持久化边界
 

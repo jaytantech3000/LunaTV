@@ -77,6 +77,26 @@ module.exports = {
     ],
     //#endregion  //*======== Import Sort ===========
   },
+  overrides: [
+    {
+      files: ['src/app/**/*.{ts,tsx}', 'src/components/**/*.{ts,tsx}'],
+      excludedFiles: ['**/*.test.ts', '**/*.test.tsx'],
+      rules: {
+        'no-restricted-imports': [
+          'error',
+          {
+            paths: [
+              {
+                name: '@/lib/download/manager',
+                message:
+                  'Use "@/lib/download/client" so desktop download execution can switch behind a stable UI boundary.',
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ],
   globals: {
     React: true,
     JSX: true,

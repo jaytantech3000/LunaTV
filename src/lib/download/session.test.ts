@@ -1,10 +1,10 @@
 import { clearDownloadCache } from './cache';
+import { downloadClient } from './client';
 import { clearDesktopDownloadEngineSnapshotCache } from './desktop-engine-sync';
 import {
   clearDesktopDownloadEngineTasks,
   clearDesktopDownloadStoreSnapshot,
 } from './desktop-runtime';
-import { downloadManager } from './manager';
 import { clearResourceIndexes } from './resource-index';
 import { purgeOfflineDownloads } from './session';
 
@@ -34,8 +34,8 @@ jest.mock('./desktop-runtime', () => ({
   clearDesktopDownloadStoreSnapshot: jest.fn(),
 }));
 
-jest.mock('./manager', () => ({
-  downloadManager: {
+jest.mock('./client', () => ({
+  downloadClient: {
     abortAll: jest.fn(),
   },
 }));
@@ -87,7 +87,7 @@ describe('download session helpers', () => {
 
     await purgeOfflineDownloads();
 
-    expect(downloadManager.abortAll).toHaveBeenCalledTimes(1);
+    expect(downloadClient.abortAll).toHaveBeenCalledTimes(1);
     expect(clearDownloadCache).toHaveBeenCalledTimes(1);
     expect(clearResourceIndexes).toHaveBeenCalledTimes(1);
     expect(clearDesktopDownloadEngineTasks).toHaveBeenCalledTimes(1);

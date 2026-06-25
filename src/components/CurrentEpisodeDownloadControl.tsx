@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getOfflineDownloadSupportState } from '@/lib/download/cache';
+import { downloadClient } from '@/lib/download/client';
 import { resolveDownloadablePlaybackSources } from '@/lib/download/downloadable';
 import {
   formatBytes,
@@ -13,7 +14,6 @@ import {
   formatTransferRate,
   getDownloadStatusLabel,
 } from '@/lib/download/format';
-import { downloadManager } from '@/lib/download/manager';
 import {
   buildOfflinePlayHref,
   getDownloadedEpisodeMeta,
@@ -240,13 +240,19 @@ export default function CurrentEpisodeDownloadControl({
       ? 'border-emerald-200/80 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-300'
       : 'border-gray-200/80 bg-white/80 text-gray-600 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300';
   const standardSummary = task
-    ? `${task.totalResources > 0 ? `${task.downloadedResources}/${task.totalResources} 个资源` : `${task.progress}%`} · ${formatTaskSizeProgress(task)}${
+    ? `${
+        task.totalResources > 0
+          ? `${task.downloadedResources}/${task.totalResources} 个资源`
+          : `${task.progress}%`
+      } · ${formatTaskSizeProgress(task)}${
         task.status === 'downloading'
           ? ` · ${formatTransferRate(task.downloadSpeedBytesPerSecond)}`
           : ''
       }`
     : downloadedEpisode
-    ? `${formatBytes(downloadedEpisode.sizeBytes)} · ${downloadedEpisode.resourceCount} 个资源已缓存`
+    ? `${formatBytes(downloadedEpisode.sizeBytes)} · ${
+        downloadedEpisode.resourceCount
+      } 个资源已缓存`
     : detail.episodes.length > 1
     ? '可缓存当前集，也可从下载选项批量选择剧集。'
     : '可缓存当前内容，稍后离线播放。';
@@ -317,7 +323,7 @@ export default function CurrentEpisodeDownloadControl({
       if (!downloadSources) {
         return;
       }
-      await downloadManager.startEpisodeDownload({
+      await downloadClient.startEpisodeDownload({
         detail: downloadSources.detail,
         episodeIndex: targetEpisodeIndex,
         availableSources: downloadSources.availableSources,
@@ -334,7 +340,7 @@ export default function CurrentEpisodeDownloadControl({
   const handlePause = async () => {
     try {
       setActionError(null);
-      await downloadManager.pauseTask(taskId);
+      await downloadClient.pauseTask(taskId);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '暂停下载失败');
     }
@@ -343,7 +349,7 @@ export default function CurrentEpisodeDownloadControl({
   const handleResume = async () => {
     try {
       setActionError(null);
-      await downloadManager.resumeTask(taskId);
+      await downloadClient.resumeTask(taskId);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '恢复下载失败');
     }
@@ -352,7 +358,7 @@ export default function CurrentEpisodeDownloadControl({
   const handleCancel = async () => {
     try {
       setActionError(null);
-      await downloadManager.cancelTask(taskId);
+      await downloadClient.cancelTask(taskId);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '取消下载失败');
     }
@@ -361,7 +367,7 @@ export default function CurrentEpisodeDownloadControl({
   const handleDelete = async () => {
     try {
       setActionError(null);
-      await downloadManager.deleteEpisode(contentId, targetEpisodeIndex);
+      await downloadClient.deleteEpisode(contentId, targetEpisodeIndex);
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : '删除离线文件失败'
@@ -604,9 +610,7 @@ export default function CurrentEpisodeDownloadControl({
                 )}
 
                 {actionError && (
-                  <div className='mt-3 text-xs text-red-400'>
-                    {actionError}
-                  </div>
+                  <div className='mt-3 text-xs text-red-400'>{actionError}</div>
                 )}
 
                 {task?.errorMessage && task.status === 'error' && (

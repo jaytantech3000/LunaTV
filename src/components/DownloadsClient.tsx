@@ -12,6 +12,7 @@ import {
   buildAdultDownloadGroupingQuery,
   filterAdultGroupingSearchResults,
 } from '@/lib/download/adult';
+import { downloadClient } from '@/lib/download/client';
 import { syncDesktopDownloadEngineSettings } from '@/lib/download/desktop-engine-sync';
 import {
   type DesktopDownloadRuntimeStorageInfoResponse,
@@ -27,7 +28,6 @@ import {
   getTaskCurrentSizeBytes,
   getTaskEstimatedTotalSizeBytes,
 } from '@/lib/download/format';
-import { downloadManager } from '@/lib/download/manager';
 import {
   normalizeVodDetailForPlayback,
   normalizeVodSearchResultsForPlayback,
@@ -1289,16 +1289,16 @@ function ActiveTaskDialog({ group, onClose }: ActiveTaskDialogProps) {
       setPendingTaskId(taskId);
 
       if (action === 'pause') {
-        await downloadManager.pauseTask(taskId);
+        await downloadClient.pauseTask(taskId);
         return;
       }
 
       if (action === 'resume') {
-        await downloadManager.resumeTask(taskId);
+        await downloadClient.resumeTask(taskId);
         return;
       }
 
-      await downloadManager.cancelTask(taskId);
+      await downloadClient.cancelTask(taskId);
     } catch (error) {
       setActionError(
         error instanceof Error
@@ -2626,7 +2626,7 @@ export function DownloadedContentDialog({
           throw new Error('获取可重新下载的剧集失败');
         }
 
-        const result = await downloadManager.restartBatchEpisodeDownloads({
+        const result = await downloadClient.restartBatchEpisodeDownloads({
           detail: resolvedDownloadable.detail,
           episodeIndexes,
           availableSources: resolvedDownloadable.availableSources,
@@ -2772,7 +2772,7 @@ export function DownloadedContentDialog({
     try {
       setMoreDownloadsError(null);
       setMoreDownloadsFeedback(null);
-      await downloadManager.startEpisodeDownload({
+      await downloadClient.startEpisodeDownload({
         detail: resolvedDownloadable.detail,
         episodeIndex,
         availableSources: resolvedDownloadable.availableSources,
@@ -2802,7 +2802,7 @@ export function DownloadedContentDialog({
     try {
       setMoreDownloadsError(null);
       setMoreDownloadsFeedback(null);
-      await downloadManager.startBatchEpisodeDownloads({
+      await downloadClient.startBatchEpisodeDownloads({
         detail: option.detail,
         episodeIndexes: option.actionableEpisodeIndexes,
         searchTitle: adultGroupingQuery || content.searchTitle,
@@ -4205,7 +4205,7 @@ export default function DownloadsClient() {
     try {
       setActionError(null);
       setActionFeedback(null);
-      await downloadManager.deleteEpisode(contentId, episodeIndex);
+      await downloadClient.deleteEpisode(contentId, episodeIndex);
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : '删除离线文件失败'
@@ -4219,7 +4219,7 @@ export default function DownloadsClient() {
   ) => {
     const nextValue = Number(event.target.value);
     setMaxConcurrentTasks(nextValue);
-    downloadManager.refreshScheduling();
+    downloadClient.refreshScheduling();
     if (isDesktopLocalDownloadRuntimeEnabled()) {
       void syncDesktopDownloadEngineSettings(nextValue).catch(() => undefined);
     }
@@ -4234,18 +4234,18 @@ export default function DownloadsClient() {
       setPendingBulkAction(action);
 
       if (action === 'resume') {
-        await downloadManager.resumeAllTasks();
+        await downloadClient.resumeAllTasks();
         setActionFeedback('已开始恢复全部可继续的下载任务。');
         return;
       }
 
       if (action === 'pause') {
-        await downloadManager.pauseAllTasks();
+        await downloadClient.pauseAllTasks();
         setActionFeedback('已暂停全部进行中的下载任务。');
         return;
       }
 
-      await downloadManager.cancelAllTasks();
+      await downloadClient.cancelAllTasks();
       setActionFeedback('已停止全部下载任务。');
     } catch (error) {
       setActionError(
