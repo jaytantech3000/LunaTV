@@ -29,6 +29,7 @@
 > - 桌面运行时在 profile sync 从启用切回禁用时，会立即清理残留的 `desktop-profile-sync` 浏览器态，避免遗留远端会话。
 > - Rust 回归测试现已覆盖 admin data migration 在 sync mode 下的 export / import 透传，避免只验证导出、不验证导入的半截覆盖。
 > - Phase 6 所需的故障排查文档现已独立落到 `desktop-profile-sync-troubleshooting.md`，把状态文案、错误分类、会话语义和 diagnostics 使用方式收口到一处。
+> - 基于当前代码审计，Phase 0-5 的功能性目标已基本落地；本文当前主要处于 Phase 6 的旧分支收缩与最终验收审计阶段。
 > - 当前剩余工作主要集中在 Phase 6 的旧分支进一步收缩，以及更大范围的桌面 Rust 化主线继续推进。
 
 ## 1. 目标
@@ -708,6 +709,16 @@ src/lib/profile/
 - 本地 profile 真源在 Rust 层收口
 - 远端 sync 逻辑从 local service facade 中抽离
 - 协议文档、代码、测试三者一致
+
+当前验收审计（2026-06-25）：
+
+- 已满足：桌面 sync 仍是可选能力，媒体/搜索/代理/下载主链路没有被重新绑定回远端 Web 后端。
+- 已满足：sync on/off 的行为边界已经可诊断，`/api/profile/bootstrap`、诊断文案 helper 与 troubleshooting 文档都已覆盖切换后的状态解释。
+- 已满足：`profile mode / storage type / session mode` 已有统一解析主路径，桌面启动与登录页通过共享 bootstrap loader 和 `src/lib/profile/runtime.ts` 消费同一套结果。
+- 已满足：桌面前端已不再自行拼 profile sync 状态；`src/lib/desktop/profile-bootstrap.ts`、`src/lib/desktop/profile-sync.ts` 与 `src/lib/profile/client.ts` 已构成统一入口，`src/lib/db.client.ts` 只保留兼容导出。
+- 已满足：五个 profile 域在桌面本地模式下已切到 Rust 真源，`moontv-profile` / `profile_local` 主路径已经落地。
+- 部分满足：远端 sync 逻辑虽然已引入 `moontv-sync`，且 `crates/moontv-local-service/src/profile_sync.rs` 已把 handler 从 `lib.rs` 中抽薄，但 facade 仍保留 request forwarding / session bridge / response mapping 这一层，不能算完全退出 local service。
+- 部分满足：协议文档、代码、测试对 `bootstrap`、`follows`、`401` 清 session、diagnostics 与 admin migration 已基本对齐，但 Phase 6 仍保留旧兼容出口与收尾分支，因此本文暂不应标记为“全部完成”。
 
 ## 12. 本计划的落地建议
 
