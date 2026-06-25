@@ -66,6 +66,7 @@ use url::{Url, form_urlencoded};
 mod content_detail;
 mod content_search;
 mod download_runtime;
+mod image_proxy;
 mod live_proxy;
 mod playback_prefetch;
 mod profile_local;
@@ -97,6 +98,7 @@ use profile_sync::{
     proxy_profile_sync_search_history, proxy_profile_sync_skip_configs,
 };
 use live_proxy::{get_live_key, get_live_logo, get_live_m3u8, get_live_precheck, get_live_segment};
+use image_proxy::get_image_proxy;
 use vod_proxy::{get_vod_key, get_vod_m3u8, get_vod_segment};
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -1669,7 +1671,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/media/vod/m3u8", get(get_vod_m3u8))
         .route("/media/vod/segment", get(get_vod_segment))
         .route("/media/vod/key", get(get_vod_key))
+        .route("/image-proxy", get(get_image_proxy))
         .route("/api/runtime/public-config", get(get_runtime_public_config))
+        .route("/api/image-proxy", get(get_image_proxy))
         .route("/api/profile/bootstrap", get(get_profile_bootstrap))
         .route("/api/profile-sync/status", get(get_profile_sync_status))
         .route("/api/server-config", get(get_profile_sync_server_config))
@@ -10142,6 +10146,85 @@ segment0.ts
                 .and_then(|value| value.to_str().ok()),
             Some("bytes")
         );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn image_proxy_endpoint_fetches_images_through_local_service() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/cover.jpg",
+            get(|headers: HeaderMap| async move {
+                assert_eq!(
+                    headers.get(REFERER).and_then(|value| value.to_str().ok()),
+                    Some("https://movie.douban.com/")
+                );
+                assert_eq!(
+                    headers
+                        .get(USER_AGENT)
+                        .and_then(|value| value.to_str().ok())
+                        .map(|value| value.contains("Mozilla/5.0")),
+                    Some(true)
+                );
+
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "image/jpeg")
+                    .header(CONTENT_LENGTH, "4")
+                    .body(Body::from(vec![1_u8, 2, 3, 4]))
+                    .expect("image response")
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let image_url = format!("{}/cover.jpg", upstream.base_url());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/image-proxy?url={}",
+                        form_urlencoded::byte_serialize(image_url.as_bytes()).collect::<String>()
+                    ))
+                    .body(Body::empty())
+                    .expect("image proxy request"),
+            )
+            .await
+            .expect("image proxy response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("public, max-age=15720000, s-maxage=15720000")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("image proxy body");
+        assert_eq!(body.as_ref(), &[1_u8, 2, 3, 4]);
 
         upstream.abort();
     }
