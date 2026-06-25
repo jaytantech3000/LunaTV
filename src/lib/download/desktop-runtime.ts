@@ -60,6 +60,11 @@ export interface DesktopDownloadEngineSnapshot {
   lastEvent?: DesktopDownloadEngineEvent | null;
 }
 
+export interface DesktopDownloadEngineSnapshotSubscriptionOptions {
+  onSnapshot: (snapshot: DesktopDownloadEngineSnapshot) => void;
+  onError?: (error: Error) => void;
+}
+
 function ensureDesktopLocalDownloadRuntime(): void {
   if (!isDesktopLocalDownloadRuntimeEnabled()) {
     throw new Error(
@@ -343,6 +348,51 @@ export async function getDesktopDownloadEngineSnapshot(): Promise<DesktopDownloa
   });
 
   return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+}
+
+export function subscribeToDesktopDownloadEngineSnapshots({
+  onSnapshot,
+  onError,
+}: DesktopDownloadEngineSnapshotSubscriptionOptions): () => void {
+  ensureDesktopLocalDownloadRuntime();
+
+  if (typeof EventSource === 'undefined') {
+    throw new Error(
+      'Desktop download runtime event stream is unavailable in the current environment.'
+    );
+  }
+
+  const eventSource = new EventSource(
+    buildDesktopDownloadRuntimeUrl('/tasks/stream')
+  );
+
+  eventSource.onmessage = (event) => {
+    if (!event.data) {
+      return;
+    }
+
+    try {
+      onSnapshot(JSON.parse(event.data) as DesktopDownloadEngineSnapshot);
+    } catch (error) {
+      onError?.(
+        error instanceof Error
+          ? error
+          : new Error(
+              'Failed to parse a desktop download runtime snapshot event.'
+            )
+      );
+    }
+  };
+
+  eventSource.onerror = () => {
+    onError?.(
+      new Error('Desktop download runtime snapshot stream disconnected.')
+    );
+  };
+
+  return () => {
+    eventSource.close();
+  };
 }
 
 export async function putDesktopDownloadEngineSettings(

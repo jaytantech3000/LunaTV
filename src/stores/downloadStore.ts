@@ -30,11 +30,17 @@ interface DownloadStoreState {
   removeLibraryItem: (contentId: string) => void;
   resetDownloads: () => void;
   replacePersistedState: (snapshot: PersistedDownloadStoreState) => void;
+  replaceRuntimeState: (snapshot: RuntimeDownloadStoreState) => void;
 }
 
 export type PersistedDownloadStoreState = Pick<
   DownloadStoreState,
   'maxConcurrentTasks' | 'ownerUsername' | 'tasks' | 'library'
+>;
+
+export type RuntimeDownloadStoreState = Pick<
+  DownloadStoreState,
+  'maxConcurrentTasks' | 'tasks'
 >;
 
 const emptyPersistedState: PersistedDownloadStoreState = {
@@ -80,6 +86,17 @@ export function buildPersistedDownloadStoreState(
   >
 ): PersistedDownloadStoreState {
   return normalizePersistedDownloadStoreState(state);
+}
+
+function normalizeRuntimeDownloadStoreState(
+  snapshot?: Partial<RuntimeDownloadStoreState> | null
+): RuntimeDownloadStoreState {
+  return {
+    maxConcurrentTasks: normalizeConcurrentDownloadTasks(
+      snapshot?.maxConcurrentTasks
+    ),
+    tasks: normalizeTasks(snapshot?.tasks),
+  };
 }
 
 function normalizeTask(
@@ -269,6 +286,14 @@ export const useDownloadStore = create<DownloadStoreState>()(
             tasks: nextState.tasks,
             library: nextState.library,
             hasHydrated: state.hasHydrated,
+          };
+        }),
+      replaceRuntimeState: (snapshot) =>
+        set(() => {
+          const nextState = normalizeRuntimeDownloadStoreState(snapshot);
+          return {
+            maxConcurrentTasks: nextState.maxConcurrentTasks,
+            tasks: nextState.tasks,
           };
         }),
     }),

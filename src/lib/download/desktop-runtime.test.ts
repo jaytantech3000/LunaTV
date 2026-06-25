@@ -53,6 +53,41 @@ function buildDownloadTask(partial: Partial<DownloadTask> = {}): DownloadTask {
   };
 }
 
+class MockEventSource {
+  static instances: MockEventSource[] = [];
+
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  readyState = 1;
+  readonly close = jest.fn(() => {
+    this.readyState = 2;
+  });
+
+  constructor(public readonly url: string) {
+    MockEventSource.instances.push(this);
+  }
+
+  static reset(): void {
+    MockEventSource.instances = [];
+  }
+
+  emitSnapshot(snapshot: unknown): void {
+    this.onmessage?.({
+      data: JSON.stringify(snapshot),
+    } as MessageEvent);
+  }
+
+  emitRawMessage(data: string): void {
+    this.onmessage?.({
+      data,
+    } as MessageEvent);
+  }
+
+  emitError(): void {
+    this.onerror?.(new Event('error'));
+  }
+}
+
 describe('desktop download runtime task sdk', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -74,6 +109,9 @@ describe('desktop download runtime task sdk', () => {
     );
 
     global.fetch = jest.fn();
+    global.EventSource =
+      MockEventSource as unknown as typeof global.EventSource;
+    MockEventSource.reset();
   });
 
   afterEach(() => {
@@ -211,6 +249,44 @@ describe('desktop download runtime task sdk', () => {
         credentials: 'omit',
       }
     );
+  });
+
+  it('subscribes to desktop download engine snapshots over EventSource', () => {
+    const snapshot = {
+      maxConcurrentTasks: 4,
+      tasks: {},
+      lastEvent: null,
+    };
+    const onSnapshot = jest.fn();
+    const onError = jest.fn();
+
+    const unsubscribe =
+      desktopRuntime.subscribeToDesktopDownloadEngineSnapshots({
+        onSnapshot,
+        onError,
+      });
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(MockEventSource.instances[0].url).toBe(
+      '/api/download-runtime/tasks/stream'
+    );
+
+    MockEventSource.instances[0].emitSnapshot(snapshot);
+    expect(onSnapshot).toHaveBeenCalledWith(snapshot);
+
+    MockEventSource.instances[0].emitRawMessage('{');
+    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+
+    onError.mockClear();
+    MockEventSource.instances[0].emitError();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Desktop download runtime snapshot stream disconnected.',
+      })
+    );
+
+    unsubscribe();
+    expect(MockEventSource.instances[0].close).toHaveBeenCalledTimes(1);
   });
 
   it('rejects calls when the desktop local runtime is unavailable', async () => {

@@ -67,7 +67,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::net::TcpListener;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, mpsc, watch};
 #[cfg(target_os = "windows")]
 use tower::ServiceExt;
 use tracing::{info, warn};
@@ -302,6 +302,7 @@ pub struct AppState {
     sqlite: DesktopSqlite,
     client: reqwest::Client,
     download_engine: Arc<RwLock<DesktopDownloadEngine>>,
+    download_engine_snapshot_tx: watch::Sender<DesktopDownloadEngineSnapshot>,
     profile_sync: ProfileSyncClient,
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
     bangumi_api_base_url: String,
@@ -371,6 +372,7 @@ impl AppState {
                 )?
                 .unwrap_or_default(),
         );
+        let (download_engine_snapshot_tx, _) = watch::channel(download_engine.snapshot());
 
         Ok(Self {
             host,
@@ -382,6 +384,7 @@ impl AppState {
             sqlite,
             client: reqwest::Client::new(),
             download_engine: Arc::new(RwLock::new(download_engine)),
+            download_engine_snapshot_tx,
             profile_sync: ProfileSyncClient::new(
                 reqwest::Client::builder()
                     .cookie_store(true)
@@ -427,6 +430,17 @@ impl AppState {
     ) -> Result<()> {
         self.sqlite
             .write_app_metadata(DOWNLOAD_ENGINE_SNAPSHOT_METADATA_KEY, snapshot)
+    }
+
+    fn publish_download_engine_snapshot(&self, snapshot: &DesktopDownloadEngineSnapshot) {
+        self.download_engine_snapshot_tx
+            .send_replace(snapshot.clone());
+    }
+
+    fn subscribe_download_engine_snapshots(
+        &self,
+    ) -> watch::Receiver<DesktopDownloadEngineSnapshot> {
+        self.download_engine_snapshot_tx.subscribe()
     }
 
     fn download_runtime_dir(&self) -> PathBuf {
@@ -1755,6 +1769,10 @@ pub fn build_router(state: AppState) -> Router {
             get(get_download_runtime_tasks).post(post_download_runtime_task),
         )
         .route(
+            "/api/download-runtime/tasks/stream",
+            get(stream_download_runtime_tasks),
+        )
+        .route(
             "/api/download-runtime/tasks/settings",
             put(put_download_runtime_task_settings),
         )
@@ -2161,6 +2179,7 @@ async fn write_download_engine_snapshot_response(
     state
         .write_download_engine_snapshot(&snapshot)
         .map_err(|error| AppError::internal(error.to_string()))?;
+    state.publish_download_engine_snapshot(&snapshot);
     no_store_json_response(&snapshot)
 }
 
@@ -2179,6 +2198,38 @@ where
 async fn get_download_runtime_tasks(State(state): State<AppState>) -> AppResult<Response> {
     let snapshot = state.download_engine.read().await.snapshot();
     no_store_json_response(&snapshot)
+}
+
+fn build_download_runtime_snapshot_event(
+    snapshot: DesktopDownloadEngineSnapshot,
+) -> Result<Event, Infallible> {
+    Ok(Event::default()
+        .data(serde_json::to_string(&snapshot).expect("download runtime snapshot serializes")))
+}
+
+async fn stream_download_runtime_tasks(State(state): State<AppState>) -> AppResult<Response> {
+    let snapshot_stream = stream::unfold(
+        (state.subscribe_download_engine_snapshots(), true),
+        |(mut receiver, include_current)| async move {
+            let next_snapshot = if include_current {
+                Some(receiver.borrow().clone())
+            } else {
+                match receiver.changed().await {
+                    Ok(()) => Some(receiver.borrow().clone()),
+                    Err(_) => None,
+                }
+            };
+
+            next_snapshot.map(|snapshot| {
+                (
+                    build_download_runtime_snapshot_event(snapshot),
+                    (receiver, false),
+                )
+            })
+        },
+    );
+
+    Ok(Sse::new(snapshot_stream).into_response())
 }
 
 async fn post_download_runtime_task(
@@ -12500,6 +12551,84 @@ segment0.ts
                 .and_then(Value::as_str),
             Some("paused")
         );
+    }
+
+    #[tokio::test]
+    async fn download_runtime_task_stream_emits_initial_and_updated_snapshots() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let task_id = "task-stream-demo";
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/download-runtime/tasks/stream")
+                    .body(Body::empty())
+                    .expect("download runtime stream request"),
+            )
+            .await
+            .expect("download runtime stream response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+
+        let mut stream = response.into_body().into_data_stream();
+        let initial_chunk = tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("download runtime initial stream event timeout")
+            .expect("download runtime initial stream event")
+            .expect("download runtime initial stream chunk");
+        let initial_text = String::from_utf8(initial_chunk.to_vec())
+            .expect("download runtime initial stream text");
+
+        assert!(initial_text.contains("\"maxConcurrentTasks\":3"));
+        assert!(initial_text.contains("\"tasks\":{}"));
+
+        let create_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        build_download_runtime_task_payload(task_id, "queued").to_string(),
+                    ))
+                    .expect("download runtime create request"),
+            )
+            .await
+            .expect("download runtime create response");
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+
+        let updated_chunk = tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("download runtime updated stream event timeout")
+            .expect("download runtime updated stream event")
+            .expect("download runtime updated stream chunk");
+        let updated_text = String::from_utf8(updated_chunk.to_vec())
+            .expect("download runtime updated stream text");
+
+        assert!(updated_text.contains(task_id));
+        assert!(updated_text.contains("\"status\":\"queued\""));
     }
 
     #[tokio::test]

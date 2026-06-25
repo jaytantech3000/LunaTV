@@ -17,6 +17,7 @@
 > - 桌面 release history 的过滤、manifest 解析与排序也已下沉到 Tauri / Rust，桌面前端直接消费最终 `DesktopReleaseHistoryItem`。
 > - Phase 2A 也开始落下第一刀：桌面模式下的 `searchPlaybackSources` 已优先走 local service 新增的 `/api/playback/search-sources`，把查询组合、候选聚合和结果预筛选从前端下沉到 Rust。
 > - Phase 1 也已经开始落下“先搭骨架、不切主流程”的第一刀：新增 `moontv-download` crate，桌面本地服务补齐 `/api/download-runtime/tasks*` 命令 / 状态查询 skeleton，并把下载引擎快照持久化到 SQLite `app_metadata`。
+> - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
 
 ## 目标
@@ -226,6 +227,7 @@ Rust Shared Crates
 - `src/components/DesktopDownloadStoreSync.tsx` 已开始把当前 TS 下载 store 中的 `tasks` / `maxConcurrentTasks` 镜像回 Rust download engine，形成“TS 执行 + Rust 状态面并行”的过渡态。
 - `src/lib/download/manager.ts` 的 `pause / resume / cancel` 与 `src/components/DownloadsClient.tsx` 的并发设置调整，已经开始显式命中 Rust runtime 命令边界；镜像同步现在主要承担兜底与快照修复角色。
 - 桌面启动时也开始优先读取 Rust download engine snapshot 回填任务状态与并发设置；这意味着 Rust 状态面已经不只是写入目标，也开始成为桌面下载 UI 的读端输入。
+- `crates/moontv-local-service` 现已新增 `/api/download-runtime/tasks/stream` SSE 订阅入口；`src/components/DesktopDownloadStoreSync.tsx` 会持续消费 Rust snapshot，把任务状态 / 进度实时合并回前端 store，同时避免把订阅回流再次镜像写回 Rust。
 - `src/lib/download/manager.ts` 仍然是当前桌面下载的真实执行器，所以这一阶段只完成了“边界收口”和“状态恢复骨架”，还没有切走主下载流程。
 
 ### 验收标准

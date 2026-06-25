@@ -1,5 +1,6 @@
 import {
   areDesktopDownloadTasksEquivalent,
+  cacheDesktopDownloadEngineSnapshot,
   cancelDesktopDownloadEngineTask,
   clearDesktopDownloadEngineSnapshotCache,
   deleteMirroredDesktopDownloadTask,
@@ -235,6 +236,34 @@ describe('desktop download engine sync', () => {
 
     expect(getDesktopDownloadEngineSnapshot).toHaveBeenCalledTimes(1);
     expect(postDesktopDownloadTask).toHaveBeenCalledWith(task);
+  });
+
+  it('accepts externally hydrated engine snapshots into the shared cache', async () => {
+    const task = buildDownloadTask({
+      status: 'downloading',
+      progress: 50,
+    });
+    const cachedSnapshot = {
+      maxConcurrentTasks: 4,
+      tasks: {
+        [task.id]: task,
+      },
+      lastEvent: null,
+    };
+
+    cacheDesktopDownloadEngineSnapshot(cachedSnapshot);
+
+    await expect(
+      syncDesktopDownloadEngineState({
+        maxConcurrentTasks: 4,
+        tasks: {
+          [task.id]: task,
+        },
+      })
+    ).resolves.toEqual(cachedSnapshot);
+
+    expect(getDesktopDownloadEngineSnapshot).not.toHaveBeenCalled();
+    expect(postDesktopDownloadTask).not.toHaveBeenCalled();
   });
 
   it('updates the shared snapshot cache after direct runtime commands', async () => {

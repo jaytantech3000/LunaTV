@@ -89,6 +89,12 @@ function rememberDesktopDownloadEngineSnapshot(
   return snapshot;
 }
 
+export function cacheDesktopDownloadEngineSnapshot(
+  snapshot: DesktopDownloadEngineSnapshot
+): DesktopDownloadEngineSnapshot {
+  return rememberDesktopDownloadEngineSnapshot(snapshot);
+}
+
 async function mutateDesktopDownloadEngineSnapshot(
   mutation: () => Promise<DesktopDownloadEngineSnapshot>
 ): Promise<DesktopDownloadEngineSnapshot> {

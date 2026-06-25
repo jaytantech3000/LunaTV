@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 
 import {
   areDesktopDownloadTaskCollectionsEquivalent,
+  cacheDesktopDownloadEngineSnapshot,
   syncDesktopDownloadEngineState,
 } from '@/lib/download/desktop-engine-sync';
 import {
@@ -12,6 +13,7 @@ import {
   getDesktopDownloadStoreSnapshot,
   isDesktopLocalDownloadRuntimeEnabled,
   putDesktopDownloadStoreSnapshot,
+  subscribeToDesktopDownloadEngineSnapshots,
 } from '@/lib/download/desktop-runtime';
 
 import {
@@ -22,6 +24,10 @@ import {
 } from '@/stores/downloadStore';
 
 const SAVE_DEBOUNCE_MS = 200;
+
+type DesktopDownloadRuntimeSnapshot = Awaited<
+  ReturnType<typeof getDesktopDownloadEngineSnapshot>
+>;
 
 function hasRecordEntries<T>(record?: Record<string, T> | null): boolean {
   return Boolean(record && Object.keys(record).length > 0);
@@ -105,6 +111,7 @@ export default function DesktopDownloadStoreSync() {
     let initialized = false;
     let skipNextPersist = false;
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
+    let unsubscribeRuntimeSnapshots: (() => void) | null = null;
 
     const flushSnapshot = async () => {
       if (!active || !initialized) {
@@ -137,6 +144,27 @@ export default function DesktopDownloadStoreSync() {
       }
     };
 
+    const applyRuntimeSnapshot = (
+      runtimeSnapshot: DesktopDownloadRuntimeSnapshot
+    ) => {
+      cacheDesktopDownloadEngineSnapshot(runtimeSnapshot);
+
+      const currentState = useDownloadStore.getState();
+      if (
+        currentState.maxConcurrentTasks ===
+          runtimeSnapshot.maxConcurrentTasks &&
+        areDesktopDownloadTaskCollectionsEquivalent(
+          currentState.tasks,
+          runtimeSnapshot.tasks
+        )
+      ) {
+        return;
+      }
+
+      skipNextPersist = true;
+      useDownloadStore.getState().replaceRuntimeState(runtimeSnapshot);
+    };
+
     void (async () => {
       try {
         const [remoteSnapshot, engineSnapshot] = await Promise.all([
@@ -147,6 +175,10 @@ export default function DesktopDownloadStoreSync() {
         ]);
         if (!active) {
           return;
+        }
+
+        if (engineSnapshot) {
+          cacheDesktopDownloadEngineSnapshot(engineSnapshot);
         }
 
         const localSnapshot = buildPersistedDownloadStoreState(
@@ -177,13 +209,31 @@ export default function DesktopDownloadStoreSync() {
         }
 
         const nextState = useDownloadStore.getState();
-        await syncDesktopDownloadEngineState({
-          maxConcurrentTasks: nextState.maxConcurrentTasks,
-          tasks: nextState.tasks,
-        }).catch(() => undefined);
+        await syncDesktopDownloadEngineState(
+          {
+            maxConcurrentTasks: nextState.maxConcurrentTasks,
+            tasks: nextState.tasks,
+          },
+          engineSnapshot
+        ).catch(() => undefined);
       } finally {
         if (active) {
           initialized = true;
+
+          try {
+            unsubscribeRuntimeSnapshots =
+              subscribeToDesktopDownloadEngineSnapshots({
+                onSnapshot: (runtimeSnapshot) => {
+                  if (!active) {
+                    return;
+                  }
+
+                  applyRuntimeSnapshot(runtimeSnapshot);
+                },
+              });
+          } catch (_) {
+            unsubscribeRuntimeSnapshots = null;
+          }
         }
       }
     })();
@@ -210,6 +260,7 @@ export default function DesktopDownloadStoreSync() {
     return () => {
       active = false;
       unsubscribe();
+      unsubscribeRuntimeSnapshots?.();
 
       if (saveTimer) {
         clearTimeout(saveTimer);
