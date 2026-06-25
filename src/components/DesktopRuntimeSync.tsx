@@ -8,17 +8,14 @@ import {
   ensureDesktopAuthSession,
 } from '@/lib/desktop/auth-session';
 import {
-  applyDesktopProfileSyncStatus,
-  getDesktopProfileSyncStatus,
-} from '@/lib/desktop/profile-sync';
+  applyDesktopProfileBootstrap,
+  getDesktopProfileBootstrap,
+} from '@/lib/desktop/profile-bootstrap';
 import {
-  applyDesktopRuntimePublicConfig,
   DESKTOP_RUNTIME_REFRESH_EVENT,
   DESKTOP_RUNTIME_UPDATED_EVENT,
-  DesktopRuntimePublicConfigPayload,
 } from '@/lib/desktop/runtime-config';
 import { getRuntimeConfig } from '@/lib/runtime-config';
-import { apiFetch } from '@/lib/transport/api-client';
 
 const INITIAL_REFRESH_MAX_ATTEMPTS = 10;
 const INITIAL_REFRESH_RETRY_DELAY_MS = 1500;
@@ -45,27 +42,16 @@ function redirectDesktopLoginIfNeeded() {
 }
 
 async function refreshDesktopRuntimeConfig() {
-  const response = await apiFetch('/runtime/public-config', {
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to refresh desktop runtime config: ${response.status}`
-    );
+  const bootstrap = await getDesktopProfileBootstrap();
+  if (!bootstrap) {
+    return;
   }
 
-  const payload = (await response.json()) as DesktopRuntimePublicConfigPayload;
-  applyDesktopRuntimePublicConfig(payload);
-  const nextRuntimeConfig = getRuntimeConfig();
-
-  if (nextRuntimeConfig.PROFILE_SYNC_ENABLED) {
-    const profileSyncStatus = await getDesktopProfileSyncStatus();
-    if (profileSyncStatus) {
-      applyDesktopProfileSyncStatus(profileSyncStatus);
-    }
-  } else {
+  applyDesktopProfileBootstrap(bootstrap);
+  if (!bootstrap.profileSync.enabled) {
     await ensureDesktopAuthSession();
+  } else {
+    // Profile sync status is already applied from the unified bootstrap payload.
   }
 
   redirectDesktopLoginIfNeeded();

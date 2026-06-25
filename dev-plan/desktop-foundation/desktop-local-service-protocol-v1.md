@@ -85,6 +85,36 @@
 - 不替代 `read_app_config` / `write_app_config` 这类 IPC 控制面能力
 - 推荐同时保留兼容路径 `GET /api/runtime/public-config`
 
+### GET `/api/profile/bootstrap`
+
+响应：
+
+```json
+{
+  "appTarget": "desktop",
+  "runtime": {
+    "siteName": "string"
+  },
+  "profileSync": {
+    "enabled": false
+  },
+  "localAuth": {
+    "username": "owner",
+    "passwordRequired": false,
+    "multiUser": false,
+    "ownerPasswordConfigured": false
+  }
+}
+```
+
+说明：
+
+- 作为桌面启动和登录页的统一 bootstrap 快照入口，避免前端串行拼接 `GET /runtime/public-config`、`GET /api/profile-sync/status` 和本地鉴权状态
+- `runtime` 字段与 `GET /runtime/public-config` 保持同构
+- `profileSync` 字段与 `GET /api/profile-sync/status` 保持同构
+- `localAuth` 字段用于未启用账号同步时恢复桌面本地登录态，语义应与桌面壳 `get_desktop_auth_status` 对齐
+- 推荐把该接口作为桌面首屏初始化主入口，同时继续保留已有兼容接口
+
 ### GET `/api/profile-sync/status`
 
 响应：

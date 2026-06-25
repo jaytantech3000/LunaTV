@@ -13,9 +13,9 @@ import {
   loginDesktopSession,
 } from '@/lib/desktop/auth-session';
 import {
-  applyDesktopProfileSyncStatus,
-  getDesktopProfileSyncStatus,
-} from '@/lib/desktop/profile-sync';
+  applyDesktopProfileBootstrap,
+  getDesktopProfileBootstrap,
+} from '@/lib/desktop/profile-bootstrap';
 import { getProjectPageUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
@@ -123,12 +123,12 @@ function LoginPageClient() {
     }
 
     const runtimeConfig = getRuntimeConfig();
-    const storageType = runtimeConfig?.STORAGE_TYPE;
-    setShouldAskUsername(
-      Boolean(storageType && storageType !== 'localstorage')
-    );
 
     if (runtimeConfig?.APP_TARGET !== 'desktop') {
+      const storageType = runtimeConfig?.STORAGE_TYPE;
+      setShouldAskUsername(
+        Boolean(storageType && storageType !== 'localstorage')
+      );
       setDesktopAuthCheckDone(true);
       setRedirectingDesktopSession(false);
       return () => {
@@ -143,9 +143,14 @@ function LoginPageClient() {
 
     void (async () => {
       try {
-        const profileSyncStatus = await getDesktopProfileSyncStatus().catch(
-          () => null
-        );
+        const bootstrap = await getDesktopProfileBootstrap();
+        if (!bootstrap) {
+          setDesktopAuthCheckDone(true);
+          return;
+        }
+
+        applyDesktopProfileBootstrap(bootstrap);
+        const { profileSync: profileSyncStatus, localAuth } = bootstrap;
 
         if (profileSyncStatus?.enabled) {
           if (!active) {
@@ -165,8 +170,6 @@ function LoginPageClient() {
               : '云端账号同步服务当前不可用，请检查远端服务地址。'
           );
 
-          applyDesktopProfileSyncStatus(profileSyncStatus);
-
           if (profileSyncStatus.authenticated) {
             setRedirectingDesktopSession(true);
             const redirect = searchParams.get('redirect') || '/';
@@ -178,24 +181,22 @@ function LoginPageClient() {
           return;
         }
 
-        const authStatus = await ensureDesktopAuthSession();
+        const authStatus = await ensureDesktopAuthSession().catch(() => null);
         if (!active) {
           return;
         }
 
-        if (!authStatus) {
-          setDesktopAuthCheckDone(true);
-          return;
-        }
-
+        const effectiveAuthStatus = authStatus ?? localAuth;
         setDesktopProfileSyncEnabled(false);
-        setDesktopAuthUsername(authStatus.username);
-        setDesktopOwnerPasswordConfigured(authStatus.ownerPasswordConfigured);
-        setShouldAskUsername(authStatus.multiUser);
+        setDesktopAuthUsername(effectiveAuthStatus.username);
+        setDesktopOwnerPasswordConfigured(
+          effectiveAuthStatus.ownerPasswordConfigured
+        );
+        setShouldAskUsername(effectiveAuthStatus.multiUser);
         setStatusMessage('');
 
         if (
-          !authStatus.ownerPasswordConfigured &&
+          !effectiveAuthStatus.ownerPasswordConfigured &&
           !hasExplicitDesktopLogout()
         ) {
           setRedirectingDesktopSession(true);
@@ -258,9 +259,9 @@ function LoginPageClient() {
           });
 
           if (res.ok) {
-            const profileSyncStatus = await getDesktopProfileSyncStatus();
-            if (profileSyncStatus) {
-              applyDesktopProfileSyncStatus(profileSyncStatus);
+            const bootstrap = await getDesktopProfileBootstrap();
+            if (bootstrap) {
+              applyDesktopProfileBootstrap(bootstrap);
             } else {
               const data = await res.json().catch(() => ({}));
               if (data.username) {

@@ -970,6 +970,24 @@ struct ProfileSyncStatusResponse {
     error: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalAuthStatusResponse {
+    username: String,
+    password_required: bool,
+    multi_user: bool,
+    owner_password_configured: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileBootstrapResponse {
+    app_target: &'static str,
+    runtime: RuntimePublicConfigResponse,
+    profile_sync: ProfileSyncStatusResponse,
+    local_auth: LocalAuthStatusResponse,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct RemoteServerConfigResponse {
@@ -1665,6 +1683,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/media/vod/segment", get(get_vod_segment))
         .route("/media/vod/key", get(get_vod_key))
         .route("/api/runtime/public-config", get(get_runtime_public_config))
+        .route("/api/profile/bootstrap", get(get_profile_bootstrap))
         .route("/api/profile-sync/status", get(get_profile_sync_status))
         .route("/api/server-config", get(get_profile_sync_server_config))
         .route("/api/login", any(proxy_profile_sync_login))
@@ -1838,11 +1857,22 @@ async fn get_runtime_public_config(State(state): State<AppState>) -> AppResult<R
         .load_config()
         .map_err(|error| AppError::internal(error.to_string()))?;
     let payload = build_runtime_public_config_response(&config);
-    let mut response = Json(payload).into_response();
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(response)
+    no_store_json_response(&payload)
+}
+
+async fn get_profile_bootstrap(State(state): State<AppState>) -> AppResult<Response> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let payload = ProfileBootstrapResponse {
+        app_target: "desktop",
+        runtime: build_runtime_public_config_response(&config),
+        profile_sync: build_profile_sync_status_payload(&state, &config).await,
+        local_auth: build_local_auth_status_payload(&state)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+    };
+
+    no_store_json_response(&payload)
 }
 
 async fn get_profile_sync_status(State(state): State<AppState>) -> AppResult<Response> {
@@ -1850,11 +1880,7 @@ async fn get_profile_sync_status(State(state): State<AppState>) -> AppResult<Res
         .load_config()
         .map_err(|error| AppError::internal(error.to_string()))?;
     let payload = build_profile_sync_status_payload(&state, &config).await;
-    let mut response = Json(payload).into_response();
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(response)
+    no_store_json_response(&payload)
 }
 
 async fn get_profile_sync_server_config(State(state): State<AppState>) -> AppResult<Response> {
@@ -2294,6 +2320,27 @@ async fn build_profile_sync_status_payload(
             error: Some(error.to_string()),
         },
     }
+}
+
+fn build_local_auth_status_payload(state: &AppState) -> Result<LocalAuthStatusResponse> {
+    let persistence = state.load_admin_persistence()?;
+    let owner_username = resolve_owner_username_for_import(&persistence.config)
+        .unwrap_or_else(|| "owner".to_string());
+    let owner_password_configured =
+        extract_owner_password_from_config_file(&persistence.config.config_file).is_some();
+    let multi_user = persistence
+        .config
+        .user_config
+        .users
+        .iter()
+        .any(|user| user.username != owner_username);
+
+    Ok(LocalAuthStatusResponse {
+        username: owner_username,
+        password_required: owner_password_configured || multi_user,
+        multi_user,
+        owner_password_configured,
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -9364,6 +9411,154 @@ segment0.ts
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_bootstrap_endpoint_returns_runtime_sync_and_local_auth_snapshot() {
+        let temp_dir = TestDir::new();
+        let raw_config = json!({
+          "auth": {
+            "username": "desktop-owner",
+            "password": "owner-secret"
+          },
+          "site_name": "Bootstrap LunaTV",
+          "announcement": "Bootstrap ready",
+          "api_site": {}
+        });
+        let config_path = write_test_config(&temp_dir, raw_config.clone());
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "",
+                  "AutoUpdate": false,
+                  "LastCheck": ""
+                },
+                "ConfigFile": serde_json::to_string_pretty(&raw_config)
+                  .expect("serialize raw config"),
+                "SiteConfig": {
+                  "SiteName": "Bootstrap LunaTV",
+                  "Announcement": "Bootstrap ready",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "desktop-owner",
+                      "role": "owner"
+                    },
+                    {
+                      "username": "kid",
+                      "role": "user",
+                      "banned": false
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {
+                "kid": "kid-secret"
+              }
+            }),
+        );
+
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile/bootstrap")
+                    .body(Body::empty())
+                    .expect("profile bootstrap request"),
+            )
+            .await
+            .expect("profile bootstrap response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("profile bootstrap body");
+        let payload: Value = serde_json::from_slice(&body).expect("profile bootstrap payload json");
+
+        assert_eq!(
+            payload.get("appTarget").and_then(Value::as_str),
+            Some("desktop")
+        );
+        assert_eq!(
+            payload
+                .get("runtime")
+                .and_then(|value| value.get("siteName"))
+                .and_then(Value::as_str),
+            Some("Bootstrap LunaTV")
+        );
+        assert_eq!(
+            payload
+                .get("runtime")
+                .and_then(|value| value.get("profileSyncEnabled"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .get("profileSync")
+                .and_then(|value| value.get("enabled"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .get("localAuth")
+                .and_then(|value| value.get("username"))
+                .and_then(Value::as_str),
+            Some("desktop-owner")
+        );
+        assert_eq!(
+            payload
+                .get("localAuth")
+                .and_then(|value| value.get("passwordRequired"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .get("localAuth")
+                .and_then(|value| value.get("multiUser"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .get("localAuth")
+                .and_then(|value| value.get("ownerPasswordConfigured"))
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
