@@ -88,6 +88,7 @@ pub(crate) struct DesktopDownloadResourceIndexRecord {
 }
 
 const DOWNLOAD_MANIFEST_FETCH_TIMEOUT_MS: u64 = 20_000;
+const DOWNLOAD_RESOURCE_FETCH_TIMEOUT_MS: u64 = 45_000;
 const MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES: usize = 2;
 const DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER: &str = "x-moontv-download-intent";
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT: &str = "background";
@@ -123,6 +124,13 @@ struct DesktopDownloadManifestResolveResponse {
     resources: Vec<DesktopDownloadManifestResource>,
     resource_urls: Vec<String>,
     is_master_playlist: bool,
+}
+
+#[derive(Debug)]
+struct RuntimeFetchedDownloadResponse {
+    status: StatusCode,
+    content_type: Option<String>,
+    body: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,6 +267,49 @@ pub(crate) async fn get_download_runtime_cache_response(
     ))
 }
 
+pub(crate) async fn fetch_download_runtime_cache_response(
+    State(state): State<AppState>,
+    Query(params): Query<DesktopDownloadCacheQueryParams>,
+    request_headers: HeaderMap,
+) -> AppResult<Response> {
+    let url = require_download_runtime_url(params.url.as_deref())?;
+
+    if let Some(response) = try_build_cached_download_response(
+        &state,
+        &Method::GET,
+        &request_headers,
+        &url,
+    )? {
+        return Ok(response);
+    }
+
+    let fetched_response = fetch_runtime_download_response(&state, &url, &request_headers).await?;
+
+    if fetched_response.status.is_success() {
+        let entry = state
+            .write_cached_download(
+                &url,
+                fetched_response.status,
+                fetched_response.content_type.as_deref(),
+                fetched_response.body.as_ref(),
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?;
+
+        return Ok(build_cached_download_response(
+            &Method::GET,
+            &request_headers,
+            &entry,
+            fetched_response.body,
+        ));
+    }
+
+    Ok(build_download_runtime_fetched_response(
+        fetched_response.status,
+        fetched_response.content_type.as_deref(),
+        fetched_response.body,
+    ))
+}
+
 pub(crate) async fn delete_download_runtime_cache(
     State(state): State<AppState>,
     Query(params): Query<DesktopDownloadCacheQueryParams>,
@@ -281,6 +332,116 @@ pub(crate) async fn clear_download_runtime_cache(
         .clear_cached_downloads()
         .map_err(|error| AppError::internal(error.to_string()))?;
     no_store_json_response(&json!({ "ok": true }))
+}
+
+fn try_build_cached_download_response(
+    state: &AppState,
+    method: &Method,
+    request_headers: &HeaderMap,
+    url: &str,
+) -> AppResult<Option<Response>> {
+    let Some(entry) = state
+        .read_cached_download_entry(url)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let Some(body) = state
+        .read_cached_download_body(url)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(build_cached_download_response(
+        method,
+        request_headers,
+        &entry,
+        body,
+    )))
+}
+
+async fn fetch_runtime_download_response(
+    state: &AppState,
+    url: &str,
+    request_headers: &HeaderMap,
+) -> AppResult<RuntimeFetchedDownloadResponse> {
+    if let Some((path, proxy_params)) = crate::vod_proxy::parse_vod_proxy_url(url) {
+        let fetched_asset = crate::vod_proxy::fetch_vod_proxy_asset_bytes(
+            state,
+            &path,
+            proxy_params,
+            request_headers,
+        )
+        .await?;
+
+        return Ok(RuntimeFetchedDownloadResponse {
+            status: fetched_asset.status,
+            content_type: fetched_asset.content_type,
+            body: fetched_asset.body,
+        });
+    }
+
+    let response = state
+        .client
+        .get(url)
+        .header(
+            HeaderName::from_static(DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER),
+            HeaderValue::from_static(BACKGROUND_DOWNLOAD_REQUEST_INTENT),
+        )
+        .timeout(Duration::from_millis(DOWNLOAD_RESOURCE_FETCH_TIMEOUT_MS))
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to fetch download resource: {url} ({error})"),
+            )
+        })?;
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body = response
+        .bytes()
+        .await
+        .map_err(|error| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to read download resource response: {url} ({error})"),
+            )
+        })?
+        .to_vec();
+
+    Ok(RuntimeFetchedDownloadResponse {
+        status,
+        content_type,
+        body,
+    })
+}
+
+fn build_download_runtime_fetched_response(
+    status: StatusCode,
+    content_type: Option<&str>,
+    body: Vec<u8>,
+) -> Response {
+    let mut headers = HeaderMap::new();
+
+    if let Ok(value) = HeaderValue::from_str(content_type.unwrap_or("application/octet-stream")) {
+        headers.insert(CONTENT_TYPE, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&body.len().to_string()) {
+        headers.insert(CONTENT_LENGTH, value);
+    }
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    apply_cors_headers(&mut headers);
+
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    response
 }
 
 pub(crate) async fn get_download_runtime_storage_info(

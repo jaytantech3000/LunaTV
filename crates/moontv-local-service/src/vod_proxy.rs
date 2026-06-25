@@ -1,11 +1,160 @@
 use axum::{
     body::Body,
     extract::{OriginalUri, Query, State},
-    http::{HeaderMap, Method},
+    http::{HeaderMap, Method, StatusCode},
     response::Response,
 };
+use url::Url;
 
 use crate::{AppError, AppResult, AppState, VodProxyQueryParams};
+
+#[derive(Debug, Clone)]
+pub(crate) struct VodProxyFetchedAsset {
+    pub(crate) status: StatusCode,
+    pub(crate) content_type: Option<String>,
+    pub(crate) body: Vec<u8>,
+}
+
+pub(crate) fn parse_vod_proxy_url(request_url: &str) -> Option<(String, VodProxyQueryParams)> {
+    let parsed_url = Url::parse(request_url)
+        .ok()
+        .or_else(|| Url::parse(&format!("http://moontv.local{request_url}")).ok())?;
+    let path = parsed_url.path().to_string();
+
+    if !matches!(
+        path.as_str(),
+        "/api/proxy/vod/m3u8"
+            | "/media/vod/m3u8"
+            | "/api/proxy/vod/segment"
+            | "/media/vod/segment"
+            | "/api/proxy/vod/key"
+            | "/media/vod/key"
+    ) {
+        return None;
+    }
+
+    let mut params = VodProxyQueryParams {
+        source: None,
+        url: None,
+        adfilter: None,
+    };
+
+    for (key, value) in parsed_url.query_pairs() {
+        match key.as_ref() {
+            "source" => params.source = Some(value.into_owned()),
+            "url" => params.url = Some(value.into_owned()),
+            "adfilter" => params.adfilter = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+
+    if params
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+        || params
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    {
+        return None;
+    }
+
+    Some((path, params))
+}
+
+pub(crate) async fn fetch_vod_proxy_asset_bytes(
+    state: &AppState,
+    path: &str,
+    params: VodProxyQueryParams,
+    request_headers: &HeaderMap,
+) -> AppResult<VodProxyFetchedAsset> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let ad_filter_query_mode = crate::parse_bool_flag(params.adfilter.as_deref());
+    let resolved = crate::resolve_vod_proxy_request(&config, params)?;
+    let upstream_response = crate::fetch_vod_proxy_upstream(
+        &state.client,
+        &resolved.api_site,
+        &resolved.upstream_url,
+        request_headers,
+    )
+    .await?;
+    let meta = crate::upstream_response_meta(&upstream_response);
+
+    match path {
+        "/api/proxy/vod/segment" | "/media/vod/segment" => {
+            let body = upstream_response
+                .bytes()
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .to_vec();
+            Ok(VodProxyFetchedAsset {
+                status: meta.status,
+                content_type: meta.content_type,
+                body,
+            })
+        }
+        "/api/proxy/vod/key" | "/media/vod/key" => {
+            let body = upstream_response
+                .bytes()
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .to_vec();
+            Ok(VodProxyFetchedAsset {
+                status: meta.status,
+                content_type: meta.content_type,
+                body,
+            })
+        }
+        "/api/proxy/vod/m3u8" | "/media/vod/m3u8" => {
+            let manifest_content = upstream_response
+                .text()
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            let rewritten_content = crate::rewrite_vod_manifest_content(
+                &manifest_content,
+                &meta.final_url,
+                &resolved.source,
+                &state.public_base_url,
+            );
+            let ad_filter_result = if crate::should_apply_vod_ad_filter(
+                &config,
+                &resolved.api_site,
+                ad_filter_query_mode,
+            ) {
+                crate::filter_vod_manifest_ads(
+                    &rewritten_content,
+                    &crate::build_vod_ad_filter_config(true),
+                )
+            } else {
+                crate::FilteredVodManifest {
+                    filtered: rewritten_content.clone(),
+                    ads_removed: 0,
+                    ads_duration: 0.0,
+                    changed: false,
+                }
+            };
+            let response_content = if ad_filter_result.changed {
+                ad_filter_result.filtered
+            } else {
+                rewritten_content
+            };
+
+            Ok(VodProxyFetchedAsset {
+                status: meta.status,
+                content_type: meta.content_type,
+                body: response_content.into_bytes(),
+            })
+        }
+        _ => Err(AppError::bad_request("unsupported vod proxy fetch path")),
+    }
+}
 
 pub(crate) async fn get_vod_m3u8(
     method: Method,

@@ -222,6 +222,26 @@ export async function getDesktopDownloadCachedResponse(
   return response;
 }
 
+export async function fetchDesktopDownloadCacheResponse(
+  url: string,
+  options: {
+    signal?: AbortSignal;
+  } = {}
+): Promise<Response> {
+  ensureDesktopLocalDownloadRuntime();
+  return fetch(
+    buildDesktopDownloadRuntimeUrl('/cache/fetch', {
+      url,
+    }),
+    {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+      signal: options.signal,
+    }
+  );
+}
+
 export async function deleteDesktopDownloadCacheEntry(
   url: string
 ): Promise<boolean> {

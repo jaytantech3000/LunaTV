@@ -194,6 +194,7 @@
 
 - `crates/moontv-local-service/src/download_runtime.rs` 已接手 download runtime 的 cache / resource-index / store / tasks 路由、SSE 事件流与缓存响应辅助；`lib.rs` 主要保留 `AppState` 持久化方法与路由装配，避免继续把下载逻辑堆回单文件 facade。
 - [x] 桌面 manifest 的 fallback、抓取、playlist 解析、资源展开与缓存已新增 Rust runtime 主路径：`/api/download-runtime/manifest/resolve`，桌面 `src/lib/download/manifest.ts` 仅保留 Web / 非 runtime fallback。
+- [x] 桌面资源抓取新增 Rust runtime 主路径：`/api/download-runtime/cache/fetch` 会直接解析 `/media/vod/*` / `/api/proxy/vod/*` URL、在 local service 内抓取资源并写入 runtime cache；桌面 `src/lib/download/manager.ts` 在 runtime 开启时不再自己执行资源 `fetch + putDownloadResponse`。
 
 ### D. 建立下载事件流
 
@@ -204,7 +205,7 @@
 
 ### E. 实现 Rust 执行引擎
 
-- [ ] 把资源下载、并发调度、任务推进与最终执行器切换迁入 Rust（manifest 拉取与解析已切到 runtime route）
+- [ ] 把资源下载、并发调度、任务推进与最终执行器切换迁入 Rust（manifest 解析与资源抓取已可通过 `/api/download-runtime/manifest/resolve`、`/api/download-runtime/cache/fetch` 走 runtime 主路径，但调度与任务推进仍在 TS）
 - [ ] 支持暂停、继续、取消、重试
 - [ ] 继续支持断点续传，不因执行器迁移丢失部分已下载文件
 - [ ] 应用退出或重启后可恢复任务状态

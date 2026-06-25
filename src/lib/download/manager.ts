@@ -17,7 +17,10 @@ import {
   resumeDesktopDownloadEngineTask,
   upsertDesktopDownloadEngineTask,
 } from './desktop-engine-sync';
-import { isDesktopLocalDownloadRuntimeEnabled } from './desktop-runtime';
+import {
+  fetchDesktopDownloadCacheResponse,
+  isDesktopLocalDownloadRuntimeEnabled,
+} from './desktop-runtime';
 import { parseManifestForDownloadWithFallback } from './manifest';
 import { normalizeVodEpisodeUrlForDownload } from './normalize';
 import {
@@ -473,16 +476,22 @@ async function downloadAndCacheUrl(
     sourceSignal: controller.signal,
     timeoutMs: RESOURCE_DOWNLOAD_TIMEOUT_MS,
   });
+  const useDesktopRuntimeFetch = isDesktopLocalDownloadRuntimeEnabled();
 
   try {
-    const response = await fetch(url, {
-      cache: 'no-store',
-      credentials: 'same-origin',
-      headers: {
-        [DOWNLOAD_REQUEST_INTENT_HEADER]: BACKGROUND_DOWNLOAD_REQUEST_INTENT,
-      },
-      signal: timeoutSignal.signal,
-    });
+    const response = useDesktopRuntimeFetch
+      ? await fetchDesktopDownloadCacheResponse(url, {
+          signal: timeoutSignal.signal,
+        })
+      : await fetch(url, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: {
+            [DOWNLOAD_REQUEST_INTENT_HEADER]:
+              BACKGROUND_DOWNLOAD_REQUEST_INTENT,
+          },
+          signal: timeoutSignal.signal,
+        });
 
     if (!response.ok) {
       throw new DownloadRequestError({
@@ -502,7 +511,9 @@ async function downloadAndCacheUrl(
         : 0;
 
     if (!response.body) {
-      await putDownloadResponse(url, response.clone());
+      if (!useDesktopRuntimeFetch) {
+        await putDownloadResponse(url, response.clone());
+      }
       onProgress?.({
         loadedBytes: totalBytes,
         totalBytes,
@@ -512,17 +523,24 @@ async function downloadAndCacheUrl(
         totalBytes,
       };
     }
+    const responseBody = response.body;
 
-    const [cacheStream, measureStream] = response.body.tee();
-    const cachePromise = putDownloadResponse(
-      url,
-      new Response(cacheStream, {
-        headers: new Headers(response.headers),
-        status: response.status,
-        statusText: response.statusText,
-      })
-    );
-    const reader = measureStream.getReader();
+    let cachePromise: Promise<void> | null = null;
+    const progressStream = useDesktopRuntimeFetch
+      ? responseBody
+      : (() => {
+          const [cacheStream, measureStream] = responseBody.tee();
+          cachePromise = putDownloadResponse(
+            url,
+            new Response(cacheStream, {
+              headers: new Headers(response.headers),
+              status: response.status,
+              statusText: response.statusText,
+            })
+          );
+          return measureStream;
+        })();
+    const reader = progressStream.getReader();
     let loadedBytes = 0;
 
     onProgress?.({
@@ -562,28 +580,32 @@ async function downloadAndCacheUrl(
       reader.releaseLock();
     }
 
-    await new Promise<void>((resolve, reject) => {
-      const cacheTimeoutId = setTimeout(() => {
-        reject(
-          new DownloadRequestError({
-            message: `写入离线缓存超时: ${url}`,
-            kind: 'timeout',
-            url,
-          })
-        );
-      }, RESOURCE_DOWNLOAD_TIMEOUT_MS);
+    const pendingCachePromise = cachePromise;
 
-      cachePromise.then(
-        () => {
-          clearTimeout(cacheTimeoutId);
-          resolve();
-        },
-        (error) => {
-          clearTimeout(cacheTimeoutId);
-          reject(error);
-        }
-      );
-    });
+    if (pendingCachePromise) {
+      await new Promise<void>((resolve, reject) => {
+        const cacheTimeoutId = setTimeout(() => {
+          reject(
+            new DownloadRequestError({
+              message: `写入离线缓存超时: ${url}`,
+              kind: 'timeout',
+              url,
+            })
+          );
+        }, RESOURCE_DOWNLOAD_TIMEOUT_MS);
+
+        pendingCachePromise.then(
+          () => {
+            clearTimeout(cacheTimeoutId);
+            resolve();
+          },
+          (error) => {
+            clearTimeout(cacheTimeoutId);
+            reject(error);
+          }
+        );
+      });
+    }
 
     return {
       sizeBytes: loadedBytes,

@@ -34,6 +34,7 @@ jest.mock('./resource-index', () => ({
 }));
 
 jest.mock('./desktop-runtime', () => ({
+  fetchDesktopDownloadCacheResponse: jest.fn(),
   isDesktopLocalDownloadRuntimeEnabled: jest.fn(),
 }));
 
@@ -47,7 +48,10 @@ jest.mock('./desktop-engine-sync', () => ({
 
 import { hasCachedDownload } from './cache';
 import { upsertDesktopDownloadEngineTask } from './desktop-engine-sync';
-import { isDesktopLocalDownloadRuntimeEnabled } from './desktop-runtime';
+import {
+  fetchDesktopDownloadCacheResponse,
+  isDesktopLocalDownloadRuntimeEnabled,
+} from './desktop-runtime';
 import { downloadManager, resolveDownloadResourceCachedState } from './manager';
 import { parseManifestForDownloadWithFallback } from './manifest';
 
@@ -123,6 +127,9 @@ describe('downloadManager cache lookup fallback', () => {
   const mockIsDesktopLocalDownloadRuntimeEnabled = jest.mocked(
     isDesktopLocalDownloadRuntimeEnabled
   );
+  const mockFetchDesktopDownloadCacheResponse = jest.mocked(
+    fetchDesktopDownloadCacheResponse
+  );
   const mockUpsertDesktopDownloadEngineTask = jest.mocked(
     upsertDesktopDownloadEngineTask
   );
@@ -132,6 +139,7 @@ describe('downloadManager cache lookup fallback', () => {
     mockedHasCachedDownload.mockReset();
     mockedParseManifestForDownloadWithFallback.mockReset();
     mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(true);
+    mockFetchDesktopDownloadCacheResponse.mockReset();
     mockUpsertDesktopDownloadEngineTask.mockReset();
     mockUpsertDesktopDownloadEngineTask.mockResolvedValue(undefined as never);
     resetDownloadStore();
@@ -167,7 +175,7 @@ describe('downloadManager cache lookup fallback', () => {
       isMasterPlaylist: false,
     });
 
-    global.fetch = jest.fn().mockResolvedValue(
+    mockFetchDesktopDownloadCacheResponse.mockResolvedValue(
       new Response(null, {
         status: 200,
         headers: {
@@ -175,7 +183,7 @@ describe('downloadManager cache lookup fallback', () => {
           'content-type': 'video/mp2t',
         },
       })
-    ) as typeof fetch;
+    );
 
     const task = await downloadManager.startEpisodeDownload({
       detail: buildSearchResult(),
@@ -200,6 +208,12 @@ describe('downloadManager cache lookup fallback', () => {
         progress: 100,
         downloadedResources: 1,
         totalResources: 1,
+      })
+    );
+    expect(fetchDesktopDownloadCacheResponse).toHaveBeenCalledWith(
+      'https://example.com/final.ts',
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
       })
     );
     expect(warnSpy).toHaveBeenCalled();

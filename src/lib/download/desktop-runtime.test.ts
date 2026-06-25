@@ -7,7 +7,26 @@ jest.mock('@/lib/runtime-config', () => ({
 
 jest.mock('@/lib/transport/endpoint', () => ({
   buildApiUrl: jest.fn(
-    (path: string) => `/api${path.startsWith('/') ? path : `/${path}`}`
+    (
+      path: string,
+      searchParams?: Record<
+        string,
+        string | number | boolean | null | undefined
+      >
+    ) => {
+      const normalizedPath = `/api${path.startsWith('/') ? path : `/${path}`}`;
+      const query = new URLSearchParams();
+
+      Object.entries(searchParams || {}).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === '') {
+          return;
+        }
+        query.set(key, String(value));
+      });
+
+      const queryString = query.toString();
+      return queryString ? `${normalizedPath}?${queryString}` : normalizedPath;
+    }
   ),
 }));
 
@@ -113,7 +132,30 @@ describe('desktop download runtime task sdk', () => {
       API_BASE_URL: 'http://127.0.0.1:8787',
     });
     endpointModule.buildApiUrl.mockImplementation(
-      (path: string) => `/api${path.startsWith('/') ? path : `/${path}`}`
+      (
+        path: string,
+        searchParams?: Record<
+          string,
+          string | number | boolean | null | undefined
+        >
+      ) => {
+        const normalizedPath = `/api${
+          path.startsWith('/') ? path : `/${path}`
+        }`;
+        const query = new URLSearchParams();
+
+        Object.entries(searchParams || {}).forEach(([key, value]) => {
+          if (value === undefined || value === null || value === '') {
+            return;
+          }
+          query.set(key, String(value));
+        });
+
+        const queryString = query.toString();
+        return queryString
+          ? `${normalizedPath}?${queryString}`
+          : normalizedPath;
+      }
     );
 
     global.fetch = jest.fn();
@@ -171,6 +213,32 @@ describe('desktop download runtime task sdk', () => {
         }),
         cache: 'no-store',
         credentials: 'omit',
+      }
+    );
+  });
+
+  it('fetches uncached desktop download resources through the local runtime', async () => {
+    const runtimeResponse = new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: {
+        'content-type': 'video/mp2t',
+      },
+    });
+
+    (global.fetch as jest.Mock).mockResolvedValueOnce(runtimeResponse);
+
+    const response = await desktopRuntime.fetchDesktopDownloadCacheResponse(
+      'http://127.0.0.1:8787/media/vod/segment?source=demo&url=https%3A%2F%2Fcdn.example.com%2F0001.ts'
+    );
+
+    expect(response).toBe(runtimeResponse);
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/download-runtime/cache/fetch?url=http%3A%2F%2F127.0.0.1%3A8787%2Fmedia%2Fvod%2Fsegment%3Fsource%3Ddemo%26url%3Dhttps%253A%252F%252Fcdn.example.com%252F0001.ts',
+      {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: undefined,
       }
     );
   });

@@ -79,7 +79,8 @@ use download_runtime::{
     clear_download_runtime_resource_indexes, clear_download_runtime_store_snapshot,
     clear_download_runtime_tasks, delete_download_runtime_cache,
     delete_download_runtime_resource_index, delete_download_runtime_task,
-    get_download_runtime_cache_meta, get_download_runtime_cache_response,
+    fetch_download_runtime_cache_response, get_download_runtime_cache_meta,
+    get_download_runtime_cache_response,
     get_download_runtime_resource_index, get_download_runtime_storage_info,
     get_download_runtime_store_snapshot, get_download_runtime_tasks, pause_download_runtime_task,
     post_download_runtime_task, put_download_runtime_cache, put_download_runtime_resource_index,
@@ -1687,6 +1688,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/download-runtime/cache/response",
             get(get_download_runtime_cache_response),
+        )
+        .route(
+            "/api/download-runtime/cache/fetch",
+            get(fetch_download_runtime_cache_response),
         )
         .route(
             "/api/download-runtime/cache/delete",
@@ -10803,6 +10808,106 @@ segment0.ts
         assert_eq!(attempt_count.load(Ordering::SeqCst), 2);
 
         upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn download_runtime_cache_fetch_endpoint_fetches_and_caches_vod_proxy_assets() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Resource"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let runtime_url = format!(
+            "http://127.0.0.1:8787/media/vod/segment?source=mock&url={}",
+            form_urlencoded::byte_serialize(
+                format!("{}/upstream/segment.ts", upstream.base_url()).as_bytes()
+            )
+            .collect::<String>()
+        );
+        let encoded_runtime_url =
+            form_urlencoded::byte_serialize(runtime_url.as_bytes()).collect::<String>();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/cache/fetch?url={encoded_runtime_url}"
+                    ))
+                    .body(Body::empty())
+                    .expect("download runtime cache fetch request"),
+            )
+            .await
+            .expect("download runtime cache fetch response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("video/mp2t")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("download runtime cache fetch body");
+        assert_eq!(body.as_ref(), b"mockdata");
+
+        let cache_meta_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/cache/meta?url={encoded_runtime_url}"
+                    ))
+                    .body(Body::empty())
+                    .expect("download runtime cache meta request"),
+            )
+            .await
+            .expect("download runtime cache meta response");
+
+        assert_eq!(cache_meta_response.status(), StatusCode::OK);
+        let cache_meta_payload = read_json_body(cache_meta_response).await;
+        assert_eq!(
+            cache_meta_payload.get("exists").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        upstream.abort();
+
+        let cached_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/cache/fetch?url={encoded_runtime_url}"
+                    ))
+                    .body(Body::empty())
+                    .expect("download runtime cached fetch request"),
+            )
+            .await
+            .expect("download runtime cached fetch response");
+
+        assert_eq!(cached_response.status(), StatusCode::OK);
+        let cached_body = to_bytes(cached_response.into_body(), usize::MAX)
+            .await
+            .expect("download runtime cached fetch body");
+        assert_eq!(cached_body.as_ref(), b"mockdata");
     }
 
     #[tokio::test]

@@ -24,6 +24,7 @@
 > - Phase 2B 也补上了第一刀结构性收口：`/media/vod/m3u8`、`/media/vod/segment`、`/media/vod/key` handler 已从 `crates/moontv-local-service/src/lib.rs` 抽到独立的 `crates/moontv-local-service/src/vod_proxy.rs`，为后续继续下沉资源抓取与图片代理留出明确模块边界。
 > - Phase 1 也已经开始落下“先搭骨架、不切主流程”的第一刀：新增 `moontv-download` crate，桌面本地服务补齐 `/api/download-runtime/tasks*` 命令 / 状态查询 skeleton，并把下载引擎快照持久化到 SQLite `app_metadata`。
 > - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot。
+> - Phase 1 继续补上了资源抓取主路径：local service 新增 `/api/download-runtime/cache/fetch`，桌面 runtime 开启时会由 Rust 直接解析并抓取 `/media/vod/*` 资源、写入 runtime cache；前端 `src/lib/download/manager.ts` 只保留进度测量与任务编排，不再自己执行这一段 `fetch + cache put`。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
 
 ## 目标
@@ -240,6 +241,7 @@ Rust Shared Crates
 - ESLint 现已禁止 `src/app/*` 与 `src/components/*` 在非测试代码中直接依赖 `@/lib/download/manager`，防止桌面下载 UI 再次绕过统一下载 SDK 回连 TS 执行器细节。
 - `crates/moontv-local-service/src/download_runtime.rs` 现已接手 download runtime 的 cache / resource-index / store / tasks facade、SSE 推送与缓存响应辅助；`lib.rs` 收缩为路由装配与 `AppState` 存储能力，为后续继续下沉到独立下载 crate 留出清晰边界。
 - 桌面模式下的 manifest candidate fallback、m3u8 抓取、master/media playlist 解析、资源列表展开与 manifest 缓存，现在也优先走 local service 新增的 `/api/download-runtime/manifest/resolve`；`src/lib/download/manifest.ts` 在桌面 runtime 开启时不再直接承担这段前端网络抓取。
+- 桌面模式下的资源下载主路径也继续往 Rust 收口：local service 新增 `/api/download-runtime/cache/fetch`，会直接解析 `/media/vod/*` / `/api/proxy/vod/*` 资源 URL，在 Rust 侧抓取并写入 runtime cache；`src/lib/download/manager.ts` 在 runtime 开启时不再自己执行资源 `fetch` 后再 `putDownloadResponse`。
 - `src/components/DesktopDownloadStoreSync.tsx` 也开始收缩成“启动修复 + sidecar store 持久化”角色：运行期的任务生命周期同步主要交给 `src/lib/download/manager.ts` 的显式 runtime upsert / 命令桥，不再在每次本地 store 变动后都整库 mirror 一次 Rust task snapshot。
 - `src/lib/download/manager.ts` 仍然是当前桌面下载的真实执行器，所以这一阶段只完成了“边界收口”和“状态恢复骨架”，还没有切走主下载流程。
 
@@ -285,7 +287,7 @@ Rust Shared Crates
 - `src/lib/content-discovery-client.ts` 现已统一承接 `detail` / `search` / `search/suggestions` 这组前端内容发现请求；播放页、下载解析、追更刷新、搜索建议与传统搜索 fallback 不再各自直连底层 transport 组装这些请求。
 - 在已完全切走的调用点上，也补了 ESLint 限制，防止这些模块重新直接 import 底层 transport 层回到散点请求。
 - `crates/moontv-local-service/src/content_search.rs` 现已继续接手 `/api/search`、`/api/search/ws`、`/api/search/suggestions` 与共享站点搜索 helper；`playback_prefetch` 与管理页的源校验复用这层搜索能力，而不再要求 `lib.rs` 继续承载整段搜索 facade。
-- `crates/moontv-local-service/src/vod_proxy.rs` 现已开始接手 VOD proxy handler；`lib.rs` 不再直接承载 `/media/vod/*` 路由实现，后续可以在不继续膨胀 facade 文件的前提下，逐步把资源抓取、图片代理与更多媒体网络 helper 继续抽离。
+- `crates/moontv-local-service/src/vod_proxy.rs` 现已开始接手 VOD proxy handler；`lib.rs` 不再直接承载 `/media/vod/*` 路由实现，且桌面下载 runtime 的 `/api/download-runtime/cache/fetch` 已能在 Rust 侧直接复用这层逻辑抓取 VOD segment / key / m3u8 资源，不再通过前端自调用 HTTP 回环。
 - Web 路径仍保留原有 TypeScript `playback-source-prefetch` 逻辑，因此这一刀解决的是“桌面主路径继续收口”，还没有完成整段搜索 / 详情链路对 Web 侧兼容层的全量清理。
 
 #### Phase 2B：媒体代理

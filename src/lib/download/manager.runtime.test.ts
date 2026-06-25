@@ -32,6 +32,7 @@ jest.mock('./resource-index', () => ({
 }));
 
 jest.mock('./desktop-runtime', () => ({
+  fetchDesktopDownloadCacheResponse: jest.fn(),
   isDesktopLocalDownloadRuntimeEnabled: jest.fn(),
 }));
 
@@ -50,7 +51,10 @@ import {
   resumeDesktopDownloadEngineTask,
   upsertDesktopDownloadEngineTask,
 } from './desktop-engine-sync';
-import { isDesktopLocalDownloadRuntimeEnabled } from './desktop-runtime';
+import {
+  fetchDesktopDownloadCacheResponse,
+  isDesktopLocalDownloadRuntimeEnabled,
+} from './desktop-runtime';
 import { downloadManager } from './manager';
 import { parseManifestForDownloadWithFallback } from './manifest';
 import type { DownloadTask } from './types';
@@ -127,6 +131,9 @@ describe('download manager desktop runtime command bridge', () => {
   const mockIsDesktopLocalDownloadRuntimeEnabled = jest.mocked(
     isDesktopLocalDownloadRuntimeEnabled
   );
+  const mockFetchDesktopDownloadCacheResponse = jest.mocked(
+    fetchDesktopDownloadCacheResponse
+  );
   const mockParseManifestForDownloadWithFallback = jest.mocked(
     parseManifestForDownloadWithFallback
   );
@@ -135,6 +142,15 @@ describe('download manager desktop runtime command bridge', () => {
     jest.clearAllMocks();
     resetDownloadStore();
     mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(true);
+    mockFetchDesktopDownloadCacheResponse.mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: {
+          'content-length': '1',
+          'content-type': 'video/mp2t',
+        },
+      })
+    );
     mockParseManifestForDownloadWithFallback.mockImplementation(
       (_candidateUrls, options) =>
         new Promise((_, reject) => {
