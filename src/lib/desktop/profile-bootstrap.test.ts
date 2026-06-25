@@ -1,6 +1,8 @@
+import { ensureDesktopAuthSession } from '@/lib/desktop/auth-session';
 import {
   applyDesktopProfileBootstrap,
   getDesktopProfileBootstrap,
+  loadDesktopProfileBootstrapState,
 } from '@/lib/desktop/profile-bootstrap';
 import { applyDesktopProfileSyncStatus } from '@/lib/desktop/profile-sync';
 import { applyDesktopRuntimePublicConfig } from '@/lib/desktop/runtime-config';
@@ -13,6 +15,10 @@ jest.mock('@/lib/runtime-config', () => ({
 
 jest.mock('@/lib/transport/api-client', () => ({
   apiFetch: jest.fn(),
+}));
+
+jest.mock('@/lib/desktop/auth-session', () => ({
+  ensureDesktopAuthSession: jest.fn(),
 }));
 
 jest.mock('@/lib/desktop/profile-sync', () => ({
@@ -135,5 +141,146 @@ describe('desktop profile bootstrap helpers', () => {
       payload.profileSync
     );
     expect(result).toBe(nextRuntimeConfig);
+  });
+
+  it('loads bootstrap state and restores local auth for desktop-local mode', async () => {
+    const payload = {
+      appTarget: 'desktop',
+      runtime: {
+        siteName: 'Bootstrap LunaTV',
+        profileSyncEnabled: false,
+      },
+      profileSync: {
+        enabled: false,
+        reachable: false,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'localstorage',
+        profileMode: 'single-user-local',
+        error: null,
+        errorKind: null,
+        syncDomains: [],
+      },
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: false,
+        ownerPasswordConfigured: true,
+      },
+    };
+    const restoredAuth = {
+      username: 'owner',
+      passwordRequired: false,
+      multiUser: false,
+      ownerPasswordConfigured: false,
+    };
+
+    (apiFetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue(payload),
+    });
+    (ensureDesktopAuthSession as jest.Mock).mockResolvedValue(restoredAuth);
+
+    await expect(loadDesktopProfileBootstrapState()).resolves.toEqual({
+      payload,
+      localAuth: restoredAuth,
+    });
+
+    expect(applyDesktopRuntimePublicConfig).toHaveBeenCalledWith(
+      payload.runtime
+    );
+    expect(applyDesktopProfileSyncStatus).toHaveBeenCalledWith(
+      payload.profileSync
+    );
+    expect(ensureDesktopAuthSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps bootstrap local auth when best-effort desktop auth restore fails', async () => {
+    const payload = {
+      appTarget: 'desktop',
+      runtime: {
+        siteName: 'Bootstrap LunaTV',
+        profileSyncEnabled: false,
+      },
+      profileSync: {
+        enabled: false,
+        reachable: false,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'localstorage',
+        profileMode: 'single-user-local',
+        error: null,
+        errorKind: null,
+        syncDomains: [],
+      },
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: false,
+        ownerPasswordConfigured: true,
+      },
+    };
+
+    (apiFetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue(payload),
+    });
+    (ensureDesktopAuthSession as jest.Mock).mockRejectedValue(
+      new Error('desktop auth unavailable')
+    );
+
+    await expect(
+      loadDesktopProfileBootstrapState({
+        localAuthMode: 'best-effort',
+      })
+    ).resolves.toEqual({
+      payload,
+      localAuth: payload.localAuth,
+    });
+  });
+
+  it('skips local auth restore when profile sync is enabled', async () => {
+    const payload = {
+      appTarget: 'desktop',
+      runtime: {
+        siteName: 'Bootstrap LunaTV',
+        profileSyncEnabled: true,
+      },
+      profileSync: {
+        enabled: true,
+        reachable: true,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'redis',
+        profileMode: 'shared-multi-user',
+        error: null,
+        errorKind: null,
+        syncDomains: ['playrecords'],
+      },
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: true,
+        ownerPasswordConfigured: true,
+      },
+    };
+
+    (apiFetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue(payload),
+    });
+
+    await expect(loadDesktopProfileBootstrapState()).resolves.toEqual({
+      payload,
+      localAuth: payload.localAuth,
+    });
+
+    expect(ensureDesktopAuthSession).not.toHaveBeenCalled();
   });
 });

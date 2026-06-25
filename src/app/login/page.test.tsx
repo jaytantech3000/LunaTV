@@ -5,11 +5,9 @@ const mockRouter = {
 };
 const mockSearchParams = new URLSearchParams();
 
-const mockEnsureDesktopAuthSession = jest.fn();
 const mockHasExplicitDesktopLogout = jest.fn(() => false);
 const mockLoginDesktopSession = jest.fn();
-const mockApplyDesktopProfileBootstrap = jest.fn();
-const mockGetDesktopProfileBootstrap = jest.fn();
+const mockLoadDesktopProfileBootstrapState = jest.fn();
 const mockGetRuntimeConfig = jest.fn();
 const mockCheckForUpdates = jest.fn();
 
@@ -23,17 +21,13 @@ jest.mock('@/lib/auth', () => ({
 }));
 
 jest.mock('@/lib/desktop/auth-session', () => ({
-  ensureDesktopAuthSession: (...args: unknown[]) =>
-    mockEnsureDesktopAuthSession(...args),
   hasExplicitDesktopLogout: () => mockHasExplicitDesktopLogout(),
   loginDesktopSession: (...args: unknown[]) => mockLoginDesktopSession(...args),
 }));
 
 jest.mock('@/lib/desktop/profile-bootstrap', () => ({
-  applyDesktopProfileBootstrap: (...args: unknown[]) =>
-    mockApplyDesktopProfileBootstrap(...args),
-  getDesktopProfileBootstrap: (...args: unknown[]) =>
-    mockGetDesktopProfileBootstrap(...args),
+  loadDesktopProfileBootstrapState: (...args: unknown[]) =>
+    mockLoadDesktopProfileBootstrapState(...args),
 }));
 
 jest.mock('@/lib/release-urls', () => ({
@@ -130,23 +124,19 @@ describe('LoginPage desktop profile sync branches', () => {
     });
     mockCheckForUpdates.mockResolvedValue('fetch_failed');
     mockHasExplicitDesktopLogout.mockReturnValue(false);
-    mockEnsureDesktopAuthSession.mockResolvedValue({
-      username: 'owner',
-      passwordRequired: true,
-      multiUser: false,
-      ownerPasswordConfigured: true,
-    });
   });
 
   it('shows the remote sync login branch when desktop profile sync is enabled', async () => {
-    mockGetDesktopProfileBootstrap.mockResolvedValue(
-      createDesktopBootstrapPayload({
-        profileSyncEnabled: true,
-        reachable: true,
-        authenticated: false,
-        profileMode: 'shared-multi-user',
-      })
-    );
+    const payload = createDesktopBootstrapPayload({
+      profileSyncEnabled: true,
+      reachable: true,
+      authenticated: false,
+      profileMode: 'shared-multi-user',
+    });
+    mockLoadDesktopProfileBootstrapState.mockResolvedValue({
+      payload,
+      localAuth: payload.localAuth,
+    });
 
     render(<LoginPageClient />);
 
@@ -155,29 +145,30 @@ describe('LoginPage desktop profile sync branches', () => {
     ).toBeInTheDocument();
     expect(screen.getByPlaceholderText('输入用户名')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('输入访问密码')).toBeInTheDocument();
-    expect(mockEnsureDesktopAuthSession).not.toHaveBeenCalled();
     expect(mockRouter.replace).not.toHaveBeenCalled();
   });
 
   it('falls back to the local desktop auth branch when profile sync is disabled', async () => {
-    mockGetDesktopProfileBootstrap.mockResolvedValue(
-      createDesktopBootstrapPayload({
-        profileSyncEnabled: false,
-        profileMode: 'single-user-local',
-        storageType: null,
-        localAuth: {
-          username: 'owner',
-          passwordRequired: true,
-          multiUser: false,
-          ownerPasswordConfigured: true,
-        },
-      })
-    );
+    const payload = createDesktopBootstrapPayload({
+      profileSyncEnabled: false,
+      profileMode: 'single-user-local',
+      storageType: null,
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: false,
+        ownerPasswordConfigured: true,
+      },
+    });
+    mockLoadDesktopProfileBootstrapState.mockResolvedValue({
+      payload,
+      localAuth: payload.localAuth,
+    });
 
     render(<LoginPageClient />);
 
     await waitFor(() => {
-      expect(mockEnsureDesktopAuthSession).toHaveBeenCalled();
+      expect(screen.getByPlaceholderText('输入访问密码')).toBeInTheDocument();
     });
 
     expect(

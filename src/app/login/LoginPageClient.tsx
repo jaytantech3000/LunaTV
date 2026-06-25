@@ -8,14 +8,10 @@ import { useEffect, useState } from 'react';
 
 import { setAuthInfoInBrowser } from '@/lib/auth';
 import {
-  ensureDesktopAuthSession,
   hasExplicitDesktopLogout,
   loginDesktopSession,
 } from '@/lib/desktop/auth-session';
-import {
-  applyDesktopProfileBootstrap,
-  getDesktopProfileBootstrap,
-} from '@/lib/desktop/profile-bootstrap';
+import { loadDesktopProfileBootstrapState } from '@/lib/desktop/profile-bootstrap';
 import { getProjectPageUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
@@ -143,14 +139,17 @@ export function LoginPageClient() {
 
     void (async () => {
       try {
-        const bootstrap = await getDesktopProfileBootstrap();
-        if (!bootstrap) {
+        const bootstrapState = await loadDesktopProfileBootstrapState({
+          localAuthMode: 'best-effort',
+        });
+        if (!bootstrapState) {
           setDesktopAuthCheckDone(true);
           return;
         }
 
-        applyDesktopProfileBootstrap(bootstrap);
-        const { profileSync: profileSyncStatus, localAuth } = bootstrap;
+        const { payload: bootstrap, localAuth: effectiveAuthStatus } =
+          bootstrapState;
+        const { profileSync: profileSyncStatus } = bootstrap;
 
         if (profileSyncStatus?.enabled) {
           if (!active) {
@@ -181,12 +180,10 @@ export function LoginPageClient() {
           return;
         }
 
-        const authStatus = await ensureDesktopAuthSession().catch(() => null);
         if (!active) {
           return;
         }
 
-        const effectiveAuthStatus = authStatus ?? localAuth;
         setDesktopProfileSyncEnabled(false);
         setDesktopAuthUsername(effectiveAuthStatus.username);
         setDesktopOwnerPasswordConfigured(
@@ -259,9 +256,11 @@ export function LoginPageClient() {
           });
 
           if (res.ok) {
-            const bootstrap = await getDesktopProfileBootstrap();
-            if (bootstrap) {
-              applyDesktopProfileBootstrap(bootstrap);
+            const bootstrapState = await loadDesktopProfileBootstrapState({
+              localAuthMode: 'none',
+            });
+            if (bootstrapState) {
+              // Runtime config and sync state are already applied by the shared bootstrap loader.
             } else {
               const data = await res.json().catch(() => ({}));
               if (data.username) {

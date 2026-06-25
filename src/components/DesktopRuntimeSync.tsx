@@ -3,14 +3,8 @@
 import { useEffect } from 'react';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
-import {
-  buildLoginPath,
-  ensureDesktopAuthSession,
-} from '@/lib/desktop/auth-session';
-import {
-  applyDesktopProfileBootstrap,
-  getDesktopProfileBootstrap,
-} from '@/lib/desktop/profile-bootstrap';
+import { buildLoginPath } from '@/lib/desktop/auth-session';
+import { loadDesktopProfileBootstrapState } from '@/lib/desktop/profile-bootstrap';
 import {
   DESKTOP_RUNTIME_REFRESH_EVENT,
   DESKTOP_RUNTIME_UPDATED_EVENT,
@@ -42,16 +36,9 @@ function redirectDesktopLoginIfNeeded() {
 }
 
 async function refreshDesktopRuntimeConfig() {
-  const bootstrap = await getDesktopProfileBootstrap();
-  if (!bootstrap) {
+  const bootstrapState = await loadDesktopProfileBootstrapState();
+  if (!bootstrapState) {
     return;
-  }
-
-  applyDesktopProfileBootstrap(bootstrap);
-  if (!bootstrap.profileSync.enabled) {
-    await ensureDesktopAuthSession();
-  } else {
-    // Profile sync status is already applied from the unified bootstrap payload.
   }
 
   redirectDesktopLoginIfNeeded();

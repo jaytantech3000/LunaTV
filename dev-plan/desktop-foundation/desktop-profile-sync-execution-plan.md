@@ -569,6 +569,7 @@ src/lib/profile/
 - `src/lib/profile/client.test.ts` 已补上 profile SDK 级缓存刷新覆盖，验证 API storage 关闭时不出网，开启时会统一拉取 `playrecords` / `favorites` / `follows` / `searchhistory` / `skipconfigs` 五个域并回填缓存。
 - Rust profile sync 测试现已补上未配置 `api_base_url`、登录后会话代持、透传 `401` 清 session 与五个同步域透传一致性，`moontv-sync` 与 local service 两层都已有可执行回归覆盖。
 - Phase 6 所需的故障排查文档已经输出，后续排查可直接按 `desktop-profile-sync-troubleshooting.md` 的状态词典和联调基线执行。
+- `src/lib/desktop/profile-bootstrap.ts` 现已新增共享 bootstrap loader，把“拉取 bootstrap + 应用 runtime/profileSync 配置 + 在 desktop-local 下恢复本地 auth”的流程收口到一处，`DesktopRuntimeSync` 与登录页不再各自维护一套近似初始化分支。
 
 #### 验收标准
 
