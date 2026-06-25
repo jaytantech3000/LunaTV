@@ -18,11 +18,12 @@ use axum::{
 use futures::stream;
 use moontv_download::{
     DesktopDownloadEngine, DesktopDownloadEngineSettingsUpdate, DesktopDownloadEngineSnapshot,
-    DesktopDownloadTask,
+    DesktopDownloadTask, DesktopDownloadTaskStatus,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tracing::warn;
 use url::Url;
 
 use crate::{
@@ -551,36 +552,8 @@ pub(crate) async fn resolve_download_runtime_manifest(
     Json(request): Json<DesktopDownloadManifestResolveRequest>,
 ) -> AppResult<Response> {
     let candidate_urls = normalize_download_manifest_candidate_urls(request.entry_manifest_urls)?;
-    let mut last_error: Option<DownloadManifestError> = None;
-
-    for candidate_url in candidate_urls {
-        for attempt in 1..=MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES + 1 {
-            match parse_download_manifest_for_candidate(&state, &candidate_url).await {
-                Ok(result) => return no_store_json_response(&result),
-                Err(error) => {
-                    let should_retry = attempt <= MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES
-                        && is_retryable_download_manifest_error(&error);
-                    last_error = Some(error);
-
-                    if should_retry {
-                        wait_for_download_manifest_retry(attempt).await;
-                        continue;
-                    }
-
-                    break;
-                }
-            }
-        }
-    }
-
-    Err(last_error
-        .unwrap_or_else(|| {
-            DownloadManifestError::invalid(
-                "desktop-download-manifest",
-                "missing download manifest candidates",
-            )
-        })
-        .into_app_error())
+    let resolved_manifest = resolve_download_manifest_candidates(&state, candidate_urls).await?;
+    no_store_json_response(&resolved_manifest)
 }
 
 fn normalize_download_manifest_candidate_urls(
@@ -1199,18 +1172,62 @@ async fn wait_for_download_manifest_retry(attempt: usize) {
     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 }
 
+async fn resolve_download_manifest_candidates(
+    state: &AppState,
+    candidate_urls: Vec<String>,
+) -> Result<DesktopDownloadManifestResolveResponse, AppError> {
+    let mut last_error: Option<DownloadManifestError> = None;
+
+    for candidate_url in candidate_urls {
+        for attempt in 1..=MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES + 1 {
+            match parse_download_manifest_for_candidate(state, &candidate_url).await {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    let should_retry = attempt <= MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES
+                        && is_retryable_download_manifest_error(&error);
+                    last_error = Some(error);
+
+                    if should_retry {
+                        wait_for_download_manifest_retry(attempt).await;
+                        continue;
+                    }
+
+                    break;
+                }
+            }
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| {
+            DownloadManifestError::invalid(
+                "desktop-download-manifest",
+                "missing download manifest candidates",
+            )
+        })
+        .into_app_error())
+}
+
 fn download_runtime_task_not_found() -> AppError {
     AppError::new(StatusCode::NOT_FOUND, "download runtime task not found")
+}
+
+async fn persist_download_engine_snapshot(
+    state: &AppState,
+    snapshot: DesktopDownloadEngineSnapshot,
+) -> AppResult<DesktopDownloadEngineSnapshot> {
+    state
+        .write_download_engine_snapshot(&snapshot)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    state.publish_download_engine_snapshot(&snapshot);
+    Ok(snapshot)
 }
 
 async fn write_download_engine_snapshot_response(
     state: &AppState,
     snapshot: DesktopDownloadEngineSnapshot,
 ) -> AppResult<Response> {
-    state
-        .write_download_engine_snapshot(&snapshot)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    state.publish_download_engine_snapshot(&snapshot);
+    let snapshot = persist_download_engine_snapshot(state, snapshot).await?;
     no_store_json_response(&snapshot)
 }
 
@@ -1224,6 +1241,517 @@ where
     };
 
     write_download_engine_snapshot_response(state, snapshot).await
+}
+
+async fn update_download_runtime_task<F>(
+    state: &AppState,
+    task_id: &str,
+    updater: F,
+) -> AppResult<Option<DesktopDownloadTask>>
+where
+    F: FnOnce(DesktopDownloadTask) -> DesktopDownloadTask,
+{
+    let (snapshot, next_task) = {
+        let mut engine = state.download_engine.write().await;
+        let Some(current_task) = engine.snapshot().tasks.get(task_id).cloned() else {
+            return Ok(None);
+        };
+        let next_task = updater(current_task);
+        let snapshot = engine
+            .upsert_task(next_task.clone())
+            .map_err(AppError::bad_request)?
+            .clone();
+        (snapshot, next_task)
+    };
+
+    persist_download_engine_snapshot(state, snapshot).await?;
+    Ok(Some(next_task))
+}
+
+async fn read_download_runtime_task(
+    state: &AppState,
+    task_id: &str,
+) -> Option<DesktopDownloadTask> {
+    state
+        .download_engine
+        .read()
+        .await
+        .snapshot()
+        .tasks
+        .get(task_id)
+        .cloned()
+}
+
+fn calculate_download_task_progress(downloaded_resources: u32, total_resources: u32) -> u8 {
+    if total_resources == 0 {
+        return 0;
+    }
+
+    ((downloaded_resources as f64 / total_resources as f64) * 100.0)
+        .round()
+        .clamp(0.0, 100.0) as u8
+}
+
+fn estimate_download_task_total_size_bytes(
+    completed_size_bytes: u64,
+    downloaded_resources: u32,
+    total_resources: u32,
+) -> u64 {
+    if downloaded_resources == 0 || total_resources == 0 {
+        return completed_size_bytes;
+    }
+
+    let average_size = completed_size_bytes as f64 / downloaded_resources as f64;
+    completed_size_bytes.max((average_size * total_resources as f64).round() as u64)
+}
+
+fn resolve_download_runtime_owner_username(state: &AppState) -> String {
+    state
+        .read_download_store_snapshot()
+        .ok()
+        .flatten()
+        .and_then(|snapshot| {
+            snapshot
+                .get("ownerUsername")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "desktop-runtime".to_string())
+}
+
+fn normalize_download_runtime_task_candidate_url(
+    state: &AppState,
+    source: &str,
+    value: &str,
+) -> Option<String> {
+    let normalized_value = normalize_optional_text(Some(value))?;
+    if crate::vod_proxy::parse_vod_proxy_url(&normalized_value).is_some() {
+        return Some(normalized_value);
+    }
+
+    if matches!(
+        Url::parse(&normalized_value)
+            .ok()
+            .map(|parsed_url| parsed_url.scheme().to_ascii_lowercase()),
+        Some(scheme) if scheme == "http" || scheme == "https"
+    ) {
+        return Some(crate::build_vod_proxy_m3u8_url(
+            &state.public_base_url,
+            source,
+            &normalized_value,
+        ));
+    }
+
+    Some(normalized_value)
+}
+
+async fn resolve_download_runtime_task_manifest_candidates(
+    state: &AppState,
+    task: &DesktopDownloadTask,
+) -> Vec<String> {
+    let mut current_candidates = task.manifest_candidate_urls.clone();
+    current_candidates.push(task.entry_manifest_url.clone());
+    let mut candidate_urls = normalize_download_manifest_candidate_urls(current_candidates)
+        .unwrap_or_else(|_| Vec::new());
+
+    if candidate_urls.len() > 1 || task.title.trim().is_empty() {
+        return candidate_urls;
+    }
+
+    let config = match state.load_config() {
+        Ok(config) => config,
+        Err(_) => return candidate_urls,
+    };
+
+    let fallback_sources = crate::playback_prefetch::search_playback_sources_with_prefetch(
+        &state.client,
+        &config,
+        &crate::playback_prefetch::PlaybackSourcePrefetchRequest {
+            title: task.title.clone(),
+            year: Some(task.year.clone()),
+            search_type: task.search_type.clone(),
+            query: task.search_title.clone(),
+            douban_id: task.douban_id,
+            allow_adult_candidates: None,
+        },
+    )
+    .await;
+
+    for fallback_source in fallback_sources {
+        let Some(episode_url) = fallback_source.episodes.get(task.episode_index as usize) else {
+            continue;
+        };
+        let Some(candidate_url) = normalize_download_runtime_task_candidate_url(
+            state,
+            &fallback_source.source,
+            episode_url,
+        ) else {
+            continue;
+        };
+        candidate_urls.push(candidate_url);
+    }
+
+    normalize_download_manifest_candidate_urls(candidate_urls).unwrap_or_else(|_| Vec::new())
+}
+
+fn build_download_runtime_resource_index_record(
+    state: &AppState,
+    task: &DesktopDownloadTask,
+    manifest_result: &DesktopDownloadManifestResolveResponse,
+) -> DesktopDownloadResourceIndexRecord {
+    let timestamp = crate::current_timestamp_ms();
+    DesktopDownloadResourceIndexRecord {
+        id: task.cache_index_id.clone(),
+        owner_username: resolve_download_runtime_owner_username(state),
+        task_id: task.id.clone(),
+        content_id: task.content_id.clone(),
+        source: task.source.clone(),
+        vod_id: task.vod_id.clone(),
+        episode_index: i64::from(task.episode_index),
+        urls: manifest_result.resource_urls.clone(),
+        created_at: timestamp,
+        updated_at: timestamp,
+    }
+}
+
+fn is_download_runtime_task_running(task: &DesktopDownloadTask) -> bool {
+    task.status == DesktopDownloadTaskStatus::Downloading
+}
+
+fn should_flush_download_runtime_progress(downloaded_resources: u32, total_resources: u32) -> bool {
+    downloaded_resources == total_resources
+        || downloaded_resources == 1
+        || downloaded_resources % 5 == 0
+}
+
+async fn fetch_and_cache_download_runtime_resource(
+    state: &AppState,
+    url: &str,
+) -> Result<DesktopDownloadCacheEntry, String> {
+    if let Some(entry) = state
+        .read_cached_download_entry(url)
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(entry);
+    }
+
+    let fetched_response = fetch_runtime_download_response(state, url, &HeaderMap::new())
+        .await
+        .map_err(|error| error.message)?;
+    if !fetched_response.status.is_success() {
+        let detail = summarize_manifest_error_body(&String::from_utf8_lossy(&fetched_response.body));
+        return Err(format!(
+            "failed to fetch download resource: {url} ({}{})",
+            fetched_response.status.as_u16(),
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(", {detail}")
+            }
+        ));
+    }
+
+    state
+        .write_cached_download(
+            url,
+            fetched_response.status,
+            fetched_response.content_type.as_deref(),
+            fetched_response.body.as_ref(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn cleanup_download_runtime_cache_index(state: &AppState, cache_index_id: &str) -> Result<(), String> {
+    let Some(resource_index) = state
+        .read_resource_index(cache_index_id)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(());
+    };
+
+    for url in resource_index.urls {
+        state
+            .delete_cached_download(&url)
+            .map_err(|error| error.to_string())?;
+    }
+
+    state
+        .delete_resource_index(cache_index_id)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn activate_queued_download_runtime_task(state: &AppState, task_id: &str) -> AppResult<bool> {
+    let snapshot = {
+        let mut active_tasks = state.download_runtime_active_tasks.lock().await;
+        if active_tasks.contains(task_id) {
+            return Ok(false);
+        }
+
+        let mut engine = state.download_engine.write().await;
+        let Some(mut task) = engine.snapshot().tasks.get(task_id).cloned() else {
+            return Ok(false);
+        };
+        if task.status != DesktopDownloadTaskStatus::Queued {
+            return Ok(false);
+        }
+
+        task.status = DesktopDownloadTaskStatus::Downloading;
+        task.error_message = None;
+        task.download_speed_bytes_per_second = 0;
+        task.updated_at = crate::current_timestamp_ms();
+        let snapshot = engine
+            .upsert_task(task)
+            .map_err(AppError::bad_request)?
+            .clone();
+        active_tasks.insert(task_id.to_string());
+        snapshot
+    };
+
+    if let Err(error) = persist_download_engine_snapshot(state, snapshot).await {
+        state.download_runtime_active_tasks.lock().await.remove(task_id);
+        return Err(error);
+    }
+
+    Ok(true)
+}
+
+async fn process_download_runtime_queue(state: AppState) -> AppResult<()> {
+    let _guard = state.download_runtime_schedule_lock.lock().await;
+
+    loop {
+        let active_task_ids = state.download_runtime_active_tasks.lock().await.clone();
+        let snapshot = state.download_engine.read().await.snapshot();
+        let available_slots = snapshot
+            .max_concurrent_tasks
+            .saturating_sub(active_task_ids.len() as u8) as usize;
+        if available_slots == 0 {
+            return Ok(());
+        }
+
+        let mut queued_tasks = snapshot
+            .tasks
+            .into_values()
+            .filter(|task| {
+                task.status == DesktopDownloadTaskStatus::Queued
+                    && !active_task_ids.contains(&task.id)
+            })
+            .collect::<Vec<_>>();
+        if queued_tasks.is_empty() {
+            return Ok(());
+        }
+
+        queued_tasks.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.title.cmp(&right.title))
+                .then_with(|| left.episode_index.cmp(&right.episode_index))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        let next_task_ids = queued_tasks
+            .into_iter()
+            .take(available_slots)
+            .map(|task| task.id)
+            .collect::<Vec<_>>();
+        let mut spawned_worker = false;
+
+        for task_id in next_task_ids {
+            if !activate_queued_download_runtime_task(&state, &task_id).await? {
+                continue;
+            }
+
+            spawned_worker = true;
+            let worker_state = state.clone();
+            tokio::spawn(async move {
+                run_download_runtime_task_worker(worker_state, task_id).await;
+            });
+        }
+
+        if !spawned_worker {
+            return Ok(());
+        }
+    }
+}
+
+pub(crate) fn schedule_download_runtime_processing(state: AppState) {
+    tokio::spawn(async move {
+        if let Err(error) = process_download_runtime_queue(state).await {
+            warn!("desktop download runtime scheduler failed: {}", error.message);
+        }
+    });
+}
+
+async fn fail_download_runtime_task(
+    state: &AppState,
+    task_id: &str,
+    error_message: &str,
+) -> AppResult<()> {
+    let _ = update_download_runtime_task(state, task_id, |mut task| {
+        if !is_download_runtime_task_running(&task) {
+            return task;
+        }
+
+        task.status = DesktopDownloadTaskStatus::Error;
+        task.error_message = Some(error_message.to_string());
+        task.current_size_bytes = task.size_bytes;
+        task.estimated_total_size_bytes =
+            task.estimated_total_size_bytes.max(task.size_bytes);
+        task.download_speed_bytes_per_second = 0;
+        task.updated_at = crate::current_timestamp_ms();
+        task
+    })
+    .await?;
+    Ok(())
+}
+
+async fn execute_download_runtime_task(state: &AppState, task_id: &str) -> Result<(), String> {
+    let Some(initial_task) = read_download_runtime_task(state, task_id).await else {
+        return Ok(());
+    };
+    if !is_download_runtime_task_running(&initial_task) {
+        return Ok(());
+    }
+
+    let manifest_candidate_urls = resolve_download_runtime_task_manifest_candidates(state, &initial_task).await;
+    let manifest_candidate_urls = normalize_download_manifest_candidate_urls(manifest_candidate_urls)
+        .map_err(|error| error.message)?;
+    let manifest_result = resolve_download_manifest_candidates(state, manifest_candidate_urls.clone())
+        .await
+        .map_err(|error| error.message)?;
+
+    let Some(task_after_manifest) = read_download_runtime_task(state, task_id).await else {
+        return Ok(());
+    };
+    if !is_download_runtime_task_running(&task_after_manifest) {
+        return Ok(());
+    }
+
+    let Some(task_after_manifest) = update_download_runtime_task(state, task_id, |mut task| {
+        task.entry_manifest_url = manifest_result.root_manifest_url.clone();
+        task.manifest_candidate_urls = manifest_candidate_urls.clone();
+        task.playback_manifest_url = Some(manifest_result.playback_manifest_url.clone());
+        task.total_resources = manifest_result.resources.len() as u32;
+        task.downloaded_resources = 0;
+        task.progress = 0;
+        task.size_bytes = 0;
+        task.current_size_bytes = 0;
+        task.estimated_total_size_bytes = 0;
+        task.download_speed_bytes_per_second = 0;
+        task.error_message = None;
+        task.updated_at = crate::current_timestamp_ms();
+        task
+    })
+    .await
+    .map_err(|error| error.message)? else {
+        return Ok(());
+    };
+    if !is_download_runtime_task_running(&task_after_manifest) {
+        return Ok(());
+    }
+
+    let resource_index_record =
+        build_download_runtime_resource_index_record(state, &task_after_manifest, &manifest_result);
+    state
+        .write_resource_index(&resource_index_record)
+        .map_err(|error| error.to_string())?;
+
+    let total_resources = manifest_result.resources.len() as u32;
+    let mut downloaded_resources = 0_u32;
+    let mut completed_size_bytes = 0_u64;
+
+    for resource in &manifest_result.resources {
+        let Some(current_task) = read_download_runtime_task(state, task_id).await else {
+            cleanup_download_runtime_cache_index(state, &task_after_manifest.cache_index_id)?;
+            return Ok(());
+        };
+        if !is_download_runtime_task_running(&current_task) {
+            return Ok(());
+        }
+
+        let cache_entry =
+            if let Some(cache_entry) = state
+                .read_cached_download_entry(&resource.url)
+                .map_err(|error| error.to_string())?
+            {
+                cache_entry
+            } else {
+                fetch_and_cache_download_runtime_resource(state, &resource.url).await?
+            };
+
+        completed_size_bytes = completed_size_bytes.saturating_add(cache_entry.size_bytes);
+        downloaded_resources = downloaded_resources.saturating_add(1);
+
+        if !should_flush_download_runtime_progress(downloaded_resources, total_resources) {
+            continue;
+        }
+
+        let Some(current_task) = read_download_runtime_task(state, task_id).await else {
+            cleanup_download_runtime_cache_index(state, &task_after_manifest.cache_index_id)?;
+            return Ok(());
+        };
+        if !is_download_runtime_task_running(&current_task) {
+            return Ok(());
+        }
+
+        let estimated_total_size_bytes = estimate_download_task_total_size_bytes(
+            completed_size_bytes,
+            downloaded_resources,
+            total_resources,
+        );
+        let _ = update_download_runtime_task(state, task_id, |mut task| {
+            task.playback_manifest_url = Some(manifest_result.playback_manifest_url.clone());
+            task.total_resources = total_resources;
+            task.downloaded_resources = downloaded_resources;
+            task.size_bytes = completed_size_bytes;
+            task.current_size_bytes = completed_size_bytes;
+            task.estimated_total_size_bytes = estimated_total_size_bytes;
+            task.download_speed_bytes_per_second = 0;
+            task.progress =
+                calculate_download_task_progress(downloaded_resources, total_resources);
+            task.error_message = None;
+            task.updated_at = crate::current_timestamp_ms();
+            task
+        })
+        .await
+        .map_err(|error| error.message)?;
+    }
+
+    let _ = update_download_runtime_task(state, task_id, |mut task| {
+        task.status = DesktopDownloadTaskStatus::Done;
+        task.playback_manifest_url = Some(manifest_result.playback_manifest_url.clone());
+        task.total_resources = total_resources;
+        task.downloaded_resources = total_resources;
+        task.progress = 100;
+        task.size_bytes = completed_size_bytes;
+        task.current_size_bytes = completed_size_bytes;
+        task.estimated_total_size_bytes = completed_size_bytes;
+        task.download_speed_bytes_per_second = 0;
+        task.error_message = None;
+        task.updated_at = crate::current_timestamp_ms();
+        task
+    })
+    .await
+    .map_err(|error| error.message)?;
+
+    Ok(())
+}
+
+async fn run_download_runtime_task_worker(state: AppState, task_id: String) {
+    let execution_result = execute_download_runtime_task(&state, &task_id).await;
+    if let Err(error_message) = execution_result {
+        if let Err(error) = fail_download_runtime_task(&state, &task_id, &error_message).await {
+            warn!(
+                "desktop download runtime task {} failed to record error state: {}",
+                task_id, error.message
+            );
+        }
+    }
+
+    state.download_runtime_active_tasks.lock().await.remove(&task_id);
+    schedule_download_runtime_processing(state);
 }
 
 pub(crate) async fn get_download_runtime_tasks(
@@ -1277,78 +1805,90 @@ pub(crate) async fn post_download_runtime_task(
     State(state): State<AppState>,
     Json(task): Json<DesktopDownloadTask>,
 ) -> AppResult<Response> {
-    mutate_download_engine_snapshot(&state, move |engine| {
+    let response = mutate_download_engine_snapshot(&state, move |engine| {
         let snapshot = engine
             .upsert_task(task)
             .map_err(AppError::bad_request)?
             .clone();
         Ok(snapshot)
     })
-    .await
+    .await?;
+    schedule_download_runtime_processing(state);
+    Ok(response)
 }
 
 pub(crate) async fn put_download_runtime_task_settings(
     State(state): State<AppState>,
     Json(settings): Json<DesktopDownloadEngineSettingsUpdate>,
 ) -> AppResult<Response> {
-    mutate_download_engine_snapshot(&state, move |engine| {
+    let response = mutate_download_engine_snapshot(&state, move |engine| {
         Ok(engine.update_settings(settings).clone())
     })
-    .await
+    .await?;
+    schedule_download_runtime_processing(state);
+    Ok(response)
 }
 
 pub(crate) async fn pause_download_runtime_task(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,
 ) -> AppResult<Response> {
-    mutate_download_engine_snapshot(&state, move |engine| {
+    let response = mutate_download_engine_snapshot(&state, move |engine| {
         let snapshot = engine
             .pause_task(&task_id)
             .ok_or_else(download_runtime_task_not_found)?
             .clone();
         Ok(snapshot)
     })
-    .await
+    .await?;
+    schedule_download_runtime_processing(state);
+    Ok(response)
 }
 
 pub(crate) async fn resume_download_runtime_task(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,
 ) -> AppResult<Response> {
-    mutate_download_engine_snapshot(&state, move |engine| {
+    let response = mutate_download_engine_snapshot(&state, move |engine| {
         let snapshot = engine
             .resume_task(&task_id)
             .ok_or_else(download_runtime_task_not_found)?
             .clone();
         Ok(snapshot)
     })
-    .await
+    .await?;
+    schedule_download_runtime_processing(state);
+    Ok(response)
 }
 
 pub(crate) async fn cancel_download_runtime_task(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,
 ) -> AppResult<Response> {
-    mutate_download_engine_snapshot(&state, move |engine| {
+    let response = mutate_download_engine_snapshot(&state, move |engine| {
         engine
             .cancel_task(&task_id)
             .ok_or_else(download_runtime_task_not_found)?;
         Ok(engine.snapshot())
     })
-    .await
+    .await?;
+    schedule_download_runtime_processing(state);
+    Ok(response)
 }
 
 pub(crate) async fn delete_download_runtime_task(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,
 ) -> AppResult<Response> {
-    mutate_download_engine_snapshot(&state, move |engine| {
+    let response = mutate_download_engine_snapshot(&state, move |engine| {
         engine
             .delete_task(&task_id)
             .ok_or_else(download_runtime_task_not_found)?;
         Ok(engine.snapshot())
     })
-    .await
+    .await?;
+    schedule_download_runtime_processing(state);
+    Ok(response)
 }
 
 fn require_download_runtime_url(value: Option<&str>) -> AppResult<String> {

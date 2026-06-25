@@ -25,9 +25,10 @@
 > - Phase 2B 也补上了第一刀结构性收口：`/media/vod/m3u8`、`/media/vod/segment`、`/media/vod/key` handler 已从 `crates/moontv-local-service/src/lib.rs` 抽到独立的 `crates/moontv-local-service/src/vod_proxy.rs`，为后续继续下沉资源抓取与图片代理留出明确模块边界。
 > - Phase 2B 又继续补了一刀：`/live/precheck`、`/media/live/m3u8`、`/media/live/segment`、`/media/live/key`、`/media/live/logo` 与对应 legacy `/api/proxy/*` live handler 已抽到独立的 `crates/moontv-local-service/src/live_proxy.rs`，`lib.rs` 不再继续承载这组 live proxy facade。
 > - Phase 2B 继续补上了图片代理入口：local service 新增 `/api/image-proxy`（兼容 `/image-proxy`），桌面端 `buildApiUrl('/image-proxy')` 在 `server` 模式下已可直接由 Rust 本地服务代抓 Douban 图片，不再只依赖 Next route。
-> - Phase 1 也已经开始落下“先搭骨架、不切主流程”的第一刀：新增 `moontv-download` crate，桌面本地服务补齐 `/api/download-runtime/tasks*` 命令 / 状态查询 skeleton，并把下载引擎快照持久化到 SQLite `app_metadata`。
+> - Phase 1 已从“下载引擎骨架”推进到“桌面 runtime 主执行器闭环”：`moontv-download` crate、`/api/download-runtime/tasks*` 协议、SQLite `app_metadata` 快照，以及 Rust worker 调度 / 执行链路都已落地。
 > - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot。
-> - Phase 1 继续补上了资源抓取主路径：local service 新增 `/api/download-runtime/cache/fetch`，桌面 runtime 开启时会由 Rust 直接解析并抓取 `/media/vod/*` 资源、写入 runtime cache；前端 `src/lib/download/manager.ts` 只保留进度测量与任务编排，不再自己执行这一段 `fetch + cache put`。
+> - Phase 1 在桌面 runtime 模式下已由 Rust 接手 queued 任务调度、manifest candidate fallback、`/media/vod/*` 资源抓取与 cache/resource-index 写入；前端 `src/lib/download/manager.ts` 不再启动浏览器侧任务 runner。
+> - `src/components/DesktopDownloadStoreSync.tsx` 现在也会把 runtime `done` 任务回填到 `library`，避免已完成任务只停留在 snapshot 而不生成离线片库条目。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
 
 ## 目标
@@ -242,11 +243,11 @@ Rust Shared Crates
 - `src/lib/download/session.ts` 的 purge / logout 清理现在也会显式命中 `DELETE /api/download-runtime/tasks`，把 Rust runtime 的任务快照与前端内存缓存一起清空，避免旧任务继续依赖页面存活期间的整库镜像才被被动删掉。
 - `src/lib/download/client.ts` 现已作为统一桌面下载入口落地，`DownloadsClient`、`CurrentEpisodeDownloadControl`、`BatchEpisodeDownloadDialog` 与会话清理路径都改为消费这层 facade，而不再直接 import `downloadManager`。
 - ESLint 现已禁止 `src/app/*` 与 `src/components/*` 在非测试代码中直接依赖 `@/lib/download/manager`，防止桌面下载 UI 再次绕过统一下载 SDK 回连 TS 执行器细节。
-- `crates/moontv-local-service/src/download_runtime.rs` 现已接手 download runtime 的 cache / resource-index / store / tasks facade、SSE 推送与缓存响应辅助；`lib.rs` 收缩为路由装配与 `AppState` 存储能力，为后续继续下沉到独立下载 crate 留出清晰边界。
-- 桌面模式下的 manifest candidate fallback、m3u8 抓取、master/media playlist 解析、资源列表展开与 manifest 缓存，现在也优先走 local service 新增的 `/api/download-runtime/manifest/resolve`；`src/lib/download/manifest.ts` 在桌面 runtime 开启时不再直接承担这段前端网络抓取。
-- 桌面模式下的资源下载主路径也继续往 Rust 收口：local service 新增 `/api/download-runtime/cache/fetch`，会直接解析 `/media/vod/*` / `/api/proxy/vod/*` 资源 URL，在 Rust 侧抓取并写入 runtime cache；`src/lib/download/manager.ts` 在 runtime 开启时不再自己执行资源 `fetch` 后再 `putDownloadResponse`。
-- `src/components/DesktopDownloadStoreSync.tsx` 也开始收缩成“启动修复 + sidecar store 持久化”角色：运行期的任务生命周期同步主要交给 `src/lib/download/manager.ts` 的显式 runtime upsert / 命令桥，不再在每次本地 store 变动后都整库 mirror 一次 Rust task snapshot。
-- `src/lib/download/manager.ts` 仍然是当前桌面下载的真实执行器，所以这一阶段只完成了“边界收口”和“状态恢复骨架”，还没有切走主下载流程。
+- `crates/moontv-local-service/src/download_runtime.rs` 现已接手 download runtime 的 cache / resource-index / store / tasks facade、SSE 推送与缓存响应辅助，并新增 runtime scheduler/worker：在桌面 runtime 模式下负责 queued 任务调度、manifest candidate fallback、resource-index 写入、资源缓存抓取以及 `done / error` 状态持久化；`lib.rs` 收缩为路由装配与 `AppState` 存储能力，为后续继续下沉到独立下载 crate 留出清晰边界。
+- 桌面 runtime 模式下的 manifest candidate fallback、m3u8 抓取、master/media playlist 解析、资源列表展开与 manifest 缓存，现在也优先走 local service 新增的 `/api/download-runtime/manifest/resolve`；`src/lib/download/manifest.ts` 在 runtime 开启时不再直接承担这段前端网络抓取。
+- 桌面 runtime 模式下的资源下载主路径也继续往 Rust 收口：local service 新增 `/api/download-runtime/cache/fetch`，会直接解析 `/media/vod/*` / `/api/proxy/vod/*` 资源 URL，在 Rust 侧抓取并写入 runtime cache；`src/lib/download/manager.ts` 在 runtime 开启时不再自己执行资源 `fetch` 后再 `putDownloadResponse`。
+- `src/components/DesktopDownloadStoreSync.tsx` 也开始收缩成“启动修复 + sidecar store 持久化”角色：运行期的任务生命周期同步主要交给 runtime snapshot 与显式命令桥；与此同时，它会在收到 runtime `done` 任务时回填 `library`，确保 Rust 侧完成的下载能直接进入离线片库。
+- `src/lib/download/manager.ts` 在桌面 runtime 模式下不再启动浏览器侧任务 runner，主要保留任务创建 / 控制、Web / 非 runtime fallback 与兼容层；桌面下载主执行路径已切到 Rust local service。
 
 ### 验收标准
 

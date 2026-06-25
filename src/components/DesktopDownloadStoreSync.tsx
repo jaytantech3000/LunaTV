@@ -15,6 +15,8 @@ import {
   putDesktopDownloadStoreSnapshot,
   subscribeToDesktopDownloadEngineSnapshots,
 } from '@/lib/download/desktop-runtime';
+import { mergeLibraryItem } from '@/lib/download/library';
+import { DownloadTask } from '@/lib/download/types';
 
 import {
   buildPersistedDownloadStoreState,
@@ -101,6 +103,115 @@ function shouldHydrateDesktopPersistedSnapshot(
   );
 }
 
+function shouldUpsertRuntimeLibraryItem(
+  task: DownloadTask,
+  ownerUsername: string,
+  previousItem = useDownloadStore.getState().library[task.contentId]
+): boolean {
+  const playbackManifestUrl = task.playbackManifestUrl?.trim();
+  if (!playbackManifestUrl) {
+    return false;
+  }
+
+  if (!previousItem) {
+    return true;
+  }
+
+  const existingEpisode = previousItem.episodes.find(
+    (episode) => episode.episodeIndex === task.episodeIndex
+  );
+  if (!existingEpisode) {
+    return true;
+  }
+
+  return (
+    previousItem.ownerUsername !== ownerUsername ||
+    previousItem.source !== task.source ||
+    previousItem.vodId !== task.vodId ||
+    previousItem.sourceName !== task.sourceName ||
+    previousItem.title !== task.title ||
+    previousItem.searchTitle !== task.searchTitle ||
+    previousItem.searchType !== task.searchType ||
+    previousItem.poster !== task.poster ||
+    previousItem.remarks !== task.remarks ||
+    previousItem.year !== task.year ||
+    previousItem.desc !== task.desc ||
+    previousItem.typeName !== task.typeName ||
+    previousItem.doubanId !== task.doubanId ||
+    previousItem.episodeTitles[task.episodeIndex] !== task.episodeTitle ||
+    existingEpisode.rootManifestUrl !== task.entryManifestUrl ||
+    existingEpisode.playbackManifestUrl !== playbackManifestUrl ||
+    existingEpisode.cacheIndexId !== task.cacheIndexId ||
+    existingEpisode.resourceCount !== task.totalResources ||
+    existingEpisode.sizeBytes !== task.sizeBytes
+  );
+}
+
+function syncRuntimeCompletedTaskToLibrary(task: DownloadTask): void {
+  if (task.status !== 'done') {
+    return;
+  }
+
+  const ownerUsername = useDownloadStore.getState().ownerUsername;
+  const playbackManifestUrl = task.playbackManifestUrl?.trim();
+  if (!ownerUsername || !playbackManifestUrl) {
+    return;
+  }
+
+  const previousItem = useDownloadStore.getState().library[task.contentId];
+  if (!shouldUpsertRuntimeLibraryItem(task, ownerUsername, previousItem)) {
+    return;
+  }
+
+  useDownloadStore
+    .getState()
+    .upsertLibraryItem(
+      mergeLibraryItem(
+        previousItem,
+        task,
+        ownerUsername,
+        playbackManifestUrl,
+        task.entryManifestUrl,
+        task.totalResources,
+        task.sizeBytes
+      )
+    );
+}
+
+function syncRuntimeCompletedTasksToLibrary(
+  runtimeSnapshot: DesktopDownloadRuntimeSnapshot,
+  options: {
+    hydrateAllDoneTasks?: boolean;
+  } = {}
+): void {
+  const candidateTasks = options.hydrateAllDoneTasks
+    ? Object.values(runtimeSnapshot.tasks).filter(
+        (task) => task.status === 'done'
+      )
+    : (() => {
+        const runtimeEvent = runtimeSnapshot.lastEvent;
+        if (!runtimeEvent) {
+          return [];
+        }
+
+        if (
+          runtimeEvent.type === 'taskUpserted' ||
+          runtimeEvent.type === 'taskStatusChanged'
+        ) {
+          const task = runtimeSnapshot.tasks[runtimeEvent.taskId];
+          if (task?.status === 'done') {
+            return [task];
+          }
+        }
+
+        return [];
+      })();
+
+  candidateTasks.forEach((task) => {
+    syncRuntimeCompletedTaskToLibrary(task);
+  });
+}
+
 export default function DesktopDownloadStoreSync() {
   useEffect(() => {
     if (!isDesktopLocalDownloadRuntimeEnabled()) {
@@ -141,19 +252,20 @@ export default function DesktopDownloadStoreSync() {
       cacheDesktopDownloadEngineSnapshot(runtimeSnapshot);
 
       const currentState = useDownloadStore.getState();
-      if (
+      const shouldReplaceRuntimeState =
         currentState.maxConcurrentTasks ===
           runtimeSnapshot.maxConcurrentTasks &&
         areDesktopDownloadTaskCollectionsEquivalent(
           currentState.tasks,
           runtimeSnapshot.tasks
-        )
-      ) {
-        return;
+        );
+
+      if (!shouldReplaceRuntimeState) {
+        skipNextPersist = true;
+        useDownloadStore.getState().replaceRuntimeState(runtimeSnapshot);
       }
 
-      skipNextPersist = true;
-      useDownloadStore.getState().replaceRuntimeState(runtimeSnapshot);
+      syncRuntimeCompletedTasksToLibrary(runtimeSnapshot);
     };
 
     void (async () => {
@@ -197,6 +309,12 @@ export default function DesktopDownloadStoreSync() {
           await putDesktopDownloadStoreSnapshot(localSnapshot).catch(
             () => undefined
           );
+        }
+
+        if (engineSnapshot) {
+          syncRuntimeCompletedTasksToLibrary(engineSnapshot, {
+            hydrateAllDoneTasks: true,
+          });
         }
 
         const nextState = useDownloadStore.getState();

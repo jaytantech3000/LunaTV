@@ -94,19 +94,16 @@
 
 ### 3. 状态同步优先使用 SSE，轮询只做兜底
 
-推荐新增下载事件流接口，例如：
+当前已落地的下载事件流接口：
 
-- `GET /api/download-runtime/events`
+- `GET /api/download-runtime/tasks/stream`
 
-事件类型至少覆盖：
+当前事件负载采用“全量 snapshot + `lastEvent` 增量提示”模型，`lastEvent` 当前至少覆盖：
 
-- `task_created`
-- `task_updated`
-- `task_progress`
-- `task_completed`
-- `task_failed`
-- `task_removed`
-- `stats_updated`
+- `taskUpserted`
+- `taskStatusChanged`
+- `taskRemoved`
+- `maxConcurrentTasksChanged`
 
 桌面 SDK 需要同时支持：
 
@@ -139,7 +136,7 @@
 - `GET /api/download-runtime/tasks`
 - `GET /api/download-runtime/tasks/:taskId`
 - `GET /api/download-runtime/stats`
-- `GET /api/download-runtime/events`
+- `GET /api/download-runtime/tasks/stream`
 
 ### 建议新增的命令接口
 
@@ -195,34 +192,37 @@
 - `crates/moontv-local-service/src/download_runtime.rs` 已接手 download runtime 的 cache / resource-index / store / tasks 路由、SSE 事件流与缓存响应辅助；`lib.rs` 主要保留 `AppState` 持久化方法与路由装配，避免继续把下载逻辑堆回单文件 facade。
 - [x] 桌面 manifest 的 fallback、抓取、playlist 解析、资源展开与缓存已新增 Rust runtime 主路径：`/api/download-runtime/manifest/resolve`，桌面 `src/lib/download/manifest.ts` 仅保留 Web / 非 runtime fallback。
 - [x] 桌面资源抓取新增 Rust runtime 主路径：`/api/download-runtime/cache/fetch` 会直接解析 `/media/vod/*` / `/api/proxy/vod/*` URL、在 local service 内抓取资源并写入 runtime cache；桌面 `src/lib/download/manager.ts` 在 runtime 开启时不再自己执行资源 `fetch + putDownloadResponse`。
+- `crates/moontv-local-service/src/download_runtime.rs` 现已新增 runtime scheduler/worker，负责 queued 任务并发调度、manifest candidate fallback、resource-index 写入、资源 cache 抓取，以及进度 / `done` / `error` 状态持久化，并会在路由启动与任务变更后自动触发调度。
+- `src/lib/download/manager.ts` 在桌面 runtime 开启时不再启动浏览器侧任务 runner，主要保留任务创建 / 控制、Web / 非 runtime fallback 与兼容层。
+- `src/components/DesktopDownloadStoreSync.tsx` 现在会把 runtime `done` 任务回填到 `library`，并把自身进一步收缩成“启动修复 + sidecar snapshot 持久化”角色。
 
 ### D. 建立下载事件流
 
-- [ ] 为任务进度和状态变化提供 SSE 输出
-- [ ] 为 UI 提供初始快照 + 增量事件的订阅模型
-- [ ] 约定事件幂等字段，避免前端重复消费时状态错乱
+- [x] 为任务进度和状态变化提供 SSE 输出
+- [x] 为 UI 提供初始快照 + 增量事件的订阅模型
+- [x] 约定事件幂等字段，避免前端重复消费时状态错乱
 - [ ] 在 SDK 中保留轮询兜底路径
 
 ### E. 实现 Rust 执行引擎
 
-- [ ] 把资源下载、并发调度、任务推进与最终执行器切换迁入 Rust（manifest 解析与资源抓取已可通过 `/api/download-runtime/manifest/resolve`、`/api/download-runtime/cache/fetch` 走 runtime 主路径，但调度与任务推进仍在 TS）
-- [ ] 支持暂停、继续、取消、重试
-- [ ] 继续支持断点续传，不因执行器迁移丢失部分已下载文件
-- [ ] 应用退出或重启后可恢复任务状态
-- [ ] 避免对代理链路和缓存文件协议造成回退
+- [x] 把资源下载、并发调度、任务推进与最终执行器切换迁入 Rust（桌面 runtime 模式下，manifest candidate fallback、资源抓取、resource-index 写入、进度推进与最终 `done / error` 持久化都已由 local service 接手）
+- [x] 支持暂停、继续、取消、重试
+- [x] 继续支持断点续传，不因执行器迁移丢失部分已下载文件
+- [x] 应用退出或重启后可恢复任务状态
+- [x] 避免对代理链路和缓存文件协议造成回退
 
 ### F. 完成桌面 UI 切换
 
-- [ ] `DownloadsClient` 改为消费下载 SDK，不再直接驱动 TS 执行器
-- [ ] `CurrentEpisodeDownloadControl` 改为只发命令和订阅状态
-- [ ] `BatchEpisodeDownloadDialog` 改为消费统一任务视图
+- [x] `DownloadsClient` 改为消费下载 SDK，不再直接驱动 TS 执行器
+- [x] `CurrentEpisodeDownloadControl` 改为只发命令和订阅状态
+- [x] `BatchEpisodeDownloadDialog` 改为消费统一任务视图
 - [ ] 保持现有页面文案、批量操作和状态展示的一致性
 
 ### G. 清理旧路径
 
 - [ ] 桌面默认执行器切到 Rust
 - [ ] 保留一个可回退窗口，用于 pre 验证期快速切回 TS 执行器
-- [ ] 确认桌面下载网络抓取不再由 `src/lib/download/manager.ts` 承担
+- [x] 确认桌面 runtime 模式下的下载网络抓取不再由 `src/lib/download/manager.ts` 承担
 - [ ] 迁移稳定后，删除桌面专用的 TS 下载执行逻辑
 
 ## 建议按 PR 拆分

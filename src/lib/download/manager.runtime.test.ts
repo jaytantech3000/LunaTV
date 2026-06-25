@@ -274,12 +274,14 @@ describe('download manager desktop runtime command bridge', () => {
       episodeIndex: 0,
     });
 
+    expect(useDownloadStore.getState().tasks[task.id]?.status).toBe('queued');
     expect(upsertDesktopDownloadEngineTask).toHaveBeenCalledWith(
       expect.objectContaining({
         id: task.id,
         status: 'queued',
       })
     );
+    expect(mockParseManifestForDownloadWithFallback).not.toHaveBeenCalled();
   });
 
   it('upserts re-queued paused tasks into the desktop runtime without waiting for store sync', async () => {

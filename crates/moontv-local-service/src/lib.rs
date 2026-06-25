@@ -57,7 +57,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::net::TcpListener;
-use tokio::sync::{RwLock, watch};
+use tokio::sync::{Mutex, RwLock, watch};
 #[cfg(target_os = "windows")]
 use tower::ServiceExt;
 use tracing::{info, warn};
@@ -88,6 +88,7 @@ use download_runtime::{
     post_download_runtime_task, put_download_runtime_cache, put_download_runtime_resource_index,
     put_download_runtime_store_snapshot, put_download_runtime_task_settings,
     resolve_download_runtime_manifest, resume_download_runtime_task,
+    schedule_download_runtime_processing,
     stream_download_runtime_tasks,
 };
 use profile_sync::{
@@ -322,6 +323,8 @@ pub struct AppState {
     client: reqwest::Client,
     download_engine: Arc<RwLock<DesktopDownloadEngine>>,
     download_engine_snapshot_tx: watch::Sender<DesktopDownloadEngineSnapshot>,
+    download_runtime_active_tasks: Arc<Mutex<BTreeSet<String>>>,
+    download_runtime_schedule_lock: Arc<Mutex<()>>,
     profile_sync: ProfileSyncClient,
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
     bangumi_api_base_url: String,
@@ -404,6 +407,8 @@ impl AppState {
             client: reqwest::Client::new(),
             download_engine: Arc::new(RwLock::new(download_engine)),
             download_engine_snapshot_tx,
+            download_runtime_active_tasks: Arc::new(Mutex::new(BTreeSet::new())),
+            download_runtime_schedule_lock: Arc::new(Mutex::new(())),
             profile_sync: ProfileSyncClient::new(
                 reqwest::Client::builder()
                     .cookie_store(true)
@@ -1641,6 +1646,8 @@ fn resolve_bind_host<'a>(configured_host: &'a str, use_windows_wildcard_bind: bo
 }
 
 pub fn build_router(state: AppState) -> Router {
+    schedule_download_runtime_processing(state.clone());
+
     Router::new()
         .route("/health", get(get_health))
         .route("/runtime/public-config", get(get_runtime_public_config))
@@ -10940,6 +10947,134 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn download_runtime_worker_executes_queued_tasks_and_persists_cached_resources() {
+        let upstream = spawn_mock_server(mock_upstream_router()).await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Runtime Source"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let task_id = "task-runtime-worker";
+        let candidate_url = format!(
+            "/api/proxy/vod/m3u8?source=mock&url={}",
+            form_urlencoded::byte_serialize(
+                format!("{}/upstream/master.m3u8", upstream.base_url()).as_bytes()
+            )
+            .collect::<String>()
+        );
+        let mut payload = build_download_runtime_task_payload(task_id, "queued");
+        payload["entryManifestUrl"] = Value::String(candidate_url.clone());
+        payload["manifestCandidateUrls"] = json!([candidate_url]);
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .expect("download runtime worker create request"),
+            )
+            .await
+            .expect("download runtime worker create response");
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let create_payload = read_json_body(create_response).await;
+        assert_eq!(
+            create_payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(task_id))
+                .and_then(|task| task.get("status"))
+                .and_then(Value::as_str),
+            Some("queued")
+        );
+
+        let done_payload = wait_for_download_runtime_task_status(app.clone(), task_id, "done").await;
+        let done_task = done_payload
+            .get("tasks")
+            .and_then(|tasks| tasks.get(task_id))
+            .cloned()
+            .expect("completed runtime task payload");
+        assert_eq!(
+            done_task
+                .get("downloadedResources")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            done_task.get("progress").and_then(Value::as_u64),
+            Some(100)
+        );
+
+        let cache_index_id = form_urlencoded::byte_serialize(format!("cache:{task_id}").as_bytes())
+            .collect::<String>();
+        let resource_index_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/resource-index?id={cache_index_id}"
+                    ))
+                    .body(Body::empty())
+                    .expect("download runtime resource index request"),
+            )
+            .await
+            .expect("download runtime resource index response");
+
+        assert_eq!(resource_index_response.status(), StatusCode::OK);
+        let resource_index_payload = read_json_body(resource_index_response).await;
+        let resource_urls = resource_index_payload
+            .get("urls")
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("resource index urls");
+        assert_eq!(resource_urls.len(), 3);
+
+        let cached_resource_url = resource_urls
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|url| Url::parse(url).is_ok())
+            .expect("absolute cached resource url");
+        let cached_url =
+            form_urlencoded::byte_serialize(cached_resource_url.as_bytes()).collect::<String>();
+        let cache_meta_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/cache/meta?url={cached_url}"
+                    ))
+                    .body(Body::empty())
+                    .expect("download runtime cache meta request"),
+            )
+            .await
+            .expect("download runtime cache meta response");
+
+        assert_eq!(cache_meta_response.status(), StatusCode::OK);
+        let cache_meta_payload = read_json_body(cache_meta_response).await;
+        assert_eq!(
+            cache_meta_payload.get("exists").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
     async fn clear_download_runtime_tasks_resets_snapshot_tasks_only() {
         let temp_dir = TestDir::new();
         let config_path = write_test_config(
@@ -11435,6 +11570,45 @@ segment0.ts
             .await
             .expect("read response body");
         serde_json::from_slice(&body).expect("parse response json")
+    }
+
+    async fn wait_for_download_runtime_task_status(
+        app: Router,
+        task_id: &str,
+        expected_status: &str,
+    ) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+
+        loop {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/download-runtime/tasks")
+                        .body(Body::empty())
+                        .expect("download runtime task poll request"),
+                )
+                .await
+                .expect("download runtime task poll response");
+            let payload = read_json_body(response).await;
+            let current_status = payload
+                .get("tasks")
+                .and_then(|tasks| tasks.get(task_id))
+                .and_then(|task| task.get("status"))
+                .and_then(Value::as_str);
+
+            if current_status == Some(expected_status) {
+                return payload;
+            }
+
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for runtime task {task_id} to reach status {expected_status}; current status: {:?}",
+                current_status
+            );
+
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     fn build_test_auth_cookie(username: &str, role: &str, session_mode: &str) -> String {

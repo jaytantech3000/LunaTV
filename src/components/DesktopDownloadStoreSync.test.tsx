@@ -32,6 +32,10 @@ import type { DownloadTask } from '@/lib/download/types';
 
 import DesktopDownloadStoreSync from './DesktopDownloadStoreSync';
 
+type DesktopDownloadRuntimeSnapshot = Awaited<
+  ReturnType<typeof getDesktopDownloadEngineSnapshot>
+>;
+
 function buildDownloadTask(partial: Partial<DownloadTask> = {}): DownloadTask {
   return {
     id: partial.id || 'demo:1:0',
@@ -104,11 +108,7 @@ describe('DesktopDownloadStoreSync', () => {
     syncDesktopDownloadEngineState
   );
   let runtimeSnapshotHandler:
-    | ((snapshot: {
-        maxConcurrentTasks: number;
-        tasks: Record<string, DownloadTask>;
-        lastEvent: null;
-      }) => void)
+    | ((snapshot: DesktopDownloadRuntimeSnapshot) => void)
     | null = null;
   let runtimeSubscriptionUnsubscribe: jest.Mock;
 
@@ -364,5 +364,105 @@ describe('DesktopDownloadStoreSync', () => {
       })
     );
     expect(mockSyncDesktopDownloadEngineState).not.toHaveBeenCalled();
+  });
+
+  it('hydrates runtime-completed tasks into the offline library and persists the merged snapshot', async () => {
+    const doneTask = buildDownloadTask({
+      id: 'demo:done:1',
+      cacheIndexId: 'cache:demo:done:1',
+      status: 'done',
+      progress: 100,
+      totalResources: 2,
+      downloadedResources: 2,
+      sizeBytes: 8192,
+      currentSizeBytes: 8192,
+      estimatedTotalSizeBytes: 8192,
+      updatedAt: 2,
+    });
+
+    useDownloadStore.setState({
+      hasHydrated: true,
+      maxConcurrentTasks: 3,
+      ownerUsername: 'monica',
+      tasks: {},
+      library: {},
+    });
+
+    mockGetDesktopDownloadStoreSnapshot.mockResolvedValue({
+      maxConcurrentTasks: 3,
+      ownerUsername: 'monica',
+      tasks: {},
+      library: {},
+    });
+    mockGetDesktopDownloadEngineSnapshot.mockResolvedValue({
+      maxConcurrentTasks: 3,
+      tasks: {},
+      lastEvent: null,
+    });
+
+    render(<DesktopDownloadStoreSync />);
+
+    await waitFor(() => {
+      expect(runtimeSnapshotHandler).not.toBeNull();
+    });
+
+    mockPutDesktopDownloadStoreSnapshot.mockClear();
+
+    act(() => {
+      runtimeSnapshotHandler?.({
+        maxConcurrentTasks: 3,
+        tasks: {
+          [doneTask.id]: doneTask,
+        },
+        lastEvent: {
+          type: 'taskUpserted',
+          taskId: doneTask.id,
+          status: 'done',
+        },
+      });
+    });
+
+    await waitFor(() => {
+      const libraryItem =
+        useDownloadStore.getState().library[doneTask.contentId];
+      expect(libraryItem).toEqual(
+        expect.objectContaining({
+          ownerUsername: 'monica',
+          contentId: doneTask.contentId,
+          totalSizeBytes: 8192,
+        })
+      );
+      expect(libraryItem?.episodes).toEqual([
+        expect.objectContaining({
+          episodeIndex: doneTask.episodeIndex,
+          cacheIndexId: doneTask.cacheIndexId,
+          rootManifestUrl: doneTask.entryManifestUrl,
+          playbackManifestUrl: doneTask.playbackManifestUrl,
+          resourceCount: 2,
+          sizeBytes: 8192,
+        }),
+      ]);
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+
+    expect(mockPutDesktopDownloadStoreSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerUsername: 'monica',
+        library: {
+          [doneTask.contentId]: expect.objectContaining({
+            totalSizeBytes: 8192,
+            episodes: [
+              expect.objectContaining({
+                cacheIndexId: doneTask.cacheIndexId,
+                sizeBytes: 8192,
+              }),
+            ],
+          }),
+        },
+      })
+    );
   });
 });

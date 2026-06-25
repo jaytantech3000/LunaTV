@@ -532,7 +532,7 @@ pub(crate) fn filter_playback_search_results(
         .collect()
 }
 
-async fn search_playback_sources_with_prefetch(
+pub(crate) async fn search_playback_sources_with_prefetch(
     client: &reqwest::Client,
     config: &ServiceConfig,
     params: &PlaybackSourcePrefetchRequest,

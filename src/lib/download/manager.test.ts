@@ -1,11 +1,8 @@
 import { DownloadedContentMeta, DownloadTask } from '@/lib/download/types';
 import { SearchResult } from '@/lib/types';
 
-import {
-  applyLibraryMetadataFallback,
-  buildDownloadManifestCandidateUrls,
-  mergeLibraryItem,
-} from './manager';
+import { applyLibraryMetadataFallback, mergeLibraryItem } from './library';
+import { buildDownloadManifestCandidateUrls } from './manager';
 
 function buildSearchResult(partial: Partial<SearchResult>): SearchResult {
   return {
