@@ -1,4 +1,9 @@
+import { getRuntimeConfig } from '@/lib/runtime-config';
 import { SearchResult } from '@/lib/types';
+
+jest.mock('@/lib/runtime-config', () => ({
+  getRuntimeConfig: jest.fn(),
+}));
 
 import {
   buildPlaybackSearchQueries,
@@ -23,6 +28,12 @@ function buildSearchResult(partial: Partial<SearchResult>): SearchResult {
 }
 
 describe('playback source prefetch helpers', () => {
+  beforeEach(() => {
+    (getRuntimeConfig as jest.Mock).mockReturnValue({
+      APP_TARGET: 'web',
+    });
+  });
+
   it('prioritizes exact douban id matches over title formatting differences', () => {
     const matched = buildSearchResult({
       id: 'matched',
@@ -274,6 +285,111 @@ describe('playback source prefetch helpers', () => {
       expect(firstRequestUrl.searchParams.get('q')).toBe('雨霖铃');
       expect(secondRequestUrl.searchParams.get('q')).toBe('雨霖铃 2026');
     } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('uses the desktop local service playback prefetch route in desktop mode', async () => {
+    const originalFetch = global.fetch;
+    const safeMatch = buildSearchResult({
+      id: 'desktop-safe-match',
+      title: '主角',
+      source: 'safe-source',
+      source_name: '普通资源',
+      year: '2025',
+      episodes: [
+        'https://example.com/safe-episode-1/index.m3u8',
+        'https://example.com/safe-episode-2/index.m3u8',
+      ],
+      episodes_titles: ['第1集', '第2集'],
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [safeMatch] }),
+    });
+
+    (getRuntimeConfig as jest.Mock).mockReturnValue({
+      APP_TARGET: 'desktop',
+    });
+    global.fetch = fetchMock as typeof fetch;
+
+    try {
+      const results = await searchPlaybackSources({
+        title: '主角',
+        year: '2025',
+        searchType: 'tv',
+      });
+
+      expect(results.map((result) => result.id)).toEqual([
+        'desktop-safe-match',
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/playback/search-sources',
+        expect.objectContaining({
+          method: 'POST',
+          cache: 'no-store',
+        })
+      );
+      expect(
+        JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+      ).toMatchObject({
+        title: '主角',
+        year: '2025',
+        searchType: 'tv',
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('falls back to the legacy query flow when the desktop playback prefetch route fails', async () => {
+    const originalFetch = global.fetch;
+    const warnSpy = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
+    const safeMatch = buildSearchResult({
+      id: 'fallback-safe-match',
+      title: '主角',
+      source: 'safe-source',
+      source_name: '普通资源',
+      year: '2025',
+      episodes: [
+        'https://example.com/safe-episode-1/index.m3u8',
+        'https://example.com/safe-episode-2/index.m3u8',
+      ],
+      episodes_titles: ['第1集', '第2集'],
+    });
+    const fetchMock = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('desktop bridge unavailable'))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ results: [safeMatch] }),
+      });
+
+    (getRuntimeConfig as jest.Mock).mockReturnValue({
+      APP_TARGET: 'desktop',
+    });
+    global.fetch = fetchMock as typeof fetch;
+
+    try {
+      const results = await searchPlaybackSources({
+        title: '主角',
+        year: '2025',
+        searchType: 'tv',
+      });
+
+      expect(results.map((result) => result.id)).toEqual([
+        'fallback-safe-match',
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(String(fetchMock.mock.calls[0][0])).toContain(
+        '/api/playback/search-sources'
+      );
+      expect(String(fetchMock.mock.calls[1][0])).toContain('/api/search');
+    } finally {
+      warnSpy.mockRestore();
       global.fetch = originalFetch;
     }
   });

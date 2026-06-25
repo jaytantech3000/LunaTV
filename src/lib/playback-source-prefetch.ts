@@ -1,4 +1,5 @@
 import { normalizeVodSearchResultsForPlayback } from '@/lib/download/normalize';
+import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8 } from '@/lib/utils';
@@ -421,6 +422,32 @@ async function fetchPlaybackSearchQuery(
   return Array.isArray(data.results) ? data.results : [];
 }
 
+function shouldUseDesktopPlaybackSourcePrefetch(): boolean {
+  return getRuntimeConfig().APP_TARGET === 'desktop';
+}
+
+async function fetchPlaybackSourcesFromDesktopRuntime(
+  params: PlaybackSourcePrefetchParams
+): Promise<SearchResult[]> {
+  const response = await apiFetch('/playback/search-sources', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(params),
+    cache: 'no-store',
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error('桌面播放源预筛选失败');
+  }
+
+  const payload = (await response.json()) as { results?: SearchResult[] };
+  const results = Array.isArray(payload.results) ? payload.results : [];
+  return normalizeVodSearchResultsForPlayback(results);
+}
+
 export function buildPlaybackSearchQueries(
   params: PlaybackSourcePrefetchParams
 ): string[] {
@@ -523,6 +550,15 @@ export function filterPlaybackSearchResults(
 export async function searchPlaybackSources(
   params: PlaybackSourcePrefetchParams
 ): Promise<SearchResult[]> {
+  if (shouldUseDesktopPlaybackSourcePrefetch()) {
+    try {
+      return await fetchPlaybackSourcesFromDesktopRuntime(params);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn('桌面播放源预筛选失败，回退到前端搜索聚合逻辑:', error);
+    }
+  }
+
   const queries = buildPlaybackSearchQueries(params);
   const expectedDoubanId = normalizePositiveNumber(params.doubanId);
 

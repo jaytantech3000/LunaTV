@@ -15,6 +15,7 @@
 > - profile sync 状态接口现已带稳定错误分类与同步域元数据，桌面诊断报告也能直接展示这部分状态。
 > - Phase 4 已开始收口一块可落地的桌面后台能力：桌面模式下的版本检查与 release history 拉取现已优先走 Tauri / Rust 命令，浏览器侧只保留 Web / 预览态 fallback。
 > - 桌面 release history 的过滤、manifest 解析与排序也已下沉到 Tauri / Rust，桌面前端直接消费最终 `DesktopReleaseHistoryItem`。
+> - Phase 2A 也开始落下第一刀：桌面模式下的 `searchPlaybackSources` 已优先走 local service 新增的 `/api/playback/search-sources`，把查询组合、候选聚合和结果预筛选从前端下沉到 Rust。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
 
 ## 目标
@@ -246,6 +247,11 @@ Rust Shared Crates
 
 - 先把搜索、建议词、详情聚合下沉
 - 前端改为统一走本地服务接口
+
+当前进展（2026-06-25）：
+
+- 桌面模式下的 `searchPlaybackSources` 已新增一条 local service 主路径：前端优先调用 `/api/playback/search-sources`，由 Rust 负责搜索 query fallback、Douban 匹配优先级、成人内容过滤和候选源预筛选。
+- Web 路径与桌面 fallback 仍保留原有 TypeScript `playback-source-prefetch` 逻辑，因此这一刀解决的是“桌面主路径先下沉”，还没有完成整段搜索 / 详情链路的全量 Rust 化。
 
 #### Phase 2B：媒体代理
 
