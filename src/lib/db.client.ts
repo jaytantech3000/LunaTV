@@ -16,10 +16,13 @@
 
 import { getAuthInfoFromBrowserCookie } from './auth';
 import { PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS } from './profile/contracts';
+import {
+  deleteRemoteProfileResource,
+  postRemoteProfilePayload,
+} from './profile/remote-adapter';
 import { shouldUseRemoteProfileStorage } from './profile/runtime';
 import {
   type ProfileRequestInit,
-  fetchProfileJson,
   fetchProfileResponse,
   isUnauthorizedProfileRequestError,
   wasProfileRequestRedirectedToLogin,
@@ -695,7 +698,8 @@ async function fetchFromApi<T>(
   path: string,
   options?: ProfileRequestInit
 ): Promise<T> {
-  return fetchProfileJson<T>(path, options);
+  const response = await fetchWithAuth(path, options);
+  return (await response.json()) as T;
 }
 
 /**
@@ -798,12 +802,9 @@ export async function savePlayRecord(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(USER_DATA_API_PATHS.playRecords, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ key, record }),
+      await postRemoteProfilePayload(USER_DATA_API_PATHS.playRecords, {
+        key,
+        record,
       });
     } catch (err) {
       await handleDatabaseOperationFailure('playRecords', err);
@@ -861,12 +862,9 @@ export async function deletePlayRecord(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(
-        `${USER_DATA_API_PATHS.playRecords}?key=${encodeURIComponent(key)}`,
-        {
-          method: 'DELETE',
-        }
-      );
+      await deleteRemoteProfileResource(USER_DATA_API_PATHS.playRecords, {
+        key,
+      });
     } catch (err) {
       await handleDatabaseOperationFailure('playRecords', err);
       triggerGlobalError('删除播放记录失败');
@@ -1000,14 +998,15 @@ export async function addSearchHistory(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(USER_DATA_API_PATHS.searchHistory, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      await postRemoteProfilePayload(
+        USER_DATA_API_PATHS.searchHistory,
+        {
+          keyword: encodedKeyword,
         },
-        body: JSON.stringify({ keyword: encodedKeyword }),
-        redirectOnUnauthorized: false,
-      });
+        {
+          redirectOnUnauthorized: false,
+        }
+      );
     } catch (err) {
       await handleSearchHistoryOperationFailure('保存', err);
     }
@@ -1056,10 +1055,13 @@ export async function clearSearchHistory(): Promise<void> {
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(USER_DATA_API_PATHS.searchHistory, {
-        method: 'DELETE',
-        redirectOnUnauthorized: false,
-      });
+      await deleteRemoteProfileResource(
+        USER_DATA_API_PATHS.searchHistory,
+        undefined,
+        {
+          redirectOnUnauthorized: false,
+        }
+      );
     } catch (err) {
       await handleSearchHistoryOperationFailure('清空', err);
     }
@@ -1101,12 +1103,12 @@ export async function deleteSearchHistory(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(
-        `${USER_DATA_API_PATHS.searchHistory}?keyword=${encodeURIComponent(
-          rawValue
-        )}`,
+      await deleteRemoteProfileResource(
+        USER_DATA_API_PATHS.searchHistory,
         {
-          method: 'DELETE',
+          keyword: rawValue,
+        },
+        {
           redirectOnUnauthorized: false,
         }
       );
@@ -1231,12 +1233,9 @@ export async function saveFavorite(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(USER_DATA_API_PATHS.favorites, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ key, favorite }),
+      await postRemoteProfilePayload(USER_DATA_API_PATHS.favorites, {
+        key,
+        favorite,
       });
     } catch (err) {
       await handleDatabaseOperationFailure('favorites', err);
@@ -1294,12 +1293,9 @@ export async function deleteFavorite(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(
-        `${USER_DATA_API_PATHS.favorites}?key=${encodeURIComponent(key)}`,
-        {
-          method: 'DELETE',
-        }
-      );
+      await deleteRemoteProfileResource(USER_DATA_API_PATHS.favorites, {
+        key,
+      });
     } catch (err) {
       await handleDatabaseOperationFailure('favorites', err);
       triggerGlobalError('删除收藏失败');
@@ -1478,12 +1474,9 @@ export async function saveFollowRecord(
     );
 
     try {
-      await fetchWithAuth(USER_DATA_API_PATHS.follows, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ key, follow }),
+      await postRemoteProfilePayload(USER_DATA_API_PATHS.follows, {
+        key,
+        follow,
       });
     } catch (err) {
       await handleDatabaseOperationFailure('followRecords', err);
@@ -1536,12 +1529,9 @@ export async function deleteFollowRecord(
     );
 
     try {
-      await fetchWithAuth(
-        `${USER_DATA_API_PATHS.follows}?key=${encodeURIComponent(key)}`,
-        {
-          method: 'DELETE',
-        }
-      );
+      await deleteRemoteProfileResource(USER_DATA_API_PATHS.follows, {
+        key,
+      });
     } catch (err) {
       await handleDatabaseOperationFailure('followRecords', err);
       triggerGlobalError('删除追更记录失败');
@@ -1590,10 +1580,7 @@ export async function clearAllPlayRecords(): Promise<void> {
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(USER_DATA_API_PATHS.playRecords, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-      });
+      await deleteRemoteProfileResource(USER_DATA_API_PATHS.playRecords);
     } catch (err) {
       await handleDatabaseOperationFailure('playRecords', err);
       triggerGlobalError('清空播放记录失败');
@@ -1631,10 +1618,7 @@ export async function clearAllFavorites(): Promise<void> {
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(USER_DATA_API_PATHS.favorites, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-      });
+      await deleteRemoteProfileResource(USER_DATA_API_PATHS.favorites);
     } catch (err) {
       await handleDatabaseOperationFailure('favorites', err);
       triggerGlobalError('清空收藏失败');
@@ -1930,12 +1914,9 @@ export async function saveSkipConfig(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(USER_DATA_API_PATHS.skipConfigs, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ key, config }),
+      await postRemoteProfilePayload(USER_DATA_API_PATHS.skipConfigs, {
+        key,
+        config,
       });
     } catch (err) {
       console.error('保存跳过片头片尾配置失败:', err);
@@ -2057,12 +2038,9 @@ export async function deleteSkipConfig(
 
     // 异步同步到数据库
     try {
-      await fetchWithAuth(
-        `${USER_DATA_API_PATHS.skipConfigs}?key=${encodeURIComponent(key)}`,
-        {
-          method: 'DELETE',
-        }
-      );
+      await deleteRemoteProfileResource(USER_DATA_API_PATHS.skipConfigs, {
+        key,
+      });
     } catch (err) {
       console.error('删除跳过片头片尾配置失败:', err);
       triggerGlobalError('删除跳过片头片尾配置失败');
