@@ -76,10 +76,7 @@ export interface DesktopDownloadEngineSnapshotSubscriptionOptions {
   onError?: (error: Error) => void;
 }
 
-export type DesktopDownloadExecutorMode =
-  | 'desktop-runtime'
-  | 'desktop-compat'
-  | 'web-cache';
+export type DesktopDownloadExecutorMode = 'desktop-runtime' | 'web-cache';
 
 export const DESKTOP_DOWNLOAD_RUNTIME_ERROR_TASK_NOT_FOUND =
   'download_runtime_task_not_found';
@@ -97,16 +94,6 @@ function ensureDesktopLocalDownloadRuntime(): void {
       'Desktop local download runtime is unavailable in the current build.'
     );
   }
-}
-
-function isDesktopLocalDownloadRuntimeBuildEnabled(): boolean {
-  const runtimeConfig = getRuntimeConfig();
-
-  if (typeof runtimeConfig.DESKTOP_LOCAL_DOWNLOAD_RUNTIME === 'boolean') {
-    return runtimeConfig.DESKTOP_LOCAL_DOWNLOAD_RUNTIME;
-  }
-
-  return process.env.NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME === 'true';
 }
 
 function buildDesktopDownloadRuntimeUrl(
@@ -165,21 +152,15 @@ export function isDesktopLocalDownloadRuntimeEnabled(): boolean {
 
   const runtimeConfig = getRuntimeConfig();
   return Boolean(
-    isDesktopLocalDownloadRuntimeBuildEnabled() &&
-      runtimeConfig.APP_TARGET === 'desktop' &&
-      runtimeConfig.API_BASE_URL?.trim()
+    runtimeConfig.APP_TARGET === 'desktop' && runtimeConfig.API_BASE_URL?.trim()
   );
 }
 
 export function getDesktopDownloadExecutorMode(): DesktopDownloadExecutorMode {
   const runtimeConfig = getRuntimeConfig();
 
-  if (isDesktopLocalDownloadRuntimeEnabled()) {
-    return 'desktop-runtime';
-  }
-
   if (runtimeConfig.APP_TARGET === 'desktop') {
-    return 'desktop-compat';
+    return 'desktop-runtime';
   }
 
   return 'web-cache';
@@ -190,10 +171,6 @@ export function getDesktopDownloadExecutorLabel(): string {
 
   if (executorMode === 'desktop-runtime') {
     return '桌面本地下载运行时（Rust）';
-  }
-
-  if (executorMode === 'desktop-compat') {
-    return '桌面兼容下载执行器（TypeScript）';
   }
 
   return '浏览器离线缓存';

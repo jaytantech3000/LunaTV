@@ -773,33 +773,4 @@ describe('DownloadedContentDialog', () => {
     });
     expect(useDownloadStore.getState().maxConcurrentTasks).toBe(5);
   });
-
-  it('shows the desktop fallback executor copy when the Rust runtime is disabled', async () => {
-    mockGetDesktopDownloadExecutorLabel.mockReturnValue(
-      '桌面兼容下载执行器（TypeScript）'
-    );
-    mockGetDesktopDownloadExecutorMode.mockReturnValue('desktop-compat');
-
-    render(
-      <SiteProvider siteName='LunaTV'>
-        <DownloadsClient />
-      </SiteProvider>
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: '下载设置' }));
-
-    expect(
-      screen.getByText('桌面兼容下载执行器（TypeScript）')
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /当前桌面构建仍保留 TypeScript 兼容下载执行器回退窗口，\s*方便 pre 验证期快速切回旧路径。/
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        '当前桌面构建使用兼容下载执行器，离线资源仍保存在 WebView 的 Cache Storage 和 IndexedDB 沙箱中。'
-      )
-    ).toBeInTheDocument();
-  });
 });

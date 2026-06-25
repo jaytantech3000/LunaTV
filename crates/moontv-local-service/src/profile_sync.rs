@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use moontv_sync::{
-    ProfileSyncError, ProfileSyncErrorKind, ProfileSyncForwardOutcome, ProfileSyncForwardRequest,
+    ProfileSyncError, ProfileSyncForwardOutcome, ProfileSyncForwardRequest,
     ProfileSyncForwardResponse, ProfileSyncSessionMutation, ProfileSyncStatusResponse,
 };
 
@@ -273,14 +273,5 @@ async fn apply_profile_sync_session_mutation(
 }
 
 fn map_profile_sync_error(error: ProfileSyncError) -> AppError {
-    let status = match error.kind {
-        ProfileSyncErrorKind::NotConfigured => StatusCode::NOT_IMPLEMENTED,
-        ProfileSyncErrorKind::InvalidBaseUrl => StatusCode::BAD_REQUEST,
-        ProfileSyncErrorKind::Unreachable
-        | ProfileSyncErrorKind::Unauthorized
-        | ProfileSyncErrorKind::ProtocolIncompatible
-        | ProfileSyncErrorKind::UpstreamFailure => StatusCode::BAD_GATEWAY,
-    };
-
-    AppError::new(status, error.message)
+    AppError::new(error.http_status(), error.message)
 }

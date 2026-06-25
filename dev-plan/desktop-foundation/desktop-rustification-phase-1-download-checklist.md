@@ -165,7 +165,7 @@
 
 - [x] 明确桌面下载页、当前集下载控件、批量下载弹窗只能通过统一下载 SDK 访问运行时
 - [x] 停止新增直接依赖 `downloadManager` 的桌面 UI 调用点
-- [x] 为桌面模式保留“执行器选择开关”，便于 pre 阶段灰度切换（现已收口为 runtime config + 构建脚本 override；默认 Rust，`pnpm desktop:dev:legacy-download` / `pnpm desktop:build:legacy-download` 可显式切回 TS 兼容执行器）
+- [x] 为桌面模式保留“执行器选择开关”，便于 pre 阶段灰度切换（预验证阶段已完成；迁移稳定后已删除 TS 兼容执行器入口，桌面下载固定收口到 Rust runtime）
 - [x] 保证 Web 版路径不被桌面下载器迁移误伤（桌面 runtime / 非 runtime 分流仍由 `manager.runtime.test.ts` 与 `manifest.runtime.test.ts` 覆盖，Web 版继续走原有 TS 下载实现）
 
 当前进展（2026-06-25）：
@@ -222,9 +222,9 @@
 ### G. 清理旧路径
 
 - [x] 桌面默认执行器切到 Rust
-- [x] 保留一个可回退窗口，用于 pre 验证期快速切回 TS 执行器
+- [x] 保留一个可回退窗口，用于 pre 验证期快速切回 TS 执行器（该窗口已在迁移稳定后删除）
 - [x] 确认桌面 runtime 模式下的下载网络抓取不再由 `src/lib/download/manager.ts` 承担
-- [ ] 迁移稳定后，删除桌面专用的 TS 下载执行逻辑
+- [x] 迁移稳定后，删除桌面专用的 TS 下载执行逻辑（已移除 compat 模式、legacy 构建脚本与桌面下载执行器开关）
 
 ## 建议按 PR 拆分
 
@@ -269,7 +269,7 @@
 目标：
 
 - 下载页、当前集控件、批量下载入口全部切换
-- 保留 TS 执行器回退开关（已落地为 `NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME` + `pnpm desktop:dev:legacy-download` / `pnpm desktop:build:legacy-download`）
+- pre 阶段保留 TS 执行器回退开关，收尾阶段删除桌面 compat 入口
 
 ### PR 7：迁移收尾
 

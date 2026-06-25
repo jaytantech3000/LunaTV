@@ -119,7 +119,6 @@ class MockEventSource {
 describe('desktop download runtime task sdk', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env.NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME = 'true';
 
     const runtimeConfigModule = jest.requireMock('@/lib/runtime-config') as {
       getRuntimeConfig: jest.Mock;
@@ -163,10 +162,6 @@ describe('desktop download runtime task sdk', () => {
     global.EventSource =
       MockEventSource as unknown as typeof global.EventSource;
     MockEventSource.reset();
-  });
-
-  afterEach(() => {
-    delete process.env.NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME;
   });
 
   it('reads and updates the desktop download engine snapshot', async () => {
@@ -588,23 +583,22 @@ describe('desktop download runtime task sdk', () => {
     }
   });
 
-  it('derives the desktop executor label from runtime config when the Rust runtime is disabled', () => {
+  it('reports the Rust executor label for desktop builds even before the local runtime is ready', () => {
     const runtimeConfigModule = jest.requireMock('@/lib/runtime-config') as {
       getRuntimeConfig: jest.Mock;
     };
 
     runtimeConfigModule.getRuntimeConfig.mockReturnValue({
       APP_TARGET: 'desktop',
-      API_BASE_URL: 'http://127.0.0.1:8787',
-      DESKTOP_LOCAL_DOWNLOAD_RUNTIME: false,
+      API_BASE_URL: '',
     });
 
     expect(desktopRuntime.isDesktopLocalDownloadRuntimeEnabled()).toBe(false);
     expect(desktopRuntime.getDesktopDownloadExecutorMode()).toBe(
-      'desktop-compat'
+      'desktop-runtime'
     );
     expect(desktopRuntime.getDesktopDownloadExecutorLabel()).toBe(
-      '桌面兼容下载执行器（TypeScript）'
+      '桌面本地下载运行时（Rust）'
     );
   });
 
@@ -616,7 +610,6 @@ describe('desktop download runtime task sdk', () => {
     runtimeConfigModule.getRuntimeConfig.mockReturnValue({
       APP_TARGET: 'web',
       API_BASE_URL: '',
-      DESKTOP_LOCAL_DOWNLOAD_RUNTIME: false,
     });
 
     expect(desktopRuntime.getDesktopDownloadExecutorMode()).toBe('web-cache');

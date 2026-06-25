@@ -101,8 +101,6 @@ export async function buildPublicRuntimeConfig(
     APP_TARGET: appTarget,
     STORAGE_TYPE: storageType,
     PROFILE_MODE: getProfileMode(storageType),
-    DESKTOP_LOCAL_DOWNLOAD_RUNTIME:
-      process.env.NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME === 'true',
     DESKTOP_RELEASE_PROXY_BASE_URL:
       process.env.NEXT_PUBLIC_DESKTOP_RELEASE_PROXY_BASE_URL ||
       process.env.SITE_BASE ||

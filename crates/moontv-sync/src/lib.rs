@@ -24,6 +24,19 @@ pub enum ProfileSyncErrorKind {
     UpstreamFailure,
 }
 
+impl ProfileSyncErrorKind {
+    pub fn http_status(self) -> StatusCode {
+        match self {
+            Self::NotConfigured => StatusCode::NOT_IMPLEMENTED,
+            Self::InvalidBaseUrl => StatusCode::BAD_REQUEST,
+            Self::Unreachable
+            | Self::Unauthorized
+            | Self::ProtocolIncompatible
+            | Self::UpstreamFailure => StatusCode::BAD_GATEWAY,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{message}")]
 pub struct ProfileSyncError {
@@ -37,6 +50,10 @@ impl ProfileSyncError {
             kind,
             message: message.into(),
         }
+    }
+
+    pub fn http_status(&self) -> StatusCode {
+        self.kind.http_status()
     }
 }
 
@@ -421,7 +438,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::{
-        PROFILE_SYNC_USER_DATA_DOMAINS, ProfileSyncClient, ProfileSyncErrorKind,
+        PROFILE_SYNC_USER_DATA_DOMAINS, ProfileSyncClient, ProfileSyncError, ProfileSyncErrorKind,
         ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncSessionMutation,
         build_profile_sync_target_url, session_from_login_response,
     };
@@ -438,6 +455,27 @@ mod tests {
             target.as_str(),
             "https://example.com/base/api/playrecords?hello=world"
         );
+    }
+
+    #[test]
+    fn profile_sync_error_http_status_matches_error_kind() {
+        let cases = [
+            (ProfileSyncErrorKind::NotConfigured, StatusCode::NOT_IMPLEMENTED),
+            (ProfileSyncErrorKind::InvalidBaseUrl, StatusCode::BAD_REQUEST),
+            (ProfileSyncErrorKind::Unreachable, StatusCode::BAD_GATEWAY),
+            (ProfileSyncErrorKind::Unauthorized, StatusCode::BAD_GATEWAY),
+            (
+                ProfileSyncErrorKind::ProtocolIncompatible,
+                StatusCode::BAD_GATEWAY,
+            ),
+            (ProfileSyncErrorKind::UpstreamFailure, StatusCode::BAD_GATEWAY),
+        ];
+
+        for (kind, expected_status) in cases {
+            let error = ProfileSyncError::new(kind, "demo");
+            assert_eq!(kind.http_status(), expected_status);
+            assert_eq!(error.http_status(), expected_status);
+        }
     }
 
     #[test]

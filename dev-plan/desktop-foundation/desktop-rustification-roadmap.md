@@ -11,7 +11,7 @@
 >
 > - Phase 3 中最关键的 profile 资料域收口已经基本打通：`moontv-profile`、`moontv-sync`、local-service profile facade 与桌面前端 profile SDK 都已落地。
 > - 桌面本地五个 profile 域已经从浏览器 `localStorage` 真源切到 Rust 本地 store，并带有旧数据兼容迁移。
-> - `src/lib/db.client.ts` 已退化为 `src/lib/profile/client.ts` 的兼容出口，桌面 profile 读写主路径不再依赖旧 Web 存储实现。
+> - `src/lib/profile/client.ts` 已成为桌面 profile 的唯一前端入口，旧的 `src/lib/db.client.ts` 兼容出口也已删除。
 > - profile sync 状态接口现已带稳定错误分类与同步域元数据，桌面诊断报告也能直接展示这部分状态。
 > - `moontv-sync` 现已继续接手 forwarded response 读取、登录 session mutation 与透传 `401` clear-session 判定；local service 的 `profile_sync.rs` 进一步收缩为 axum facade、request 适配与本地/远端分流层。
 > - Phase 4 已开始收口一块可落地的桌面后台能力：桌面模式下的版本检查与 release history 拉取现已优先走 Tauri / Rust 命令，浏览器侧只保留 Web / 预览态 fallback。
@@ -29,10 +29,10 @@
 > - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot；SSE 不可用或断流时，桌面 SDK 会回退到 `/api/download-runtime/tasks` 轻量轮询。
 > - Phase 1 又补齐了一组关键控制面：local service 现已新增 `GET /api/download-runtime/tasks/:taskId`、`POST /api/download-runtime/tasks/:taskId/retry` 与 `POST /api/download-runtime/tasks/bulk`；桌面 `manager` 在 runtime 模式下也已把单任务 `error -> retry` 与 `pauseAll / resumeAll / cancelAll` 切到这组新接口。
 > - Phase 1 在桌面 runtime 模式下已由 Rust 接手 queued 任务调度、manifest candidate fallback、`/media/vod/*` 资源抓取与 cache/resource-index 写入；前端 `src/lib/download/manager.ts` 不再启动浏览器侧任务 runner。
-> - Phase 1 现已补上桌面下载执行器的灰度 / 回退边界：`NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME` 会写入 runtime config，默认桌面构建直接启用 Rust；如需 pre 验证期快速回切，可使用 `pnpm desktop:dev:legacy-download` 或 `pnpm desktop:build:legacy-download` 走 TS 兼容执行器，下载设置页也会显式展示当前执行器模式。
+> - Phase 1 的灰度 / 回退窗口已完成历史任务并在迁移稳定后删除：桌面构建不再暴露 TS 兼容执行器开关或 legacy 下载脚本，下载设置页也不再展示 compat 模式，桌面下载主路径固定为 Rust 本地运行时。
 > - Phase 1 也已开始统一 download runtime 的结构化错误：local service HTTP 错误会返回稳定 `code`，桌面 SDK 会抛出 `DownloadDomainError`，`manager` 与 runtime 镜像同步不再依赖中文字符串猜测。
 > - `src/components/DesktopDownloadStoreSync.tsx` 现在也会把 runtime `done` 任务回填到 `library`，避免已完成任务只停留在 snapshot 而不生成离线片库条目。
-> - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
+> - 当前 Rust 化主线的后续重点重新回到 Phase 2、Phase 3 与 Phase 4：内容发现 / 媒体网络层、profile / sync 边界，以及桌面后台能力继续收口。
 
 ## 目标
 
@@ -251,8 +251,8 @@ Rust Shared Crates
 - 桌面 runtime 模式下的资源下载主路径也继续往 Rust 收口：local service 新增 `/api/download-runtime/cache/fetch`，会直接解析 `/media/vod/*` / `/api/proxy/vod/*` 资源 URL，在 Rust 侧抓取并写入 runtime cache；`src/lib/download/manager.ts` 在 runtime 开启时不再自己执行资源 `fetch` 后再 `putDownloadResponse`。
 - `src/components/DesktopDownloadStoreSync.tsx` 也开始收缩成“启动修复 + sidecar store 持久化”角色：运行期的任务生命周期同步主要交给 runtime snapshot 与显式命令桥；与此同时，它会在收到 runtime `done` 任务时回填 `library`，确保 Rust 侧完成的下载能直接进入离线片库。
 - `src/lib/download/manager.ts` 在桌面 runtime 模式下不再启动浏览器侧任务 runner，主要保留任务创建 / 控制、Web / 非 runtime fallback 与兼容层；桌面下载主执行路径已切到 Rust local service。
-- 桌面构建现在也把 `NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME` 暴露为运行时配置：默认桌面 dev/build 直接启用 Rust 下载执行器，但仍保留 `pnpm desktop:dev:legacy-download` / `pnpm desktop:build:legacy-download` 作为显式回退窗口；`DownloadsClient` 设置页会明确显示当前是 Rust 本地运行时还是 TypeScript 兼容执行器。
-- Phase 1 清单当前只剩最后一类收尾项：迁移稳定后删除桌面专用 TS 下载执行逻辑。
+- 桌面下载执行器现已固定收口到 Rust：桌面 dev/build 不再暴露 TS compat 开关，`DownloadsClient` 设置页只保留 Rust 本地运行时与 Web 离线缓存两种展示语义。
+- Phase 1 清单现已全部完成；后续收尾重点转向 Phase 2、Phase 3 与 Phase 4。
 
 ### 验收标准
 

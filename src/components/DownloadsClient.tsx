@@ -937,7 +937,6 @@ interface DownloadSettingsDialogProps {
   storageOrigin: string;
   storageLabel: string;
   isDesktopStorage: boolean;
-  isDesktopFallbackExecutor: boolean;
   isStorageInfoLoading: boolean;
   desktopStorageInfo: DesktopDownloadRuntimeStorageInfoResponse | null;
   adultContentFilterEnabled: boolean;
@@ -3765,7 +3764,6 @@ function DownloadSettingsDialog({
   storageOrigin,
   storageLabel,
   isDesktopStorage,
-  isDesktopFallbackExecutor,
   isStorageInfoLoading,
   desktopStorageInfo,
   adultContentFilterEnabled,
@@ -3857,11 +3855,7 @@ function DownloadSettingsDialog({
               </div>
               <div className='mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4'>
                 <div className='text-xs font-medium uppercase tracking-wide text-emerald-200'>
-                  {isDesktopStorage
-                    ? '本地保存路径'
-                    : isDesktopFallbackExecutor
-                    ? '兼容模式存储位置'
-                    : '逻辑存储位置'}
+                  {isDesktopStorage ? '本地保存路径' : '逻辑存储位置'}
                 </div>
                 {isDesktopStorage ? (
                   <div className='mt-4 space-y-4'>
@@ -3922,12 +3916,6 @@ function DownloadSettingsDialog({
                   </div>
                 ) : (
                   <div className='mt-4 space-y-4'>
-                    {isDesktopFallbackExecutor ? (
-                      <p className='text-xs leading-5 text-amber-100'>
-                        当前桌面构建仍保留 TypeScript 兼容下载执行器回退窗口，
-                        方便 pre 验证期快速切回旧路径。
-                      </p>
-                    ) : null}
                     <div className='grid gap-3 text-xs text-gray-300'>
                       <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
                         <span className='font-medium text-gray-200'>站点</span>
@@ -3964,8 +3952,6 @@ function DownloadSettingsDialog({
               <p className='mt-4 text-xs leading-5 text-gray-400'>
                 {isDesktopStorage
                   ? '桌面版会通过本地下载运行时保存离线资源；页面内展示的是当前构建实际使用的本地目录。'
-                  : isDesktopFallbackExecutor
-                  ? '当前桌面构建使用兼容下载执行器，离线资源仍保存在 WebView 的 Cache Storage 和 IndexedDB 沙箱中。'
                   : '实际磁盘位置由浏览器站点沙箱托管，Web 版暂不支持直接显示系统路径、打开系统文件夹或自定义磁盘目录。'}
               </p>
               {isDevelopment && (
@@ -4016,8 +4002,6 @@ export default function DownloadsClient() {
   );
   const desktopDownloadExecutorMode = getDesktopDownloadExecutorMode();
   const isDesktopStorage = desktopDownloadExecutorMode === 'desktop-runtime';
-  const isDesktopFallbackExecutor =
-    desktopDownloadExecutorMode === 'desktop-compat';
   const storageLabel = getDesktopDownloadExecutorLabel();
   const isDevelopment = process.env.NODE_ENV === 'development';
   const hasHydrated = useDownloadStore((state) => state.hasHydrated);
@@ -4411,7 +4395,6 @@ export default function DownloadsClient() {
           storageOrigin={storageOrigin}
           storageLabel={storageLabel}
           isDesktopStorage={isDesktopStorage}
-          isDesktopFallbackExecutor={isDesktopFallbackExecutor}
           isStorageInfoLoading={isStorageInfoLoading}
           desktopStorageInfo={desktopStorageInfo}
           adultContentFilterEnabled={adultContentFilterEnabled}
