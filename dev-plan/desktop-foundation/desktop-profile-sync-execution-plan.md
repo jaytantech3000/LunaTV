@@ -26,6 +26,7 @@
 > - profile SDK 在远端 `401` 时会立刻清理本地浏览器态，再执行 `/api/logout` 清理和登录跳转，减少 sync 失效后的脏会话残留。
 > - 桌面管理页与桌面设置页现已共用 profile sync 状态文案，并能区分“本地服务读取失败导致的状态未知”与“未启用远端同步”。
 > - 桌面运行时在 profile sync 从启用切回禁用时，会立即清理残留的 `desktop-profile-sync` 浏览器态，避免遗留远端会话。
+> - Rust 回归测试现已覆盖 admin data migration 在 sync mode 下的 export / import 透传，避免只验证导出、不验证导入的半截覆盖。
 > - 当前剩余工作主要集中在 Phase 6 的旧分支进一步收缩，以及更大范围的桌面 Rust 化主线继续推进。
 
 ## 1. 目标
@@ -560,6 +561,7 @@ src/lib/profile/
 - 这一阶段已有一项收尾行为落地：profile SDK 在远端 `401` 时会立即清理本地浏览器态，并继续走既有 `/api/logout` 清理与登录跳转链路。
 - 桌面管理页与桌面设置页已经收口到同一套 profile sync 状态文案 helper，并补上“状态未知”分支，避免把本地服务读取失败误显示成“未启用”。
 - 桌面 profile sync runtime 在切回本地模式时也会主动清理 `desktop-profile-sync` 浏览器态，减少 sync off 后残留远端会话的歧义。
+- Rust 测试已经补齐 admin data migration 在 sync mode 下的导出 / 导入透传覆盖，减少桌面管理数据迁移只测单向、不测双向的风险。
 
 #### 验收标准
 

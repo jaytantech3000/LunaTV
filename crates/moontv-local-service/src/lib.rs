@@ -10819,6 +10819,83 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn admin_data_migration_import_route_proxies_profile_sync_mode() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/admin/data_migration/import",
+            post(|headers: HeaderMap, body: String| async move {
+                assert!(
+                    headers
+                        .get(CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .is_some_and(|value| value.contains("multipart/form-data"))
+                );
+                assert!(body.contains("import-secret"));
+                assert!(body.contains("encrypted-backup-payload"));
+
+                Json(json!({
+                  "message": "远端导入成功",
+                  "importedUsers": 2
+                }))
+                .into_response()
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": upstream.base_url()
+              },
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let boundary = "----LunaTVBoundary";
+        let multipart_body =
+            build_multipart_form_data(boundary, "encrypted-backup-payload", "import-secret");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/data_migration/import")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(multipart_body))
+                    .expect("proxied admin data migration import request"),
+            )
+            .await
+            .expect("proxied admin data migration import response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("proxied admin data migration import body");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("proxied admin data migration import payload");
+        assert_eq!(
+            payload.get("message").and_then(Value::as_str),
+            Some("远端导入成功")
+        );
+        assert_eq!(
+            payload.get("importedUsers").and_then(Value::as_u64),
+            Some(2)
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
     async fn profile_playrecords_route_uses_owner_fallback_when_local_auth_is_optional() {
         let temp_dir = TestDir::new();
         let config_path = write_test_config(
