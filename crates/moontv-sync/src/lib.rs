@@ -116,6 +116,26 @@ impl ProfileSyncForwardRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileSyncForwardResponse {
+    pub status: StatusCode,
+    pub content_type: Option<String>,
+    pub body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileSyncSessionMutation {
+    Keep,
+    Clear,
+    Set(ProfileSyncSession),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileSyncForwardOutcome {
+    pub response: ProfileSyncForwardResponse,
+    pub session_mutation: ProfileSyncSessionMutation,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProfileSyncClient {
     client: Client,
@@ -151,6 +171,60 @@ impl ProfileSyncClient {
 
         upstream_request.send().await.map_err(|error| {
             ProfileSyncError::new(ProfileSyncErrorKind::Unreachable, error.to_string())
+        })
+    }
+
+    pub async fn forward(
+        &self,
+        remote_base_url: Option<&str>,
+        request: ProfileSyncForwardRequest,
+    ) -> Result<ProfileSyncForwardResponse, ProfileSyncError> {
+        let response = self.send(remote_base_url, request).await?;
+        read_forward_response(response).await
+    }
+
+    pub async fn forward_login(
+        &self,
+        remote_base_url: Option<&str>,
+        request: ProfileSyncForwardRequest,
+    ) -> Result<ProfileSyncForwardOutcome, ProfileSyncError> {
+        let response = self.forward(remote_base_url, request).await?;
+        let session_mutation = session_mutation_from_login_response(&response);
+
+        Ok(ProfileSyncForwardOutcome {
+            response,
+            session_mutation,
+        })
+    }
+
+    pub async fn forward_logout(
+        &self,
+        remote_base_url: Option<&str>,
+        request: ProfileSyncForwardRequest,
+    ) -> Result<ProfileSyncForwardOutcome, ProfileSyncError> {
+        let response = self.forward(remote_base_url, request).await?;
+
+        Ok(ProfileSyncForwardOutcome {
+            response,
+            session_mutation: ProfileSyncSessionMutation::Clear,
+        })
+    }
+
+    pub async fn forward_passthrough(
+        &self,
+        remote_base_url: Option<&str>,
+        request: ProfileSyncForwardRequest,
+    ) -> Result<ProfileSyncForwardOutcome, ProfileSyncError> {
+        let response = self.forward(remote_base_url, request).await?;
+        let session_mutation = if response.status == StatusCode::UNAUTHORIZED {
+            ProfileSyncSessionMutation::Clear
+        } else {
+            ProfileSyncSessionMutation::Keep
+        };
+
+        Ok(ProfileSyncForwardOutcome {
+            response,
+            session_mutation,
         })
     }
 
@@ -245,6 +319,40 @@ impl ProfileSyncClient {
     }
 }
 
+async fn read_forward_response(
+    response: reqwest::Response,
+) -> Result<ProfileSyncForwardResponse, ProfileSyncError> {
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body = response.bytes().await.map_err(|error| {
+        ProfileSyncError::new(ProfileSyncErrorKind::UpstreamFailure, error.to_string())
+    })?;
+
+    Ok(ProfileSyncForwardResponse {
+        status,
+        content_type,
+        body: body.to_vec(),
+    })
+}
+
+fn session_mutation_from_login_response(
+    response: &ProfileSyncForwardResponse,
+) -> ProfileSyncSessionMutation {
+    if let Some(session) = session_from_login_response(response.status, &response.body) {
+        return ProfileSyncSessionMutation::Set(session);
+    }
+
+    if response.status == StatusCode::UNAUTHORIZED {
+        return ProfileSyncSessionMutation::Clear;
+    }
+
+    ProfileSyncSessionMutation::Keep
+}
+
 fn profile_sync_user_data_domains() -> Vec<String> {
     PROFILE_SYNC_USER_DATA_DOMAINS
         .iter()
@@ -314,8 +422,8 @@ mod tests {
 
     use super::{
         PROFILE_SYNC_USER_DATA_DOMAINS, ProfileSyncClient, ProfileSyncErrorKind,
-        ProfileSyncForwardRequest, ProfileSyncSession, build_profile_sync_target_url,
-        session_from_login_response,
+        ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncSessionMutation,
+        build_profile_sync_target_url, session_from_login_response,
     };
 
     #[test]
@@ -395,6 +503,64 @@ mod tests {
             payload.get("body").and_then(Value::as_str),
             Some(r#"{"key":"demo+1"}"#)
         );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn forward_login_extracts_session_mutation() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/login",
+            post(|| async move {
+                Json(json!({
+                    "ok": true,
+                    "username": "desktop-user",
+                    "role": "owner"
+                }))
+            }),
+        ))
+        .await;
+        let client = ProfileSyncClient::new(reqwest::Client::new());
+
+        let outcome = client
+            .forward_login(
+                Some(&upstream.base_url()),
+                ProfileSyncForwardRequest::new(reqwest::Method::POST, "/api/login"),
+            )
+            .await
+            .expect("forward login response");
+
+        assert_eq!(outcome.response.status, StatusCode::OK);
+        assert_eq!(
+            outcome.session_mutation,
+            ProfileSyncSessionMutation::Set(ProfileSyncSession {
+                username: "desktop-user".to_string(),
+                role: "owner".to_string(),
+            })
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn forward_passthrough_clears_session_on_unauthorized() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/playrecords",
+            get(|| async move { StatusCode::UNAUTHORIZED.into_response() }),
+        ))
+        .await;
+        let client = ProfileSyncClient::new(reqwest::Client::new());
+
+        let outcome = client
+            .forward_passthrough(
+                Some(&upstream.base_url()),
+                ProfileSyncForwardRequest::get("/api/playrecords"),
+            )
+            .await
+            .expect("forward passthrough response");
+
+        assert_eq!(outcome.response.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(outcome.session_mutation, ProfileSyncSessionMutation::Clear);
 
         upstream.abort();
     }

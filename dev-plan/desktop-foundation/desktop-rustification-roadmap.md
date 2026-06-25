@@ -13,6 +13,7 @@
 > - 桌面本地五个 profile 域已经从浏览器 `localStorage` 真源切到 Rust 本地 store，并带有旧数据兼容迁移。
 > - `src/lib/db.client.ts` 已退化为 `src/lib/profile/client.ts` 的兼容出口，桌面 profile 读写主路径不再依赖旧 Web 存储实现。
 > - profile sync 状态接口现已带稳定错误分类与同步域元数据，桌面诊断报告也能直接展示这部分状态。
+> - `moontv-sync` 现已继续接手 forwarded response 读取、登录 session mutation 与透传 `401` clear-session 判定；local service 的 `profile_sync.rs` 进一步收缩为 axum facade、request 适配与本地/远端分流层。
 > - Phase 4 已开始收口一块可落地的桌面后台能力：桌面模式下的版本检查与 release history 拉取现已优先走 Tauri / Rust 命令，浏览器侧只保留 Web / 预览态 fallback。
 > - 桌面 release history 的过滤、manifest 解析与排序也已下沉到 Tauri / Rust，桌面前端直接消费最终 `DesktopReleaseHistoryItem`。
 > - Phase 2A 也开始落下第一刀：桌面模式下的 `searchPlaybackSources` 已优先走 local service 新增的 `/api/playback/search-sources`，把查询组合、候选聚合和结果预筛选从前端下沉到 Rust。

@@ -9,8 +9,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use moontv_sync::{
-    ProfileSyncError, ProfileSyncErrorKind, ProfileSyncForwardRequest, ProfileSyncStatusResponse,
-    session_from_login_response,
+    ProfileSyncError, ProfileSyncErrorKind, ProfileSyncForwardOutcome, ProfileSyncForwardRequest,
+    ProfileSyncForwardResponse, ProfileSyncSessionMutation, ProfileSyncStatusResponse,
 };
 
 use crate::profile_local;
@@ -30,60 +30,67 @@ pub(crate) async fn proxy_profile_sync_login(
     State(state): State<AppState>,
     request: Request,
 ) -> AppResult<Response> {
-    let upstream_response = send_profile_sync_request(&state, request).await?;
-    let upstream_status = upstream_response.status();
-    let status = StatusCode::from_u16(upstream_status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let content_type = upstream_response.headers().get(CONTENT_TYPE).cloned();
-    let body = upstream_response
-        .bytes()
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let forward_request = build_profile_sync_forward_request(request).await?;
+    let outcome = state
+        .profile_sync
+        .forward_login(config.profile_sync_api_base_url.as_deref(), forward_request)
         .await
-        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+        .map_err(map_profile_sync_error)?;
 
-    if let Some(session) = session_from_login_response(upstream_status, &body) {
-        *state.profile_sync_session.write().await = Some(session);
-    } else if status == StatusCode::UNAUTHORIZED {
-        *state.profile_sync_session.write().await = None;
-    }
-
-    response_from_parts(status, content_type.as_ref(), body.to_vec())
+    apply_profile_sync_session_mutation(&state, &outcome).await;
+    response_from_forward_response(outcome.response)
 }
 
 pub(crate) async fn proxy_profile_sync_logout(
     State(state): State<AppState>,
     request: Request,
 ) -> AppResult<Response> {
-    let upstream_response = send_profile_sync_request(&state, request).await?;
-    *state.profile_sync_session.write().await = None;
-    response_from_upstream(upstream_response).await
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let forward_request = build_profile_sync_forward_request(request).await?;
+    let outcome = state
+        .profile_sync
+        .forward_logout(config.profile_sync_api_base_url.as_deref(), forward_request)
+        .await
+        .map_err(map_profile_sync_error)?;
+
+    apply_profile_sync_session_mutation(&state, &outcome).await;
+    response_from_forward_response(outcome.response)
 }
 
 pub(crate) async fn proxy_profile_sync_change_password(
     State(state): State<AppState>,
     request: Request,
 ) -> AppResult<Response> {
-    let upstream_response = send_profile_sync_request(&state, request).await?;
-    response_from_upstream(upstream_response).await
+    let forward_response = forward_profile_sync_request(&state, request).await?;
+    response_from_forward_response(forward_response)
 }
 
 pub(crate) async fn proxy_profile_sync_passthrough(
     state: &AppState,
     request: Request,
 ) -> AppResult<Response> {
-    let upstream_response = send_profile_sync_request(state, request).await?;
-    if upstream_response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        *state.profile_sync_session.write().await = None;
-    }
-
-    response_from_upstream(upstream_response).await
-}
-
-pub(crate) async fn send_profile_sync_request(
-    state: &AppState,
-    request: Request,
-) -> AppResult<reqwest::Response> {
     let config = state
         .load_config()
         .map_err(|error| AppError::internal(error.to_string()))?;
+    let forward_request = build_profile_sync_forward_request(request).await?;
+    let outcome = state
+        .profile_sync
+        .forward_passthrough(config.profile_sync_api_base_url.as_deref(), forward_request)
+        .await
+        .map_err(map_profile_sync_error)?;
+
+    apply_profile_sync_session_mutation(state, &outcome).await;
+    response_from_forward_response(outcome.response)
+}
+
+pub(crate) async fn build_profile_sync_forward_request(
+    request: Request,
+) -> AppResult<ProfileSyncForwardRequest> {
     let (parts, body) = request.into_parts();
     let request_path = parts
         .uri
@@ -111,9 +118,21 @@ pub(crate) async fn send_profile_sync_request(
         )
         .with_body(body_bytes.to_vec());
 
+    Ok(forward_request)
+}
+
+pub(crate) async fn forward_profile_sync_request(
+    state: &AppState,
+    request: Request,
+) -> AppResult<ProfileSyncForwardResponse> {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let forward_request = build_profile_sync_forward_request(request).await?;
+
     state
         .profile_sync
-        .send(config.profile_sync_api_base_url.as_deref(), forward_request)
+        .forward(config.profile_sync_api_base_url.as_deref(), forward_request)
         .await
         .map_err(map_profile_sync_error)
 }
@@ -171,14 +190,14 @@ pub(crate) async fn get_profile_sync_server_config(
 
     let upstream_response = state
         .profile_sync
-        .send(
+        .forward(
             Some(remote_base_url),
             ProfileSyncForwardRequest::get("/api/server-config"),
         )
         .await
         .map_err(map_profile_sync_error)?;
 
-    response_from_upstream(upstream_response).await
+    response_from_forward_response(upstream_response)
 }
 
 macro_rules! define_profile_user_data_proxy {
@@ -205,23 +224,19 @@ define_profile_user_data_proxy!(
 );
 define_profile_user_data_proxy!(proxy_profile_sync_skip_configs, handle_profile_skip_configs);
 
-pub(crate) async fn response_from_upstream(
-    upstream_response: reqwest::Response,
+pub(crate) fn response_from_forward_response(
+    upstream_response: ProfileSyncForwardResponse,
 ) -> AppResult<Response> {
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::BAD_GATEWAY);
-    let content_type = upstream_response.headers().get(CONTENT_TYPE).cloned();
-    let body = upstream_response
-        .bytes()
-        .await
-        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
-
-    response_from_parts(status, content_type.as_ref(), body.to_vec())
+    response_from_parts(
+        upstream_response.status,
+        upstream_response.content_type.as_deref(),
+        upstream_response.body,
+    )
 }
 
 pub(crate) fn response_from_parts(
     status: StatusCode,
-    content_type: Option<&HeaderValue>,
+    content_type: Option<&str>,
     body: Vec<u8>,
 ) -> AppResult<Response> {
     let mut response = Response::builder()
@@ -230,9 +245,9 @@ pub(crate) fn response_from_parts(
         .map_err(|error| AppError::internal(error.to_string()))?;
 
     if let Some(content_type) = content_type {
-        response
-            .headers_mut()
-            .insert(CONTENT_TYPE, content_type.clone());
+        if let Ok(content_type) = HeaderValue::from_str(content_type) {
+            response.headers_mut().insert(CONTENT_TYPE, content_type);
+        }
     }
 
     response
@@ -240,6 +255,21 @@ pub(crate) fn response_from_parts(
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
 
     Ok(response)
+}
+
+async fn apply_profile_sync_session_mutation(
+    state: &AppState,
+    outcome: &ProfileSyncForwardOutcome,
+) {
+    match &outcome.session_mutation {
+        ProfileSyncSessionMutation::Keep => {}
+        ProfileSyncSessionMutation::Clear => {
+            *state.profile_sync_session.write().await = None;
+        }
+        ProfileSyncSessionMutation::Set(session) => {
+            *state.profile_sync_session.write().await = Some(session.clone());
+        }
+    }
 }
 
 fn map_profile_sync_error(error: ProfileSyncError) -> AppError {

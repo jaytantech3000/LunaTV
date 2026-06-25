@@ -21,6 +21,7 @@
 > - `GET /api/profile/bootstrap` 已经落地，桌面运行时与登录页可以消费统一启动快照。
 > - `src/lib/profile/*` 已从旧的 `db.client.ts` 兼容层中抽出，`runtime.ts` 统一解析 `desktop-local` / `desktop-profile-sync`。
 > - `moontv-sync` 与 `moontv-profile` 已落地，sync on 走远端 adapter，sync off 走 Rust 本地 profile store。
+> - `moontv-sync` 现已继续接手 forwarded response 读取、登录 session mutation 判定与 401 clear-session 判定；local service 的 `profile_sync.rs` 进一步收缩成 axum facade、request 适配与本地/远端分流层。
 > - 五个 profile 域（`playrecords` / `favorites` / `follows` / `searchhistory` / `skipconfigs`）在桌面本地模式下已经切到 Rust 真源。
 > - 为避免升级后丢失旧数据，桌面本地模式已补上一条 `localStorage -> Rust profile store` 的一次性兼容迁移链路。
 > - `profile-sync/status` 已补充稳定错误分类和同步域元数据，桌面管理页与诊断报告可以直接消费。
@@ -573,6 +574,7 @@ src/lib/profile/
 - `src/lib/desktop/profile-bootstrap.ts` 现已新增共享 bootstrap loader，把“拉取 bootstrap + 应用 runtime/profileSync 配置 + 在 desktop-local 下恢复本地 auth”的流程收口到一处，`DesktopRuntimeSync` 与登录页不再各自维护一套近似初始化分支。
 - `src/lib/desktop/profile-sync-status-copy.ts` 现已输出结构化诊断字段；桌面管理页与设置页不再只展示一段同步状态摘要，而会显式列出当前模式、远端可达性、当前远端账号、最近错误与同步域。
 - `crates/moontv-local-service/src/profile_sync.rs` 现已继续接手 `bootstrap` / `status` / `server-config` handler 与五个用户数据域的本地/远端分流，`lib.rs` 中与 profile sync facade 直接相关的重复 handler 进一步缩短。
+- `crates/moontv-sync` 现已继续接手 forwarded response 读取、登录成功后的 session 提取以及透传 `401` 的 clear-session 判定；`profile_sync.rs` 不再自己解析 `reqwest::Response` 决定这组会话副作用。
 
 #### 验收标准
 
@@ -717,7 +719,7 @@ src/lib/profile/
 - 已满足：`profile mode / storage type / session mode` 已有统一解析主路径，桌面启动与登录页通过共享 bootstrap loader 和 `src/lib/profile/runtime.ts` 消费同一套结果。
 - 已满足：桌面前端已不再自行拼 profile sync 状态；`src/lib/desktop/profile-bootstrap.ts`、`src/lib/desktop/profile-sync.ts` 与 `src/lib/profile/client.ts` 已构成统一入口，`src/lib/db.client.ts` 只保留兼容导出。
 - 已满足：五个 profile 域在桌面本地模式下已切到 Rust 真源，`moontv-profile` / `profile_local` 主路径已经落地。
-- 部分满足：远端 sync 逻辑虽然已引入 `moontv-sync`，且 `crates/moontv-local-service/src/profile_sync.rs` 已把 handler 从 `lib.rs` 中抽薄，但 facade 仍保留 request forwarding / session bridge / response mapping 这一层，不能算完全退出 local service。
+- 部分满足：远端 sync 逻辑虽然已进一步迁入 `moontv-sync`，forwarded response / session mutation 判定也已不再留在 local service，但 facade 仍保留 axum request 适配、HTTP response 组装以及本地/远端分流入口，不能算完全退出 local service。
 - 部分满足：协议文档、代码、测试对 `bootstrap`、`follows`、`401` 清 session、diagnostics 与 admin migration 已基本对齐，但 Phase 6 仍保留旧兼容出口与收尾分支，因此本文暂不应标记为“全部完成”。
 
 ## 12. 本计划的落地建议
