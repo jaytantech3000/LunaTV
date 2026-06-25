@@ -190,6 +190,10 @@
 - [ ] 统一错误码和错误消息，避免前端依赖字符串猜测
 - [ ] 保持旧有 cache/index/store 接口兼容
 
+当前进展（2026-06-25）：
+
+- `crates/moontv-local-service/src/download_runtime.rs` 已接手 download runtime 的 cache / resource-index / store / tasks 路由、SSE 事件流与缓存响应辅助；`lib.rs` 主要保留 `AppState` 持久化方法与路由装配，避免继续把下载逻辑堆回单文件 facade。
+
 ### D. 建立下载事件流
 
 - [ ] 为任务进度和状态变化提供 SSE 输出

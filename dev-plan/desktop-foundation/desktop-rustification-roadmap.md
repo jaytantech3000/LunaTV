@@ -232,6 +232,7 @@ Rust Shared Crates
 - `src/lib/download/session.ts` 的 purge / logout 清理现在也会显式命中 `DELETE /api/download-runtime/tasks`，把 Rust runtime 的任务快照与前端内存缓存一起清空，避免旧任务继续依赖页面存活期间的整库镜像才被被动删掉。
 - `src/lib/download/client.ts` 现已作为统一桌面下载入口落地，`DownloadsClient`、`CurrentEpisodeDownloadControl`、`BatchEpisodeDownloadDialog` 与会话清理路径都改为消费这层 facade，而不再直接 import `downloadManager`。
 - ESLint 现已禁止 `src/app/*` 与 `src/components/*` 在非测试代码中直接依赖 `@/lib/download/manager`，防止桌面下载 UI 再次绕过统一下载 SDK 回连 TS 执行器细节。
+- `crates/moontv-local-service/src/download_runtime.rs` 现已接手 download runtime 的 cache / resource-index / store / tasks facade、SSE 推送与缓存响应辅助；`lib.rs` 收缩为路由装配与 `AppState` 存储能力，为后续继续下沉到独立下载 crate 留出清晰边界。
 - `src/components/DesktopDownloadStoreSync.tsx` 也开始收缩成“启动修复 + sidecar store 持久化”角色：运行期的任务生命周期同步主要交给 `src/lib/download/manager.ts` 的显式 runtime upsert / 命令桥，不再在每次本地 store 变动后都整库 mirror 一次 Rust task snapshot。
 - `src/lib/download/manager.ts` 仍然是当前桌面下载的真实执行器，所以这一阶段只完成了“边界收口”和“状态恢复骨架”，还没有切走主下载流程。
 
