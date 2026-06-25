@@ -106,6 +106,8 @@
 
 - 用于桌面前端判断是否启用了远端帐号同步、远端后端是否可达、当前是否已登录
 - `enabled=false` 表示当前保持纯本地桌面模式
+- `authenticated=true` 表示本地服务当前持有一份可用于远端 profile sync 的会话
+- `storageType` / `profileMode` 在远端可达时反映远端 `GET /api/server-config` 的结果；远端不可达时允许返回 `null`
 
 ### GET `/api/server-config`
 
@@ -113,6 +115,7 @@
 
 - 当启用账号同步时，本地服务代理远端 `GET /api/server-config`
 - 当未启用账号同步时，返回本地回退值：`StorageType=localstorage`、`ProfileMode=single-user-local`
+- 桌面前端应把这里返回的 `StorageType` / `ProfileMode` 视为 profile 域的有效运行模式，而不是只看本地 env 配置
 
 ### `/api/login` `/api/logout` `/api/change-password`
 
@@ -121,14 +124,37 @@
 - 这些接口在启用账号同步时由本地服务代理远端 Web 后端
 - 远端登录成功后，本地服务保存远端会话，并向桌面前端返回远端登录结果
 - 桌面本地访问密码只在未启用账号同步时作为回退认证方案
+- 桌面浏览器态建议用 `sessionMode=desktop-profile-sync` 标记这类会话来源
+- 当远端后端返回 `401` 时，本地服务应清理代持的远端会话，并允许前端回到登录页
 
-### `/api/playrecords` `/api/favorites` `/api/searchhistory` `/api/skipconfigs`
+### 会话语义
+
+- `desktop-local`
+  - 表示当前会话来自桌面本地认证
+  - 真源是本地配置 / 本地账户
+- `desktop-profile-sync`
+  - 表示当前会话来自本地服务代理的远端登录
+  - 真源是远端 Web 后端会话
+- profile sync 只影响账号与用户数据域，不改变媒体数据面仍由本地服务提供这一事实
+
+### `/api/playrecords` `/api/favorites` `/api/follows` `/api/searchhistory` `/api/skipconfigs`
 
 说明：
 
 - 当启用账号同步时，这些接口由本地服务代理远端 Web 用户数据接口
 - 当未启用账号同步时，桌面前端回退到本地 profile 存储方案
+- 这五类接口共同构成当前桌面 profile sync 的正式同步域
 - 桌面版只同步用户资料，不同步媒体缓存、下载任务和资源站配置
+- sync 开启时，远端 Web 后端是这些同步域数据的真源；本地缓存只承担 UI 性能优化职责
+
+### `/api/admin/data_migration/export` `/api/admin/data_migration/import`
+
+说明：
+
+- 当启用账号同步时，这两个接口由本地服务代理远端 Web 后端
+- 当未启用账号同步时，这两个接口导出 / 导入桌面本地管理配置、用户信息和本地密码数据
+- 本地导出包不包含远端 profile sync 数据，也不包含媒体缓存、下载任务和资源站同步数据
+- 这两个接口属于管理能力的一部分，不属于 profile sync 正式同步域，但在 sync 模式下允许透传远端以保持行为一致
 
 ### GET `/content/search`
 
@@ -300,7 +326,12 @@
 
 以下内容不进入 v1 协议阻塞范围：
 
-- `admin/*`
+- `admin/*` 的完整全量收口
 - 媒体与下载数据云同步
 - 配置订阅自动更新
 - 桌面壳生命周期接口
+
+补充说明：
+
+- 当前已经接入本地服务的管理接口（例如 `data_migration`）不受这条限制
+- 这里的“非目标”表示不作为 v1 收口阻塞项，不表示后续桌面版不会继续补齐

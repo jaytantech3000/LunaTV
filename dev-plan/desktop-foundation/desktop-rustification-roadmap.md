@@ -5,6 +5,7 @@
 - `dev-plan/desktop-foundation/desktop-first-platform-blueprint.md`
 - `dev-plan/desktop-foundation/desktop-local-service-protocol-v1.md`
 - `dev-plan/desktop-foundation/desktop-rust-evolution-execution-plan.md`
+- `dev-plan/desktop-foundation/desktop-profile-sync-execution-plan.md`
 
 ## 目标
 
@@ -247,6 +248,12 @@ Rust Shared Crates
 - 桌面模式下，主要播放链路完全可脱离 `src/app/api/*`
 
 ## Phase 3：本地 profile、配置与同步链路收口
+
+> 执行关系：
+>
+> - 这一阶段的 profile sync 细化执行方案见 `dev-plan/desktop-foundation/desktop-profile-sync-execution-plan.md`
+> - 两份计划并行推进，不需要等待整份 Rust 化路线图全部完成后再启动
+> - 建议先落地 profile sync 计划中的 Phase 0-3，再把 `moontv-profile` / `moontv-sync` 的 crate 收口纳入本阶段后半段
 
 ### 涉及能力
 
