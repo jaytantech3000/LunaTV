@@ -53,6 +53,14 @@ function buildDownloadTask(partial: Partial<DownloadTask> = {}): DownloadTask {
   };
 }
 
+function buildJsonResponse(payload: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    json: jest.fn().mockResolvedValue(payload),
+  };
+}
+
 class MockEventSource {
   static instances: MockEventSource[] = [];
 
@@ -129,16 +137,8 @@ describe('desktop download runtime task sdk', () => {
     };
 
     (global.fetch as jest.Mock)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: jest.fn().mockResolvedValue(snapshot),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: jest.fn().mockResolvedValue(snapshot),
-      });
+      .mockResolvedValueOnce(buildJsonResponse(snapshot))
+      .mockResolvedValueOnce(buildJsonResponse(snapshot));
 
     await expect(
       desktopRuntime.getDesktopDownloadEngineSnapshot()
@@ -175,7 +175,7 @@ describe('desktop download runtime task sdk', () => {
     );
   });
 
-  it('posts task mutations to the local runtime endpoints', async () => {
+  it('posts task mutations and clear-all commands to the local runtime endpoints', async () => {
     const task = buildDownloadTask({
       id: 'task/id 1',
       cacheIndexId: 'cache:task/id 1',
@@ -187,18 +187,28 @@ describe('desktop download runtime task sdk', () => {
       },
       lastEvent: null,
     };
+    const clearedSnapshot = {
+      maxConcurrentTasks: 3,
+      tasks: {},
+      lastEvent: null,
+    };
 
-    (global.fetch as jest.Mock).mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: jest.fn().mockResolvedValue(snapshot),
-    });
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(buildJsonResponse(snapshot))
+      .mockResolvedValueOnce(buildJsonResponse(snapshot))
+      .mockResolvedValueOnce(buildJsonResponse(snapshot))
+      .mockResolvedValueOnce(buildJsonResponse(snapshot))
+      .mockResolvedValueOnce(buildJsonResponse(snapshot))
+      .mockResolvedValueOnce(buildJsonResponse(clearedSnapshot));
 
     await desktopRuntime.postDesktopDownloadTask(task);
     await desktopRuntime.pauseDesktopDownloadTask(task.id);
     await desktopRuntime.resumeDesktopDownloadTask(task.id);
     await desktopRuntime.cancelDesktopDownloadTask(task.id);
     await desktopRuntime.deleteDesktopDownloadTask(task.id);
+    await expect(
+      desktopRuntime.clearDesktopDownloadEngineTasks()
+    ).resolves.toEqual(clearedSnapshot);
 
     expect(global.fetch).toHaveBeenNthCalledWith(
       1,
@@ -243,6 +253,15 @@ describe('desktop download runtime task sdk', () => {
     expect(global.fetch).toHaveBeenNthCalledWith(
       5,
       '/api/download-runtime/tasks/task%2Fid%201',
+      {
+        method: 'DELETE',
+        cache: 'no-store',
+        credentials: 'omit',
+      }
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      6,
+      '/api/download-runtime/tasks',
       {
         method: 'DELETE',
         cache: 'no-store',

@@ -1766,7 +1766,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/download-runtime/tasks",
-            get(get_download_runtime_tasks).post(post_download_runtime_task),
+            get(get_download_runtime_tasks)
+                .post(post_download_runtime_task)
+                .delete(clear_download_runtime_tasks),
         )
         .route(
             "/api/download-runtime/tasks/stream",
@@ -2198,6 +2200,10 @@ where
 async fn get_download_runtime_tasks(State(state): State<AppState>) -> AppResult<Response> {
     let snapshot = state.download_engine.read().await.snapshot();
     no_store_json_response(&snapshot)
+}
+
+async fn clear_download_runtime_tasks(State(state): State<AppState>) -> AppResult<Response> {
+    mutate_download_engine_snapshot(&state, |engine| Ok(engine.clear_tasks().clone())).await
 }
 
 fn build_download_runtime_snapshot_event(
@@ -12825,6 +12831,118 @@ segment0.ts
                 .and_then(Value::as_str),
             Some("cancelled")
         );
+    }
+
+    #[tokio::test]
+    async fn clear_download_runtime_tasks_resets_snapshot_tasks_only() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let task_id = "task-clear-demo";
+
+        let settings_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/download-runtime/tasks/settings")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "maxConcurrentTasks": 5,
+                        })
+                        .to_string(),
+                    ))
+                    .expect("download runtime settings request"),
+            )
+            .await
+            .expect("download runtime settings response");
+
+        assert_eq!(settings_response.status(), StatusCode::OK);
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        build_download_runtime_task_payload(task_id, "queued").to_string(),
+                    ))
+                    .expect("download runtime create request"),
+            )
+            .await
+            .expect("download runtime create response");
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+
+        let clear_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/download-runtime/tasks")
+                    .body(Body::empty())
+                    .expect("download runtime clear request"),
+            )
+            .await
+            .expect("download runtime clear response");
+
+        assert_eq!(clear_response.status(), StatusCode::OK);
+        let clear_payload = read_json_body(clear_response).await;
+        assert_eq!(
+            clear_payload
+                .get("maxConcurrentTasks")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            clear_payload
+                .get("tasks")
+                .and_then(Value::as_object)
+                .map(|tasks| tasks.len()),
+            Some(0)
+        );
+        assert!(clear_payload.get("lastEvent").is_none());
+
+        let get_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/download-runtime/tasks")
+                    .body(Body::empty())
+                    .expect("download runtime get request"),
+            )
+            .await
+            .expect("download runtime get response");
+
+        assert_eq!(get_response.status(), StatusCode::OK);
+        let get_payload = read_json_body(get_response).await;
+        assert_eq!(
+            get_payload
+                .get("maxConcurrentTasks")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            get_payload
+                .get("tasks")
+                .and_then(Value::as_object)
+                .map(|tasks| tasks.len()),
+            Some(0)
+        );
+        assert!(get_payload.get("lastEvent").is_none());
     }
 
     fn build_download_runtime_task_payload(task_id: &str, status: &str) -> Value {

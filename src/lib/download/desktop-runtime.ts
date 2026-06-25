@@ -350,6 +350,17 @@ export async function getDesktopDownloadEngineSnapshot(): Promise<DesktopDownloa
   return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
 }
 
+export async function clearDesktopDownloadEngineTasks(): Promise<DesktopDownloadEngineSnapshot> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(buildDesktopDownloadRuntimeUrl('/tasks'), {
+    method: 'DELETE',
+    cache: 'no-store',
+    credentials: 'omit',
+  });
+
+  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+}
+
 export function subscribeToDesktopDownloadEngineSnapshots({
   onSnapshot,
   onError,

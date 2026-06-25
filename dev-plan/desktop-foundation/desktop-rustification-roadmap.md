@@ -229,6 +229,7 @@ Rust Shared Crates
 - `src/lib/download/manager.ts` 现在也开始在任务创建、重新排队、运行中进度刷新、完成与失败这些生命周期节点上显式 upsert Rust runtime task snapshot，而不再只依赖 `DesktopDownloadStoreSync.tsx` 对整个 store 做旁路镜像。
 - 桌面启动时也开始优先读取 Rust download engine snapshot 回填任务状态与并发设置；这意味着 Rust 状态面已经不只是写入目标，也开始成为桌面下载 UI 的读端输入。
 - `crates/moontv-local-service` 现已新增 `/api/download-runtime/tasks/stream` SSE 订阅入口；`src/components/DesktopDownloadStoreSync.tsx` 会持续消费 Rust snapshot，把任务状态 / 进度实时合并回前端 store，同时避免把订阅回流再次镜像写回 Rust。
+- `src/lib/download/session.ts` 的 purge / logout 清理现在也会显式命中 `DELETE /api/download-runtime/tasks`，把 Rust runtime 的任务快照与前端内存缓存一起清空，避免旧任务继续依赖页面存活期间的整库镜像才被被动删掉。
 - `src/lib/download/manager.ts` 仍然是当前桌面下载的真实执行器，所以这一阶段只完成了“边界收口”和“状态恢复骨架”，还没有切走主下载流程。
 
 ### 验收标准

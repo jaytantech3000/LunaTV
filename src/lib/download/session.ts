@@ -3,7 +3,11 @@ import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { useDownloadStore } from '@/stores/downloadStore';
 
 import { clearDownloadCache } from './cache';
-import { clearDesktopDownloadStoreSnapshot } from './desktop-runtime';
+import { clearDesktopDownloadEngineSnapshotCache } from './desktop-engine-sync';
+import {
+  clearDesktopDownloadEngineTasks,
+  clearDesktopDownloadStoreSnapshot,
+} from './desktop-runtime';
 import { downloadManager } from './manager';
 import { clearResourceIndexes } from './resource-index';
 
@@ -17,8 +21,10 @@ export async function purgeOfflineDownloads(): Promise<void> {
   await Promise.allSettled([
     clearDownloadCache(),
     clearResourceIndexes(),
+    clearDesktopDownloadEngineTasks(),
     clearDesktopDownloadStoreSnapshot(),
   ]);
+  clearDesktopDownloadEngineSnapshotCache();
   useDownloadStore.getState().resetDownloads();
   await useDownloadStore.persist.clearStorage();
 }

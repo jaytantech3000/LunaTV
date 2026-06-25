@@ -312,6 +312,12 @@ impl DesktopDownloadEngine {
         });
         Some(removed_task)
     }
+
+    pub fn clear_tasks(&mut self) -> &DesktopDownloadEngineSnapshot {
+        self.snapshot.tasks.clear();
+        self.snapshot.last_event = None;
+        &self.snapshot
+    }
 }
 
 pub fn normalize_concurrent_download_tasks(value: u8) -> u8 {
@@ -504,5 +510,23 @@ mod tests {
             engine.snapshot().max_concurrent_tasks,
             MAX_CONCURRENT_DOWNLOAD_TASKS
         );
+    }
+
+    #[test]
+    fn clear_tasks_removes_tasks_without_resetting_settings() {
+        let mut engine = DesktopDownloadEngine::new();
+
+        engine.update_settings(DesktopDownloadEngineSettingsUpdate {
+            max_concurrent_tasks: 5,
+        });
+        engine
+            .upsert_task(build_task(DesktopDownloadTaskStatus::Queued))
+            .expect("task should upsert");
+
+        let snapshot = engine.clear_tasks().clone();
+
+        assert_eq!(snapshot.max_concurrent_tasks, 5);
+        assert!(snapshot.tasks.is_empty());
+        assert_eq!(snapshot.last_event, None);
     }
 }
