@@ -1,4 +1,8 @@
-import { clearAuthInfoInBrowser, setAuthInfoInBrowser } from '@/lib/auth';
+import {
+  clearAuthInfoInBrowser,
+  getAuthInfoFromBrowserCookie,
+  setAuthInfoInBrowser,
+} from '@/lib/auth';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 
@@ -83,6 +87,10 @@ export function applyDesktopProfileSyncStatus(
     } else {
       clearAuthInfoInBrowser();
     }
+  } else if (
+    getAuthInfoFromBrowserCookie()?.sessionMode === 'desktop-profile-sync'
+  ) {
+    clearAuthInfoInBrowser();
   }
 
   return window.RUNTIME_CONFIG;

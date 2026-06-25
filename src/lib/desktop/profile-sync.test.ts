@@ -1,4 +1,8 @@
-import { clearAuthInfoInBrowser, setAuthInfoInBrowser } from '@/lib/auth';
+import {
+  clearAuthInfoInBrowser,
+  getAuthInfoFromBrowserCookie,
+  setAuthInfoInBrowser,
+} from '@/lib/auth';
 import {
   applyDesktopProfileSyncStatus,
   getDesktopProfileSyncStatus,
@@ -17,6 +21,7 @@ jest.mock('@/lib/transport/api-client', () => ({
 
 jest.mock('@/lib/auth', () => ({
   clearAuthInfoInBrowser: jest.fn(),
+  getAuthInfoFromBrowserCookie: jest.fn(),
   setAuthInfoInBrowser: jest.fn(),
 }));
 
@@ -27,6 +32,7 @@ describe('desktop profile sync helpers', () => {
       APP_TARGET: 'desktop',
       PROFILE_SYNC_ENABLED: false,
     });
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue(null);
     window.RUNTIME_CONFIG = {
       APP_TARGET: 'desktop',
       PROFILE_SYNC_ENABLED: false,
@@ -109,6 +115,30 @@ describe('desktop profile sync helpers', () => {
       profileMode: 'shared-multi-user',
       error: null,
       errorKind: null,
+      syncDomains: [...PROFILE_SYNC_USER_DATA_DOMAINS],
+    });
+
+    expect(clearAuthInfoInBrowser).toHaveBeenCalled();
+    expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
+  });
+
+  it('clears stale desktop profile sync auth when remote sync is disabled', () => {
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
+      username: 'kid',
+      role: 'user',
+      sessionMode: 'desktop-profile-sync',
+    });
+
+    applyDesktopProfileSyncStatus({
+      enabled: false,
+      reachable: false,
+      authenticated: false,
+      username: null,
+      role: null,
+      storageType: null,
+      profileMode: null,
+      error: null,
+      errorKind: 'not-configured',
       syncDomains: [...PROFILE_SYNC_USER_DATA_DOMAINS],
     });
 
