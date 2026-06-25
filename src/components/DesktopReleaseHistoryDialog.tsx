@@ -257,7 +257,7 @@ function VersionSection({
   }
 
   return (
-    <div className='space-y-3'>
+    <div className='space-y-2.5'>
       {releases.map((release) => {
         const isCurrentVersion = release.version === currentVersion;
         const isFavorited = favoriteTagSet.has(release.tagName);
@@ -275,7 +275,7 @@ function VersionSection({
           <div
             key={release.id}
             data-testid={`desktop-release-card-${release.tagName}`}
-            className={`rounded-2xl border p-4 shadow-sm transition-colors ${
+            className={`rounded-2xl border px-4 py-3 shadow-sm transition-colors ${
               isCurrentVersion
                 ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/20'
                 : isFavorited
@@ -283,14 +283,14 @@ function VersionSection({
                 : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900/70'
             }`}
           >
-            <div className='flex items-start justify-between gap-4'>
-              <div className='min-w-0 space-y-2'>
-                <div className='flex flex-wrap items-center gap-2'>
-                  <h4 className='text-base font-semibold text-gray-900 dark:text-gray-100'>
+            <div className='flex items-start justify-between gap-3'>
+              <div className='min-w-0 space-y-1.5'>
+                <div className='flex flex-wrap items-center gap-1.5'>
+                  <h4 className='text-[15px] font-semibold leading-6 text-gray-900 dark:text-gray-100'>
                     v{release.version}
                   </h4>
                   <span
-                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 ${
                       release.prerelease
                         ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200'
                         : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-200'
@@ -299,17 +299,17 @@ function VersionSection({
                     {release.prerelease ? 'Prerelease' : 'Release'}
                   </span>
                 </div>
-                <p className='break-all text-xs text-gray-500 dark:text-gray-400'>
-                  {release.tagName}
-                </p>
-                <p className='text-sm text-gray-500 dark:text-gray-400'>
-                  {formatPublishedAt(release.publishedAt)}
-                </p>
+                <div className='flex flex-wrap items-center gap-x-2 gap-y-0 text-[11px] leading-5 text-gray-500 dark:text-gray-400'>
+                  <span className='break-all'>{release.tagName}</span>
+                  <span className='whitespace-nowrap'>
+                    {formatPublishedAt(release.publishedAt)}
+                  </span>
+                </div>
               </div>
 
-              <div className='flex items-center gap-2'>
+              <div className='flex items-center gap-1.5'>
                 {isCurrentVersion ? (
-                  <span className='inline-flex h-8 items-center rounded-full bg-emerald-100 px-3 text-xs font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200'>
+                  <span className='inline-flex h-7 items-center rounded-full bg-emerald-100 px-2.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200'>
                     当前
                   </span>
                 ) : null}
@@ -317,7 +317,7 @@ function VersionSection({
                 <button
                   type='button'
                   onClick={() => onToggleFavorite(release)}
-                  className={`inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors ${
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
                     isFavorited
                       ? 'bg-rose-100 text-rose-600 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300 dark:hover:bg-rose-900/50'
                       : 'text-gray-500 hover:bg-gray-100 hover:text-rose-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-rose-300'
@@ -327,7 +327,7 @@ function VersionSection({
                   title={favoriteTitle}
                 >
                   <Heart
-                    className='h-4 w-4'
+                    className='h-3.5 w-3.5'
                     fill={isFavorited ? 'currentColor' : 'none'}
                   />
                 </button>
@@ -336,10 +336,11 @@ function VersionSection({
                   <AppIconButton
                     onClick={() => void openExternalUrl(release.htmlUrl || '')}
                     variant='ghost'
+                    className='h-8 w-8'
                     aria-label={`打开 v${release.version} 发布页`}
                     title='打开发布页'
                   >
-                    <ExternalLink className='h-4 w-4' />
+                    <ExternalLink className='h-3.5 w-3.5' />
                   </AppIconButton>
                 ) : null}
 
@@ -347,7 +348,7 @@ function VersionSection({
                   type='button'
                   disabled={isCurrentVersion || updateState.isBusy}
                   onClick={() => onSelectRelease(release)}
-                  className={`inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors ${
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
                     isCurrentVersion
                       ? 'cursor-default bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200'
                       : 'bg-gray-900 text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200'
@@ -356,11 +357,11 @@ function VersionSection({
                   title={isCurrentVersion ? '当前版本' : actionTitle}
                 >
                   {isCurrentVersion ? (
-                    <CheckCircle2 className='h-4 w-4' />
+                    <CheckCircle2 className='h-3.5 w-3.5' />
                   ) : isActiveVersion ? (
-                    <Loader2 className='h-4 w-4 animate-spin' />
+                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
                   ) : (
-                    <RotateCcw className='h-4 w-4' />
+                    <RotateCcw className='h-3.5 w-3.5' />
                   )}
                 </button>
               </div>
