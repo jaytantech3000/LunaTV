@@ -23,6 +23,7 @@
 # production
 /build
 /target
+**/target/
 /src-tauri/binaries/
 /.lunatv-desktop/
 
