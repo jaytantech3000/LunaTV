@@ -15,7 +15,31 @@
  */
 
 import { getAuthInfoFromBrowserCookie } from './auth';
-import { PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS } from './profile/contracts';
+import {
+  dispatchProfileCacheUpdate,
+  dispatchProfileSearchHistoryUpdated,
+  subscribeToProfileCacheUpdates,
+} from './profile/cache';
+import {
+  type ProfileCacheUpdateEvent,
+  PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS,
+} from './profile/contracts';
+import {
+  clearLocalFavorites,
+  clearLocalPlayRecords,
+  clearLocalSearchHistoryValues,
+  LOCAL_SEARCH_HISTORY_LIMIT,
+  readLocalFavorites,
+  readLocalFollowRecords,
+  readLocalPlayRecords,
+  readLocalSearchHistoryValues,
+  readLocalSkipConfigs,
+  writeLocalFavorites,
+  writeLocalFollowRecords,
+  writeLocalPlayRecords,
+  writeLocalSearchHistoryValues,
+  writeLocalSkipConfigs,
+} from './profile/local-adapter';
 import {
   deleteRemoteProfileResource,
   postRemoteProfilePayload,
@@ -95,12 +119,6 @@ interface UserCacheStore {
   skipConfigs?: CacheData<Record<string, SkipConfig>>;
 }
 
-// ---- 常量 ----
-const PLAY_RECORDS_KEY = 'moontv_play_records';
-const FAVORITES_KEY = 'moontv_favorites';
-const FOLLOWS_KEY = 'moontv_follows';
-const SEARCH_HISTORY_KEY = 'moontv_search_history';
-
 // 缓存相关常量
 const CACHE_PREFIX = 'moontv_cache_';
 const CACHE_VERSION = '1.0.0';
@@ -108,10 +126,6 @@ const CACHE_EXPIRE_TIME = 60 * 60 * 1000; // 一小时缓存过期
 function shouldUseRemoteUserDataStorage(): boolean {
   return shouldUseRemoteProfileStorage();
 }
-
-// ---------------- 搜索历史相关常量 ----------------
-// 搜索历史最大保存条数
-const SEARCH_HISTORY_LIMIT = 20;
 
 // ---- 缓存管理器 ----
 class HybridCacheManager {
@@ -448,12 +462,15 @@ class HybridCacheManager {
 // 获取缓存管理器实例
 const cacheManager = HybridCacheManager.getInstance();
 
+function dispatchDataUpdate<T>(
+  eventType: ProfileCacheUpdateEvent,
+  detail: T
+): void {
+  dispatchProfileCacheUpdate(eventType, detail);
+}
+
 function dispatchSearchHistoryUpdated(rawHistory: string[]): void {
-  window.dispatchEvent(
-    new CustomEvent('searchHistoryUpdated', {
-      detail: decodeSearchHistoryValues(rawHistory),
-    })
-  );
+  dispatchProfileSearchHistoryUpdated(rawHistory);
 }
 
 function shouldReplaceSearchHistoryValue(
@@ -487,12 +504,7 @@ export function getCachedPlayRecordsSnapshot(): Record<
   }
 
   try {
-    const raw = localStorage.getItem(PLAY_RECORDS_KEY);
-    if (!raw) {
-      return {};
-    }
-
-    return JSON.parse(raw) as Record<string, PlayRecord>;
+    return readLocalPlayRecords();
   } catch (err) {
     console.error('读取播放记录快照失败:', err);
     return null;
@@ -512,12 +524,7 @@ export function getCachedFollowRecordsSnapshot(): Record<
   }
 
   try {
-    const raw = localStorage.getItem(FOLLOWS_KEY);
-    if (!raw) {
-      return {};
-    }
-
-    return JSON.parse(raw) as Record<string, FollowRecord>;
+    return readLocalFollowRecords();
   } catch (err) {
     console.error('读取追更记录快照失败:', err);
     return null;
@@ -550,7 +557,7 @@ async function handleDatabaseOperationFailure(
 
   try {
     let freshData: any;
-    let eventName: string;
+    let eventType: ProfileCacheUpdateEvent;
     let eventDetail: any;
 
     switch (dataType) {
@@ -559,7 +566,7 @@ async function handleDatabaseOperationFailure(
           USER_DATA_API_PATHS.playRecords
         );
         cacheManager.cachePlayRecords(freshData);
-        eventName = 'playRecordsUpdated';
+        eventType = 'playRecordsUpdated';
         eventDetail = freshData;
         break;
       case 'favorites':
@@ -567,7 +574,7 @@ async function handleDatabaseOperationFailure(
           USER_DATA_API_PATHS.favorites
         );
         cacheManager.cacheFavorites(freshData);
-        eventName = 'favoritesUpdated';
+        eventType = 'favoritesUpdated';
         eventDetail = freshData;
         break;
       case 'followRecords':
@@ -575,7 +582,7 @@ async function handleDatabaseOperationFailure(
           USER_DATA_API_PATHS.follows
         );
         cacheManager.cacheFollowRecords(freshData);
-        eventName = 'followRecordsUpdated';
+        eventType = 'followRecordsUpdated';
         eventDetail = freshData;
         break;
       case 'searchHistory':
@@ -583,17 +590,13 @@ async function handleDatabaseOperationFailure(
           USER_DATA_API_PATHS.searchHistory
         );
         cacheManager.cacheSearchHistory(freshData);
-        eventName = 'searchHistoryUpdated';
+        eventType = 'searchHistoryUpdated';
         eventDetail = decodeSearchHistoryValues(freshData);
         break;
     }
 
     // 触发更新事件通知组件
-    window.dispatchEvent(
-      new CustomEvent(eventName, {
-        detail: eventDetail,
-      })
-    );
+    dispatchDataUpdate(eventType, eventDetail);
   } catch (refreshErr) {
     if (
       wasRedirectedToLogin(refreshErr) ||
@@ -734,11 +737,7 @@ export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cachePlayRecords(freshData);
             // 触发数据更新事件，供组件监听
-            window.dispatchEvent(
-              new CustomEvent('playRecordsUpdated', {
-                detail: freshData,
-              })
-            );
+            dispatchDataUpdate('playRecordsUpdated', freshData);
           }
         })
         .catch((err) => {
@@ -765,9 +764,7 @@ export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
 
   // localstorage 模式
   try {
-    const raw = localStorage.getItem(PLAY_RECORDS_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as Record<string, PlayRecord>;
+    return readLocalPlayRecords();
   } catch (err) {
     console.error('读取播放记录失败:', err);
     triggerGlobalError('读取播放记录失败');
@@ -794,11 +791,7 @@ export async function savePlayRecord(
     cacheManager.cachePlayRecords(cachedRecords);
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('playRecordsUpdated', {
-        detail: cachedRecords,
-      })
-    );
+    dispatchDataUpdate('playRecordsUpdated', cachedRecords);
 
     // 异步同步到数据库
     try {
@@ -823,12 +816,8 @@ export async function savePlayRecord(
   try {
     const allRecords = await getAllPlayRecords();
     allRecords[key] = record;
-    localStorage.setItem(PLAY_RECORDS_KEY, JSON.stringify(allRecords));
-    window.dispatchEvent(
-      new CustomEvent('playRecordsUpdated', {
-        detail: allRecords,
-      })
-    );
+    writeLocalPlayRecords(allRecords);
+    dispatchDataUpdate('playRecordsUpdated', allRecords);
   } catch (err) {
     console.error('保存播放记录失败:', err);
     triggerGlobalError('保存播放记录失败');
@@ -854,11 +843,7 @@ export async function deletePlayRecord(
     cacheManager.cachePlayRecords(cachedRecords);
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('playRecordsUpdated', {
-        detail: cachedRecords,
-      })
-    );
+    dispatchDataUpdate('playRecordsUpdated', cachedRecords);
 
     // 异步同步到数据库
     try {
@@ -882,12 +867,8 @@ export async function deletePlayRecord(
   try {
     const allRecords = await getAllPlayRecords();
     delete allRecords[key];
-    localStorage.setItem(PLAY_RECORDS_KEY, JSON.stringify(allRecords));
-    window.dispatchEvent(
-      new CustomEvent('playRecordsUpdated', {
-        detail: allRecords,
-      })
-    );
+    writeLocalPlayRecords(allRecords);
+    dispatchDataUpdate('playRecordsUpdated', allRecords);
   } catch (err) {
     console.error('删除播放记录失败:', err);
     triggerGlobalError('删除播放记录失败');
@@ -953,10 +934,7 @@ export async function getSearchHistory(): Promise<SearchHistoryEntry[]> {
 
   // localStorage 模式
   try {
-    const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw) as string[];
-    return decodeSearchHistoryValues(Array.isArray(arr) ? arr : []);
+    return decodeSearchHistoryValues(readLocalSearchHistoryValues());
   } catch (err) {
     console.error('读取搜索历史失败:', err);
     triggerGlobalError('读取搜索历史失败');
@@ -988,8 +966,8 @@ export async function addSearchHistory(
       ),
     ];
     // 限制长度
-    if (newHistory.length > SEARCH_HISTORY_LIMIT) {
-      newHistory.length = SEARCH_HISTORY_LIMIT;
+    if (newHistory.length > LOCAL_SEARCH_HISTORY_LIMIT) {
+      newHistory.length = LOCAL_SEARCH_HISTORY_LIMIT;
     }
     cacheManager.cacheSearchHistory(newHistory);
 
@@ -1017,11 +995,7 @@ export async function addSearchHistory(
   if (typeof window === 'undefined') return;
 
   try {
-    const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
-    const parsedHistory = raw ? JSON.parse(raw) : [];
-    const history = Array.isArray(parsedHistory)
-      ? (parsedHistory as string[])
-      : [];
+    const history = readLocalSearchHistoryValues();
     const newHistory = [
       encodedKeyword,
       ...history.filter(
@@ -1029,10 +1003,10 @@ export async function addSearchHistory(
       ),
     ];
     // 限制长度
-    if (newHistory.length > SEARCH_HISTORY_LIMIT) {
-      newHistory.length = SEARCH_HISTORY_LIMIT;
+    if (newHistory.length > LOCAL_SEARCH_HISTORY_LIMIT) {
+      newHistory.length = LOCAL_SEARCH_HISTORY_LIMIT;
     }
-    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(newHistory));
+    writeLocalSearchHistoryValues(newHistory);
     dispatchSearchHistoryUpdated(newHistory);
   } catch (err) {
     console.error('保存搜索历史失败:', err);
@@ -1070,7 +1044,7 @@ export async function clearSearchHistory(): Promise<void> {
 
   // localStorage 模式
   if (typeof window === 'undefined') return;
-  localStorage.removeItem(SEARCH_HISTORY_KEY);
+  clearLocalSearchHistoryValues();
   dispatchSearchHistoryUpdated([]);
 }
 
@@ -1122,17 +1096,13 @@ export async function deleteSearchHistory(
   if (typeof window === 'undefined') return;
 
   try {
-    const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
-    const parsedHistory = raw ? JSON.parse(raw) : [];
-    const history = Array.isArray(parsedHistory)
-      ? (parsedHistory as string[])
-      : [];
+    const history = readLocalSearchHistoryValues();
     const newHistory = history.filter((value) =>
       typeof entry === 'string'
         ? !shouldReplaceSearchHistoryValue(value, trimmedKeyword)
         : value !== rawValue
     );
-    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(newHistory));
+    writeLocalSearchHistoryValues(newHistory);
     dispatchSearchHistoryUpdated(newHistory);
   } catch (err) {
     console.error('删除搜索历史失败:', err);
@@ -1165,11 +1135,7 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cacheFavorites(freshData);
             // 触发数据更新事件
-            window.dispatchEvent(
-              new CustomEvent('favoritesUpdated', {
-                detail: freshData,
-              })
-            );
+            dispatchDataUpdate('favoritesUpdated', freshData);
           }
         })
         .catch((err) => {
@@ -1196,9 +1162,7 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
 
   // localStorage 模式
   try {
-    const raw = localStorage.getItem(FAVORITES_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as Record<string, Favorite>;
+    return readLocalFavorites();
   } catch (err) {
     console.error('读取收藏失败:', err);
     triggerGlobalError('读取收藏失败');
@@ -1225,11 +1189,7 @@ export async function saveFavorite(
     cacheManager.cacheFavorites(cachedFavorites);
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('favoritesUpdated', {
-        detail: cachedFavorites,
-      })
-    );
+    dispatchDataUpdate('favoritesUpdated', cachedFavorites);
 
     // 异步同步到数据库
     try {
@@ -1254,12 +1214,8 @@ export async function saveFavorite(
   try {
     const allFavorites = await getAllFavorites();
     allFavorites[key] = favorite;
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify(allFavorites));
-    window.dispatchEvent(
-      new CustomEvent('favoritesUpdated', {
-        detail: allFavorites,
-      })
-    );
+    writeLocalFavorites(allFavorites);
+    dispatchDataUpdate('favoritesUpdated', allFavorites);
   } catch (err) {
     console.error('保存收藏失败:', err);
     triggerGlobalError('保存收藏失败');
@@ -1285,11 +1241,7 @@ export async function deleteFavorite(
     cacheManager.cacheFavorites(cachedFavorites);
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('favoritesUpdated', {
-        detail: cachedFavorites,
-      })
-    );
+    dispatchDataUpdate('favoritesUpdated', cachedFavorites);
 
     // 异步同步到数据库
     try {
@@ -1313,12 +1265,8 @@ export async function deleteFavorite(
   try {
     const allFavorites = await getAllFavorites();
     delete allFavorites[key];
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify(allFavorites));
-    window.dispatchEvent(
-      new CustomEvent('favoritesUpdated', {
-        detail: allFavorites,
-      })
-    );
+    writeLocalFavorites(allFavorites);
+    dispatchDataUpdate('favoritesUpdated', allFavorites);
   } catch (err) {
     console.error('删除收藏失败:', err);
     triggerGlobalError('删除收藏失败');
@@ -1348,11 +1296,7 @@ export async function isFavorited(
           if (JSON.stringify(cachedFavorites) !== JSON.stringify(freshData)) {
             cacheManager.cacheFavorites(freshData);
             // 触发数据更新事件
-            window.dispatchEvent(
-              new CustomEvent('favoritesUpdated', {
-                detail: freshData,
-              })
-            );
+            dispatchDataUpdate('favoritesUpdated', freshData);
           }
         })
         .catch((err) => {
@@ -1401,11 +1345,7 @@ export async function getAllFollowRecords(): Promise<
         .then((freshData) => {
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cacheFollowRecords(freshData);
-            window.dispatchEvent(
-              new CustomEvent('followRecordsUpdated', {
-                detail: freshData,
-              })
-            );
+            dispatchDataUpdate('followRecordsUpdated', freshData);
           }
         })
         .catch((err) => {
@@ -1429,9 +1369,7 @@ export async function getAllFollowRecords(): Promise<
   }
 
   try {
-    const raw = localStorage.getItem(FOLLOWS_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as Record<string, FollowRecord>;
+    return readLocalFollowRecords();
   } catch (err) {
     console.error('读取追更记录失败:', err);
     triggerGlobalError('读取追更记录失败');
@@ -1467,11 +1405,7 @@ export async function saveFollowRecord(
     cachedFollows[key] = follow;
     cacheManager.cacheFollowRecords(cachedFollows);
 
-    window.dispatchEvent(
-      new CustomEvent('followRecordsUpdated', {
-        detail: cachedFollows,
-      })
-    );
+    dispatchDataUpdate('followRecordsUpdated', cachedFollows);
 
     try {
       await postRemoteProfilePayload(USER_DATA_API_PATHS.follows, {
@@ -1494,12 +1428,8 @@ export async function saveFollowRecord(
   try {
     const allFollows = await getAllFollowRecords();
     allFollows[key] = follow;
-    localStorage.setItem(FOLLOWS_KEY, JSON.stringify(allFollows));
-    window.dispatchEvent(
-      new CustomEvent('followRecordsUpdated', {
-        detail: allFollows,
-      })
-    );
+    writeLocalFollowRecords(allFollows);
+    dispatchDataUpdate('followRecordsUpdated', allFollows);
   } catch (err) {
     console.error('保存追更记录失败:', err);
     triggerGlobalError('保存追更记录失败');
@@ -1522,11 +1452,7 @@ export async function deleteFollowRecord(
     delete cachedFollows[key];
     cacheManager.cacheFollowRecords(cachedFollows);
 
-    window.dispatchEvent(
-      new CustomEvent('followRecordsUpdated', {
-        detail: cachedFollows,
-      })
-    );
+    dispatchDataUpdate('followRecordsUpdated', cachedFollows);
 
     try {
       await deleteRemoteProfileResource(USER_DATA_API_PATHS.follows, {
@@ -1548,12 +1474,8 @@ export async function deleteFollowRecord(
   try {
     const allFollows = await getAllFollowRecords();
     delete allFollows[key];
-    localStorage.setItem(FOLLOWS_KEY, JSON.stringify(allFollows));
-    window.dispatchEvent(
-      new CustomEvent('followRecordsUpdated', {
-        detail: allFollows,
-      })
-    );
+    writeLocalFollowRecords(allFollows);
+    dispatchDataUpdate('followRecordsUpdated', allFollows);
   } catch (err) {
     console.error('删除追更记录失败:', err);
     triggerGlobalError('删除追更记录失败');
@@ -1572,11 +1494,7 @@ export async function clearAllPlayRecords(): Promise<void> {
     cacheManager.cachePlayRecords({});
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('playRecordsUpdated', {
-        detail: {},
-      })
-    );
+    dispatchDataUpdate('playRecordsUpdated', {});
 
     // 异步同步到数据库
     try {
@@ -1591,12 +1509,8 @@ export async function clearAllPlayRecords(): Promise<void> {
 
   // localStorage 模式
   if (typeof window === 'undefined') return;
-  localStorage.removeItem(PLAY_RECORDS_KEY);
-  window.dispatchEvent(
-    new CustomEvent('playRecordsUpdated', {
-      detail: {},
-    })
-  );
+  clearLocalPlayRecords();
+  dispatchDataUpdate('playRecordsUpdated', {});
 }
 
 /**
@@ -1610,11 +1524,7 @@ export async function clearAllFavorites(): Promise<void> {
     cacheManager.cacheFavorites({});
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('favoritesUpdated', {
-        detail: {},
-      })
-    );
+    dispatchDataUpdate('favoritesUpdated', {});
 
     // 异步同步到数据库
     try {
@@ -1629,12 +1539,8 @@ export async function clearAllFavorites(): Promise<void> {
 
   // localStorage 模式
   if (typeof window === 'undefined') return;
-  localStorage.removeItem(FAVORITES_KEY);
-  window.dispatchEvent(
-    new CustomEvent('favoritesUpdated', {
-      detail: {},
-    })
-  );
+  clearLocalFavorites();
+  dispatchDataUpdate('favoritesUpdated', {});
 }
 
 // ---------------- 混合缓存辅助函数 ----------------
@@ -1673,29 +1579,17 @@ export async function refreshAllCache(): Promise<void> {
 
     if (playRecords.status === 'fulfilled') {
       cacheManager.cachePlayRecords(playRecords.value);
-      window.dispatchEvent(
-        new CustomEvent('playRecordsUpdated', {
-          detail: playRecords.value,
-        })
-      );
+      dispatchDataUpdate('playRecordsUpdated', playRecords.value);
     }
 
     if (favorites.status === 'fulfilled') {
       cacheManager.cacheFavorites(favorites.value);
-      window.dispatchEvent(
-        new CustomEvent('favoritesUpdated', {
-          detail: favorites.value,
-        })
-      );
+      dispatchDataUpdate('favoritesUpdated', favorites.value);
     }
 
     if (followRecords.status === 'fulfilled') {
       cacheManager.cacheFollowRecords(followRecords.value);
-      window.dispatchEvent(
-        new CustomEvent('followRecordsUpdated', {
-          detail: followRecords.value,
-        })
-      );
+      dispatchDataUpdate('followRecordsUpdated', followRecords.value);
     }
 
     if (searchHistory.status === 'fulfilled') {
@@ -1705,11 +1599,7 @@ export async function refreshAllCache(): Promise<void> {
 
     if (skipConfigs.status === 'fulfilled') {
       cacheManager.cacheSkipConfigs(skipConfigs.value);
-      window.dispatchEvent(
-        new CustomEvent('skipConfigsUpdated', {
-          detail: skipConfigs.value,
-        })
-      );
+      dispatchDataUpdate('skipConfigsUpdated', skipConfigs.value);
     }
   } catch (err) {
     console.error('刷新缓存失败:', err);
@@ -1753,12 +1643,7 @@ export function getCacheStatus(): {
 
 // ---------------- React Hook 辅助类型 ----------------
 
-export type CacheUpdateEvent =
-  | 'playRecordsUpdated'
-  | 'favoritesUpdated'
-  | 'followRecordsUpdated'
-  | 'searchHistoryUpdated'
-  | 'skipConfigsUpdated';
+export type CacheUpdateEvent = ProfileCacheUpdateEvent;
 
 /**
  * 用于 React 组件监听数据更新的事件监听器
@@ -1775,19 +1660,7 @@ export function subscribeToDataUpdates<T>(
   eventType: CacheUpdateEvent,
   callback: (data: T) => void
 ): () => void {
-  if (typeof window === 'undefined') {
-    return () => {};
-  }
-
-  const handleUpdate = (event: CustomEvent) => {
-    callback(event.detail);
-  };
-
-  window.addEventListener(eventType, handleUpdate as EventListener);
-
-  return () => {
-    window.removeEventListener(eventType, handleUpdate as EventListener);
-  };
+  return subscribeToProfileCacheUpdates(eventType, callback);
 }
 
 /**
@@ -1846,11 +1719,7 @@ export async function getSkipConfig(
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cacheSkipConfigs(freshData);
             // 触发数据更新事件
-            window.dispatchEvent(
-              new CustomEvent('skipConfigsUpdated', {
-                detail: freshData,
-              })
-            );
+            dispatchDataUpdate('skipConfigsUpdated', freshData);
           }
         })
         .catch((err) => {
@@ -1876,9 +1745,7 @@ export async function getSkipConfig(
 
   // localStorage 模式
   try {
-    const raw = localStorage.getItem('moontv_skip_configs');
-    if (!raw) return null;
-    const configs = JSON.parse(raw) as Record<string, SkipConfig>;
+    const configs = readLocalSkipConfigs();
     return configs[key] || null;
   } catch (err) {
     console.error('读取跳过片头片尾配置失败:', err);
@@ -1906,11 +1773,7 @@ export async function saveSkipConfig(
     cacheManager.cacheSkipConfigs(cachedConfigs);
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('skipConfigsUpdated', {
-        detail: cachedConfigs,
-      })
-    );
+    dispatchDataUpdate('skipConfigsUpdated', cachedConfigs);
 
     // 异步同步到数据库
     try {
@@ -1932,15 +1795,10 @@ export async function saveSkipConfig(
   }
 
   try {
-    const raw = localStorage.getItem('moontv_skip_configs');
-    const configs = raw ? (JSON.parse(raw) as Record<string, SkipConfig>) : {};
+    const configs = readLocalSkipConfigs();
     configs[key] = config;
-    localStorage.setItem('moontv_skip_configs', JSON.stringify(configs));
-    window.dispatchEvent(
-      new CustomEvent('skipConfigsUpdated', {
-        detail: configs,
-      })
-    );
+    writeLocalSkipConfigs(configs);
+    dispatchDataUpdate('skipConfigsUpdated', configs);
   } catch (err) {
     console.error('保存跳过片头片尾配置失败:', err);
     triggerGlobalError('保存跳过片头片尾配置失败');
@@ -1971,11 +1829,7 @@ export async function getAllSkipConfigs(): Promise<Record<string, SkipConfig>> {
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cacheSkipConfigs(freshData);
             // 触发数据更新事件
-            window.dispatchEvent(
-              new CustomEvent('skipConfigsUpdated', {
-                detail: freshData,
-              })
-            );
+            dispatchDataUpdate('skipConfigsUpdated', freshData);
           }
         })
         .catch((err) => {
@@ -2002,9 +1856,7 @@ export async function getAllSkipConfigs(): Promise<Record<string, SkipConfig>> {
 
   // localStorage 模式
   try {
-    const raw = localStorage.getItem('moontv_skip_configs');
-    if (!raw) return {};
-    return JSON.parse(raw) as Record<string, SkipConfig>;
+    return readLocalSkipConfigs();
   } catch (err) {
     console.error('读取跳过片头片尾配置失败:', err);
     triggerGlobalError('读取跳过片头片尾配置失败');
@@ -2030,11 +1882,7 @@ export async function deleteSkipConfig(
     cacheManager.cacheSkipConfigs(cachedConfigs);
 
     // 触发立即更新事件
-    window.dispatchEvent(
-      new CustomEvent('skipConfigsUpdated', {
-        detail: cachedConfigs,
-      })
-    );
+    dispatchDataUpdate('skipConfigsUpdated', cachedConfigs);
 
     // 异步同步到数据库
     try {
@@ -2055,17 +1903,10 @@ export async function deleteSkipConfig(
   }
 
   try {
-    const raw = localStorage.getItem('moontv_skip_configs');
-    if (raw) {
-      const configs = JSON.parse(raw) as Record<string, SkipConfig>;
-      delete configs[key];
-      localStorage.setItem('moontv_skip_configs', JSON.stringify(configs));
-      window.dispatchEvent(
-        new CustomEvent('skipConfigsUpdated', {
-          detail: configs,
-        })
-      );
-    }
+    const configs = readLocalSkipConfigs();
+    delete configs[key];
+    writeLocalSkipConfigs(configs);
+    dispatchDataUpdate('skipConfigsUpdated', configs);
   } catch (err) {
     console.error('删除跳过片头片尾配置失败:', err);
     triggerGlobalError('删除跳过片头片尾配置失败');
