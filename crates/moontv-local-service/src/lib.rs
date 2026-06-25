@@ -56,9 +56,7 @@ use moontv_download::{
 };
 use moontv_profile::LocalDesktopProfileStore;
 use moontv_storage::sqlite::{DesktopSqlite, SqliteDatabaseInfo};
-use moontv_sync::{
-    ProfileSyncClient, ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncStatusResponse,
-};
+use moontv_sync::{ProfileSyncClient, ProfileSyncSession, ProfileSyncStatusResponse};
 use rand::Rng;
 use regex::Regex;
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
@@ -77,9 +75,11 @@ mod profile_local;
 mod profile_sync;
 
 use profile_sync::{
-    build_profile_sync_status_payload, proxy_profile_sync_change_password,
+    build_profile_sync_status_payload, get_profile_sync_server_config,
+    proxy_profile_sync_change_password, proxy_profile_sync_favorites, proxy_profile_sync_follows,
     proxy_profile_sync_login, proxy_profile_sync_logout, proxy_profile_sync_passthrough,
-    response_from_upstream,
+    proxy_profile_sync_playrecords, proxy_profile_sync_search_history,
+    proxy_profile_sync_skip_configs,
 };
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -1949,43 +1949,6 @@ async fn get_profile_sync_status(State(state): State<AppState>) -> AppResult<Res
     no_store_json_response(&payload)
 }
 
-async fn get_profile_sync_server_config(State(state): State<AppState>) -> AppResult<Response> {
-    let config = state
-        .load_config()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-
-    let Some(remote_base_url) = config.profile_sync_api_base_url.as_deref() else {
-        let mut response = Json(json!({
-            "StorageType": "localstorage",
-            "ProfileMode": "single-user-local",
-        }))
-        .into_response();
-        response
-            .headers_mut()
-            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        return Ok(response);
-    };
-
-    let upstream_response = state
-        .profile_sync
-        .send(
-            Some(remote_base_url),
-            ProfileSyncForwardRequest::get("/api/server-config"),
-        )
-        .await
-        .map_err(|error| match error.kind {
-            moontv_sync::ProfileSyncErrorKind::InvalidBaseUrl => {
-                AppError::bad_request(error.message)
-            }
-            moontv_sync::ProfileSyncErrorKind::NotConfigured => {
-                AppError::new(StatusCode::NOT_IMPLEMENTED, error.message)
-            }
-            _ => AppError::new(StatusCode::BAD_GATEWAY, error.message),
-        })?;
-
-    response_from_upstream(upstream_response).await
-}
-
 async fn put_download_runtime_cache(
     State(state): State<AppState>,
     Query(params): Query<DesktopDownloadCacheQueryParams>,
@@ -2314,71 +2277,6 @@ async fn delete_download_runtime_task(
         Ok(engine.snapshot())
     })
     .await
-}
-
-async fn proxy_profile_sync_playrecords(
-    State(state): State<AppState>,
-    request: Request,
-) -> AppResult<Response> {
-    if should_proxy_profile_user_data(&state)
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        return proxy_profile_sync_passthrough(&state, request).await;
-    }
-
-    profile_local::handle_profile_playrecords(&state, request).await
-}
-
-async fn proxy_profile_sync_favorites(
-    State(state): State<AppState>,
-    request: Request,
-) -> AppResult<Response> {
-    if should_proxy_profile_user_data(&state)
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        return proxy_profile_sync_passthrough(&state, request).await;
-    }
-
-    profile_local::handle_profile_favorites(&state, request).await
-}
-
-async fn proxy_profile_sync_follows(
-    State(state): State<AppState>,
-    request: Request,
-) -> AppResult<Response> {
-    if should_proxy_profile_user_data(&state)
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        return proxy_profile_sync_passthrough(&state, request).await;
-    }
-
-    profile_local::handle_profile_follows(&state, request).await
-}
-
-async fn proxy_profile_sync_search_history(
-    State(state): State<AppState>,
-    request: Request,
-) -> AppResult<Response> {
-    if should_proxy_profile_user_data(&state)
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        return proxy_profile_sync_passthrough(&state, request).await;
-    }
-
-    profile_local::handle_profile_search_history(&state, request).await
-}
-
-async fn proxy_profile_sync_skip_configs(
-    State(state): State<AppState>,
-    request: Request,
-) -> AppResult<Response> {
-    if should_proxy_profile_user_data(&state)
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        return proxy_profile_sync_passthrough(&state, request).await;
-    }
-
-    profile_local::handle_profile_skip_configs(&state, request).await
 }
 
 fn build_local_auth_status_payload(state: &AppState) -> Result<LocalAuthStatusResponse> {
@@ -5479,10 +5377,6 @@ fn normalize_user_config(
 }
 
 fn should_proxy_admin_data_migration(state: &AppState) -> Result<bool> {
-    Ok(state.load_config()?.profile_sync_api_base_url.is_some())
-}
-
-fn should_proxy_profile_user_data(state: &AppState) -> Result<bool> {
     Ok(state.load_config()?.profile_sync_api_base_url.is_some())
 }
 

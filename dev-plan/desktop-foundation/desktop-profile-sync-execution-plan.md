@@ -571,6 +571,7 @@ src/lib/profile/
 - Phase 6 所需的故障排查文档已经输出，后续排查可直接按 `desktop-profile-sync-troubleshooting.md` 的状态词典和联调基线执行。
 - `src/lib/desktop/profile-bootstrap.ts` 现已新增共享 bootstrap loader，把“拉取 bootstrap + 应用 runtime/profileSync 配置 + 在 desktop-local 下恢复本地 auth”的流程收口到一处，`DesktopRuntimeSync` 与登录页不再各自维护一套近似初始化分支。
 - `src/lib/desktop/profile-sync-status-copy.ts` 现已输出结构化诊断字段；桌面管理页与设置页不再只展示一段同步状态摘要，而会显式列出当前模式、远端可达性、当前远端账号、最近错误与同步域。
+- `crates/moontv-local-service/src/profile_sync.rs` 现已继续接手 `server-config` handler 与五个用户数据域的本地/远端分流，`lib.rs` 中与 profile sync facade 直接相关的重复 handler 进一步缩短。
 
 #### 验收标准
 
