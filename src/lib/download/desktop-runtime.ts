@@ -1,6 +1,7 @@
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { buildApiUrl } from '@/lib/transport/endpoint';
 
+import { DownloadDomainError } from './request';
 import {
   DownloadTask,
   ManifestParseResult,
@@ -80,7 +81,15 @@ export type DesktopDownloadExecutorMode =
   | 'desktop-compat'
   | 'web-cache';
 
+export const DESKTOP_DOWNLOAD_RUNTIME_ERROR_TASK_NOT_FOUND =
+  'download_runtime_task_not_found';
+
 const DESKTOP_DOWNLOAD_RUNTIME_POLL_INTERVAL_MS = 2_000;
+
+interface DesktopDownloadRuntimeErrorPayload {
+  error?: string;
+  code?: string;
+}
 
 function ensureDesktopLocalDownloadRuntime(): void {
   if (!isDesktopLocalDownloadRuntimeEnabled()) {
@@ -107,29 +116,43 @@ function buildDesktopDownloadRuntimeUrl(
   return buildApiUrl(`/download-runtime${path}`, searchParams);
 }
 
-async function parseJsonResponse<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    let errorMessage = `Desktop download runtime request failed: ${response.status}`;
+async function buildDesktopDownloadRuntimeError(
+  response: Response
+): Promise<DownloadDomainError> {
+  let errorMessage = `Desktop download runtime request failed: ${response.status}`;
+  let errorCode = 'download_runtime_request_failed';
 
+  try {
+    const payload = (await response
+      .clone()
+      .json()) as DesktopDownloadRuntimeErrorPayload;
+    if (typeof payload.error === 'string' && payload.error.trim()) {
+      errorMessage = payload.error.trim();
+    }
+    if (typeof payload.code === 'string' && payload.code.trim()) {
+      errorCode = payload.code.trim();
+    }
+  } catch {
     try {
-      const payload = (await response.clone().json()) as {
-        error?: string;
-      };
-      if (typeof payload.error === 'string' && payload.error.trim()) {
-        errorMessage = payload.error.trim();
+      const fallbackText = (await response.text()).trim();
+      if (fallbackText) {
+        errorMessage = fallbackText;
       }
     } catch {
-      try {
-        const fallbackText = (await response.text()).trim();
-        if (fallbackText) {
-          errorMessage = fallbackText;
-        }
-      } catch {
-        // Ignore secondary parsing failures and keep the status fallback.
-      }
+      // Ignore secondary parsing failures and keep the status fallback.
     }
+  }
 
-    throw new Error(errorMessage);
+  return new DownloadDomainError({
+    code: errorCode,
+    message: errorMessage,
+    status: response.status,
+  });
+}
+
+async function parseJsonResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    throw await buildDesktopDownloadRuntimeError(response);
   }
 
   return response.json() as Promise<T>;
@@ -259,9 +282,7 @@ export async function getDesktopDownloadCachedResponse(
   }
 
   if (!response.ok) {
-    throw new Error(
-      `Desktop download runtime request failed: ${response.status}`
-    );
+    throw await buildDesktopDownloadRuntimeError(response);
   }
 
   return response;

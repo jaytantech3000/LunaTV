@@ -15,6 +15,7 @@ import {
 import {
   cancelDesktopDownloadTask,
   deleteDesktopDownloadTask,
+  DESKTOP_DOWNLOAD_RUNTIME_ERROR_TASK_NOT_FOUND,
   getDesktopDownloadEngineSnapshot,
   pauseDesktopDownloadTask,
   postDesktopDownloadTask,
@@ -23,10 +24,13 @@ import {
   resumeDesktopDownloadTask,
   retryDesktopDownloadTask,
 } from './desktop-runtime';
+import { DownloadDomainError } from './request';
 import type { DownloadTask } from './types';
 
 jest.mock('./desktop-runtime', () => ({
   cancelDesktopDownloadTask: jest.fn(),
+  DESKTOP_DOWNLOAD_RUNTIME_ERROR_TASK_NOT_FOUND:
+    'download_runtime_task_not_found',
   deleteDesktopDownloadTask: jest.fn(),
   getDesktopDownloadEngineSnapshot: jest.fn(),
   pauseDesktopDownloadTask: jest.fn(),
@@ -298,6 +302,39 @@ describe('desktop download engine sync', () => {
 
     expect(getDesktopDownloadEngineSnapshot).not.toHaveBeenCalled();
     expect(postDesktopDownloadTask).not.toHaveBeenCalled();
+  });
+
+  it('drops stale cached tasks when delete returns task-not-found', async () => {
+    const staleTask = buildDownloadTask({
+      id: 'task-stale',
+      cacheIndexId: 'cache:task-stale',
+    });
+    const cachedSnapshot = {
+      maxConcurrentTasks: 4,
+      tasks: {
+        [staleTask.id]: staleTask,
+      },
+      lastEvent: null,
+    };
+
+    cacheDesktopDownloadEngineSnapshot(cachedSnapshot);
+    (deleteDesktopDownloadTask as jest.Mock).mockRejectedValue(
+      new DownloadDomainError({
+        code: DESKTOP_DOWNLOAD_RUNTIME_ERROR_TASK_NOT_FOUND,
+        message: 'download runtime task not found',
+        status: 404,
+      })
+    );
+
+    await expect(
+      deleteMirroredDesktopDownloadTask(staleTask.id)
+    ).resolves.toEqual({
+      ...cachedSnapshot,
+      tasks: {},
+    });
+
+    expect(deleteDesktopDownloadTask).toHaveBeenCalledWith(staleTask.id);
+    expect(getDesktopDownloadEngineSnapshot).not.toHaveBeenCalled();
   });
 
   it('updates the shared snapshot cache after direct runtime commands', async () => {

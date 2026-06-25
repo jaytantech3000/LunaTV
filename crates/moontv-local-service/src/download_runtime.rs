@@ -124,6 +124,48 @@ const DOWNLOAD_RESOURCE_FETCH_TIMEOUT_MS: u64 = 45_000;
 const MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES: usize = 2;
 const DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER: &str = "x-moontv-download-intent";
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT: &str = "background";
+const DOWNLOAD_RUNTIME_ERROR_STORAGE: &str = "download_runtime_storage_error";
+const DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED: &str =
+    "download_runtime_resource_fetch_failed";
+const DOWNLOAD_RUNTIME_ERROR_RESOURCE_RESPONSE_READ_FAILED: &str =
+    "download_runtime_resource_response_read_failed";
+const DOWNLOAD_RUNTIME_ERROR_CACHE_NOT_FOUND: &str = "download_runtime_cache_not_found";
+const DOWNLOAD_RUNTIME_ERROR_CACHE_BODY_NOT_FOUND: &str =
+    "download_runtime_cache_body_not_found";
+const DOWNLOAD_RUNTIME_ERROR_MANIFEST_INVALID: &str = "download_runtime_manifest_invalid";
+const DOWNLOAD_RUNTIME_ERROR_MANIFEST_UPSTREAM: &str = "download_runtime_manifest_upstream";
+const DOWNLOAD_RUNTIME_ERROR_MANIFEST_TIMEOUT: &str = "download_runtime_manifest_timeout";
+const DOWNLOAD_RUNTIME_ERROR_MANIFEST_INTERNAL: &str = "download_runtime_manifest_internal";
+const DOWNLOAD_RUNTIME_ERROR_TASK_NOT_FOUND: &str = "download_runtime_task_not_found";
+const DOWNLOAD_RUNTIME_ERROR_TASK_INVALID: &str = "download_runtime_task_invalid";
+const DOWNLOAD_RUNTIME_ERROR_MISSING_URL: &str = "download_runtime_missing_url";
+const DOWNLOAD_RUNTIME_ERROR_INVALID_URL: &str = "download_runtime_invalid_url";
+const DOWNLOAD_RUNTIME_ERROR_MISSING_INDEX_ID: &str = "download_runtime_missing_index_id";
+const DOWNLOAD_RUNTIME_ERROR_INVALID_STATUS: &str = "download_runtime_invalid_status";
+const DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX: &str =
+    "download_runtime_invalid_resource_index";
+
+fn download_runtime_storage_error(message: impl Into<String>) -> AppError {
+    AppError::internal_with_code(DOWNLOAD_RUNTIME_ERROR_STORAGE, message)
+}
+
+fn download_runtime_validation_error(
+    code: &'static str,
+    message: impl Into<String>,
+) -> AppError {
+    AppError::bad_request_with_code(code, message)
+}
+
+fn download_runtime_task_invalid(message: impl Into<String>) -> AppError {
+    AppError::bad_request_with_code(DOWNLOAD_RUNTIME_ERROR_TASK_INVALID, message)
+}
+
+fn download_runtime_upstream_error(
+    code: &'static str,
+    message: impl Into<String>,
+) -> AppError {
+    AppError::with_code(StatusCode::BAD_GATEWAY, code, message)
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -223,15 +265,26 @@ impl DownloadManifestError {
     }
 
     fn into_app_error(self) -> AppError {
-        let status = match self.kind {
-            DownloadManifestErrorKind::Invalid => StatusCode::BAD_REQUEST,
-            DownloadManifestErrorKind::Http
-            | DownloadManifestErrorKind::Network
-            | DownloadManifestErrorKind::Timeout => StatusCode::BAD_GATEWAY,
-            DownloadManifestErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-
-        AppError::new(status, self.message)
+        match self.kind {
+            DownloadManifestErrorKind::Invalid => AppError::bad_request_with_code(
+                DOWNLOAD_RUNTIME_ERROR_MANIFEST_INVALID,
+                self.message,
+            ),
+            DownloadManifestErrorKind::Http | DownloadManifestErrorKind::Network => {
+                download_runtime_upstream_error(
+                    DOWNLOAD_RUNTIME_ERROR_MANIFEST_UPSTREAM,
+                    self.message,
+                )
+            }
+            DownloadManifestErrorKind::Timeout => download_runtime_upstream_error(
+                DOWNLOAD_RUNTIME_ERROR_MANIFEST_TIMEOUT,
+                self.message,
+            ),
+            DownloadManifestErrorKind::Internal => AppError::internal_with_code(
+                DOWNLOAD_RUNTIME_ERROR_MANIFEST_INTERNAL,
+                self.message,
+            ),
+        }
     }
 }
 
@@ -248,10 +301,10 @@ pub(crate) async fn put_download_runtime_cache(
         .and_then(|value| value.to_str().ok());
     let body_bytes = to_bytes(body, usize::MAX)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
     let entry = state
         .write_cached_download(&url, status, content_type, body_bytes.as_ref())
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
 
     no_store_json_response(&entry)
 }
@@ -263,7 +316,7 @@ pub(crate) async fn get_download_runtime_cache_meta(
     let url = require_download_runtime_url(params.url.as_deref())?;
     let entry = state
         .read_cached_download_entry(&url)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
     let payload = DesktopDownloadCacheMetaResponse {
         exists: entry.is_some(),
         url,
@@ -284,12 +337,24 @@ pub(crate) async fn get_download_runtime_cache_response(
     let url = require_download_runtime_url(params.url.as_deref())?;
     let entry = state
         .read_cached_download_entry(&url)
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "cached download not found"))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::with_code(
+                StatusCode::NOT_FOUND,
+                DOWNLOAD_RUNTIME_ERROR_CACHE_NOT_FOUND,
+                "cached download not found",
+            )
+        })?;
     let body = state
         .read_cached_download_body(&url)
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "cached download body not found"))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::with_code(
+                StatusCode::NOT_FOUND,
+                DOWNLOAD_RUNTIME_ERROR_CACHE_BODY_NOT_FOUND,
+                "cached download body not found",
+            )
+        })?;
 
     Ok(build_cached_download_response(
         &method,
@@ -322,7 +387,7 @@ pub(crate) async fn fetch_download_runtime_cache_response(
                 fetched_response.content_type.as_deref(),
                 fetched_response.body.as_ref(),
             )
-            .map_err(|error| AppError::internal(error.to_string()))?;
+            .map_err(|error| download_runtime_storage_error(error.to_string()))?;
 
         return Ok(build_cached_download_response(
             &Method::GET,
@@ -346,7 +411,7 @@ pub(crate) async fn delete_download_runtime_cache(
     let url = require_download_runtime_url(params.url.as_deref())?;
     let deleted = state
         .delete_cached_download(&url)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
 
     no_store_json_response(&json!({
         "ok": true,
@@ -359,7 +424,7 @@ pub(crate) async fn clear_download_runtime_cache(
 ) -> AppResult<Response> {
     state
         .clear_cached_downloads()
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
     no_store_json_response(&json!({ "ok": true }))
 }
 
@@ -371,13 +436,13 @@ fn try_build_cached_download_response(
 ) -> AppResult<Option<Response>> {
     let Some(entry) = state
         .read_cached_download_entry(url)
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?
     else {
         return Ok(None);
     };
     let Some(body) = state
         .read_cached_download_body(url)
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?
     else {
         return Ok(None);
     };
@@ -422,8 +487,9 @@ async fn fetch_runtime_download_response(
         .send()
         .await
         .map_err(|error| {
-            AppError::new(
+            AppError::with_code(
                 StatusCode::BAD_GATEWAY,
+                DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED,
                 format!("failed to fetch download resource: {url} ({error})"),
             )
         })?;
@@ -437,8 +503,9 @@ async fn fetch_runtime_download_response(
         .bytes()
         .await
         .map_err(|error| {
-            AppError::new(
+            AppError::with_code(
                 StatusCode::BAD_GATEWAY,
+                DOWNLOAD_RUNTIME_ERROR_RESOURCE_RESPONSE_READ_FAILED,
                 format!("failed to read download resource response: {url} ({error})"),
             )
         })?
@@ -504,7 +571,7 @@ pub(crate) async fn put_download_runtime_resource_index(
     let normalized_record = normalize_download_runtime_resource_index(record)?;
     let saved = state
         .write_resource_index(&normalized_record)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
     no_store_json_response(&saved)
 }
 
@@ -515,7 +582,7 @@ pub(crate) async fn get_download_runtime_resource_index(
     let id = require_download_runtime_index_id(params.id.as_deref())?;
     let record = state
         .read_resource_index(&id)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
 
     no_store_json_response(&record)
 }
@@ -527,7 +594,7 @@ pub(crate) async fn delete_download_runtime_resource_index(
     let id = require_download_runtime_index_id(params.id.as_deref())?;
     let deleted = state
         .delete_resource_index(&id)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
 
     no_store_json_response(&json!({
         "ok": true,
@@ -540,7 +607,7 @@ pub(crate) async fn clear_download_runtime_resource_indexes(
 ) -> AppResult<Response> {
     state
         .clear_resource_indexes()
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
     no_store_json_response(&json!({ "ok": true }))
 }
 
@@ -549,7 +616,7 @@ pub(crate) async fn get_download_runtime_store_snapshot(
 ) -> AppResult<Response> {
     let snapshot = state
         .read_download_store_snapshot()
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
     no_store_json_response(&snapshot)
 }
 
@@ -559,7 +626,7 @@ pub(crate) async fn put_download_runtime_store_snapshot(
 ) -> AppResult<Response> {
     state
         .write_download_store_snapshot(&snapshot)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
     no_store_json_response(&json!({ "ok": true }))
 }
 
@@ -568,7 +635,7 @@ pub(crate) async fn clear_download_runtime_store_snapshot(
 ) -> AppResult<Response> {
     let deleted = state
         .clear_download_store_snapshot()
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
     no_store_json_response(&json!({
         "ok": true,
         "deleted": deleted,
@@ -602,7 +669,8 @@ fn normalize_download_manifest_candidate_urls(
     }
 
     if normalized.is_empty() {
-        return Err(AppError::bad_request(
+        return Err(AppError::bad_request_with_code(
+            DOWNLOAD_RUNTIME_ERROR_MANIFEST_INVALID,
             "missing desktop download manifest candidates",
         ));
     }
@@ -1245,7 +1313,11 @@ async fn resolve_download_manifest_candidates(
 }
 
 fn download_runtime_task_not_found() -> AppError {
-    AppError::new(StatusCode::NOT_FOUND, "download runtime task not found")
+    AppError::with_code(
+        StatusCode::NOT_FOUND,
+        DOWNLOAD_RUNTIME_ERROR_TASK_NOT_FOUND,
+        "download runtime task not found",
+    )
 }
 
 async fn persist_download_engine_snapshot(
@@ -1254,7 +1326,7 @@ async fn persist_download_engine_snapshot(
 ) -> AppResult<DesktopDownloadEngineSnapshot> {
     state
         .write_download_engine_snapshot(&snapshot)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
     state.publish_download_engine_snapshot(&snapshot);
     Ok(snapshot)
 }
@@ -1295,7 +1367,7 @@ where
         let next_task = updater(current_task);
         let snapshot = engine
             .upsert_task(next_task.clone())
-            .map_err(AppError::bad_request)?
+            .map_err(download_runtime_task_invalid)?
             .clone();
         (snapshot, next_task)
     };
@@ -1544,7 +1616,7 @@ async fn activate_queued_download_runtime_task(state: &AppState, task_id: &str) 
         task.updated_at = crate::current_timestamp_ms();
         let snapshot = engine
             .upsert_task(task)
-            .map_err(AppError::bad_request)?
+            .map_err(download_runtime_task_invalid)?
             .clone();
         active_tasks.insert(task_id.to_string());
         snapshot
@@ -1877,7 +1949,7 @@ pub(crate) async fn post_download_runtime_task(
     let response = mutate_download_engine_snapshot(&state, move |engine| {
         let snapshot = engine
             .upsert_task(task)
-            .map_err(AppError::bad_request)?
+            .map_err(download_runtime_task_invalid)?
             .clone();
         Ok(snapshot)
     })
@@ -2015,14 +2087,29 @@ pub(crate) async fn delete_download_runtime_task(
 
 fn require_download_runtime_url(value: Option<&str>) -> AppResult<String> {
     let url = normalize_optional_text(value)
-        .ok_or_else(|| AppError::bad_request("missing download runtime url"))?;
-    Url::parse(&url).map_err(|_| AppError::bad_request("invalid download runtime url"))?;
+        .ok_or_else(|| {
+            download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_MISSING_URL,
+                "missing download runtime url",
+            )
+        })?;
+    Url::parse(&url).map_err(|_| {
+        download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_URL,
+            "invalid download runtime url",
+        )
+    })?;
     Ok(url)
 }
 
 fn require_download_runtime_index_id(value: Option<&str>) -> AppResult<String> {
     normalize_optional_string(value.map(|item| item.to_string()))
-        .ok_or_else(|| AppError::bad_request("missing download runtime index id"))
+        .ok_or_else(|| {
+            download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_MISSING_INDEX_ID,
+                "missing download runtime index id",
+            )
+        })
 }
 
 fn parse_download_runtime_status(headers: &HeaderMap) -> AppResult<StatusCode> {
@@ -2033,9 +2120,19 @@ fn parse_download_runtime_status(headers: &HeaderMap) -> AppResult<StatusCode> {
         .trim();
     let numeric_status = raw_status
         .parse::<u16>()
-        .map_err(|_| AppError::bad_request("invalid download runtime status"))?;
+        .map_err(|_| {
+            download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_INVALID_STATUS,
+                "invalid download runtime status",
+            )
+        })?;
     StatusCode::from_u16(numeric_status)
-        .map_err(|_| AppError::bad_request("invalid download runtime status"))
+        .map_err(|_| {
+            download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_INVALID_STATUS,
+                "invalid download runtime status",
+            )
+        })
 }
 
 fn normalize_download_runtime_resource_index(
@@ -2043,15 +2140,40 @@ fn normalize_download_runtime_resource_index(
 ) -> AppResult<DesktopDownloadResourceIndexRecord> {
     let id = require_download_runtime_index_id(Some(&record.id))?;
     let owner_username = normalize_optional_string(Some(record.owner_username))
-        .ok_or_else(|| AppError::bad_request("missing download runtime ownerUsername"))?;
+        .ok_or_else(|| {
+            download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
+                "missing download runtime ownerUsername",
+            )
+        })?;
     let task_id = normalize_optional_string(Some(record.task_id))
-        .ok_or_else(|| AppError::bad_request("missing download runtime taskId"))?;
+        .ok_or_else(|| {
+            download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
+                "missing download runtime taskId",
+            )
+        })?;
     let content_id = normalize_optional_string(Some(record.content_id))
-        .ok_or_else(|| AppError::bad_request("missing download runtime contentId"))?;
+        .ok_or_else(|| {
+            download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
+                "missing download runtime contentId",
+            )
+        })?;
     let source = normalize_optional_string(Some(record.source))
-        .ok_or_else(|| AppError::bad_request("missing download runtime source"))?;
+        .ok_or_else(|| {
+            download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
+                "missing download runtime source",
+            )
+        })?;
     let vod_id = normalize_optional_string(Some(record.vod_id))
-        .ok_or_else(|| AppError::bad_request("missing download runtime vodId"))?;
+        .ok_or_else(|| {
+            download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
+                "missing download runtime vodId",
+            )
+        })?;
     let urls = record
         .urls
         .into_iter()

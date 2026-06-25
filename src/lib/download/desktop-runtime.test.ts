@@ -1,4 +1,5 @@
 import * as desktopRuntime from './desktop-runtime';
+import { DownloadDomainError } from './request';
 import type { DownloadTask } from './types';
 
 jest.mock('@/lib/runtime-config', () => ({
@@ -215,6 +216,38 @@ describe('desktop download runtime task sdk', () => {
         credentials: 'omit',
       }
     );
+  });
+
+  it('preserves structured runtime error codes from HTTP responses', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: 'download runtime task not found',
+          code: 'download_runtime_task_not_found',
+        }),
+        {
+          status: 404,
+          headers: {
+            'content-type': 'application/json',
+          },
+        }
+      )
+    );
+
+    let error: unknown;
+
+    try {
+      await desktopRuntime.deleteDesktopDownloadTask('task-missing');
+    } catch (candidate) {
+      error = candidate;
+    }
+
+    expect(error).toBeInstanceOf(DownloadDomainError);
+    expect(error).toMatchObject({
+      code: 'download_runtime_task_not_found',
+      message: 'download runtime task not found',
+      status: 404,
+    });
   });
 
   it('fetches uncached desktop download resources through the local runtime', async () => {

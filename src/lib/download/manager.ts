@@ -31,8 +31,11 @@ import {
 import { parseManifestForDownloadWithFallback } from './manifest';
 import { normalizeVodEpisodeUrlForDownload } from './normalize';
 import {
+  createMissingPlaybackSourceDownloadError,
   createTimeoutAbortSignal,
+  DOWNLOAD_ERROR_CODE_MISSING_PLAYBACK_SOURCE,
   DownloadRequestError,
+  isDownloadDomainErrorCode,
   isRetryableDownloadError,
   waitForRetry,
 } from './request';
@@ -851,7 +854,7 @@ class DownloadManager {
     const nextTask = applyLibraryMetadataFallback(task, existingLibraryItem);
 
     if (!nextTask.entryManifestUrl) {
-      throw new Error('当前剧集缺少可下载的播放地址');
+      throw createMissingPlaybackSourceDownloadError();
     }
 
     const existingTask = this.getTask(nextTask.id);
@@ -1524,8 +1527,10 @@ class DownloadManager {
         }
       } catch (error) {
         if (
-          error instanceof Error &&
-          error.message === '当前剧集缺少可下载的播放地址'
+          isDownloadDomainErrorCode(
+            error,
+            DOWNLOAD_ERROR_CODE_MISSING_PLAYBACK_SOURCE
+          )
         ) {
           skippedCount += 1;
           continue;

@@ -2,6 +2,7 @@ import {
   type DesktopDownloadEngineBulkCommand,
   cancelDesktopDownloadTask,
   deleteDesktopDownloadTask,
+  DESKTOP_DOWNLOAD_RUNTIME_ERROR_TASK_NOT_FOUND,
   DesktopDownloadEngineSnapshot,
   getDesktopDownloadEngineSnapshot,
   pauseDesktopDownloadTask,
@@ -11,6 +12,7 @@ import {
   resumeDesktopDownloadTask,
   retryDesktopDownloadTask,
 } from './desktop-runtime';
+import { isDownloadDomainErrorCode } from './request';
 import { DownloadTask } from './types';
 
 export interface DesktopDownloadEngineSyncState {
@@ -124,6 +126,23 @@ export function clearDesktopDownloadEngineSnapshotCache(): void {
   desktopDownloadEngineSnapshotCache = null;
 }
 
+function dropTaskFromDesktopDownloadEngineSnapshotCache(
+  taskId: string
+): DesktopDownloadEngineSnapshot | null {
+  if (!desktopDownloadEngineSnapshotCache?.tasks[taskId]) {
+    return null;
+  }
+
+  const nextTasks = {
+    ...desktopDownloadEngineSnapshotCache.tasks,
+  };
+  delete nextTasks[taskId];
+  return rememberDesktopDownloadEngineSnapshot({
+    ...desktopDownloadEngineSnapshotCache,
+    tasks: nextTasks,
+  });
+}
+
 export async function syncDesktopDownloadEngineSettings(
   maxConcurrentTasks: number
 ): Promise<DesktopDownloadEngineSnapshot> {
@@ -177,9 +196,26 @@ export async function cancelDesktopDownloadEngineTask(
 export async function deleteMirroredDesktopDownloadTask(
   taskId: string
 ): Promise<DesktopDownloadEngineSnapshot> {
-  return mutateDesktopDownloadEngineSnapshot(() =>
-    deleteDesktopDownloadTask(taskId)
-  );
+  try {
+    return await mutateDesktopDownloadEngineSnapshot(() =>
+      deleteDesktopDownloadTask(taskId)
+    );
+  } catch (error) {
+    if (
+      isDownloadDomainErrorCode(
+        error,
+        DESKTOP_DOWNLOAD_RUNTIME_ERROR_TASK_NOT_FOUND
+      )
+    ) {
+      const cachedSnapshot =
+        dropTaskFromDesktopDownloadEngineSnapshotCache(taskId);
+      if (cachedSnapshot) {
+        return cachedSnapshot;
+      }
+    }
+
+    throw error;
+  }
 }
 
 export async function postDesktopDownloadEngineTaskBulkCommand(

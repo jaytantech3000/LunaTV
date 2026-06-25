@@ -5,6 +5,7 @@ import {
 } from './desktop-runtime';
 import { looksLikeManifestUrl } from './proxy-url';
 import {
+  createMissingPlaybackSourceDownloadError,
   createTimeoutAbortSignal,
   DownloadRequestError,
   isAbortError,
@@ -326,7 +327,7 @@ export async function parseManifestForDownloadWithFallback(
   );
 
   if (candidates.length === 0) {
-    throw new Error('当前剧集缺少可下载的播放地址');
+    throw createMissingPlaybackSourceDownloadError();
   }
 
   if (isDesktopLocalDownloadRuntimeEnabled()) {

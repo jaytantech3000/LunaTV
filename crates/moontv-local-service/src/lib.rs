@@ -1466,6 +1466,7 @@ struct UpstreamResponseMeta {
 #[derive(Debug)]
 struct AppError {
     status: StatusCode,
+    code: Option<&'static str>,
     message: String,
 }
 
@@ -1473,6 +1474,19 @@ impl AppError {
     fn new(status: StatusCode, message: impl Into<String>) -> Self {
         Self {
             status,
+            code: None,
+            message: message.into(),
+        }
+    }
+
+    fn with_code(
+        status: StatusCode,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            status,
+            code: Some(code),
             message: message.into(),
         }
     }
@@ -1481,14 +1495,28 @@ impl AppError {
         Self::new(StatusCode::BAD_REQUEST, message)
     }
 
+    fn bad_request_with_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self::with_code(StatusCode::BAD_REQUEST, code, message)
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, message)
+    }
+
+    fn internal_with_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self::with_code(StatusCode::INTERNAL_SERVER_ERROR, code, message)
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": self.message }))).into_response()
+        let mut payload = serde_json::Map::new();
+        payload.insert("error".into(), Value::String(self.message));
+        if let Some(code) = self.code {
+            payload.insert("code".into(), Value::String(code.to_string()));
+        }
+
+        (self.status, Json(Value::Object(payload))).into_response()
     }
 }
 
@@ -10875,6 +10903,10 @@ segment0.ts
         assert_eq!(
             missing_payload.get("error").and_then(Value::as_str),
             Some("download runtime task not found")
+        );
+        assert_eq!(
+            missing_payload.get("code").and_then(Value::as_str),
+            Some("download_runtime_task_not_found")
         );
 
         let delete_response = app

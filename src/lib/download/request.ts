@@ -2,12 +2,22 @@ const RETRYABLE_DOWNLOAD_HTTP_STATUS_SET = new Set([
   408, 425, 429, 500, 502, 503, 504,
 ]);
 
+export const DOWNLOAD_ERROR_CODE_MISSING_PLAYBACK_SOURCE =
+  'download_missing_playback_source';
+
 export type DownloadRequestErrorKind = 'http' | 'network' | 'timeout';
 
 interface DownloadRequestErrorParams {
   message: string;
   kind: DownloadRequestErrorKind;
   url: string;
+  status?: number;
+  cause?: unknown;
+}
+
+interface DownloadDomainErrorParams {
+  code: string;
+  message: string;
   status?: number;
   cause?: unknown;
 }
@@ -24,6 +34,28 @@ export class DownloadRequestError extends Error {
     this.name = 'DownloadRequestError';
     this.kind = params.kind;
     this.url = params.url;
+    this.status = params.status;
+
+    if (params.cause !== undefined) {
+      Object.defineProperty(this, 'cause', {
+        value: params.cause,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+}
+
+export class DownloadDomainError extends Error {
+  readonly code: string;
+
+  readonly status?: number;
+
+  constructor(params: DownloadDomainErrorParams) {
+    super(params.message);
+    this.name = 'DownloadDomainError';
+    this.code = params.code;
     this.status = params.status;
 
     if (params.cause !== undefined) {
@@ -61,6 +93,26 @@ function abortController(controller: AbortController, reason?: unknown): void {
 
 export function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+export function isDownloadDomainError(
+  error: unknown
+): error is DownloadDomainError {
+  return error instanceof DownloadDomainError;
+}
+
+export function isDownloadDomainErrorCode(
+  error: unknown,
+  code: string
+): boolean {
+  return isDownloadDomainError(error) && error.code === code;
+}
+
+export function createMissingPlaybackSourceDownloadError(): DownloadDomainError {
+  return new DownloadDomainError({
+    code: DOWNLOAD_ERROR_CODE_MISSING_PLAYBACK_SOURCE,
+    message: '当前剧集缺少可下载的播放地址',
+  });
 }
 
 export function isRetryableDownloadError(error: unknown): boolean {

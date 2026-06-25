@@ -30,6 +30,7 @@
 > - Phase 1 又补齐了一组关键控制面：local service 现已新增 `GET /api/download-runtime/tasks/:taskId`、`POST /api/download-runtime/tasks/:taskId/retry` 与 `POST /api/download-runtime/tasks/bulk`；桌面 `manager` 在 runtime 模式下也已把单任务 `error -> retry` 与 `pauseAll / resumeAll / cancelAll` 切到这组新接口。
 > - Phase 1 在桌面 runtime 模式下已由 Rust 接手 queued 任务调度、manifest candidate fallback、`/media/vod/*` 资源抓取与 cache/resource-index 写入；前端 `src/lib/download/manager.ts` 不再启动浏览器侧任务 runner。
 > - Phase 1 现已补上桌面下载执行器的灰度 / 回退边界：`NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME` 会写入 runtime config，默认桌面构建直接启用 Rust；如需 pre 验证期快速回切，可使用 `pnpm desktop:dev:legacy-download` 或 `pnpm desktop:build:legacy-download` 走 TS 兼容执行器，下载设置页也会显式展示当前执行器模式。
+> - Phase 1 也已开始统一 download runtime 的结构化错误：local service HTTP 错误会返回稳定 `code`，桌面 SDK 会抛出 `DownloadDomainError`，`manager` 与 runtime 镜像同步不再依赖中文字符串猜测。
 > - `src/components/DesktopDownloadStoreSync.tsx` 现在也会把 runtime `done` 任务回填到 `library`，避免已完成任务只停留在 snapshot 而不生成离线片库条目。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
 
@@ -251,7 +252,7 @@ Rust Shared Crates
 - `src/components/DesktopDownloadStoreSync.tsx` 也开始收缩成“启动修复 + sidecar store 持久化”角色：运行期的任务生命周期同步主要交给 runtime snapshot 与显式命令桥；与此同时，它会在收到 runtime `done` 任务时回填 `library`，确保 Rust 侧完成的下载能直接进入离线片库。
 - `src/lib/download/manager.ts` 在桌面 runtime 模式下不再启动浏览器侧任务 runner，主要保留任务创建 / 控制、Web / 非 runtime fallback 与兼容层；桌面下载主执行路径已切到 Rust local service。
 - 桌面构建现在也把 `NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME` 暴露为运行时配置：默认桌面 dev/build 直接启用 Rust 下载执行器，但仍保留 `pnpm desktop:dev:legacy-download` / `pnpm desktop:build:legacy-download` 作为显式回退窗口；`DownloadsClient` 设置页会明确显示当前是 Rust 本地运行时还是 TypeScript 兼容执行器。
-- Phase 1 清单当前只剩两类收尾项：download runtime 错误码 / 错误消息归一化，以及迁移稳定后删除桌面专用 TS 下载执行逻辑。
+- Phase 1 清单当前只剩最后一类收尾项：迁移稳定后删除桌面专用 TS 下载执行逻辑。
 
 ### 验收标准
 
