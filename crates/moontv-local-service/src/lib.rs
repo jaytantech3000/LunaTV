@@ -10044,6 +10044,55 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn profile_sync_status_endpoint_reports_disabled_when_not_configured() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .body(Body::empty())
+                    .expect("profile sync status without config request"),
+            )
+            .await
+            .expect("profile sync status without config response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+
+        assert_eq!(payload.get("enabled").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            payload.get("reachable").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload.get("authenticated").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(payload.get("errorKind"), Some(&Value::Null));
+        assert_eq!(
+            payload
+                .get("syncDomains")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(5)
+        );
+    }
+
+    #[tokio::test]
     async fn profile_sync_status_endpoint_exposes_error_kind_and_domains() {
         let temp_dir = TestDir::new();
         let config_path = write_test_config(
@@ -11396,6 +11445,199 @@ segment0.ts
                 .and_then(|record| record.get("title"))
                 .and_then(Value::as_str),
             Some("Remote Demo")
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_user_data_routes_proxy_all_domains() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/playrecords",
+                    get(|| async move { Json(json!({ "domain": "playrecords" })) }),
+                )
+                .route(
+                    "/api/favorites",
+                    get(|| async move { Json(json!({ "domain": "favorites" })) }),
+                )
+                .route(
+                    "/api/follows",
+                    get(|| async move { Json(json!({ "domain": "follows" })) }),
+                )
+                .route(
+                    "/api/searchhistory",
+                    get(|| async move { Json(json!({ "domain": "searchhistory" })) }),
+                )
+                .route(
+                    "/api/skipconfigs",
+                    get(|| async move { Json(json!({ "domain": "skipconfigs" })) }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": upstream.base_url()
+              },
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        for (path, expected_domain) in [
+            ("/api/playrecords", "playrecords"),
+            ("/api/favorites", "favorites"),
+            ("/api/follows", "follows"),
+            ("/api/searchhistory", "searchhistory"),
+            ("/api/skipconfigs", "skipconfigs"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("profile sync user-data request"),
+                )
+                .await
+                .expect("profile sync user-data response");
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let payload = read_json_body(response).await;
+            assert_eq!(
+                payload.get("domain").and_then(Value::as_str),
+                Some(expected_domain)
+            );
+        }
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_login_session_is_carried_and_cleared_after_401() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/login",
+                    post(|| async move {
+                        Json(json!({
+                            "ok": true,
+                            "username": "remote-user",
+                            "role": "user"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/server-config",
+                    get(|| async move {
+                        Json(json!({
+                            "StorageType": "redis",
+                            "ProfileMode": "shared-multi-user"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/playrecords",
+                    get(|| async move { StatusCode::UNAUTHORIZED.into_response() }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": upstream.base_url()
+              },
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let login_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/login")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"password":"demo"}"#))
+                    .expect("profile sync login request"),
+            )
+            .await
+            .expect("profile sync login response");
+        assert_eq!(login_response.status(), StatusCode::OK);
+
+        let status_before_401 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .body(Body::empty())
+                    .expect("profile sync status before 401 request"),
+            )
+            .await
+            .expect("profile sync status before 401 response");
+        let payload_before_401 = read_json_body(status_before_401).await;
+        assert_eq!(
+            payload_before_401
+                .get("authenticated")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload_before_401.get("username").and_then(Value::as_str),
+            Some("remote-user")
+        );
+
+        let proxied_401_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/playrecords")
+                    .body(Body::empty())
+                    .expect("profile sync passthrough request"),
+            )
+            .await
+            .expect("profile sync passthrough response");
+        assert_eq!(proxied_401_response.status(), StatusCode::UNAUTHORIZED);
+
+        let status_after_401 = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .body(Body::empty())
+                    .expect("profile sync status after 401 request"),
+            )
+            .await
+            .expect("profile sync status after 401 response");
+        let payload_after_401 = read_json_body(status_after_401).await;
+        assert_eq!(
+            payload_after_401
+                .get("authenticated")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(payload_after_401.get("username"), Some(&Value::Null));
+        assert_eq!(
+            payload_after_401.get("reachable").and_then(Value::as_bool),
+            Some(true)
         );
 
         upstream.abort();

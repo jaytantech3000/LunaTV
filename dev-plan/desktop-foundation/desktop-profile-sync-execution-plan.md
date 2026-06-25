@@ -566,6 +566,7 @@ src/lib/profile/
 - Rust 测试已经补齐 admin data migration 在 sync mode 下的导出 / 导入透传覆盖，减少桌面管理数据迁移只测单向、不测双向的风险。
 - `src/app/login/page.test.tsx` 已补上登录页在 sync on/off 下的分支覆盖，验证 profile sync 开启时进入远端登录分支，关闭时回落本地桌面鉴权分支。
 - `src/lib/profile/client.test.ts` 已补上 profile SDK 级缓存刷新覆盖，验证 API storage 关闭时不出网，开启时会统一拉取 `playrecords` / `favorites` / `follows` / `searchhistory` / `skipconfigs` 五个域并回填缓存。
+- Rust profile sync 测试现已补上未配置 `api_base_url`、登录后会话代持、透传 `401` 清 session 与五个同步域透传一致性，`moontv-sync` 与 local service 两层都已有可执行回归覆盖。
 - Phase 6 所需的故障排查文档已经输出，后续排查可直接按 `desktop-profile-sync-troubleshooting.md` 的状态词典和联调基线执行。
 
 #### 验收标准
@@ -627,15 +628,15 @@ src/lib/profile/
 
 ### 8.2 Rust 测试
 
-必须补的测试：
+当前覆盖进展（2026-06-25）：
 
-- profile sync 目标 URL 解析
-- 未配置 `profile_sync.api_base_url` 时的行为
-- 远端 `server-config` 拉取成功 / 失败
-- 登录成功后会话代持
-- 401 时会话清理
-- `playrecords` / `favorites` / `follows` / `searchhistory` / `skipconfigs` 透传一致性
-- admin data migration 在 sync mode 下透传
+- profile sync 目标 URL 解析（已由 `crates/moontv-sync/src/lib.rs` 覆盖）
+- 未配置 `profile_sync.api_base_url` 时的行为（已由 `crates/moontv-local-service/src/lib.rs` 覆盖）
+- 远端 `server-config` 拉取成功 / 失败（已由 `crates/moontv-sync/src/lib.rs` 覆盖）
+- 登录成功后会话代持（已由 `crates/moontv-local-service/src/lib.rs` 覆盖）
+- 401 时会话清理（已由 `crates/moontv-local-service/src/lib.rs` 覆盖）
+- `playrecords` / `favorites` / `follows` / `searchhistory` / `skipconfigs` 透传一致性（已由 `crates/moontv-local-service/src/lib.rs` 覆盖）
+- admin data migration 在 sync mode 下透传（已由 `crates/moontv-local-service/src/lib.rs` 覆盖）
 
 ### 8.3 手工联调清单
 
