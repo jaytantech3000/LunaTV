@@ -1,3 +1,4 @@
+import * as desktopRuntime from './desktop-runtime';
 import type { DownloadTask } from './types';
 
 jest.mock('@/lib/runtime-config', () => ({
@@ -53,10 +54,7 @@ function buildDownloadTask(partial: Partial<DownloadTask> = {}): DownloadTask {
 }
 
 describe('desktop download runtime task sdk', () => {
-  let desktopRuntime: typeof import('./desktop-runtime');
-
-  beforeEach(async () => {
-    jest.resetModules();
+  beforeEach(() => {
     jest.clearAllMocks();
     process.env.NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME = 'true';
 
@@ -76,9 +74,6 @@ describe('desktop download runtime task sdk', () => {
     );
 
     global.fetch = jest.fn();
-    desktopRuntime = (await import(
-      './desktop-runtime'
-    )) as typeof import('./desktop-runtime');
   });
 
   afterEach(() => {

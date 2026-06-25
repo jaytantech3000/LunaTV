@@ -223,6 +223,7 @@ Rust Shared Crates
 - `crates/moontv-local-service` 已新增 `/api/download-runtime/tasks`、`/api/download-runtime/tasks/settings` 以及 `pause/resume/cancel/delete` 路由，形成桌面下载引擎的命令 + 状态查询 skeleton。
 - 下载引擎快照现在通过 SQLite `app_metadata` 持久化；应用重启后，未完成的 `downloading` 任务会恢复为 `paused`，避免把旧运行态误当成仍在执行。
 - `src/lib/download/desktop-runtime.ts` 已补齐对应的桌面 SDK 封装，前端可以开始逐步改为消费这组新边界。
+- `src/components/DesktopDownloadStoreSync.tsx` 已开始把当前 TS 下载 store 中的 `tasks` / `maxConcurrentTasks` 镜像回 Rust download engine，形成“TS 执行 + Rust 状态面并行”的过渡态。
 - `src/lib/download/manager.ts` 仍然是当前桌面下载的真实执行器，所以这一阶段只完成了“边界收口”和“状态恢复骨架”，还没有切走主下载流程。
 
 ### 验收标准

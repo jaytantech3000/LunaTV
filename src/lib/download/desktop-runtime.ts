@@ -3,9 +3,6 @@ import { buildApiUrl } from '@/lib/transport/endpoint';
 
 import { DownloadTask, ResourceIndexRecord } from './types';
 
-const DESKTOP_LOCAL_DOWNLOAD_RUNTIME_ENABLED =
-  process.env.NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME === 'true';
-
 interface DesktopDownloadCacheMetaResponse {
   exists: boolean;
   url: string;
@@ -71,6 +68,10 @@ function ensureDesktopLocalDownloadRuntime(): void {
   }
 }
 
+function isDesktopLocalDownloadRuntimeBuildEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME === 'true';
+}
+
 function buildDesktopDownloadRuntimeUrl(
   path: string,
   searchParams?: Record<string, string>
@@ -95,7 +96,7 @@ export function isDesktopLocalDownloadRuntimeEnabled(): boolean {
 
   const runtimeConfig = getRuntimeConfig();
   return Boolean(
-    DESKTOP_LOCAL_DOWNLOAD_RUNTIME_ENABLED &&
+    isDesktopLocalDownloadRuntimeBuildEnabled() &&
       runtimeConfig.APP_TARGET === 'desktop' &&
       runtimeConfig.API_BASE_URL?.trim()
   );

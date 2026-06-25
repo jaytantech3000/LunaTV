@@ -2,17 +2,19 @@
 
 import { useEffect } from 'react';
 
+import { syncDesktopDownloadEngineState } from '@/lib/download/desktop-engine-sync';
 import {
   clearDesktopDownloadStoreSnapshot,
+  DesktopDownloadEngineSnapshot,
   getDesktopDownloadStoreSnapshot,
   isDesktopLocalDownloadRuntimeEnabled,
   putDesktopDownloadStoreSnapshot,
 } from '@/lib/download/desktop-runtime';
 
 import {
-  PersistedDownloadStoreState,
   buildPersistedDownloadStoreState,
   isPersistedDownloadStoreEmpty,
+  PersistedDownloadStoreState,
   useDownloadStore,
 } from '@/stores/downloadStore';
 
@@ -27,6 +29,7 @@ export default function DesktopDownloadStoreSync() {
     let active = true;
     let initialized = false;
     let skipNextPersist = false;
+    let lastEngineSnapshot: DesktopDownloadEngineSnapshot | null = null;
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
     const flushSnapshot = async () => {
@@ -43,12 +46,23 @@ export default function DesktopDownloadStoreSync() {
       try {
         if (isPersistedDownloadStoreEmpty(snapshot)) {
           await clearDesktopDownloadStoreSnapshot();
-          return;
+        } else {
+          await putDesktopDownloadStoreSnapshot(snapshot);
         }
-
-        await putDesktopDownloadStoreSnapshot(snapshot);
       } catch (_) {
         // Ignore sidecar snapshot write failures and keep local state intact.
+      }
+
+      try {
+        lastEngineSnapshot = await syncDesktopDownloadEngineState(
+          {
+            maxConcurrentTasks: state.maxConcurrentTasks,
+            tasks: state.tasks,
+          },
+          lastEngineSnapshot
+        );
+      } catch (_) {
+        // Ignore download engine mirror failures and keep local state intact.
       }
     };
 
@@ -79,6 +93,15 @@ export default function DesktopDownloadStoreSync() {
             () => undefined
           );
         }
+
+        const nextState = useDownloadStore.getState();
+        lastEngineSnapshot = await syncDesktopDownloadEngineState(
+          {
+            maxConcurrentTasks: nextState.maxConcurrentTasks,
+            tasks: nextState.tasks,
+          },
+          lastEngineSnapshot
+        ).catch(() => null);
       } finally {
         if (active) {
           initialized = true;
