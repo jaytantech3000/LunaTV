@@ -20,9 +20,12 @@ import {
   subscribeToProfileCacheUpdates,
 } from './cache';
 import {
+  type Favorite,
+  type PlayRecord,
   type ProfileCacheUpdateEvent,
   PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS,
 } from './contracts';
+import { cacheManager, getCacheStatus } from './hybrid-cache';
 import {
   clearLocalFavorites,
   clearLocalPlayRecords,
@@ -50,7 +53,6 @@ import {
   isUnauthorizedProfileRequestError,
   wasProfileRequestRedirectedToLogin,
 } from './session';
-import { getAuthInfoFromBrowserCookie } from '../auth';
 import {
   type SearchHistoryEntry,
   type SearchHistoryMode,
@@ -60,6 +62,9 @@ import {
   resolveSearchHistoryRawValue,
 } from '../search-history';
 import { type FollowRecord, SkipConfig } from '../types';
+
+export type { Favorite, PlayRecord } from './contracts';
+export { getCacheStatus } from './hybrid-cache';
 
 // 全局错误触发函数
 function triggerGlobalError(message: string) {
@@ -72,395 +77,9 @@ function triggerGlobalError(message: string) {
   }
 }
 
-// ---- 类型 ----
-export interface PlayRecord {
-  title: string;
-  source_name: string;
-  year: string;
-  cover: string;
-  index: number; // 第几集
-  total_episodes: number; // 总集数
-  play_time: number; // 播放进度（秒）
-  total_time: number; // 总进度（秒）
-  save_time: number; // 记录保存时间（时间戳）
-  search_title?: string; // 搜索时使用的标题
-  playback_mode?: 'online' | 'offline';
-  offline_content_id?: string;
-  is_adult?: boolean;
-}
-
-// ---- 收藏类型 ----
-export interface Favorite {
-  title: string;
-  source_name: string;
-  year: string;
-  cover: string;
-  total_episodes: number;
-  save_time: number;
-  search_title?: string;
-  playback_mode?: 'online' | 'offline';
-  offline_content_id?: string;
-  is_adult?: boolean;
-  origin?: 'vod' | 'live';
-}
-
-// ---- 缓存数据结构 ----
-interface CacheData<T> {
-  data: T;
-  timestamp: number;
-  version: string;
-}
-
-interface UserCacheStore {
-  playRecords?: CacheData<Record<string, PlayRecord>>;
-  favorites?: CacheData<Record<string, Favorite>>;
-  followRecords?: CacheData<Record<string, FollowRecord>>;
-  searchHistory?: CacheData<string[]>;
-  skipConfigs?: CacheData<Record<string, SkipConfig>>;
-}
-
-// 缓存相关常量
-const CACHE_PREFIX = 'moontv_cache_';
-const CACHE_VERSION = '1.0.0';
-const CACHE_EXPIRE_TIME = 60 * 60 * 1000; // 一小时缓存过期
 function shouldUseRemoteUserDataStorage(): boolean {
   return shouldUseRemoteProfileStorage();
 }
-
-// ---- 缓存管理器 ----
-class HybridCacheManager {
-  private static instance: HybridCacheManager;
-
-  static getInstance(): HybridCacheManager {
-    if (!HybridCacheManager.instance) {
-      HybridCacheManager.instance = new HybridCacheManager();
-    }
-    return HybridCacheManager.instance;
-  }
-
-  /**
-   * 获取当前用户名
-   */
-  private getCurrentUsername(): string | null {
-    const authInfo = getAuthInfoFromBrowserCookie();
-    return authInfo?.username || null;
-  }
-
-  /**
-   * 生成用户专属的缓存key
-   */
-  private getUserCacheKey(username: string): string {
-    return `${CACHE_PREFIX}${username}`;
-  }
-
-  /**
-   * 获取用户缓存数据
-   */
-  private getUserCache(username: string): UserCacheStore {
-    if (typeof window === 'undefined') return {};
-
-    try {
-      const cacheKey = this.getUserCacheKey(username);
-      const cached = localStorage.getItem(cacheKey);
-      return cached ? JSON.parse(cached) : {};
-    } catch (error) {
-      console.warn('获取用户缓存失败:', error);
-      return {};
-    }
-  }
-
-  /**
-   * 保存用户缓存数据
-   */
-  private saveUserCache(username: string, cache: UserCacheStore): void {
-    if (typeof window === 'undefined') return;
-
-    try {
-      // 检查缓存大小，超过15MB时清理旧数据
-      const cacheSize = JSON.stringify(cache).length;
-      if (cacheSize > 15 * 1024 * 1024) {
-        console.warn('缓存过大，清理旧数据');
-        this.cleanOldCache(cache);
-      }
-
-      const cacheKey = this.getUserCacheKey(username);
-      localStorage.setItem(cacheKey, JSON.stringify(cache));
-    } catch (error) {
-      console.warn('保存用户缓存失败:', error);
-      // 存储空间不足时清理缓存后重试
-      if (
-        error instanceof DOMException &&
-        error.name === 'QuotaExceededError'
-      ) {
-        this.clearAllCache();
-        try {
-          const cacheKey = this.getUserCacheKey(username);
-          localStorage.setItem(cacheKey, JSON.stringify(cache));
-        } catch (retryError) {
-          console.error('重试保存缓存仍然失败:', retryError);
-        }
-      }
-    }
-  }
-
-  /**
-   * 清理过期缓存数据
-   */
-  private cleanOldCache(cache: UserCacheStore): void {
-    const now = Date.now();
-    const maxAge = 60 * 24 * 60 * 60 * 1000; // 两个月
-
-    // 清理过期的播放记录缓存
-    if (cache.playRecords && now - cache.playRecords.timestamp > maxAge) {
-      delete cache.playRecords;
-    }
-
-    // 清理过期的收藏缓存
-    if (cache.favorites && now - cache.favorites.timestamp > maxAge) {
-      delete cache.favorites;
-    }
-
-    // 清理过期的追更缓存
-    if (cache.followRecords && now - cache.followRecords.timestamp > maxAge) {
-      delete cache.followRecords;
-    }
-  }
-
-  /**
-   * 清理所有缓存
-   */
-  private clearAllCache(): void {
-    const keys = Object.keys(localStorage);
-    keys.forEach((key) => {
-      if (key.startsWith('moontv_cache_')) {
-        localStorage.removeItem(key);
-      }
-    });
-  }
-
-  /**
-   * 检查缓存是否有效
-   */
-  private isCacheValid<T>(cache: CacheData<T>): boolean {
-    const now = Date.now();
-    return (
-      cache.version === CACHE_VERSION &&
-      now - cache.timestamp < CACHE_EXPIRE_TIME
-    );
-  }
-
-  /**
-   * 创建缓存数据
-   */
-  private createCacheData<T>(data: T): CacheData<T> {
-    return {
-      data,
-      timestamp: Date.now(),
-      version: CACHE_VERSION,
-    };
-  }
-
-  /**
-   * 获取缓存的播放记录
-   */
-  getCachedPlayRecords(): Record<string, PlayRecord> | null {
-    const username = this.getCurrentUsername();
-    if (!username) return null;
-
-    const userCache = this.getUserCache(username);
-    const cached = userCache.playRecords;
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    return null;
-  }
-
-  /**
-   * 缓存播放记录
-   */
-  cachePlayRecords(data: Record<string, PlayRecord>): void {
-    const username = this.getCurrentUsername();
-    if (!username) return;
-
-    const userCache = this.getUserCache(username);
-    userCache.playRecords = this.createCacheData(data);
-    this.saveUserCache(username, userCache);
-  }
-
-  /**
-   * 获取缓存的收藏
-   */
-  getCachedFavorites(): Record<string, Favorite> | null {
-    const username = this.getCurrentUsername();
-    if (!username) return null;
-
-    const userCache = this.getUserCache(username);
-    const cached = userCache.favorites;
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    return null;
-  }
-
-  /**
-   * 缓存收藏
-   */
-  cacheFavorites(data: Record<string, Favorite>): void {
-    const username = this.getCurrentUsername();
-    if (!username) return;
-
-    const userCache = this.getUserCache(username);
-    userCache.favorites = this.createCacheData(data);
-    this.saveUserCache(username, userCache);
-  }
-
-  /**
-   * 获取缓存的追更记录
-   */
-  getCachedFollowRecords(): Record<string, FollowRecord> | null {
-    const username = this.getCurrentUsername();
-    if (!username) return null;
-
-    const userCache = this.getUserCache(username);
-    const cached = userCache.followRecords;
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    return null;
-  }
-
-  /**
-   * 缓存追更记录
-   */
-  cacheFollowRecords(data: Record<string, FollowRecord>): void {
-    const username = this.getCurrentUsername();
-    if (!username) return;
-
-    const userCache = this.getUserCache(username);
-    userCache.followRecords = this.createCacheData(data);
-    this.saveUserCache(username, userCache);
-  }
-
-  /**
-   * 获取缓存的搜索历史
-   */
-  getCachedSearchHistory(): string[] | null {
-    const username = this.getCurrentUsername();
-    if (!username) return null;
-
-    const userCache = this.getUserCache(username);
-    const cached = userCache.searchHistory;
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    return null;
-  }
-
-  /**
-   * 缓存搜索历史
-   */
-  cacheSearchHistory(data: string[]): void {
-    const username = this.getCurrentUsername();
-    if (!username) return;
-
-    const userCache = this.getUserCache(username);
-    userCache.searchHistory = this.createCacheData(data);
-    this.saveUserCache(username, userCache);
-  }
-
-  /**
-   * 获取缓存的跳过片头片尾配置
-   */
-  getCachedSkipConfigs(): Record<string, SkipConfig> | null {
-    const username = this.getCurrentUsername();
-    if (!username) return null;
-
-    const userCache = this.getUserCache(username);
-    const cached = userCache.skipConfigs;
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    return null;
-  }
-
-  /**
-   * 缓存跳过片头片尾配置
-   */
-  cacheSkipConfigs(data: Record<string, SkipConfig>): void {
-    const username = this.getCurrentUsername();
-    if (!username) return;
-
-    const userCache = this.getUserCache(username);
-    userCache.skipConfigs = this.createCacheData(data);
-    this.saveUserCache(username, userCache);
-  }
-
-  /**
-   * 清除指定用户的所有缓存
-   */
-  clearUserCache(username?: string): void {
-    const targetUsername = username || this.getCurrentUsername();
-    if (!targetUsername) return;
-
-    try {
-      const cacheKey = this.getUserCacheKey(targetUsername);
-      localStorage.removeItem(cacheKey);
-    } catch (error) {
-      console.warn('清除用户缓存失败:', error);
-    }
-  }
-
-  /**
-   * 清除所有过期缓存
-   */
-  clearExpiredCaches(): void {
-    if (typeof window === 'undefined') return;
-
-    try {
-      const keysToRemove: string[] = [];
-
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key?.startsWith(CACHE_PREFIX)) {
-          try {
-            const cache = JSON.parse(localStorage.getItem(key) || '{}');
-            // 检查是否有任何缓存数据过期
-            let hasValidData = false;
-            for (const [, cacheData] of Object.entries(cache)) {
-              if (cacheData && this.isCacheValid(cacheData as CacheData<any>)) {
-                hasValidData = true;
-                break;
-              }
-            }
-            if (!hasValidData) {
-              keysToRemove.push(key);
-            }
-          } catch {
-            // 解析失败的缓存也删除
-            keysToRemove.push(key);
-          }
-        }
-      }
-
-      keysToRemove.forEach((key) => localStorage.removeItem(key));
-    } catch (error) {
-      console.warn('清除过期缓存失败:', error);
-    }
-  }
-}
-
-// 获取缓存管理器实例
-const cacheManager = HybridCacheManager.getInstance();
 
 function dispatchDataUpdate<T>(
   eventType: ProfileCacheUpdateEvent,
@@ -1611,36 +1230,6 @@ export async function refreshAllCache(): Promise<void> {
  * 获取缓存状态信息
  * 用于调试和监控缓存健康状态
  */
-export function getCacheStatus(): {
-  hasPlayRecords: boolean;
-  hasFavorites: boolean;
-  hasFollowRecords: boolean;
-  hasSearchHistory: boolean;
-  hasSkipConfigs: boolean;
-  username: string | null;
-} {
-  if (!shouldUseRemoteUserDataStorage()) {
-    return {
-      hasPlayRecords: false,
-      hasFavorites: false,
-      hasFollowRecords: false,
-      hasSearchHistory: false,
-      hasSkipConfigs: false,
-      username: null,
-    };
-  }
-
-  const authInfo = getAuthInfoFromBrowserCookie();
-  return {
-    hasPlayRecords: !!cacheManager.getCachedPlayRecords(),
-    hasFavorites: !!cacheManager.getCachedFavorites(),
-    hasFollowRecords: !!cacheManager.getCachedFollowRecords(),
-    hasSearchHistory: !!cacheManager.getCachedSearchHistory(),
-    hasSkipConfigs: !!cacheManager.getCachedSkipConfigs(),
-    username: authInfo?.username || null,
-  };
-}
-
 // ---------------- React Hook 辅助类型 ----------------
 
 export type CacheUpdateEvent = ProfileCacheUpdateEvent;
