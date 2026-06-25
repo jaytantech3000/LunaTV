@@ -7,9 +7,11 @@ import {
   assertValidSemver,
   buildDesktopPrereleaseTitle,
   buildDesktopReleaseTag,
+  compareSemver,
   extractDesktopPrereleaseSequence,
   parseCliArgs,
   readDesktopReleaseMetadata,
+  tryParseReleaseVersionFromTag,
 } from './desktop-release-utils.mjs';
 
 function readEnvValue(name) {
@@ -33,6 +35,20 @@ function getTargetRef(metadata, args) {
     readEnvValue('GITHUB_REF_NAME') ||
     metadata.releaseBranch
   );
+}
+
+function resolveLatestStableReleaseVersion(releases) {
+  return releases
+    .filter((release) => !release.isPrerelease)
+    .map((release) => tryParseReleaseVersionFromTag(release.tagName))
+    .filter((version) => Boolean(version))
+    .reduce(
+      (latestVersion, version) =>
+        !latestVersion || compareSemver(version, latestVersion) > 0
+          ? version
+          : latestVersion,
+      null
+    );
 }
 
 async function resolveGhExecutable() {
@@ -144,6 +160,11 @@ async function main() {
     args.get('version') || metadata.desktopVersion,
     'desktop base version'
   );
+  if (!/^\d+\.\d+\.\d+$/.test(baseVersion)) {
+    throw new Error(
+      `Desktop prerelease base version must be a stable semver version like 200.0.1. Received: ${baseVersion}`
+    );
+  }
   const repository = getRepository(metadata, args);
   const targetRef = getTargetRef(metadata, args);
   const releases = await runGhJson('release', [
@@ -155,6 +176,17 @@ async function main() {
     '--json',
     'tagName,isPrerelease',
   ]);
+  const latestStableReleaseVersion =
+    resolveLatestStableReleaseVersion(releases);
+
+  if (
+    latestStableReleaseVersion &&
+    compareSemver(baseVersion, latestStableReleaseVersion) <= 0
+  ) {
+    throw new Error(
+      `Desktop prerelease base version ${baseVersion} must be greater than latest stable release ${latestStableReleaseVersion}. Bump src/config/desktop-release.json#desktopVersion before creating a new beta release.`
+    );
+  }
 
   const nextSequence =
     releases

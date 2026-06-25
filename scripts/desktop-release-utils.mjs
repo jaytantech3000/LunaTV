@@ -10,7 +10,7 @@ export const DESKTOP_RELEASE_METADATA_PATH = path.join(
 );
 
 const SEMVER_PATTERN =
-  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 export function parseCliArgs(argv) {
   const args = new Map();
@@ -53,6 +53,40 @@ export function assertValidSemver(version, label = 'version') {
   return version;
 }
 
+export function parseSemver(version) {
+  const normalizedVersion = version.trim();
+  const match = normalizedVersion.match(SEMVER_PATTERN);
+  if (!match) {
+    throw new Error(`Invalid version: ${version}`);
+  }
+
+  return {
+    major: Number.parseInt(match[1], 10),
+    minor: Number.parseInt(match[2], 10),
+    patch: Number.parseInt(match[3], 10),
+    prerelease: parsePrerelease(match[4]),
+  };
+}
+
+export function compareSemver(leftVersion, rightVersion) {
+  const left = parseSemver(leftVersion);
+  const right = parseSemver(rightVersion);
+
+  if (left.major !== right.major) {
+    return compareNumbers(left.major, right.major);
+  }
+
+  if (left.minor !== right.minor) {
+    return compareNumbers(left.minor, right.minor);
+  }
+
+  if (left.patch !== right.patch) {
+    return compareNumbers(left.patch, right.patch);
+  }
+
+  return comparePrerelease(left.prerelease, right.prerelease);
+}
+
 export function parseReleaseVersionFromTag(tag) {
   const normalizedTag = tag.trim();
   const desktopMatch = normalizedTag.match(/^desktop-v(.+)$/);
@@ -85,6 +119,92 @@ export function extractDesktopPrereleaseSequence(tag, baseVersion) {
   }
 
   return Number.parseInt(match[1], 10);
+}
+
+export function tryParseReleaseVersionFromTag(tag) {
+  try {
+    return parseReleaseVersionFromTag(tag);
+  } catch {
+    return null;
+  }
+}
+
+function compareNumbers(left, right) {
+  if (left > right) {
+    return 1;
+  }
+
+  if (left < right) {
+    return -1;
+  }
+
+  return 0;
+}
+
+function parsePrerelease(rawPrerelease) {
+  if (!rawPrerelease) {
+    return [];
+  }
+
+  return rawPrerelease.split('.').map((identifier) => {
+    if (/^\d+$/.test(identifier)) {
+      return Number.parseInt(identifier, 10);
+    }
+
+    return identifier;
+  });
+}
+
+function comparePrerelease(left, right) {
+  if (left.length === 0 && right.length === 0) {
+    return 0;
+  }
+
+  if (left.length === 0) {
+    return 1;
+  }
+
+  if (right.length === 0) {
+    return -1;
+  }
+
+  const limit = Math.max(left.length, right.length);
+
+  for (let index = 0; index < limit; index += 1) {
+    const leftIdentifier = left[index];
+    const rightIdentifier = right[index];
+
+    if (leftIdentifier === undefined) {
+      return -1;
+    }
+
+    if (rightIdentifier === undefined) {
+      return 1;
+    }
+
+    if (leftIdentifier === rightIdentifier) {
+      continue;
+    }
+
+    const leftIsNumeric = typeof leftIdentifier === 'number';
+    const rightIsNumeric = typeof rightIdentifier === 'number';
+
+    if (leftIsNumeric && rightIsNumeric) {
+      return compareNumbers(leftIdentifier, rightIdentifier);
+    }
+
+    if (leftIsNumeric) {
+      return -1;
+    }
+
+    if (rightIsNumeric) {
+      return 1;
+    }
+
+    return leftIdentifier > rightIdentifier ? 1 : -1;
+  }
+
+  return 0;
 }
 
 function escapeRegExp(value) {
