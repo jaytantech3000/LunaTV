@@ -27,6 +27,11 @@ export interface DesktopProfileSyncStatus {
   syncDomains?: readonly string[] | null;
 }
 
+export interface DesktopProfileSyncStatusState {
+  status: DesktopProfileSyncStatus | null | undefined;
+  error: string;
+}
+
 function normalizeRole(
   role?: DesktopProfileSyncStatus['role']
 ): 'owner' | 'admin' | 'user' {
@@ -51,6 +56,44 @@ export async function getDesktopProfileSyncStatus(): Promise<DesktopProfileSyncS
   }
 
   return (await response.json()) as DesktopProfileSyncStatus;
+}
+
+export function describeDesktopProfileSyncStatusReadError(
+  error: unknown
+): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return error;
+  }
+
+  if (
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof error.message === 'string' &&
+    error.message.trim()
+  ) {
+    return error.message;
+  }
+
+  return '未能从本地服务读取 profile sync 状态。';
+}
+
+export async function readDesktopProfileSyncStatusState(): Promise<DesktopProfileSyncStatusState> {
+  try {
+    return {
+      status: await getDesktopProfileSyncStatus(),
+      error: '',
+    };
+  } catch (error) {
+    return {
+      status: undefined,
+      error: describeDesktopProfileSyncStatusReadError(error),
+    };
+  }
 }
 
 export function applyDesktopProfileSyncStatus(

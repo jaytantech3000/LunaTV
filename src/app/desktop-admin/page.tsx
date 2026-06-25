@@ -15,7 +15,7 @@ import {
 } from '@/lib/auth';
 import {
   type DesktopProfileSyncStatus,
-  getDesktopProfileSyncStatus,
+  readDesktopProfileSyncStatusState,
 } from '@/lib/desktop/profile-sync';
 import {
   buildDesktopProfileSyncStatusDetail,
@@ -36,18 +36,6 @@ import PageLayout from '@/components/PageLayout';
 interface AuthInfo {
   username?: string;
   role?: 'owner' | 'admin' | 'user';
-}
-
-function describeProfileSyncStatusReadError(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-
-  if (typeof error === 'string' && error.trim()) {
-    return error;
-  }
-
-  return '未能从本地服务读取 profile sync 状态。';
 }
 
 function StatusCard({
@@ -116,15 +104,7 @@ export default function DesktopAdminPage() {
         const [nextAuthStatus, nextProfileSyncResult, nextServiceStatus] =
           await Promise.all([
             ipcAvailable ? getDesktopAuthStatus().catch(() => null) : null,
-            getDesktopProfileSyncStatus()
-              .then((status) => ({
-                status,
-                error: '',
-              }))
-              .catch((error) => ({
-                status: undefined,
-                error: describeProfileSyncStatusReadError(error),
-              })),
+            readDesktopProfileSyncStatusState(),
             ipcAvailable ? getLocalServiceStatus().catch(() => null) : null,
           ]);
 

@@ -19,7 +19,7 @@ import { createPortal } from 'react-dom';
 import { BROWSER_AUTH_UPDATED_EVENT } from '@/lib/auth';
 import {
   type DesktopProfileSyncStatus,
-  getDesktopProfileSyncStatus,
+  readDesktopProfileSyncStatusState,
 } from '@/lib/desktop/profile-sync';
 import {
   buildDesktopProfileSyncStatusDetail,
@@ -78,23 +78,6 @@ function getErrorMessage(error: unknown): string {
   }
 
   return '桌面本地服务操作失败';
-}
-
-async function readDesktopProfileSyncStatusState(): Promise<{
-  status: DesktopProfileSyncStatus | null | undefined;
-  error: string;
-}> {
-  try {
-    return {
-      status: await getDesktopProfileSyncStatus(),
-      error: '',
-    };
-  } catch (error) {
-    return {
-      status: undefined,
-      error: getErrorMessage(error),
-    };
-  }
 }
 
 async function copyText(value: string): Promise<boolean> {

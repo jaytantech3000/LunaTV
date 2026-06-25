@@ -5,7 +5,9 @@ import {
 } from '@/lib/auth';
 import {
   applyDesktopProfileSyncStatus,
+  describeDesktopProfileSyncStatusReadError,
   getDesktopProfileSyncStatus,
+  readDesktopProfileSyncStatusState,
 } from '@/lib/desktop/profile-sync';
 import { PROFILE_SYNC_USER_DATA_DOMAINS } from '@/lib/profile/contracts';
 import { getRuntimeConfig } from '@/lib/runtime-config';
@@ -72,6 +74,23 @@ describe('desktop profile sync helpers', () => {
     expect(apiFetch).toHaveBeenCalledWith('/profile-sync/status', {
       cache: 'no-store',
     });
+  });
+
+  it('normalizes profile sync read errors into a stable status payload', async () => {
+    (apiFetch as jest.Mock).mockRejectedValue(
+      new Error('local service unavailable')
+    );
+
+    await expect(readDesktopProfileSyncStatusState()).resolves.toEqual({
+      status: undefined,
+      error: 'local service unavailable',
+    });
+  });
+
+  it('provides a fallback message when reading profile sync status fails silently', () => {
+    expect(describeDesktopProfileSyncStatusReadError({})).toBe(
+      '未能从本地服务读取 profile sync 状态。'
+    );
   });
 
   it('projects authenticated sync state into runtime config and browser auth', () => {

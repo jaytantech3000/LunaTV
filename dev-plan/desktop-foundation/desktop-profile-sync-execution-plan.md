@@ -562,6 +562,7 @@ src/lib/profile/
 
 - 这一阶段已有一项收尾行为落地：profile SDK 在远端 `401` 时会立即清理本地浏览器态，并继续走既有 `/api/logout` 清理与登录跳转链路。
 - 桌面管理页与桌面设置页已经收口到同一套 profile sync 状态文案 helper，并补上“状态未知”分支，避免把本地服务读取失败误显示成“未启用”。
+- 桌面管理页与桌面设置页现在也共用同一条 profile sync 状态读取 helper，读取失败时的错误归一化不再各自维护一套兼容分支。
 - 桌面 profile sync runtime 在切回本地模式时也会主动清理 `desktop-profile-sync` 浏览器态，减少 sync off 后残留远端会话的歧义。
 - Rust 测试已经补齐 admin data migration 在 sync mode 下的导出 / 导入透传覆盖，减少桌面管理数据迁移只测单向、不测双向的风险。
 - `src/app/login/page.test.tsx` 已补上登录页在 sync on/off 下的分支覆盖，验证 profile sync 开启时进入远端登录分支，关闭时回落本地桌面鉴权分支。
