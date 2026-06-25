@@ -30,8 +30,13 @@ jest.mock('@/lib/desktop/runtime-config', () => ({
 }));
 
 describe('desktop profile bootstrap helpers', () => {
+  const mutableWindow = window as Window & {
+    __DESKTOP_PROFILE_BOOTSTRAP__?: unknown;
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
+    delete mutableWindow.__DESKTOP_PROFILE_BOOTSTRAP__;
     (getRuntimeConfig as jest.Mock).mockReturnValue({
       APP_TARGET: 'desktop',
     });
@@ -89,6 +94,43 @@ describe('desktop profile bootstrap helpers', () => {
     expect(apiFetch).toHaveBeenCalledWith('/profile/bootstrap', {
       cache: 'no-store',
     });
+    expect(mutableWindow.__DESKTOP_PROFILE_BOOTSTRAP__).toEqual(payload);
+  });
+
+  it('reuses a cached desktop bootstrap payload when requested', async () => {
+    const payload = {
+      appTarget: 'desktop',
+      runtime: {
+        siteName: 'Cached LunaTV',
+        profileSyncEnabled: false,
+      },
+      profileSync: {
+        enabled: false,
+        reachable: false,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'localstorage',
+        profileMode: 'single-user-local',
+        error: null,
+        errorKind: null,
+        syncDomains: [],
+      },
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: false,
+        ownerPasswordConfigured: true,
+      },
+    };
+    mutableWindow.__DESKTOP_PROFILE_BOOTSTRAP__ = payload;
+
+    await expect(
+      getDesktopProfileBootstrap({
+        preferCachedPayload: true,
+      })
+    ).resolves.toEqual(payload);
+    expect(apiFetch).not.toHaveBeenCalled();
   });
 
   it('applies runtime and profile sync state from the bootstrap payload', () => {

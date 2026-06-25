@@ -44,6 +44,14 @@ function buildDesktopRuntimeBootstrapScript() {
     }
 
     function applyPayload(payload) {
+      var runtime =
+        payload && typeof payload === 'object' && payload.runtime
+          ? payload.runtime
+          : {};
+      var profileSync =
+        payload && typeof payload === 'object' && payload.profileSync
+          ? payload.profileSync
+          : {};
       var current = window.RUNTIME_CONFIG || {};
       var currentAudioLevel =
         current.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL !== undefined &&
@@ -68,45 +76,49 @@ function buildDesktopRuntimeBootstrapScript() {
         currentAudioLevel !== 'off'
       );
       var nextAudioLevel =
-        payload.playerAudioSpikeProtectionLevel !== undefined &&
-        payload.playerAudioSpikeProtectionLevel !== null
-          ? payload.playerAudioSpikeProtectionLevel
-          : payload.playerAudioSpikeProtection === undefined
+        runtime.playerAudioSpikeProtectionLevel !== undefined &&
+        runtime.playerAudioSpikeProtectionLevel !== null
+          ? runtime.playerAudioSpikeProtectionLevel
+          : runtime.playerAudioSpikeProtection === undefined
           ? currentAudioLevel
-          : payload.playerAudioSpikeProtection
+          : runtime.playerAudioSpikeProtection
           ? 'standard'
           : 'off';
       var nextVisualLevel =
-        payload.playerVisualEnhancementLevel !== undefined &&
-        payload.playerVisualEnhancementLevel !== null
-          ? payload.playerVisualEnhancementLevel
-          : payload.playerVisualEnhancement === undefined
+        runtime.playerVisualEnhancementLevel !== undefined &&
+        runtime.playerVisualEnhancementLevel !== null
+          ? runtime.playerVisualEnhancementLevel
+          : runtime.playerVisualEnhancement === undefined
           ? currentVisualLevel
-          : payload.playerVisualEnhancement
+          : runtime.playerVisualEnhancement
           ? 'standard'
           : 'off';
+      var profileSyncEnabled = coalesce(
+        profileSync.enabled,
+        coalesce(runtime.profileSyncEnabled, coalesce(current.PROFILE_SYNC_ENABLED, false))
+      );
 
       window.RUNTIME_CONFIG = Object.assign({}, current, {
         DOUBAN_PROXY_TYPE: coalesce(
-          payload.doubanProxyType,
+          runtime.doubanProxyType,
           current.DOUBAN_PROXY_TYPE
         ),
-        DOUBAN_PROXY: coalesce(payload.doubanProxy, current.DOUBAN_PROXY),
+        DOUBAN_PROXY: coalesce(runtime.doubanProxy, current.DOUBAN_PROXY),
         DOUBAN_IMAGE_PROXY_TYPE: coalesce(
-          payload.doubanImageProxyType,
+          runtime.doubanImageProxyType,
           current.DOUBAN_IMAGE_PROXY_TYPE
         ),
         DOUBAN_IMAGE_PROXY: coalesce(
-          payload.doubanImageProxy,
+          runtime.doubanImageProxy,
           current.DOUBAN_IMAGE_PROXY
         ),
         DISABLE_YELLOW_FILTER: coalesce(
-          payload.disableYellowFilter,
+          runtime.disableYellowFilter,
           current.DISABLE_YELLOW_FILTER
         ),
-        FLUID_SEARCH: coalesce(payload.fluidSearch, coalesce(current.FLUID_SEARCH, true)),
+        FLUID_SEARCH: coalesce(runtime.fluidSearch, coalesce(current.FLUID_SEARCH, true)),
         ENABLE_WEB_LIVE: coalesce(
-          payload.enableWebLive,
+          runtime.enableWebLive,
           coalesce(current.ENABLE_WEB_LIVE, false)
         ),
         ENABLE_WEB_MUSIC: coalesce(
@@ -116,26 +128,36 @@ function buildDesktopRuntimeBootstrapScript() {
         PLAYER_AUDIO_SPIKE_PROTECTION: nextAudioLevel !== 'off',
         PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: nextAudioLevel,
         PLAYER_AUDIO_DYNAMIC_PROTECTION: coalesce(
-          payload.playerAudioDynamicProtection,
+          runtime.playerAudioDynamicProtection,
           currentAudioDynamicProtection
         ),
         PLAYER_AUDIO_FIXED_CEILING: coalesce(
-          payload.playerAudioFixedCeiling,
+          runtime.playerAudioFixedCeiling,
           currentAudioFixedCeiling
         ),
         PLAYER_VISUAL_ENHANCEMENT: nextVisualLevel !== 'off',
         PLAYER_VISUAL_ENHANCEMENT_LEVEL: nextVisualLevel,
-        PROFILE_SYNC_ENABLED: coalesce(
-          payload.profileSyncEnabled,
-          coalesce(current.PROFILE_SYNC_ENABLED, false)
-        ),
-        CUSTOM_CATEGORIES: Array.isArray(payload.customCategories)
-          ? payload.customCategories
+        PROFILE_SYNC_ENABLED: profileSyncEnabled,
+        PROFILE_SYNC_STORAGE_TYPE: profileSyncEnabled
+          ? coalesce(
+              profileSync.storageType,
+              current.PROFILE_SYNC_STORAGE_TYPE
+            )
+          : undefined,
+        PROFILE_SYNC_PROFILE_MODE: profileSyncEnabled
+          ? coalesce(
+              profileSync.profileMode,
+              current.PROFILE_SYNC_PROFILE_MODE
+            )
+          : undefined,
+        CUSTOM_CATEGORIES: Array.isArray(runtime.customCategories)
+          ? runtime.customCategories
           : current.CUSTOM_CATEGORIES || [],
       });
+      window.__DESKTOP_PROFILE_BOOTSTRAP__ = payload;
       window.__SITE_PRESENTATION__ = {
-        siteName: payload.siteName,
-        announcement: payload.announcement,
+        siteName: runtime.siteName,
+        announcement: runtime.announcement,
       };
 
       if (typeof window.dispatchEvent === 'function') {
@@ -146,7 +168,7 @@ function buildDesktopRuntimeBootstrapScript() {
     function fetchRuntimeConfig() {
       attempts += 1;
 
-      fetch(baseUrl + '/api/runtime/public-config', {
+      fetch(baseUrl + '/api/profile/bootstrap', {
         cache: 'no-store',
         headers: {
           Accept: 'application/json',
@@ -154,7 +176,7 @@ function buildDesktopRuntimeBootstrapScript() {
       })
         .then(function (response) {
           if (!response.ok) {
-            throw new Error('desktop runtime bootstrap request failed');
+            throw new Error('desktop profile bootstrap request failed');
           }
 
           return response.json();

@@ -35,8 +35,14 @@ function redirectDesktopLoginIfNeeded() {
   window.location.replace(buildLoginPath(currentPath));
 }
 
-async function refreshDesktopRuntimeConfig() {
-  const bootstrapState = await loadDesktopProfileBootstrapState();
+async function refreshDesktopRuntimeConfig(options?: {
+  preferCachedPayload?: boolean;
+}) {
+  const bootstrapState = options
+    ? await loadDesktopProfileBootstrapState({
+        preferCachedPayload: options.preferCachedPayload,
+      })
+    : await loadDesktopProfileBootstrapState();
   if (!bootstrapState) {
     return;
   }
@@ -61,16 +67,21 @@ export default function DesktopRuntimeSync() {
       }
     };
 
-    const refreshWithRetry = (attempt = 0) => {
+    const refreshWithRetry = (
+      attempt = 0,
+      options?: {
+        preferCachedPayload?: boolean;
+      }
+    ) => {
       clearRetryTimer();
 
-      void refreshDesktopRuntimeConfig().catch(() => {
+      void refreshDesktopRuntimeConfig(options).catch(() => {
         if (cancelled || attempt + 1 >= INITIAL_REFRESH_MAX_ATTEMPTS) {
           return;
         }
 
         retryTimer = window.setTimeout(() => {
-          refreshWithRetry(attempt + 1);
+          refreshWithRetry(attempt + 1, options);
         }, INITIAL_REFRESH_RETRY_DELAY_MS);
       });
     };
@@ -81,7 +92,9 @@ export default function DesktopRuntimeSync() {
 
     window.addEventListener(DESKTOP_RUNTIME_REFRESH_EVENT, handleRefresh);
 
-    refreshWithRetry();
+    refreshWithRetry(0, {
+      preferCachedPayload: true,
+    });
 
     return () => {
       cancelled = true;

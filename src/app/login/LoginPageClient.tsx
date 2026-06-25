@@ -141,6 +141,7 @@ export function LoginPageClient() {
       try {
         const bootstrapState = await loadDesktopProfileBootstrapState({
           localAuthMode: 'best-effort',
+          preferCachedPayload: true,
         });
         if (!bootstrapState) {
           setDesktopAuthCheckDone(true);

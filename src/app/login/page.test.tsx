@@ -143,6 +143,10 @@ describe('LoginPage desktop profile sync branches', () => {
     expect(
       await screen.findByText('桌面版当前使用云端账号与用户数据同步。')
     ).toBeInTheDocument();
+    expect(mockLoadDesktopProfileBootstrapState).toHaveBeenCalledWith({
+      localAuthMode: 'best-effort',
+      preferCachedPayload: true,
+    });
     expect(screen.getByPlaceholderText('输入用户名')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('输入访问密码')).toBeInTheDocument();
     expect(mockRouter.replace).not.toHaveBeenCalled();
@@ -171,6 +175,10 @@ describe('LoginPage desktop profile sync branches', () => {
       expect(screen.getByPlaceholderText('输入访问密码')).toBeInTheDocument();
     });
 
+    expect(mockLoadDesktopProfileBootstrapState).toHaveBeenCalledWith({
+      localAuthMode: 'best-effort',
+      preferCachedPayload: true,
+    });
     expect(
       screen.queryByText('桌面版当前使用云端账号与用户数据同步。')
     ).not.toBeInTheDocument();

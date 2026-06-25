@@ -19,6 +19,7 @@
 > 最新进展（2026-06-25）：
 >
 > - `GET /api/profile/bootstrap` 已经落地，桌面运行时与登录页可以消费统一启动快照。
+> - `src/app/layout.tsx` 的桌面启动刷新也已改为读取同一份 `/api/profile/bootstrap`，并把结果缓存到浏览器侧；`DesktopRuntimeSync` 与登录页首轮加载会优先复用这份 bootstrap，减少首屏阶段的重复请求与分叉判断。
 > - `src/lib/profile/*` 已从旧的 `db.client.ts` 兼容层中抽出，`runtime.ts` 统一解析 `desktop-local` / `desktop-profile-sync`。
 > - `moontv-sync` 与 `moontv-profile` 已落地，sync on 走远端 adapter，sync off 走 Rust 本地 profile store。
 > - `moontv-sync` 现已继续接手 forwarded response 读取、登录 session mutation 判定与 401 clear-session 判定；local service 的 `profile_sync.rs` 进一步收缩成 axum facade、request 适配与本地/远端分流层。
@@ -571,6 +572,7 @@ src/lib/profile/
 - `src/lib/profile/client.test.ts` 已补上 profile SDK 级缓存刷新覆盖，验证 API storage 关闭时不出网，开启时会统一拉取 `playrecords` / `favorites` / `follows` / `searchhistory` / `skipconfigs` 五个域并回填缓存。
 - Rust profile sync 测试现已补上未配置 `api_base_url`、登录后会话代持、透传 `401` 清 session 与五个同步域透传一致性，`moontv-sync` 与 local service 两层都已有可执行回归覆盖。
 - Phase 6 所需的故障排查文档已经输出，后续排查可直接按 `desktop-profile-sync-troubleshooting.md` 的状态词典和联调基线执行。
+- `src/app/layout.tsx` 的桌面运行时刷新脚本现已从 `/api/runtime/public-config` 切到 `/api/profile/bootstrap`，并把 bootstrap 快照缓存到 `window.__DESKTOP_PROFILE_BOOTSTRAP__`；`DesktopRuntimeSync` 与登录页首轮加载会优先消费缓存，只有显式 refresh / 登录后校验才强制重新出网。
 - `src/lib/desktop/profile-bootstrap.ts` 现已新增共享 bootstrap loader，把“拉取 bootstrap + 应用 runtime/profileSync 配置 + 在 desktop-local 下恢复本地 auth”的流程收口到一处，`DesktopRuntimeSync` 与登录页不再各自维护一套近似初始化分支。
 - `src/lib/desktop/profile-sync-status-copy.ts` 现已输出结构化诊断字段；桌面管理页与设置页不再只展示一段同步状态摘要，而会显式列出当前模式、远端可达性、当前远端账号、最近错误与同步域。
 - `crates/moontv-local-service/src/profile_sync.rs` 现已继续接手 `bootstrap` / `status` / `server-config` handler 与五个用户数据域的本地/远端分流，`lib.rs` 中与 profile sync facade 直接相关的重复 handler 进一步缩短。

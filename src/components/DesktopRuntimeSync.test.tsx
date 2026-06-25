@@ -99,6 +99,9 @@ describe('DesktopRuntimeSync', () => {
     await waitFor(() => {
       expect(mockLoadDesktopProfileBootstrapState).toHaveBeenCalledTimes(1);
     });
+    expect(mockLoadDesktopProfileBootstrapState).toHaveBeenCalledWith({
+      preferCachedPayload: true,
+    });
     expect(updatedHandler).toHaveBeenCalledTimes(1);
 
     window.removeEventListener(DESKTOP_RUNTIME_UPDATED_EVENT, updatedHandler);
@@ -126,8 +129,34 @@ describe('DesktopRuntimeSync', () => {
     await waitFor(() => {
       expect(mockLoadDesktopProfileBootstrapState).toHaveBeenCalledTimes(2);
     });
+    expect(mockLoadDesktopProfileBootstrapState).toHaveBeenNthCalledWith(1, {
+      preferCachedPayload: true,
+    });
+    expect(mockLoadDesktopProfileBootstrapState).toHaveBeenNthCalledWith(2, {
+      preferCachedPayload: true,
+    });
     expect(updatedHandler).toHaveBeenCalledTimes(1);
 
     window.removeEventListener(DESKTOP_RUNTIME_UPDATED_EVENT, updatedHandler);
+  });
+
+  it('bypasses the cached bootstrap payload on explicit refresh events', async () => {
+    mockLoadDesktopProfileBootstrapState.mockResolvedValue(
+      createBootstrapState()
+    );
+
+    render(<DesktopRuntimeSync />);
+
+    await waitFor(() => {
+      expect(mockLoadDesktopProfileBootstrapState).toHaveBeenCalledTimes(1);
+    });
+
+    mockLoadDesktopProfileBootstrapState.mockClear();
+    window.dispatchEvent(new Event('lunatv:refresh-runtime-config'));
+
+    await waitFor(() => {
+      expect(mockLoadDesktopProfileBootstrapState).toHaveBeenCalledTimes(1);
+    });
+    expect(mockLoadDesktopProfileBootstrapState).toHaveBeenCalledWith();
   });
 });

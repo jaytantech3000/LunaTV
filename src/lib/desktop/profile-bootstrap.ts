@@ -19,6 +19,12 @@ export interface DesktopProfileBootstrapPayload {
   localAuth: DesktopAuthStatus;
 }
 
+declare global {
+  interface Window {
+    __DESKTOP_PROFILE_BOOTSTRAP__?: DesktopProfileBootstrapPayload;
+  }
+}
+
 export type DesktopProfileBootstrapLocalAuthMode =
   | 'strict'
   | 'best-effort'
@@ -29,9 +35,38 @@ export interface LoadedDesktopProfileBootstrapState {
   localAuth: DesktopAuthStatus;
 }
 
-export async function getDesktopProfileBootstrap(): Promise<DesktopProfileBootstrapPayload | null> {
+function readCachedDesktopProfileBootstrap(): DesktopProfileBootstrapPayload | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  return window.__DESKTOP_PROFILE_BOOTSTRAP__ || null;
+}
+
+function cacheDesktopProfileBootstrap(
+  payload: DesktopProfileBootstrapPayload
+): DesktopProfileBootstrapPayload {
+  if (typeof window !== 'undefined') {
+    window.__DESKTOP_PROFILE_BOOTSTRAP__ = payload;
+  }
+
+  return payload;
+}
+
+export async function getDesktopProfileBootstrap(
+  options: {
+    preferCachedPayload?: boolean;
+  } = {}
+): Promise<DesktopProfileBootstrapPayload | null> {
   if (getRuntimeConfig().APP_TARGET !== 'desktop') {
     return null;
+  }
+
+  if (options.preferCachedPayload) {
+    const cachedPayload = readCachedDesktopProfileBootstrap();
+    if (cachedPayload) {
+      return cachedPayload;
+    }
   }
 
   const response = await apiFetch('/profile/bootstrap', {
@@ -42,12 +77,15 @@ export async function getDesktopProfileBootstrap(): Promise<DesktopProfileBootst
     throw new Error(`Failed to load profile bootstrap: ${response.status}`);
   }
 
-  return (await response.json()) as DesktopProfileBootstrapPayload;
+  return cacheDesktopProfileBootstrap(
+    (await response.json()) as DesktopProfileBootstrapPayload
+  );
 }
 
 export function applyDesktopProfileBootstrap(
   payload: DesktopProfileBootstrapPayload
 ): AppRuntimeConfig {
+  cacheDesktopProfileBootstrap(payload);
   applyDesktopRuntimePublicConfig(payload.runtime);
   return applyDesktopProfileSyncStatus(payload.profileSync);
 }
@@ -55,9 +93,12 @@ export function applyDesktopProfileBootstrap(
 export async function loadDesktopProfileBootstrapState(
   options: {
     localAuthMode?: DesktopProfileBootstrapLocalAuthMode;
+    preferCachedPayload?: boolean;
   } = {}
 ): Promise<LoadedDesktopProfileBootstrapState | null> {
-  const payload = await getDesktopProfileBootstrap();
+  const payload = await getDesktopProfileBootstrap({
+    preferCachedPayload: options.preferCachedPayload,
+  });
   if (!payload) {
     return null;
   }
