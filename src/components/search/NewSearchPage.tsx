@@ -5,18 +5,18 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
-  addSearchHistory,
-  clearSearchHistory,
-  deleteSearchHistory,
-  getSearchHistory,
-  subscribeToDataUpdates,
-} from '@/lib/db.client';
-import {
   getDoubanCategories,
   getDoubanList,
   getDoubanRecommends,
   getDoubanTitleSearch,
 } from '@/lib/douban.client';
+import {
+  addSearchHistory,
+  clearSearchHistory,
+  deleteSearchHistory,
+  getSearchHistory,
+  subscribeToDataUpdates,
+} from '@/lib/profile/client';
 import { filterItemsByMinimumRating } from '@/lib/rating-filter';
 import {
   type SearchHistoryEntry,

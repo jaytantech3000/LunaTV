@@ -10,14 +10,14 @@ import React, {
   useState,
 } from 'react';
 
+import { getPreferredFluidSearchSetting } from '@/lib/fluid-search';
 import {
   addSearchHistory,
   clearSearchHistory,
   deleteSearchHistory,
   getSearchHistory,
   subscribeToDataUpdates,
-} from '@/lib/db.client';
-import { getPreferredFluidSearchSetting } from '@/lib/fluid-search';
+} from '@/lib/profile/client';
 import {
   filterItemsByMinimumRating,
   passesGlobalRatingFilter,

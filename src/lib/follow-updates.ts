@@ -1,13 +1,13 @@
 'use client';
 
 import { getAuthInfoFromBrowserCookie } from './auth';
+import { normalizeVodDetailForPlayback } from './download/normalize';
 import {
   deleteFollowRecord,
   getAllFollowRecords,
   getCachedFollowRecordsSnapshot,
   saveFollowRecord,
-} from './db.client';
-import { normalizeVodDetailForPlayback } from './download/normalize';
+} from './profile/client';
 import { resolveProfileRuntime } from './profile/runtime';
 import { apiFetch } from './transport/api-client';
 import { FollowRecord, SearchResult } from './types';

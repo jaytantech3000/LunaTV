@@ -19,6 +19,8 @@ import {
   BROWSER_AUTH_UPDATED_EVENT,
   getAuthInfoFromBrowserCookie,
 } from '@/lib/auth';
+import { buildLoginPath } from '@/lib/desktop/auth-session';
+import { hasNewEpisodes, refreshFollowRecords } from '@/lib/follow-updates';
 import {
   type Favorite,
   type PlayRecord,
@@ -26,9 +28,7 @@ import {
   getAllFollowRecords,
   getAllPlayRecords,
   subscribeToDataUpdates,
-} from '@/lib/db.client';
-import { buildLoginPath } from '@/lib/desktop/auth-session';
-import { hasNewEpisodes, refreshFollowRecords } from '@/lib/follow-updates';
+} from '@/lib/profile/client';
 import { resolveProfileRuntime } from '@/lib/profile/runtime';
 import { type FollowRecord } from '@/lib/types';
 

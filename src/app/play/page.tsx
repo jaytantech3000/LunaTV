@@ -16,22 +16,6 @@ import {
 } from 'react';
 
 import {
-  deleteFavorite,
-  deletePlayRecord,
-  deleteSkipConfig,
-  generateStorageKey,
-  getAllPlayRecords,
-  getCachedFollowRecordsSnapshot,
-  getFollowRecord,
-  getSkipConfig,
-  isFavorited,
-  saveFavorite,
-  saveFollowRecord,
-  savePlayRecord,
-  saveSkipConfig,
-  subscribeToDataUpdates,
-} from '@/lib/db.client';
-import {
   bindDesktopPlayerPresentationFullscreenState,
   toggleDesktopPlayerPresentationFullscreenState,
 } from '@/lib/desktop/fullscreen';
@@ -83,6 +67,22 @@ import {
   readPlayerEnhancementPreferences,
   updatePlayerEnhancementPreference,
 } from '@/lib/player-enhancements';
+import {
+  deleteFavorite,
+  deletePlayRecord,
+  deleteSkipConfig,
+  generateStorageKey,
+  getAllPlayRecords,
+  getCachedFollowRecordsSnapshot,
+  getFollowRecord,
+  getSkipConfig,
+  isFavorited,
+  saveFavorite,
+  saveFollowRecord,
+  savePlayRecord,
+  saveSkipConfig,
+  subscribeToDataUpdates,
+} from '@/lib/profile/client';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { apiFetch } from '@/lib/transport/api-client';

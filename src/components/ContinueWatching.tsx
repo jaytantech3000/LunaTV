@@ -3,14 +3,14 @@
 
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 
-import type { PlayRecord } from '@/lib/db.client';
+import { isAdultDownloadedContent } from '@/lib/download/offline';
+import type { PlayRecord } from '@/lib/profile/client';
 import {
   clearAllPlayRecords,
   getAllPlayRecords,
   getCachedPlayRecordsSnapshot,
   subscribeToDataUpdates,
-} from '@/lib/db.client';
-import { isAdultDownloadedContent } from '@/lib/download/offline';
+} from '@/lib/profile/client';
 import { isAdultLibraryEntry } from '@/lib/yellow';
 
 import ScrollableRow from '@/components/ScrollableRow';
@@ -170,16 +170,16 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
                     poster={record.cover}
                     year={record.year}
                     source={source}
-                  source_name={record.source_name}
-                  progress={getProgress(record)}
-                  episodes={record.total_episodes}
-                  currentEpisode={record.index}
-                  query={record.search_title}
-                  playbackMode={record.playback_mode}
-                  offlineContentId={record.offline_content_id}
-                  from='playrecord'
-                  onDelete={() =>
-                    setPlayRecords((prev) =>
+                    source_name={record.source_name}
+                    progress={getProgress(record)}
+                    episodes={record.total_episodes}
+                    currentEpisode={record.index}
+                    query={record.search_title}
+                    playbackMode={record.playback_mode}
+                    offlineContentId={record.offline_content_id}
+                    from='playrecord'
+                    onDelete={() =>
+                      setPlayRecords((prev) =>
                         prev.filter((r) => r.key !== record.key)
                       )
                     }

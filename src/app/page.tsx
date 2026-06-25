@@ -17,15 +17,15 @@ import {
   BangumiCalendarData,
   GetBangumiCalendarData,
 } from '@/lib/bangumi.client';
+import { getDoubanCategories } from '@/lib/douban.client';
+import { isAdultDownloadedContent } from '@/lib/download/offline';
 // 客户端收藏 API
 import {
   clearAllFavorites,
   getAllFavorites,
   getAllPlayRecords,
   subscribeToDataUpdates,
-} from '@/lib/db.client';
-import { getDoubanCategories } from '@/lib/douban.client';
-import { isAdultDownloadedContent } from '@/lib/download/offline';
+} from '@/lib/profile/client';
 import { filterItemsByMinimumRating } from '@/lib/rating-filter';
 import { DoubanItem } from '@/lib/types';
 import { isAdultLibraryEntry } from '@/lib/yellow';
@@ -422,7 +422,7 @@ function HomeClient() {
                   </button>
                 )}
               </div>
-                <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8'>
+              <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8'>
                 {visibleFavoriteItems.map((item) => (
                   <div key={item.id + item.source} className='w-full'>
                     <VideoCard

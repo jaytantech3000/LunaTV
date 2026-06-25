@@ -35,7 +35,7 @@ jest.mock('@/hooks/useLongPress', () => ({
   useLongPress: jest.fn(() => ({})),
 }));
 
-jest.mock('@/lib/db.client', () => ({
+jest.mock('@/lib/profile/client', () => ({
   deleteFavorite: jest.fn(),
   deletePlayRecord: jest.fn(),
   generateStorageKey: jest.fn(() => 'storage-key'),
@@ -113,17 +113,17 @@ jest.mock('@/components/NavigationFeedbackProvider', () => ({
   })),
 }));
 
-import {
-  getCachedFollowRecordsSnapshot,
-  getFollowRecord,
-  isFavorited,
-  saveFavorite,
-} from '@/lib/db.client';
 import { resolveDownloadablePlaybackSources } from '@/lib/download/downloadable';
 import {
   disableFollowUpdatesWithFeedback,
   enableFollowUpdatesWithFeedback,
 } from '@/lib/follow-updates';
+import {
+  getCachedFollowRecordsSnapshot,
+  getFollowRecord,
+  isFavorited,
+  saveFavorite,
+} from '@/lib/profile/client';
 
 import VideoCard from './VideoCard';
 

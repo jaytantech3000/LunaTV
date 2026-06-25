@@ -26,16 +26,6 @@ import React, {
 import { flushSync } from 'react-dom';
 import { createPortal } from 'react-dom';
 
-import {
-  deleteFavorite,
-  deletePlayRecord,
-  generateStorageKey,
-  getCachedFollowRecordsSnapshot,
-  getFollowRecord,
-  isFavorited,
-  saveFavorite,
-  subscribeToDataUpdates,
-} from '@/lib/db.client';
 import { getOfflineDownloadSupportState } from '@/lib/download/cache';
 import { resolveDownloadablePlaybackSources } from '@/lib/download/downloadable';
 import {
@@ -45,6 +35,16 @@ import {
   hasNewEpisodes,
   isDesktopFollowUpdatesEnabled,
 } from '@/lib/follow-updates';
+import {
+  deleteFavorite,
+  deletePlayRecord,
+  generateStorageKey,
+  getCachedFollowRecordsSnapshot,
+  getFollowRecord,
+  isFavorited,
+  saveFavorite,
+  subscribeToDataUpdates,
+} from '@/lib/profile/client';
 import { FollowRecord, SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 import { isAdultContentResult, isAdultSourceCandidate } from '@/lib/yellow';

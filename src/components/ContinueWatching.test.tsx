@@ -5,7 +5,7 @@ import React from 'react';
 
 import { useDownloadStore } from '@/stores/downloadStore';
 
-jest.mock('@/lib/db.client', () => ({
+jest.mock('@/lib/profile/client', () => ({
   clearAllPlayRecords: jest.fn(),
   getAllPlayRecords: jest.fn(),
   getCachedPlayRecordsSnapshot: jest.fn(),
@@ -25,7 +25,7 @@ jest.mock('@/components/VideoCard', () => ({
 import {
   getAllPlayRecords,
   getCachedPlayRecordsSnapshot,
-} from '@/lib/db.client';
+} from '@/lib/profile/client';
 
 import ContinueWatching from './ContinueWatching';
 import { SiteProvider } from './SiteProvider';

@@ -9,13 +9,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { startTransition, Suspense, useEffect, useRef, useState } from 'react';
 
 import {
-  deleteFavorite,
-  generateStorageKey,
-  isFavorited as checkIsFavorited,
-  saveFavorite,
-  subscribeToDataUpdates,
-} from '@/lib/db.client';
-import {
   bindDesktopPlayerPresentationFullscreenState,
   toggleDesktopPlayerPresentationFullscreenState,
 } from '@/lib/desktop/fullscreen';
@@ -32,6 +25,13 @@ import {
   PLAYER_ENHANCEMENTS_UPDATED_EVENT,
   readPlayerEnhancementPreferences,
 } from '@/lib/player-enhancements';
+import {
+  deleteFavorite,
+  generateStorageKey,
+  isFavorited as checkIsFavorited,
+  saveFavorite,
+  subscribeToDataUpdates,
+} from '@/lib/profile/client';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { parseCustomTimeFormat } from '@/lib/time';
 import {
