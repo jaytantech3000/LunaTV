@@ -2,9 +2,13 @@
 
 import { useEffect } from 'react';
 
-import { syncDesktopDownloadEngineState } from '@/lib/download/desktop-engine-sync';
+import {
+  areDesktopDownloadTaskCollectionsEquivalent,
+  syncDesktopDownloadEngineState,
+} from '@/lib/download/desktop-engine-sync';
 import {
   clearDesktopDownloadStoreSnapshot,
+  getDesktopDownloadEngineSnapshot,
   getDesktopDownloadStoreSnapshot,
   isDesktopLocalDownloadRuntimeEnabled,
   putDesktopDownloadStoreSnapshot,
@@ -18,6 +22,74 @@ import {
 } from '@/stores/downloadStore';
 
 const SAVE_DEBOUNCE_MS = 200;
+
+function hasRecordEntries<T>(record?: Record<string, T> | null): boolean {
+  return Boolean(record && Object.keys(record).length > 0);
+}
+
+function buildMergedDesktopPersistedSnapshot(
+  localSnapshot: PersistedDownloadStoreState,
+  remoteSnapshot: PersistedDownloadStoreState | null,
+  engineSnapshot: Awaited<
+    ReturnType<typeof getDesktopDownloadEngineSnapshot>
+  > | null
+): PersistedDownloadStoreState {
+  const remoteTasks = remoteSnapshot?.tasks;
+  const remoteLibrary = remoteSnapshot?.library;
+
+  return {
+    maxConcurrentTasks:
+      engineSnapshot?.maxConcurrentTasks ??
+      remoteSnapshot?.maxConcurrentTasks ??
+      localSnapshot.maxConcurrentTasks,
+    ownerUsername: remoteSnapshot?.ownerUsername || localSnapshot.ownerUsername,
+    tasks:
+      engineSnapshot?.tasks ??
+      (hasRecordEntries(remoteTasks) ? remoteTasks : localSnapshot.tasks),
+    library: hasRecordEntries(remoteLibrary)
+      ? remoteLibrary
+      : localSnapshot.library,
+  };
+}
+
+function shouldHydrateDesktopPersistedSnapshot(
+  localSnapshot: PersistedDownloadStoreState,
+  mergedSnapshot: PersistedDownloadStoreState,
+  hasEngineSnapshot: boolean
+): boolean {
+  if (hasEngineSnapshot) {
+    if (
+      localSnapshot.maxConcurrentTasks !== mergedSnapshot.maxConcurrentTasks
+    ) {
+      return true;
+    }
+
+    if (
+      !areDesktopDownloadTaskCollectionsEquivalent(
+        localSnapshot.tasks,
+        mergedSnapshot.tasks
+      )
+    ) {
+      return true;
+    }
+  }
+
+  if (!localSnapshot.ownerUsername && mergedSnapshot.ownerUsername) {
+    return true;
+  }
+
+  if (
+    !hasRecordEntries(localSnapshot.library) &&
+    hasRecordEntries(mergedSnapshot.library)
+  ) {
+    return true;
+  }
+
+  return (
+    isPersistedDownloadStoreEmpty(localSnapshot) &&
+    !isPersistedDownloadStoreEmpty(mergedSnapshot)
+  );
+}
 
 export default function DesktopDownloadStoreSync() {
   useEffect(() => {
@@ -63,8 +135,12 @@ export default function DesktopDownloadStoreSync() {
 
     void (async () => {
       try {
-        const remoteSnapshot =
-          await getDesktopDownloadStoreSnapshot<PersistedDownloadStoreState>();
+        const [remoteSnapshot, engineSnapshot] = await Promise.all([
+          getDesktopDownloadStoreSnapshot<PersistedDownloadStoreState>().catch(
+            () => null
+          ),
+          getDesktopDownloadEngineSnapshot().catch(() => null),
+        ]);
         if (!active) {
           return;
         }
@@ -72,14 +148,21 @@ export default function DesktopDownloadStoreSync() {
         const localSnapshot = buildPersistedDownloadStoreState(
           useDownloadStore.getState()
         );
+        const mergedSnapshot = buildMergedDesktopPersistedSnapshot(
+          localSnapshot,
+          remoteSnapshot,
+          engineSnapshot
+        );
 
         if (
-          remoteSnapshot &&
-          isPersistedDownloadStoreEmpty(localSnapshot) &&
-          !isPersistedDownloadStoreEmpty(remoteSnapshot)
+          shouldHydrateDesktopPersistedSnapshot(
+            localSnapshot,
+            mergedSnapshot,
+            Boolean(engineSnapshot)
+          )
         ) {
           skipNextPersist = true;
-          useDownloadStore.getState().replacePersistedState(remoteSnapshot);
+          useDownloadStore.getState().replacePersistedState(mergedSnapshot);
         } else if (
           (!remoteSnapshot || isPersistedDownloadStoreEmpty(remoteSnapshot)) &&
           !isPersistedDownloadStoreEmpty(localSnapshot)

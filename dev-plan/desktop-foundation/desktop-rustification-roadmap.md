@@ -225,6 +225,7 @@ Rust Shared Crates
 - `src/lib/download/desktop-runtime.ts` 已补齐对应的桌面 SDK 封装，前端可以开始逐步改为消费这组新边界。
 - `src/components/DesktopDownloadStoreSync.tsx` 已开始把当前 TS 下载 store 中的 `tasks` / `maxConcurrentTasks` 镜像回 Rust download engine，形成“TS 执行 + Rust 状态面并行”的过渡态。
 - `src/lib/download/manager.ts` 的 `pause / resume / cancel` 与 `src/components/DownloadsClient.tsx` 的并发设置调整，已经开始显式命中 Rust runtime 命令边界；镜像同步现在主要承担兜底与快照修复角色。
+- 桌面启动时也开始优先读取 Rust download engine snapshot 回填任务状态与并发设置；这意味着 Rust 状态面已经不只是写入目标，也开始成为桌面下载 UI 的读端输入。
 - `src/lib/download/manager.ts` 仍然是当前桌面下载的真实执行器，所以这一阶段只完成了“边界收口”和“状态恢复骨架”，还没有切走主下载流程。
 
 ### 验收标准

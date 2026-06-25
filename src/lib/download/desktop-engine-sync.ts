@@ -66,6 +66,22 @@ export function areDesktopDownloadTasksEquivalent(
   return buildTaskFingerprint(left) === buildTaskFingerprint(right);
 }
 
+export function areDesktopDownloadTaskCollectionsEquivalent(
+  left: Record<string, DownloadTask>,
+  right: Record<string, DownloadTask>
+): boolean {
+  const leftTaskIds = Object.keys(left);
+  const rightTaskIds = Object.keys(right);
+
+  if (leftTaskIds.length !== rightTaskIds.length) {
+    return false;
+  }
+
+  return leftTaskIds.every((taskId) =>
+    areDesktopDownloadTasksEquivalent(left[taskId], right[taskId])
+  );
+}
+
 function rememberDesktopDownloadEngineSnapshot(
   snapshot: DesktopDownloadEngineSnapshot
 ): DesktopDownloadEngineSnapshot {
