@@ -564,6 +564,7 @@ src/lib/profile/
 - 桌面管理页与桌面设置页已经收口到同一套 profile sync 状态文案 helper，并补上“状态未知”分支，避免把本地服务读取失败误显示成“未启用”。
 - 桌面 profile sync runtime 在切回本地模式时也会主动清理 `desktop-profile-sync` 浏览器态，减少 sync off 后残留远端会话的歧义。
 - Rust 测试已经补齐 admin data migration 在 sync mode 下的导出 / 导入透传覆盖，减少桌面管理数据迁移只测单向、不测双向的风险。
+- `src/app/login/page.test.tsx` 已补上登录页在 sync on/off 下的分支覆盖，验证 profile sync 开启时进入远端登录分支，关闭时回落本地桌面鉴权分支。
 - Phase 6 所需的故障排查文档已经输出，后续排查可直接按 `desktop-profile-sync-troubleshooting.md` 的状态词典和联调基线执行。
 
 #### 验收标准
@@ -618,7 +619,7 @@ src/lib/profile/
 
 - desktop bootstrap 解析
 - profile sync 状态写入运行时配置
-- 登录页在 sync on/off 下的分支
+- 登录页在 sync on/off 下的分支（已由 `src/app/login/page.test.tsx` 覆盖）
 - 401 时本地浏览器会话清理
 - `db.client.ts` 或新 profile SDK 在 sync on/off 下的路径选择
 - `follows` 与其它 profile 域行为一致
