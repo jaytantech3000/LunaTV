@@ -21,6 +21,7 @@
 > - Phase 2A 已继续收口第四刀：`/api/detail` 相关 handler 与 detail HTML/JSON 解析逻辑也已拆到 `crates/moontv-local-service/src/content_detail.rs`，为后续把 `/api/search` 与建议词链路继续模块化留出边界。
 > - Phase 2A 已继续收口第五刀：`src/lib/content-discovery-client.ts` 已成为前端共享的 `search/detail/suggestions` 入口，播放页、下载解析、追更刷新、搜索建议与传统搜索 fallback 不再各自拼装这组内容发现请求。
 > - Phase 2A 已继续收口第六刀：`crates/moontv-local-service/src/content_search.rs` 已接管 `/api/search`、`/api/search/ws`、`/api/search/suggestions` 与共享下游搜索 helper，local service 的内容发现 facade 进一步从 `lib.rs` 脱身。
+> - Phase 2B 也补上了第一刀结构性收口：`/media/vod/m3u8`、`/media/vod/segment`、`/media/vod/key` handler 已从 `crates/moontv-local-service/src/lib.rs` 抽到独立的 `crates/moontv-local-service/src/vod_proxy.rs`，为后续继续下沉资源抓取与图片代理留出明确模块边界。
 > - Phase 1 也已经开始落下“先搭骨架、不切主流程”的第一刀：新增 `moontv-download` crate，桌面本地服务补齐 `/api/download-runtime/tasks*` 命令 / 状态查询 skeleton，并把下载引擎快照持久化到 SQLite `app_metadata`。
 > - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
@@ -284,6 +285,7 @@ Rust Shared Crates
 - `src/lib/content-discovery-client.ts` 现已统一承接 `detail` / `search` / `search/suggestions` 这组前端内容发现请求；播放页、下载解析、追更刷新、搜索建议与传统搜索 fallback 不再各自直连底层 transport 组装这些请求。
 - 在已完全切走的调用点上，也补了 ESLint 限制，防止这些模块重新直接 import 底层 transport 层回到散点请求。
 - `crates/moontv-local-service/src/content_search.rs` 现已继续接手 `/api/search`、`/api/search/ws`、`/api/search/suggestions` 与共享站点搜索 helper；`playback_prefetch` 与管理页的源校验复用这层搜索能力，而不再要求 `lib.rs` 继续承载整段搜索 facade。
+- `crates/moontv-local-service/src/vod_proxy.rs` 现已开始接手 VOD proxy handler；`lib.rs` 不再直接承载 `/media/vod/*` 路由实现，后续可以在不继续膨胀 facade 文件的前提下，逐步把资源抓取、图片代理与更多媒体网络 helper 继续抽离。
 - Web 路径仍保留原有 TypeScript `playback-source-prefetch` 逻辑，因此这一刀解决的是“桌面主路径继续收口”，还没有完成整段搜索 / 详情链路对 Web 侧兼容层的全量清理。
 
 #### Phase 2B：媒体代理
