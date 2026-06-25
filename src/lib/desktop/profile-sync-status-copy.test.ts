@@ -1,4 +1,5 @@
 import {
+  buildDesktopProfileSyncDiagnostics,
   buildDesktopProfileSyncErrorHint,
   buildDesktopProfileSyncStatusDetail,
   buildDesktopProfileSyncStatusValue,
@@ -50,6 +51,29 @@ describe('desktop profile sync status copy helpers', () => {
     ).toBe(
       '未能从本地服务读取 profile sync 状态。最近错误：local service unavailable'
     );
+  });
+
+  it('builds structured diagnostics fields for the settings and admin surfaces', () => {
+    const status = {
+      enabled: true,
+      reachable: false,
+      authenticated: false,
+      username: 'kid',
+      role: 'user',
+      storageType: 'redis',
+      profileMode: 'shared-multi-user',
+      error: '远端账号同步后端不可达。',
+      errorKind: 'unreachable',
+      syncDomains: ['favorites', 'follows'],
+    } as const;
+
+    expect(buildDesktopProfileSyncDiagnostics(status)).toEqual([
+      { label: '当前模式', value: '远端多用户 / redis' },
+      { label: '远端可达性', value: '不可达' },
+      { label: '远端账号', value: 'kid' },
+      { label: '最近错误', value: '远端账号同步后端不可达。' },
+      { label: '同步域', value: '收藏、追更' },
+    ]);
   });
 
   it('returns an empty hint when the error kind is absent', () => {

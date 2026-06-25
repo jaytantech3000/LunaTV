@@ -570,6 +570,7 @@ src/lib/profile/
 - Rust profile sync 测试现已补上未配置 `api_base_url`、登录后会话代持、透传 `401` 清 session 与五个同步域透传一致性，`moontv-sync` 与 local service 两层都已有可执行回归覆盖。
 - Phase 6 所需的故障排查文档已经输出，后续排查可直接按 `desktop-profile-sync-troubleshooting.md` 的状态词典和联调基线执行。
 - `src/lib/desktop/profile-bootstrap.ts` 现已新增共享 bootstrap loader，把“拉取 bootstrap + 应用 runtime/profileSync 配置 + 在 desktop-local 下恢复本地 auth”的流程收口到一处，`DesktopRuntimeSync` 与登录页不再各自维护一套近似初始化分支。
+- `src/lib/desktop/profile-sync-status-copy.ts` 现已输出结构化诊断字段；桌面管理页与设置页不再只展示一段同步状态摘要，而会显式列出当前模式、远端可达性、当前远端账号、最近错误与同步域。
 
 #### 验收标准
 

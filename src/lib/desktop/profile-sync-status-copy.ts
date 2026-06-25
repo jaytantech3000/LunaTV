@@ -2,6 +2,11 @@ import { PROFILE_SYNC_USER_DATA_DOMAINS } from '@/lib/profile/contracts';
 
 import type { DesktopProfileSyncStatus } from './profile-sync';
 
+export interface DesktopProfileSyncDiagnosticItem {
+  label: string;
+  value: string;
+}
+
 const PROFILE_SYNC_DOMAIN_LABELS: Record<string, string> = {
   playrecords: '播放记录',
   favorites: '收藏',
@@ -13,6 +18,88 @@ const PROFILE_SYNC_DOMAIN_LABELS: Record<string, string> = {
 function normalizeErrorMessage(errorMessage?: string | null): string {
   const normalized = errorMessage?.trim();
   return normalized || '';
+}
+
+function resolveDesktopProfileSyncModeText(
+  profileSyncStatus: DesktopProfileSyncStatus | null | undefined,
+  readErrorMessage?: string | null
+): string {
+  if (normalizeErrorMessage(readErrorMessage)) {
+    return '状态未知';
+  }
+
+  if (!profileSyncStatus) {
+    return '待读取';
+  }
+
+  if (!profileSyncStatus.enabled) {
+    return '本地模式';
+  }
+
+  const modeText =
+    profileSyncStatus.profileMode === 'shared-multi-user'
+      ? '远端多用户'
+      : profileSyncStatus.profileMode
+      ? '远端单用户'
+      : '远端模式待定';
+
+  if (!profileSyncStatus.storageType?.trim()) {
+    return modeText;
+  }
+
+  return `${modeText} / ${profileSyncStatus.storageType.trim()}`;
+}
+
+function resolveDesktopProfileSyncReachabilityText(
+  profileSyncStatus: DesktopProfileSyncStatus | null | undefined,
+  readErrorMessage?: string | null
+): string {
+  if (normalizeErrorMessage(readErrorMessage)) {
+    return '读取失败';
+  }
+
+  if (!profileSyncStatus?.enabled) {
+    return '未启用';
+  }
+
+  if (!profileSyncStatus.reachable) {
+    return '不可达';
+  }
+
+  if (profileSyncStatus.errorKind === 'unauthorized') {
+    return '可达，但登录失效';
+  }
+
+  return '可达';
+}
+
+function resolveDesktopProfileSyncAccountText(
+  profileSyncStatus: DesktopProfileSyncStatus | null | undefined,
+  readErrorMessage?: string | null
+): string {
+  if (normalizeErrorMessage(readErrorMessage)) {
+    return '-';
+  }
+
+  if (!profileSyncStatus?.enabled) {
+    return '本地模式';
+  }
+
+  const username = profileSyncStatus.username?.trim();
+  return username || '未登录';
+}
+
+function resolveDesktopProfileSyncLastErrorText(
+  profileSyncStatus: DesktopProfileSyncStatus | null | undefined,
+  readErrorMessage?: string | null
+): string {
+  const normalizedReadErrorMessage = normalizeErrorMessage(readErrorMessage);
+  if (normalizedReadErrorMessage) {
+    return normalizedReadErrorMessage;
+  }
+
+  const normalizedStatusError = normalizeErrorMessage(profileSyncStatus?.error);
+  return normalizedStatusError || '无';
 }
 
 export function resolveDesktopProfileSyncDomainsText(
@@ -119,4 +206,44 @@ export function buildDesktopProfileSyncStatusDetail(
   }
 
   return details.join(' ');
+}
+
+export function buildDesktopProfileSyncDiagnostics(
+  profileSyncStatus: DesktopProfileSyncStatus | null | undefined,
+  readErrorMessage?: string | null
+): DesktopProfileSyncDiagnosticItem[] {
+  return [
+    {
+      label: '当前模式',
+      value: resolveDesktopProfileSyncModeText(
+        profileSyncStatus,
+        readErrorMessage
+      ),
+    },
+    {
+      label: '远端可达性',
+      value: resolveDesktopProfileSyncReachabilityText(
+        profileSyncStatus,
+        readErrorMessage
+      ),
+    },
+    {
+      label: '远端账号',
+      value: resolveDesktopProfileSyncAccountText(
+        profileSyncStatus,
+        readErrorMessage
+      ),
+    },
+    {
+      label: '最近错误',
+      value: resolveDesktopProfileSyncLastErrorText(
+        profileSyncStatus,
+        readErrorMessage
+      ),
+    },
+    {
+      label: '同步域',
+      value: resolveDesktopProfileSyncDomainsText(profileSyncStatus),
+    },
+  ];
 }

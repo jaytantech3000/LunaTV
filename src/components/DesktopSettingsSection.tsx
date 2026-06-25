@@ -53,6 +53,7 @@ import {
   AppIconButton,
   AppSurfaceCard,
 } from '@/components/AppChrome';
+import DesktopProfileSyncDiagnosticsGrid from '@/components/DesktopProfileSyncDiagnosticsGrid';
 
 interface DesktopSettingsSectionProps {
   isOpen: boolean;
@@ -906,6 +907,12 @@ export default function DesktopSettingsSection({
                     profileSyncStatusError
                   )}
                 </p>
+                <div className='mt-3'>
+                  <DesktopProfileSyncDiagnosticsGrid
+                    profileSyncStatus={profileSyncStatus}
+                    profileSyncStatusError={profileSyncStatusError}
+                  />
+                </div>
               </div>
               <div className='grid gap-2 sm:grid-cols-2'>
                 <div className='rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'>
