@@ -27,13 +27,10 @@ import {
 import { cacheManager, getCacheStatus } from './hybrid-cache';
 import {
   clearLocalFavorites,
-  clearLocalPlayRecords,
   readLocalFavorites,
   readLocalFollowRecords,
-  readLocalPlayRecords,
   writeLocalFavorites,
   writeLocalFollowRecords,
-  writeLocalPlayRecords,
 } from './local-adapter';
 import {
   deleteRemoteProfileResource,
@@ -45,11 +42,17 @@ import {
 import { shouldUseRemoteProfileStorage } from './runtime';
 import { dispatchSearchHistoryUpdated } from './search-history-client';
 import { generateStorageKey } from './storage-key';
-import { decodeSearchHistoryValues } from '../search-history';
 import { type FollowRecord, SkipConfig } from '../types';
 
 export type { Favorite, PlayRecord } from './contracts';
 export { getCacheStatus } from './hybrid-cache';
+export {
+  clearAllPlayRecords,
+  deletePlayRecord,
+  getAllPlayRecords,
+  getCachedPlayRecordsSnapshot,
+  savePlayRecord,
+} from './play-records-client';
 export {
   addSearchHistory,
   clearSearchHistory,
@@ -86,26 +89,6 @@ function dispatchDataUpdate<T>(
   dispatchProfileCacheUpdate(eventType, detail);
 }
 
-export function getCachedPlayRecordsSnapshot(): Record<
-  string,
-  PlayRecord
-> | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  if (shouldUseRemoteUserDataStorage()) {
-    return cacheManager.getCachedPlayRecords();
-  }
-
-  try {
-    return readLocalPlayRecords();
-  } catch (err) {
-    console.error('读取播放记录快照失败:', err);
-    return null;
-  }
-}
-
 export function getCachedFollowRecordsSnapshot(): Record<
   string,
   FollowRecord
@@ -132,7 +115,7 @@ export function getCachedFollowRecordsSnapshot(): Record<
  * 立即从数据库刷新对应类型的缓存以保持数据一致性
  */
 async function handleDatabaseOperationFailure(
-  dataType: 'playRecords' | 'favorites' | 'followRecords' | 'searchHistory',
+  dataType: 'favorites' | 'followRecords',
   error: any
 ): Promise<void> {
   if (wasRedirectedToLogin(error) || isUnauthorizedRequestError(error)) {
@@ -148,14 +131,6 @@ async function handleDatabaseOperationFailure(
     let eventDetail: any;
 
     switch (dataType) {
-      case 'playRecords':
-        freshData = await fetchFromApi<Record<string, PlayRecord>>(
-          USER_DATA_API_PATHS.playRecords
-        );
-        cacheManager.cachePlayRecords(freshData);
-        eventType = 'playRecordsUpdated';
-        eventDetail = freshData;
-        break;
       case 'favorites':
         freshData = await fetchFromApi<Record<string, Favorite>>(
           USER_DATA_API_PATHS.favorites
@@ -171,14 +146,6 @@ async function handleDatabaseOperationFailure(
         cacheManager.cacheFollowRecords(freshData);
         eventType = 'followRecordsUpdated';
         eventDetail = freshData;
-        break;
-      case 'searchHistory':
-        freshData = await fetchFromApi<string[]>(
-          USER_DATA_API_PATHS.searchHistory
-        );
-        cacheManager.cacheSearchHistory(freshData);
-        eventType = 'searchHistoryUpdated';
-        eventDetail = decodeSearchHistoryValues(freshData);
         break;
     }
 
@@ -200,170 +167,6 @@ async function handleDatabaseOperationFailure(
 // 页面加载时清理过期缓存
 if (typeof window !== 'undefined') {
   setTimeout(() => cacheManager.clearExpiredCaches(), 1000);
-}
-
-// ---- API ----
-/**
- * 读取全部播放记录。
- * 非本地存储模式下使用混合缓存策略：优先返回缓存数据，后台异步同步最新数据。
- * 在服务端渲染阶段 (window === undefined) 时返回空对象，避免报错。
- */
-export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
-  // 服务器端渲染阶段直接返回空，交由客户端 useEffect 再行请求
-  if (typeof window === 'undefined') {
-    return {};
-  }
-
-  // 数据库存储模式：使用混合缓存策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 优先从缓存获取数据
-    const cachedData = cacheManager.getCachedPlayRecords();
-
-    if (cachedData) {
-      // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, PlayRecord>>(USER_DATA_API_PATHS.playRecords)
-        .then((freshData) => {
-          // 只有数据真正不同时才更新缓存
-          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
-            cacheManager.cachePlayRecords(freshData);
-            // 触发数据更新事件，供组件监听
-            dispatchDataUpdate('playRecordsUpdated', freshData);
-          }
-        })
-        .catch((err) => {
-          console.warn('后台同步播放记录失败:', err);
-          triggerGlobalError('后台同步播放记录失败');
-        });
-
-      return cachedData;
-    } else {
-      // 缓存为空，直接从 API 获取并缓存
-      try {
-        const freshData = await fetchFromApi<Record<string, PlayRecord>>(
-          USER_DATA_API_PATHS.playRecords
-        );
-        cacheManager.cachePlayRecords(freshData);
-        return freshData;
-      } catch (err) {
-        console.error('获取播放记录失败:', err);
-        triggerGlobalError('获取播放记录失败');
-        return {};
-      }
-    }
-  }
-
-  // localstorage 模式
-  try {
-    return readLocalPlayRecords();
-  } catch (err) {
-    console.error('读取播放记录失败:', err);
-    triggerGlobalError('读取播放记录失败');
-    return {};
-  }
-}
-
-/**
- * 保存播放记录。
- * 数据库存储模式下使用乐观更新：先更新缓存（立即生效），再异步同步到数据库。
- */
-export async function savePlayRecord(
-  source: string,
-  id: string,
-  record: PlayRecord
-): Promise<void> {
-  const key = generateStorageKey(source, id);
-
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    const cachedRecords = cacheManager.getCachedPlayRecords() || {};
-    cachedRecords[key] = record;
-    cacheManager.cachePlayRecords(cachedRecords);
-
-    // 触发立即更新事件
-    dispatchDataUpdate('playRecordsUpdated', cachedRecords);
-
-    // 异步同步到数据库
-    try {
-      await postRemoteProfilePayload(USER_DATA_API_PATHS.playRecords, {
-        key,
-        record,
-      });
-    } catch (err) {
-      await handleDatabaseOperationFailure('playRecords', err);
-      triggerGlobalError('保存播放记录失败');
-      throw err;
-    }
-    return;
-  }
-
-  // localstorage 模式
-  if (typeof window === 'undefined') {
-    console.warn('无法在服务端保存播放记录到 localStorage');
-    return;
-  }
-
-  try {
-    const allRecords = await getAllPlayRecords();
-    allRecords[key] = record;
-    writeLocalPlayRecords(allRecords);
-    dispatchDataUpdate('playRecordsUpdated', allRecords);
-  } catch (err) {
-    console.error('保存播放记录失败:', err);
-    triggerGlobalError('保存播放记录失败');
-    throw err;
-  }
-}
-
-/**
- * 删除播放记录。
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function deletePlayRecord(
-  source: string,
-  id: string
-): Promise<void> {
-  const key = generateStorageKey(source, id);
-
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    const cachedRecords = cacheManager.getCachedPlayRecords() || {};
-    delete cachedRecords[key];
-    cacheManager.cachePlayRecords(cachedRecords);
-
-    // 触发立即更新事件
-    dispatchDataUpdate('playRecordsUpdated', cachedRecords);
-
-    // 异步同步到数据库
-    try {
-      await deleteRemoteProfileResource(USER_DATA_API_PATHS.playRecords, {
-        key,
-      });
-    } catch (err) {
-      await handleDatabaseOperationFailure('playRecords', err);
-      triggerGlobalError('删除播放记录失败');
-      throw err;
-    }
-    return;
-  }
-
-  // localstorage 模式
-  if (typeof window === 'undefined') {
-    console.warn('无法在服务端删除播放记录到 localStorage');
-    return;
-  }
-
-  try {
-    const allRecords = await getAllPlayRecords();
-    delete allRecords[key];
-    writeLocalPlayRecords(allRecords);
-    dispatchDataUpdate('playRecordsUpdated', allRecords);
-  } catch (err) {
-    console.error('删除播放记录失败:', err);
-    triggerGlobalError('删除播放记录失败');
-    throw err;
-  }
 }
 
 // ---------------- 收藏相关 API ----------------
@@ -737,36 +540,6 @@ export async function deleteFollowRecord(
     triggerGlobalError('删除追更记录失败');
     throw err;
   }
-}
-
-/**
- * 清空全部播放记录
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function clearAllPlayRecords(): Promise<void> {
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    cacheManager.cachePlayRecords({});
-
-    // 触发立即更新事件
-    dispatchDataUpdate('playRecordsUpdated', {});
-
-    // 异步同步到数据库
-    try {
-      await deleteRemoteProfileResource(USER_DATA_API_PATHS.playRecords);
-    } catch (err) {
-      await handleDatabaseOperationFailure('playRecords', err);
-      triggerGlobalError('清空播放记录失败');
-      throw err;
-    }
-    return;
-  }
-
-  // localStorage 模式
-  if (typeof window === 'undefined') return;
-  clearLocalPlayRecords();
-  dispatchDataUpdate('playRecordsUpdated', {});
 }
 
 /**
