@@ -15,8 +15,15 @@
  */
 
 import { getAuthInfoFromBrowserCookie } from './auth';
-import { purgeOfflineDownloads } from './download/session';
+import { PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS } from './profile/contracts';
 import { shouldUseRemoteProfileStorage } from './profile/runtime';
+import {
+  type ProfileRequestInit,
+  fetchProfileJson,
+  fetchProfileResponse,
+  isUnauthorizedProfileRequestError,
+  wasProfileRequestRedirectedToLogin,
+} from './profile/session';
 import {
   type SearchHistoryEntry,
   type SearchHistoryMode,
@@ -25,7 +32,6 @@ import {
   encodeSearchHistoryValue,
   resolveSearchHistoryRawValue,
 } from './search-history';
-import { buildApiUrl } from './transport/endpoint';
 import { type FollowRecord, SkipConfig } from './types';
 
 // 全局错误触发函数
@@ -96,15 +102,6 @@ const SEARCH_HISTORY_KEY = 'moontv_search_history';
 const CACHE_PREFIX = 'moontv_cache_';
 const CACHE_VERSION = '1.0.0';
 const CACHE_EXPIRE_TIME = 60 * 60 * 1000; // 一小时缓存过期
-const USER_DATA_API_PATHS = {
-  logout: '/logout',
-  playRecords: '/playrecords',
-  searchHistory: '/searchhistory',
-  favorites: '/favorites',
-  follows: '/follows',
-  skipConfigs: '/skipconfigs',
-} as const;
-
 function shouldUseRemoteUserDataStorage(): boolean {
   return shouldUseRemoteProfileStorage();
 }
@@ -524,38 +521,12 @@ export function getCachedFollowRecordsSnapshot(): Record<
   }
 }
 
-interface AuthenticatedRequestInit extends RequestInit {
-  redirectOnUnauthorized?: boolean;
-}
-
-class DatabaseRequestError extends Error {
-  status: number | null;
-  redirectedToLogin: boolean;
-
-  constructor(
-    message: string,
-    options?: {
-      status?: number | null;
-      redirectedToLogin?: boolean;
-    }
-  ) {
-    super(message);
-    this.name = 'DatabaseRequestError';
-    this.status = options?.status ?? null;
-    this.redirectedToLogin = options?.redirectedToLogin ?? false;
-  }
-}
-
-function isDatabaseRequestError(error: unknown): error is DatabaseRequestError {
-  return error instanceof DatabaseRequestError;
-}
-
 function isUnauthorizedRequestError(error: unknown): boolean {
-  return isDatabaseRequestError(error) && error.status === 401;
+  return isUnauthorizedProfileRequestError(error);
 }
 
 function wasRedirectedToLogin(error: unknown): boolean {
-  return isDatabaseRequestError(error) && error.redirectedToLogin;
+  return wasProfileRequestRedirectedToLogin(error);
 }
 
 // ---- 错误处理辅助函数 ----
@@ -673,25 +644,13 @@ if (typeof window !== 'undefined') {
 /**
  * 通用的 fetch 函数，处理 401 状态码自动跳转登录
  */
-function resolveApiRequestUrl(url: string): string {
-  return /^https?:\/\//i.test(url) ? url : buildApiUrl(url);
-}
-
 async function fetchWithAuth(
   url: string,
-  options?: AuthenticatedRequestInit
+  options?: ProfileRequestInit
 ): Promise<Response> {
-  const {
-    redirectOnUnauthorized = true,
-    credentials,
-    ...requestOptions
-  } = options || {};
-  const requestUrl = resolveApiRequestUrl(url);
-  const res = await fetch(requestUrl, {
-    ...requestOptions,
-    credentials: credentials || 'same-origin',
-  });
+  return fetchProfileResponse(url, options);
 
+  /*
   if (!res.ok) {
     // 如果是 401 未授权，跳转到登录页面
     if (res.status === 401) {
@@ -729,14 +688,14 @@ async function fetchWithAuth(
     });
   }
   return res;
+  */
 }
 
 async function fetchFromApi<T>(
   path: string,
-  options?: AuthenticatedRequestInit
+  options?: ProfileRequestInit
 ): Promise<T> {
-  const res = await fetchWithAuth(path, options);
-  return (await res.json()) as T;
+  return fetchProfileJson<T>(path, options);
 }
 
 /**
