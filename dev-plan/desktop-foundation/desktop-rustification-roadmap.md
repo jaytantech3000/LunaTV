@@ -17,6 +17,7 @@
 > - 桌面 release history 的过滤、manifest 解析与排序也已下沉到 Tauri / Rust，桌面前端直接消费最终 `DesktopReleaseHistoryItem`。
 > - Phase 2A 也开始落下第一刀：桌面模式下的 `searchPlaybackSources` 已优先走 local service 新增的 `/api/playback/search-sources`，把查询组合、候选聚合和结果预筛选从前端下沉到 Rust。
 > - Phase 2A 已继续收口第二刀：`src/lib/playback-source-client.ts` 现已成为播放源统一入口，播放页与下载相关链路不再直接 import `playback-source-prefetch`；桌面运行时在 `/api/playback/search-sources` 失败时也不再回退到旧的 TS 查询聚合分支。
+> - Phase 2A 已继续收口第三刀：local service 内部的播放源预抓取 facade 已从 `crates/moontv-local-service/src/lib.rs` 拆到独立的 `crates/moontv-local-service/src/playback_prefetch.rs`，本地服务路由层只再负责装配与复用。
 > - Phase 1 也已经开始落下“先搭骨架、不切主流程”的第一刀：新增 `moontv-download` crate，桌面本地服务补齐 `/api/download-runtime/tasks*` 命令 / 状态查询 skeleton，并把下载引擎快照持久化到 SQLite `app_metadata`。
 > - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
@@ -274,6 +275,7 @@ Rust Shared Crates
 - 桌面模式下的 `searchPlaybackSources` 已新增一条 local service 主路径：前端优先调用 `/api/playback/search-sources`，由 Rust 负责搜索 query fallback、Douban 匹配优先级、成人内容过滤和候选源预筛选。
 - `src/lib/playback-source-client.ts` 现已作为统一入口落地，播放页、下载页与下载相关 lib 不再直接 import `playback-source-prefetch`，并由 ESLint 阻止桌面 UI / 下载链路绕过这层边界。
 - 桌面运行时在 `/api/playback/search-sources` 失败时不再回退到旧的 TypeScript 查询聚合分支；这意味着桌面播放源发现主路径已不再依赖 TS 侧 query fallback、结果聚合与候选预筛选逻辑。
+- `crates/moontv-local-service/src/playback_prefetch.rs` 现已接管 local service 的播放源预抓取 facade；`lib.rs` 仅保留路由与共享能力编排，便于继续把详情聚合与后续媒体网络逻辑拆成独立模块。
 - Web 路径仍保留原有 TypeScript `playback-source-prefetch` 逻辑，因此这一刀解决的是“桌面主路径继续收口”，还没有完成整段搜索 / 详情链路对 Web 侧兼容层的全量清理。
 
 #### Phase 2B：媒体代理
