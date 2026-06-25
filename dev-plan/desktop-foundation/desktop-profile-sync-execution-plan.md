@@ -14,6 +14,15 @@
 > - 仓库里已经存在一条可工作的桌面 profile sync 代理链路，但它仍是“可选 adapter + 兼容实现”，不是已经收口完成的桌面核心架构。
 > - 本文目标不是把桌面重新定义成“远端账号驱动”的产品，而是在保持桌面本地优先前提下，把当前同步链路整理成可维护、可测试、可灰度的能力。
 > - 本文与 `dev-plan/desktop-foundation/desktop-rustification-roadmap.md` 的 Phase 3 并行推进，不等待整份 roadmap 完成后再实施。
+>
+> 最新进展（2026-06-25）：
+>
+> - `GET /api/profile/bootstrap` 已经落地，桌面运行时与登录页可以消费统一启动快照。
+> - `src/lib/profile/*` 已从旧的 `db.client.ts` 兼容层中抽出，`runtime.ts` 统一解析 `desktop-local` / `desktop-profile-sync`。
+> - `moontv-sync` 与 `moontv-profile` 已落地，sync on 走远端 adapter，sync off 走 Rust 本地 profile store。
+> - 五个 profile 域（`playrecords` / `favorites` / `follows` / `searchhistory` / `skipconfigs`）在桌面本地模式下已经切到 Rust 真源。
+> - 为避免升级后丢失旧数据，桌面本地模式已补上一条 `localStorage -> Rust profile store` 的一次性兼容迁移链路。
+> - 当前剩余工作主要集中在 Phase 0 的协议文档收口，以及 Phase 6 的旧分支清理与诊断能力补齐。
 
 ## 1. 目标
 

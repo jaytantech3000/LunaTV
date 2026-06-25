@@ -7,6 +7,13 @@
 - `dev-plan/desktop-foundation/desktop-rust-evolution-execution-plan.md`
 - `dev-plan/desktop-foundation/desktop-profile-sync-execution-plan.md`
 
+> 最新进展（2026-06-25）：
+>
+> - Phase 3 中最关键的 profile 资料域收口已经基本打通：`moontv-profile`、`moontv-sync`、local-service profile facade 与桌面前端 profile SDK 都已落地。
+> - 桌面本地五个 profile 域已经从浏览器 `localStorage` 真源切到 Rust 本地 store，并带有旧数据兼容迁移。
+> - `src/lib/db.client.ts` 已退化为 `src/lib/profile/client.ts` 的兼容出口，桌面 profile 读写主路径不再依赖旧 Web 存储实现。
+> - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
+
 ## 目标
 
 这份文档聚焦一个明确方向：
