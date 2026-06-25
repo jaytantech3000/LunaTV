@@ -26,7 +26,7 @@
 > - Phase 2B 又继续补了一刀：`/live/precheck`、`/media/live/m3u8`、`/media/live/segment`、`/media/live/key`、`/media/live/logo` 与对应 legacy `/api/proxy/*` live handler 已抽到独立的 `crates/moontv-local-service/src/live_proxy.rs`，`lib.rs` 不再继续承载这组 live proxy facade。
 > - Phase 2B 继续补上了图片代理入口：local service 新增 `/api/image-proxy`（兼容 `/image-proxy`），桌面端 `buildApiUrl('/image-proxy')` 在 `server` 模式下已可直接由 Rust 本地服务代抓 Douban 图片，不再只依赖 Next route。
 > - Phase 1 已从“下载引擎骨架”推进到“桌面 runtime 主执行器闭环”：`moontv-download` crate、`/api/download-runtime/tasks*` 协议、SQLite `app_metadata` 快照，以及 Rust worker 调度 / 执行链路都已落地。
-> - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot。
+> - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot；SSE 不可用或断流时，桌面 SDK 会回退到 `/api/download-runtime/tasks` 轻量轮询。
 > - Phase 1 在桌面 runtime 模式下已由 Rust 接手 queued 任务调度、manifest candidate fallback、`/media/vod/*` 资源抓取与 cache/resource-index 写入；前端 `src/lib/download/manager.ts` 不再启动浏览器侧任务 runner。
 > - `src/components/DesktopDownloadStoreSync.tsx` 现在也会把 runtime `done` 任务回填到 `library`，避免已完成任务只停留在 snapshot 而不生成离线片库条目。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。

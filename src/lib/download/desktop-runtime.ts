@@ -69,6 +69,8 @@ export interface DesktopDownloadEngineSnapshotSubscriptionOptions {
   onError?: (error: Error) => void;
 }
 
+const DESKTOP_DOWNLOAD_RUNTIME_POLL_INTERVAL_MS = 2_000;
+
 function ensureDesktopLocalDownloadRuntime(): void {
   if (!isDesktopLocalDownloadRuntimeEnabled()) {
     throw new Error(
@@ -429,6 +431,64 @@ export async function clearDesktopDownloadEngineTasks(): Promise<DesktopDownload
   return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
 }
 
+function subscribeToDesktopDownloadEngineSnapshotsByPolling({
+  onSnapshot,
+  onError,
+}: DesktopDownloadEngineSnapshotSubscriptionOptions): () => void {
+  let active = true;
+  let nextPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearNextPollTimer = () => {
+    if (!nextPollTimer) {
+      return;
+    }
+
+    clearTimeout(nextPollTimer);
+    nextPollTimer = null;
+  };
+
+  const scheduleNextPoll = () => {
+    clearNextPollTimer();
+    if (!active) {
+      return;
+    }
+
+    nextPollTimer = setTimeout(() => {
+      void pollSnapshot();
+    }, DESKTOP_DOWNLOAD_RUNTIME_POLL_INTERVAL_MS);
+  };
+
+  const pollSnapshot = async () => {
+    try {
+      const snapshot = await getDesktopDownloadEngineSnapshot();
+      if (!active) {
+        return;
+      }
+
+      onSnapshot(snapshot);
+    } catch (error) {
+      if (!active) {
+        return;
+      }
+
+      onError?.(
+        error instanceof Error
+          ? error
+          : new Error('Desktop download runtime snapshot polling failed.')
+      );
+    } finally {
+      scheduleNextPoll();
+    }
+  };
+
+  void pollSnapshot();
+
+  return () => {
+    active = false;
+    clearNextPollTimer();
+  };
+}
+
 export function subscribeToDesktopDownloadEngineSnapshots({
   onSnapshot,
   onError,
@@ -436,14 +496,33 @@ export function subscribeToDesktopDownloadEngineSnapshots({
   ensureDesktopLocalDownloadRuntime();
 
   if (typeof EventSource === 'undefined') {
-    throw new Error(
-      'Desktop download runtime event stream is unavailable in the current environment.'
-    );
+    return subscribeToDesktopDownloadEngineSnapshotsByPolling({
+      onSnapshot,
+      onError,
+    });
   }
 
   const eventSource = new EventSource(
     buildDesktopDownloadRuntimeUrl('/tasks/stream')
   );
+  let unsubscribePolling: (() => void) | null = null;
+  let active = true;
+
+  const switchToPolling = (error: Error) => {
+    if (!active || unsubscribePolling) {
+      return;
+    }
+
+    active = false;
+    eventSource.onmessage = null;
+    eventSource.onerror = null;
+    eventSource.close();
+    onError?.(error);
+    unsubscribePolling = subscribeToDesktopDownloadEngineSnapshotsByPolling({
+      onSnapshot,
+      onError,
+    });
+  };
 
   eventSource.onmessage = (event) => {
     if (!event.data) {
@@ -464,12 +543,20 @@ export function subscribeToDesktopDownloadEngineSnapshots({
   };
 
   eventSource.onerror = () => {
-    onError?.(
+    switchToPolling(
       new Error('Desktop download runtime snapshot stream disconnected.')
     );
   };
 
   return () => {
+    if (unsubscribePolling) {
+      unsubscribePolling();
+      return;
+    }
+
+    active = false;
+    eventSource.onmessage = null;
+    eventSource.onerror = null;
     eventSource.close();
   };
 }

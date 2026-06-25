@@ -390,14 +390,32 @@ describe('desktop download runtime task sdk', () => {
     );
   });
 
-  it('subscribes to desktop download engine snapshots over EventSource', () => {
+  it('subscribes to desktop download engine snapshots over EventSource', async () => {
     const snapshot = {
       maxConcurrentTasks: 4,
       tasks: {},
       lastEvent: null,
     };
+    const fallbackSnapshot = {
+      maxConcurrentTasks: 4,
+      tasks: {
+        [buildDownloadTask().id]: buildDownloadTask({
+          status: 'downloading',
+          progress: 50,
+          downloadedResources: 5,
+        }),
+      },
+      lastEvent: {
+        type: 'taskUpserted',
+        taskId: buildDownloadTask().id,
+        status: 'downloading',
+      },
+    };
     const onSnapshot = jest.fn();
     const onError = jest.fn();
+    (global.fetch as jest.Mock).mockResolvedValue(
+      buildJsonResponse(fallbackSnapshot)
+    );
 
     const unsubscribe =
       desktopRuntime.subscribeToDesktopDownloadEngineSnapshots({
@@ -416,16 +434,80 @@ describe('desktop download runtime task sdk', () => {
     MockEventSource.instances[0].emitRawMessage('{');
     expect(onError).toHaveBeenCalledWith(expect.any(Error));
 
+    onSnapshot.mockClear();
     onError.mockClear();
+    const fallbackSnapshotPromise = new Promise((resolve) => {
+      onSnapshot.mockImplementationOnce(resolve as (value: unknown) => void);
+    });
     MockEventSource.instances[0].emitError();
+    await expect(fallbackSnapshotPromise).resolves.toEqual(fallbackSnapshot);
     expect(onError).toHaveBeenCalledWith(
       expect.objectContaining({
         message: 'Desktop download runtime snapshot stream disconnected.',
       })
     );
+    expect(global.fetch).toHaveBeenCalledWith('/api/download-runtime/tasks', {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+    });
+    expect(onSnapshot).toHaveBeenLastCalledWith(fallbackSnapshot);
 
     unsubscribe();
     expect(MockEventSource.instances[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to polling when EventSource is unavailable', async () => {
+    jest.useFakeTimers();
+    const mutableGlobal = globalThis as typeof globalThis & {
+      EventSource?: typeof EventSource;
+    };
+    const originalEventSource = mutableGlobal.EventSource;
+    const snapshot = {
+      maxConcurrentTasks: 2,
+      tasks: {},
+      lastEvent: {
+        type: 'maxConcurrentTasksChanged',
+        maxConcurrentTasks: 2,
+      },
+    };
+    const onSnapshot = jest.fn();
+    const onError = jest.fn();
+
+    try {
+      mutableGlobal.EventSource = undefined as unknown as typeof EventSource;
+      (global.fetch as jest.Mock).mockResolvedValue(
+        buildJsonResponse(snapshot)
+      );
+      const firstSnapshotPromise = new Promise((resolve) => {
+        onSnapshot.mockImplementationOnce(resolve as (value: unknown) => void);
+      });
+
+      const unsubscribe =
+        desktopRuntime.subscribeToDesktopDownloadEngineSnapshots({
+          onSnapshot,
+          onError,
+        });
+
+      await expect(firstSnapshotPromise).resolves.toEqual(snapshot);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(onSnapshot).toHaveBeenCalledWith(snapshot);
+      expect(onError).not.toHaveBeenCalled();
+
+      const secondSnapshotPromise = new Promise((resolve) => {
+        onSnapshot.mockImplementationOnce(resolve as (value: unknown) => void);
+      });
+      jest.advanceTimersByTime(2_000);
+      await expect(secondSnapshotPromise).resolves.toEqual(snapshot);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+
+      unsubscribe();
+      jest.advanceTimersByTime(2_000);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      mutableGlobal.EventSource = originalEventSource;
+      jest.useRealTimers();
+    }
   });
 
   it('rejects calls when the desktop local runtime is unavailable', async () => {
