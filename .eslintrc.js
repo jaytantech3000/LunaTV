@@ -91,6 +91,29 @@ module.exports = {
                 message:
                   'Use "@/lib/download/client" so desktop download execution can switch behind a stable UI boundary.',
               },
+              {
+                name: '@/lib/playback-source-prefetch',
+                message:
+                  'Use "@/lib/playback-source-client" so desktop playback-source routing can switch behind a stable boundary.',
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      files: ['src/lib/download/**/*.{ts,tsx}'],
+      excludedFiles: ['**/*.test.ts', '**/*.test.tsx'],
+      rules: {
+        'no-restricted-imports': [
+          'error',
+          {
+            paths: [
+              {
+                name: '@/lib/playback-source-prefetch',
+                message:
+                  'Use "@/lib/playback-source-client" so download flows do not depend on the legacy playback prefetch module directly.',
+              },
             ],
           },
         ],

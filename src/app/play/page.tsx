@@ -49,7 +49,7 @@ import {
 import {
   preferBestPlaybackSource,
   searchPlaybackSources,
-} from '@/lib/playback-source-prefetch';
+} from '@/lib/playback-source-client';
 import {
   AudioSpikeProtectionStatus,
   PlayerEnhancementManager,

@@ -52,7 +52,7 @@ import {
   MAX_CONCURRENT_DOWNLOAD_TASKS,
   MIN_CONCURRENT_DOWNLOAD_TASKS,
 } from '@/lib/download/types';
-import { searchPlaybackSources } from '@/lib/playback-source-prefetch';
+import { searchPlaybackSources } from '@/lib/playback-source-client';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';

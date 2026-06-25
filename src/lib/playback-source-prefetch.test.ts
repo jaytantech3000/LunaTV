@@ -343,30 +343,11 @@ describe('playback source prefetch helpers', () => {
     }
   });
 
-  it('falls back to the legacy query flow when the desktop playback prefetch route fails', async () => {
+  it('does not fall back to the legacy query flow when the desktop playback prefetch route fails', async () => {
     const originalFetch = global.fetch;
-    const warnSpy = jest
-      .spyOn(console, 'warn')
-      .mockImplementation(() => undefined);
-    const safeMatch = buildSearchResult({
-      id: 'fallback-safe-match',
-      title: '主角',
-      source: 'safe-source',
-      source_name: '普通资源',
-      year: '2025',
-      episodes: [
-        'https://example.com/safe-episode-1/index.m3u8',
-        'https://example.com/safe-episode-2/index.m3u8',
-      ],
-      episodes_titles: ['第1集', '第2集'],
-    });
     const fetchMock = jest
       .fn()
-      .mockRejectedValueOnce(new Error('desktop bridge unavailable'))
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ results: [safeMatch] }),
-      });
+      .mockRejectedValueOnce(new Error('desktop bridge unavailable'));
 
     (getRuntimeConfig as jest.Mock).mockReturnValue({
       APP_TARGET: 'desktop',
@@ -374,22 +355,18 @@ describe('playback source prefetch helpers', () => {
     global.fetch = fetchMock as typeof fetch;
 
     try {
-      const results = await searchPlaybackSources({
-        title: '主角',
-        year: '2025',
-        searchType: 'tv',
-      });
-
-      expect(results.map((result) => result.id)).toEqual([
-        'fallback-safe-match',
-      ]);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await expect(
+        searchPlaybackSources({
+          title: '主角',
+          year: '2025',
+          searchType: 'tv',
+        })
+      ).rejects.toThrow('desktop bridge unavailable');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(String(fetchMock.mock.calls[0][0])).toContain(
         '/api/playback/search-sources'
       );
-      expect(String(fetchMock.mock.calls[1][0])).toContain('/api/search');
     } finally {
-      warnSpy.mockRestore();
       global.fetch = originalFetch;
     }
   });

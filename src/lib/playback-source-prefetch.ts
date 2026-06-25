@@ -551,12 +551,7 @@ export async function searchPlaybackSources(
   params: PlaybackSourcePrefetchParams
 ): Promise<SearchResult[]> {
   if (shouldUseDesktopPlaybackSourcePrefetch()) {
-    try {
-      return await fetchPlaybackSourcesFromDesktopRuntime(params);
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.warn('桌面播放源预筛选失败，回退到前端搜索聚合逻辑:', error);
-    }
+    return fetchPlaybackSourcesFromDesktopRuntime(params);
   }
 
   const queries = buildPlaybackSearchQueries(params);

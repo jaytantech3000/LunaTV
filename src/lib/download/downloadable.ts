@@ -1,4 +1,4 @@
-import { searchPlaybackSources } from '@/lib/playback-source-prefetch';
+import { searchPlaybackSources } from '@/lib/playback-source-client';
 import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 
@@ -89,9 +89,7 @@ export async function resolveDownloadablePlaybackSources(
           .catch((error: unknown) => ({
             detail: null,
             error:
-              error instanceof Error
-                ? error
-                : new Error('获取可下载剧集失败'),
+              error instanceof Error ? error : new Error('获取可下载剧集失败'),
           }))
       : Promise.resolve({
           detail: null,
@@ -121,11 +119,19 @@ export async function resolveDownloadablePlaybackSources(
         }),
   ]);
 
-  if (!detailResult.detail && detailResult.error && searchResult.sources.length === 0) {
+  if (
+    !detailResult.detail &&
+    detailResult.error &&
+    searchResult.sources.length === 0
+  ) {
     throw detailResult.error;
   }
 
-  if (!detailResult.detail && searchResult.error && searchResult.sources.length === 0) {
+  if (
+    !detailResult.detail &&
+    searchResult.error &&
+    searchResult.sources.length === 0
+  ) {
     throw searchResult.error;
   }
 
@@ -142,7 +148,8 @@ export async function resolveDownloadablePlaybackSources(
     detail,
     availableSources: mergedSources.filter(
       (source) =>
-        buildDownloadableSourceKey(source) !== buildDownloadableSourceKey(detail)
+        buildDownloadableSourceKey(source) !==
+        buildDownloadableSourceKey(detail)
     ),
   };
 }

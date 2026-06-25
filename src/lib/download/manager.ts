@@ -1,5 +1,5 @@
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
-import { searchPlaybackSources } from '@/lib/playback-source-prefetch';
+import { searchPlaybackSources } from '@/lib/playback-source-client';
 import { SearchResult } from '@/lib/types';
 
 import { useDownloadStore } from '@/stores/downloadStore';

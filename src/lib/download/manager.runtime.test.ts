@@ -8,7 +8,7 @@ jest.mock('@/lib/auth', () => ({
   })),
 }));
 
-jest.mock('@/lib/playback-source-prefetch', () => ({
+jest.mock('@/lib/playback-source-client', () => ({
   searchPlaybackSources: jest.fn().mockResolvedValue([]),
 }));
 

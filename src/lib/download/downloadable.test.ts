@@ -1,4 +1,4 @@
-jest.mock('@/lib/playback-source-prefetch', () => ({
+jest.mock('@/lib/playback-source-client', () => ({
   searchPlaybackSources: jest.fn(),
 }));
 
@@ -6,7 +6,7 @@ jest.mock('@/lib/transport/api-client', () => ({
   apiFetch: jest.fn(),
 }));
 
-import { searchPlaybackSources } from '@/lib/playback-source-prefetch';
+import { searchPlaybackSources } from '@/lib/playback-source-client';
 import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 
@@ -39,8 +39,9 @@ function createJsonResponse(body: unknown, ok = true): Response {
 }
 
 const apiFetchMock = apiFetch as jest.MockedFunction<typeof apiFetch>;
-const searchPlaybackSourcesMock =
-  searchPlaybackSources as jest.MockedFunction<typeof searchPlaybackSources>;
+const searchPlaybackSourcesMock = searchPlaybackSources as jest.MockedFunction<
+  typeof searchPlaybackSources
+>;
 
 describe('downloadable source helpers', () => {
   beforeEach(() => {
