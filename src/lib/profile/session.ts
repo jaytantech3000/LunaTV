@@ -1,3 +1,4 @@
+import { clearAuthInfoInBrowser } from '@/lib/auth';
 import { purgeOfflineDownloads } from '@/lib/download/session';
 import { buildApiUrl } from '@/lib/transport/endpoint';
 
@@ -91,6 +92,8 @@ export async function fetchProfileResponse(
         }
       );
     }
+
+    clearAuthInfoInBrowser();
 
     try {
       await logoutProfileSession();

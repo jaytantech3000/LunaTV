@@ -23,6 +23,7 @@
 > - 五个 profile 域（`playrecords` / `favorites` / `follows` / `searchhistory` / `skipconfigs`）在桌面本地模式下已经切到 Rust 真源。
 > - 为避免升级后丢失旧数据，桌面本地模式已补上一条 `localStorage -> Rust profile store` 的一次性兼容迁移链路。
 > - `profile-sync/status` 已补充稳定错误分类和同步域元数据，桌面管理页与诊断报告可以直接消费。
+> - profile SDK 在远端 `401` 时会立刻清理本地浏览器态，再执行 `/api/logout` 清理和登录跳转，减少 sync 失效后的脏会话残留。
 > - 当前剩余工作主要集中在 Phase 6 的旧分支进一步收缩，以及更大范围的桌面 Rust 化主线继续推进。
 
 ## 1. 目标
@@ -551,6 +552,10 @@ src/lib/profile/
   - 最近错误
   - 当前同步域
 - 输出故障排查文档
+
+当前进展（2026-06-25）：
+
+- 这一阶段已有一项收尾行为落地：profile SDK 在远端 `401` 时会立即清理本地浏览器态，并继续走既有 `/api/logout` 清理与登录跳转链路。
 
 #### 验收标准
 
