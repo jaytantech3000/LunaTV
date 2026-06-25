@@ -8,6 +8,7 @@ import {
   resumeDesktopDownloadEngineTask,
   syncDesktopDownloadEngineSettings,
   syncDesktopDownloadEngineState,
+  upsertDesktopDownloadEngineTask,
 } from './desktop-engine-sync';
 import {
   cancelDesktopDownloadTask,
@@ -236,6 +237,33 @@ describe('desktop download engine sync', () => {
 
     expect(getDesktopDownloadEngineSnapshot).toHaveBeenCalledTimes(1);
     expect(postDesktopDownloadTask).toHaveBeenCalledWith(task);
+  });
+
+  it('upserts tasks directly into the runtime and refreshes the shared cache', async () => {
+    const task = buildDownloadTask({
+      status: 'downloading',
+      progress: 50,
+    });
+    const snapshot = {
+      maxConcurrentTasks: 3,
+      tasks: {
+        [task.id]: task,
+      },
+      lastEvent: {
+        type: 'taskUpserted',
+        taskId: task.id,
+        status: task.status,
+      },
+    };
+
+    (postDesktopDownloadTask as jest.Mock).mockResolvedValue(snapshot);
+
+    await expect(upsertDesktopDownloadEngineTask(task)).resolves.toEqual(
+      snapshot
+    );
+
+    expect(postDesktopDownloadTask).toHaveBeenCalledWith(task);
+    expect(getDesktopDownloadEngineSnapshot).not.toHaveBeenCalled();
   });
 
   it('accepts externally hydrated engine snapshots into the shared cache', async () => {

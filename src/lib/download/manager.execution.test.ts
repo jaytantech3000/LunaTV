@@ -33,7 +33,21 @@ jest.mock('./resource-index', () => ({
   putResourceIndex: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('./desktop-runtime', () => ({
+  isDesktopLocalDownloadRuntimeEnabled: jest.fn(),
+}));
+
+jest.mock('./desktop-engine-sync', () => ({
+  cancelDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
+  deleteMirroredDesktopDownloadTask: jest.fn().mockResolvedValue(undefined),
+  pauseDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
+  resumeDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
+  upsertDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
+}));
+
 import { hasCachedDownload } from './cache';
+import { upsertDesktopDownloadEngineTask } from './desktop-engine-sync';
+import { isDesktopLocalDownloadRuntimeEnabled } from './desktop-runtime';
 import { downloadManager, resolveDownloadResourceCachedState } from './manager';
 import { parseManifestForDownloadWithFallback } from './manifest';
 
@@ -106,11 +120,20 @@ describe('resolveDownloadResourceCachedState', () => {
 
 describe('downloadManager cache lookup fallback', () => {
   const originalFetch = global.fetch;
+  const mockIsDesktopLocalDownloadRuntimeEnabled = jest.mocked(
+    isDesktopLocalDownloadRuntimeEnabled
+  );
+  const mockUpsertDesktopDownloadEngineTask = jest.mocked(
+    upsertDesktopDownloadEngineTask
+  );
 
   beforeEach(() => {
     jest.useRealTimers();
     mockedHasCachedDownload.mockReset();
     mockedParseManifestForDownloadWithFallback.mockReset();
+    mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(true);
+    mockUpsertDesktopDownloadEngineTask.mockReset();
+    mockUpsertDesktopDownloadEngineTask.mockResolvedValue(undefined as never);
     resetDownloadStore();
     localStorage.clear();
   });
@@ -170,6 +193,15 @@ describe('downloadManager cache lookup fallback', () => {
       progress: 100,
       sizeBytes: 12,
     });
+    expect(mockUpsertDesktopDownloadEngineTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: task.id,
+        status: 'done',
+        progress: 100,
+        downloadedResources: 1,
+        totalResources: 1,
+      })
+    );
     expect(warnSpy).toHaveBeenCalled();
   });
 });

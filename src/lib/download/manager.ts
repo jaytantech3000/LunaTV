@@ -15,6 +15,7 @@ import {
   deleteMirroredDesktopDownloadTask,
   pauseDesktopDownloadEngineTask,
   resumeDesktopDownloadEngineTask,
+  upsertDesktopDownloadEngineTask,
 } from './desktop-engine-sync';
 import { isDesktopLocalDownloadRuntimeEnabled } from './desktop-runtime';
 import { parseManifestForDownloadWithFallback } from './manifest';
@@ -90,8 +91,28 @@ const MAX_RESOURCE_DOWNLOAD_RETRIES = 2;
 const RESOURCE_DOWNLOAD_TIMEOUT_MS = 45_000;
 const RESOURCE_CACHE_LOOKUP_TIMEOUT_MS = 8_000;
 const PROGRESS_FLUSH_INTERVAL_MS = 250;
+const DESKTOP_RUNTIME_TASK_UPSERT_DEBOUNCE_MS = 200;
 const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
+
+interface TaskRuntimeSyncOptions {
+  syncDesktopRuntime?: 'upsert' | 'none';
+  immediate?: boolean;
+}
+
+const pendingDesktopTaskUpsertTimers = new Map<
+  string,
+  ReturnType<typeof setTimeout>
+>();
+
+function cloneDownloadTaskForRuntime(task: DownloadTask): DownloadTask {
+  return {
+    ...task,
+    manifestCandidateUrls: task.manifestCandidateUrls
+      ? [...task.manifestCandidateUrls]
+      : undefined,
+  };
+}
 
 function getCurrentOwnerUsername(): string {
   const username = getAuthInfoFromBrowserCookie()?.username?.trim();
@@ -156,17 +177,94 @@ function syncDesktopDownloadEngineCommand(
   void operation().catch(() => undefined);
 }
 
-function upsertTask(task: DownloadTask): void {
+function clearScheduledDesktopTaskUpsert(taskId: string): void {
+  const timer = pendingDesktopTaskUpsertTimers.get(taskId);
+  if (!timer) {
+    return;
+  }
+
+  clearTimeout(timer);
+  pendingDesktopTaskUpsertTimers.delete(taskId);
+}
+
+function clearAllScheduledDesktopTaskUpserts(): void {
+  pendingDesktopTaskUpsertTimers.forEach((timer) => {
+    clearTimeout(timer);
+  });
+  pendingDesktopTaskUpsertTimers.clear();
+}
+
+function scheduleDesktopTaskUpsert(
+  task: DownloadTask,
+  options: {
+    immediate?: boolean;
+  } = {}
+): void {
+  if (!isDesktopLocalDownloadRuntimeEnabled()) {
+    return;
+  }
+
+  clearScheduledDesktopTaskUpsert(task.id);
+  const runtimeTask = cloneDownloadTaskForRuntime(task);
+  const submit = () => {
+    pendingDesktopTaskUpsertTimers.delete(runtimeTask.id);
+    void upsertDesktopDownloadEngineTask(runtimeTask).catch(() => undefined);
+  };
+
+  if (options.immediate) {
+    submit();
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    submit();
+  }, DESKTOP_RUNTIME_TASK_UPSERT_DEBOUNCE_MS);
+
+  pendingDesktopTaskUpsertTimers.set(runtimeTask.id, timer);
+}
+
+function upsertTask(
+  task: DownloadTask,
+  options: TaskRuntimeSyncOptions = {}
+): void {
   useDownloadStore.getState().upsertTask(task);
+  if (options.syncDesktopRuntime !== 'none') {
+    scheduleDesktopTaskUpsert(task, {
+      immediate: options.immediate,
+    });
+  }
 }
 
 function patchTask(
   taskId: string,
-  updater: (task: DownloadTask) => DownloadTask
+  updater: (task: DownloadTask) => DownloadTask,
+  options: TaskRuntimeSyncOptions = {}
 ): void {
-  useDownloadStore
-    .getState()
-    .patchTask(taskId, (task) => (task ? updater(task) : undefined));
+  let nextTask: DownloadTask | undefined;
+  useDownloadStore.getState().patchTask(taskId, (task) => {
+    if (!task) {
+      return undefined;
+    }
+
+    nextTask = updater(task);
+    return nextTask;
+  });
+
+  if (!nextTask) {
+    clearScheduledDesktopTaskUpsert(taskId);
+    return;
+  }
+
+  if (options.syncDesktopRuntime !== 'none') {
+    scheduleDesktopTaskUpsert(nextTask, {
+      immediate: options.immediate,
+    });
+  }
+}
+
+function removeTask(taskId: string): void {
+  clearScheduledDesktopTaskUpsert(taskId);
+  useDownloadStore.getState().removeTask(taskId);
 }
 
 function mergeManifestCandidateUrls(...candidateLists: string[][]): string[] {
@@ -677,28 +775,38 @@ class DownloadManager {
   private setTaskStatus(
     taskId: string,
     status: DownloadTaskStatus,
-    extra: Partial<DownloadTask> = {}
+    extra: Partial<DownloadTask> = {},
+    options: TaskRuntimeSyncOptions = {}
   ): void {
-    patchTask(taskId, (task) => ({
-      ...task,
-      ...(status === 'downloading'
-        ? {}
-        : {
-            currentSizeBytes:
-              typeof extra.currentSizeBytes === 'number'
-                ? extra.currentSizeBytes
-                : typeof extra.sizeBytes === 'number'
-                ? extra.sizeBytes
-                : task.sizeBytes,
-            downloadSpeedBytesPerSecond:
-              typeof extra.downloadSpeedBytesPerSecond === 'number'
-                ? extra.downloadSpeedBytesPerSecond
-                : 0,
-          }),
-      ...extra,
-      status,
-      updatedAt: now(),
-    }));
+    patchTask(
+      taskId,
+      (task) => ({
+        ...task,
+        ...(status === 'downloading'
+          ? {}
+          : {
+              currentSizeBytes:
+                typeof extra.currentSizeBytes === 'number'
+                  ? extra.currentSizeBytes
+                  : typeof extra.sizeBytes === 'number'
+                  ? extra.sizeBytes
+                  : task.sizeBytes,
+              downloadSpeedBytesPerSecond:
+                typeof extra.downloadSpeedBytesPerSecond === 'number'
+                  ? extra.downloadSpeedBytesPerSecond
+                  : 0,
+            }),
+        ...extra,
+        status,
+        updatedAt: now(),
+      }),
+      {
+        syncDesktopRuntime: options.syncDesktopRuntime ?? 'upsert',
+        immediate:
+          options.immediate ??
+          (status === 'done' || status === 'error' || status === 'queued'),
+      }
+    );
   }
 
   private async ensureStoragePersistence(): Promise<void> {
@@ -971,7 +1079,10 @@ class DownloadManager {
       };
     }
 
-    upsertTask(nextTask);
+    upsertTask(nextTask, {
+      syncDesktopRuntime: 'upsert',
+      immediate: true,
+    });
     return {
       task: nextTask,
       queued: true,
@@ -1401,7 +1512,7 @@ class DownloadManager {
           !currentTask ||
           currentTask.createdAt === taskForCleanup.createdAt
         ) {
-          useDownloadStore.getState().removeTask(taskId);
+          removeTask(taskId);
         }
       } else {
         if (currentTask) {
@@ -1566,7 +1677,7 @@ class DownloadManager {
       return;
     }
 
-    const { library, removeLibraryItem, removeTask, upsertLibraryItem } =
+    const { library, removeLibraryItem, upsertLibraryItem } =
       useDownloadStore.getState();
     const content = library[contentId];
 
@@ -1622,9 +1733,17 @@ class DownloadManager {
       runner.controllers.forEach((controller) => controller.abort());
     }
 
-    this.setTaskStatus(taskId, 'paused', {
-      errorMessage: undefined,
-    });
+    clearScheduledDesktopTaskUpsert(taskId);
+    this.setTaskStatus(
+      taskId,
+      'paused',
+      {
+        errorMessage: undefined,
+      },
+      {
+        syncDesktopRuntime: 'none',
+      }
+    );
     this.schedulePendingTasks();
     syncDesktopDownloadEngineCommand(() =>
       pauseDesktopDownloadEngineTask(taskId)
@@ -1641,9 +1760,17 @@ class DownloadManager {
       return;
     }
 
-    this.setTaskStatus(taskId, 'queued', {
-      errorMessage: undefined,
-    });
+    clearScheduledDesktopTaskUpsert(taskId);
+    this.setTaskStatus(
+      taskId,
+      'queued',
+      {
+        errorMessage: undefined,
+      },
+      {
+        syncDesktopRuntime: 'none',
+      }
+    );
     this.schedulePendingTasks();
     syncDesktopDownloadEngineCommand(() =>
       resumeDesktopDownloadEngineTask(taskId)
@@ -1682,7 +1809,7 @@ class DownloadManager {
     if (runner) {
       runner.mode = 'cancelled';
       runner.controllers.forEach((controller) => controller.abort());
-      useDownloadStore.getState().removeTask(taskId);
+      removeTask(taskId);
       this.schedulePendingTasks();
       syncDesktopDownloadEngineCommand(() =>
         cancelDesktopDownloadEngineTask(taskId)
@@ -1690,7 +1817,7 @@ class DownloadManager {
       return;
     }
 
-    useDownloadStore.getState().removeTask(taskId);
+    removeTask(taskId);
     this.removeTaskResourcesInBackground(task);
     this.schedulePendingTasks();
     syncDesktopDownloadEngineCommand(() =>
@@ -1717,7 +1844,7 @@ class DownloadManager {
       return;
     }
 
-    const { library, removeLibraryItem, removeTask, upsertLibraryItem } =
+    const { library, removeLibraryItem, upsertLibraryItem } =
       useDownloadStore.getState();
     const content = library[contentId];
     if (!content) {
@@ -1761,6 +1888,7 @@ class DownloadManager {
   }
 
   abortAll(): void {
+    clearAllScheduledDesktopTaskUpserts();
     Array.from(this.runners.keys()).forEach((taskId) => {
       this.stopRunner(taskId);
     });

@@ -1,3 +1,5 @@
+import type { SearchResult } from '@/lib/types';
+
 import { useDownloadStore } from '@/stores/downloadStore';
 
 jest.mock('@/lib/auth', () => ({
@@ -38,6 +40,7 @@ jest.mock('./desktop-engine-sync', () => ({
   deleteMirroredDesktopDownloadTask: jest.fn().mockResolvedValue(undefined),
   pauseDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
   resumeDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
+  upsertDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
 }));
 
 import {
@@ -45,10 +48,28 @@ import {
   deleteMirroredDesktopDownloadTask,
   pauseDesktopDownloadEngineTask,
   resumeDesktopDownloadEngineTask,
+  upsertDesktopDownloadEngineTask,
 } from './desktop-engine-sync';
 import { isDesktopLocalDownloadRuntimeEnabled } from './desktop-runtime';
 import { downloadManager } from './manager';
+import { parseManifestForDownloadWithFallback } from './manifest';
 import type { DownloadTask } from './types';
+
+function buildSearchResult(partial: Partial<SearchResult> = {}): SearchResult {
+  return {
+    id: partial.id || '1',
+    title: partial.title || 'Demo Title',
+    poster: partial.poster || 'https://img.example.com/demo.jpg',
+    episodes: partial.episodes || ['https://cdn.example.com/root.m3u8'],
+    episodes_titles: partial.episodes_titles || ['Episode 1'],
+    source: partial.source || 'demo',
+    source_name: partial.source_name || 'Demo Source',
+    year: partial.year || '2026',
+    desc: partial.desc,
+    type_name: partial.type_name,
+    douban_id: partial.douban_id,
+  };
+}
 
 function buildDownloadTask(partial: Partial<DownloadTask> = {}): DownloadTask {
   return {
@@ -106,11 +127,32 @@ describe('download manager desktop runtime command bridge', () => {
   const mockIsDesktopLocalDownloadRuntimeEnabled = jest.mocked(
     isDesktopLocalDownloadRuntimeEnabled
   );
+  const mockParseManifestForDownloadWithFallback = jest.mocked(
+    parseManifestForDownloadWithFallback
+  );
 
   beforeEach(() => {
     jest.clearAllMocks();
     resetDownloadStore();
     mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(true);
+    mockParseManifestForDownloadWithFallback.mockImplementation(
+      (_candidateUrls, options) =>
+        new Promise((_, reject) => {
+          const signal = options?.signal;
+          const rejectWhenAborted = () => {
+            reject(new Error('aborted'));
+          };
+
+          if (signal?.aborted) {
+            rejectWhenAborted();
+            return;
+          }
+
+          signal?.addEventListener('abort', rejectWhenAborted, {
+            once: true,
+          });
+        }) as ReturnType<typeof parseManifestForDownloadWithFallback>
+    );
   });
 
   afterEach(() => {
@@ -210,6 +252,60 @@ describe('download manager desktop runtime command bridge', () => {
     expect(deleteMirroredDesktopDownloadTask).toHaveBeenCalledWith(task.id);
   });
 
+  it('upserts newly queued tasks into the desktop runtime immediately', async () => {
+    const task = await downloadManager.startEpisodeDownload({
+      detail: buildSearchResult(),
+      episodeIndex: 0,
+    });
+
+    expect(upsertDesktopDownloadEngineTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: task.id,
+        status: 'queued',
+      })
+    );
+  });
+
+  it('upserts re-queued paused tasks into the desktop runtime without waiting for store sync', async () => {
+    const pausedTask = buildDownloadTask({
+      status: 'paused',
+      errorMessage: 'temporary failure',
+    });
+    useDownloadStore.setState({
+      tasks: {
+        [pausedTask.id]: pausedTask,
+      },
+    });
+
+    const result = await downloadManager.startEpisodeDownload({
+      detail: buildSearchResult({
+        id: pausedTask.vodId,
+        source: pausedTask.source,
+        source_name: pausedTask.sourceName,
+        title: pausedTask.title,
+        poster: pausedTask.poster,
+        year: pausedTask.year,
+        desc: pausedTask.desc,
+        type_name: pausedTask.typeName,
+        douban_id: pausedTask.doubanId,
+        episodes: [pausedTask.originalM3u8Url],
+        episodes_titles: [pausedTask.episodeTitle],
+      }),
+      episodeIndex: pausedTask.episodeIndex,
+      searchTitle: pausedTask.searchTitle,
+      searchType: pausedTask.searchType,
+    });
+
+    expect(result.status).toBe('queued');
+    expect(upsertDesktopDownloadEngineTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: pausedTask.id,
+        status: 'queued',
+        errorMessage: undefined,
+      })
+    );
+  });
+
   it('keeps local behavior when the desktop runtime is unavailable', async () => {
     const task = buildDownloadTask();
     mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(false);
@@ -227,5 +323,6 @@ describe('download manager desktop runtime command bridge', () => {
     expect(pauseDesktopDownloadEngineTask).not.toHaveBeenCalled();
     expect(resumeDesktopDownloadEngineTask).not.toHaveBeenCalled();
     expect(cancelDesktopDownloadEngineTask).not.toHaveBeenCalled();
+    expect(upsertDesktopDownloadEngineTask).not.toHaveBeenCalled();
   });
 });

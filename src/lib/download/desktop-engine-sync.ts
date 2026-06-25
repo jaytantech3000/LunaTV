@@ -131,6 +131,14 @@ export async function syncDesktopDownloadEngineSettings(
   );
 }
 
+export async function upsertDesktopDownloadEngineTask(
+  task: DownloadTask
+): Promise<DesktopDownloadEngineSnapshot> {
+  return mutateDesktopDownloadEngineSnapshot(() =>
+    postDesktopDownloadTask(task)
+  );
+}
+
 export async function pauseDesktopDownloadEngineTask(
   taskId: string
 ): Promise<DesktopDownloadEngineSnapshot> {
