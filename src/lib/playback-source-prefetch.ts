@@ -5,6 +5,8 @@ import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8 } from '@/lib/utils';
 import { filterAdultContentResults } from '@/lib/yellow';
 
+import { fetchContentSearchResults } from './content-discovery-client';
+
 export interface PlaybackSourceMetrics {
   quality: string;
   loadSpeed: string;
@@ -409,17 +411,9 @@ function hasHighConfidenceDoubanMatch(
 async function fetchPlaybackSearchQuery(
   query: string
 ): Promise<SearchResult[]> {
-  const response = await apiFetch('/search', {
+  return fetchContentSearchResults(query, {
     credentials: 'same-origin',
-    searchParams: { q: query },
   });
-
-  if (!response.ok) {
-    throw new Error('搜索失败');
-  }
-
-  const data = (await response.json()) as { results?: SearchResult[] };
-  return Array.isArray(data.results) ? data.results : [];
 }
 
 function shouldUseDesktopPlaybackSourcePrefetch(): boolean {

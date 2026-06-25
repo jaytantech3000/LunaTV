@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { apiFetch } from '@/lib/transport/api-client';
+import { fetchContentSuggestions } from '@/lib/content-discovery-client';
 
 interface SearchSuggestionsProps {
   query: string;
@@ -43,22 +43,15 @@ export default function SearchSuggestions({
     abortControllerRef.current = controller;
 
     try {
-      const response = await apiFetch('/search/suggestions', {
-        searchParams: {
-          q: searchQuery,
-        },
+      const apiSuggestions = await fetchContentSuggestions(searchQuery, {
         signal: controller.signal,
       });
-      if (response.ok) {
-        const data = await response.json();
-        const apiSuggestions = data.suggestions.map(
-          (item: { text: string }) => ({
-            text: item.text,
-            type: 'related' as const,
-          })
-        );
-        setSuggestions(apiSuggestions);
-      }
+      setSuggestions(
+        apiSuggestions.map((item) => ({
+          text: item.text,
+          type: 'related' as const,
+        }))
+      );
     } catch (err: unknown) {
       // 类型保护判断 err 是否是 Error 类型
       if (err instanceof Error) {
@@ -156,7 +149,7 @@ export default function SearchSuggestions({
         <button
           key={`related-${suggestion.text}`}
           onClick={() => onSelect(suggestion.text)}
-          className="w-full px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-150 flex items-center gap-3"
+          className='w-full px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-150 flex items-center gap-3'
         >
           <span className='flex-1 text-sm text-gray-700 dark:text-gray-300 truncate'>
             {suggestion.text}

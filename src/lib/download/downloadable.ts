@@ -1,5 +1,5 @@
+import { fetchContentDetail } from '@/lib/content-discovery-client';
 import { searchPlaybackSources } from '@/lib/playback-source-client';
-import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 
 import { normalizeVodDetailForPlayback } from './normalize';
@@ -53,20 +53,15 @@ async function fetchDownloadableDetail(
   source: string,
   id: string
 ): Promise<SearchResult> {
-  const response = await apiFetch('/detail', {
-    searchParams: {
+  const payload = await fetchContentDetail(
+    {
       source,
       id,
     },
-    cache: 'no-store',
-  });
-  const payload = (await response.json()) as SearchResult & {
-    error?: string;
-  };
-
-  if (!response.ok) {
-    throw new Error(payload.error || '获取可下载剧集失败');
-  }
+    {
+      cache: 'no-store',
+    }
+  );
 
   return normalizeVodDetailForPlayback(payload);
 }

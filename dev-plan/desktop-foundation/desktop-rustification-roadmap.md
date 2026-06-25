@@ -19,6 +19,7 @@
 > - Phase 2A 已继续收口第二刀：`src/lib/playback-source-client.ts` 现已成为播放源统一入口，播放页与下载相关链路不再直接 import `playback-source-prefetch`；桌面运行时在 `/api/playback/search-sources` 失败时也不再回退到旧的 TS 查询聚合分支。
 > - Phase 2A 已继续收口第三刀：local service 内部的播放源预抓取 facade 已从 `crates/moontv-local-service/src/lib.rs` 拆到独立的 `crates/moontv-local-service/src/playback_prefetch.rs`，本地服务路由层只再负责装配与复用。
 > - Phase 2A 已继续收口第四刀：`/api/detail` 相关 handler 与 detail HTML/JSON 解析逻辑也已拆到 `crates/moontv-local-service/src/content_detail.rs`，为后续把 `/api/search` 与建议词链路继续模块化留出边界。
+> - Phase 2A 已继续收口第五刀：`src/lib/content-discovery-client.ts` 已成为前端共享的 `search/detail/suggestions` 入口，播放页、下载解析、追更刷新、搜索建议与传统搜索 fallback 不再各自拼装这组内容发现请求。
 > - Phase 1 也已经开始落下“先搭骨架、不切主流程”的第一刀：新增 `moontv-download` crate，桌面本地服务补齐 `/api/download-runtime/tasks*` 命令 / 状态查询 skeleton，并把下载引擎快照持久化到 SQLite `app_metadata`。
 > - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
@@ -278,6 +279,8 @@ Rust Shared Crates
 - 桌面运行时在 `/api/playback/search-sources` 失败时不再回退到旧的 TypeScript 查询聚合分支；这意味着桌面播放源发现主路径已不再依赖 TS 侧 query fallback、结果聚合与候选预筛选逻辑。
 - `crates/moontv-local-service/src/playback_prefetch.rs` 现已接管 local service 的播放源预抓取 facade；`lib.rs` 仅保留路由与共享能力编排，便于继续把详情聚合与后续媒体网络逻辑拆成独立模块。
 - `crates/moontv-local-service/src/content_detail.rs` 现已接管 `/api/detail` handler 与 detail JSON/HTML 聚合逻辑；`lib.rs` 不再直接承载这部分 detail facade，为继续抽离 `/api/search`、建议词与更多内容发现协议层做准备。
+- `src/lib/content-discovery-client.ts` 现已统一承接 `detail` / `search` / `search/suggestions` 这组前端内容发现请求；播放页、下载解析、追更刷新、搜索建议与传统搜索 fallback 不再各自直连底层 transport 组装这些请求。
+- 在已完全切走的调用点上，也补了 ESLint 限制，防止这些模块重新直接 import 底层 transport 层回到散点请求。
 - Web 路径仍保留原有 TypeScript `playback-source-prefetch` 逻辑，因此这一刀解决的是“桌面主路径继续收口”，还没有完成整段搜索 / 详情链路对 Web 侧兼容层的全量清理。
 
 #### Phase 2B：媒体代理

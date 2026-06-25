@@ -1,6 +1,7 @@
 'use client';
 
 import { getAuthInfoFromBrowserCookie } from './auth';
+import { fetchContentDetail } from './content-discovery-client';
 import { normalizeVodDetailForPlayback } from './download/normalize';
 import {
   deleteFollowRecord,
@@ -9,7 +10,6 @@ import {
   saveFollowRecord,
 } from './profile/client';
 import { resolveProfileRuntime } from './profile/runtime';
-import { apiFetch } from './transport/api-client';
 import { FollowRecord, SearchResult } from './types';
 
 const FOLLOW_REFRESH_CONCURRENCY = 3;
@@ -112,20 +112,15 @@ async function fetchFollowDetail(
   source: string,
   id: string
 ): Promise<SearchResult> {
-  const response = await apiFetch('/detail', {
-    searchParams: {
+  const payload = await fetchContentDetail(
+    {
       source,
       id,
     },
-    cache: 'no-store',
-  });
-  const payload = (await response.json()) as SearchResult & {
-    error?: string;
-  };
-
-  if (!response.ok) {
-    throw new Error(payload.error || '获取追更详情失败');
-  }
+    {
+      cache: 'no-store',
+    }
+  );
 
   return normalizeVodDetailForPlayback(payload);
 }

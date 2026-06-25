@@ -119,6 +119,34 @@ module.exports = {
         ],
       },
     },
+    {
+      files: [
+        'src/app/play/page.tsx',
+        'src/components/DownloadsClient.tsx',
+        'src/components/SearchSuggestions.tsx',
+        'src/lib/download/downloadable.ts',
+        'src/lib/follow-updates.ts',
+      ],
+      rules: {
+        'no-restricted-imports': [
+          'error',
+          {
+            paths: [
+              {
+                name: '@/lib/transport/api-client',
+                message:
+                  'Use "@/lib/content-discovery-client" so content discovery requests stay behind a stable desktop/web boundary.',
+              },
+              {
+                name: '@/lib/transport/endpoint',
+                message:
+                  'Use "@/lib/content-discovery-client" so content discovery stream URLs stay behind a stable desktop/web boundary.',
+              },
+            ],
+          },
+        ],
+      },
+    },
   ],
   globals: {
     React: true,

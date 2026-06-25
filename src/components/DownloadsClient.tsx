@@ -7,6 +7,10 @@ import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 
 import {
+  fetchContentDetail,
+  fetchContentSearchResults,
+} from '@/lib/content-discovery-client';
+import {
   buildAdultContentMatchKey,
   buildAdultDownloadGroupingKey,
   buildAdultDownloadGroupingQuery,
@@ -54,7 +58,6 @@ import {
 } from '@/lib/download/types';
 import { searchPlaybackSources } from '@/lib/playback-source-client';
 import { acquireScrollLock } from '@/lib/scroll-lock';
-import { apiFetch } from '@/lib/transport/api-client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 import { isAdultContentResult } from '@/lib/yellow';
@@ -2485,24 +2488,15 @@ export function DownloadedContentDialog({
     availableSources: SearchResult[];
   }> => {
     const [detailResponse, matchedSources] = await Promise.all([
-      (async () => {
-        const searchParams = new URLSearchParams({
+      fetchContentDetail(
+        {
           source: targetContent.source,
           id: targetContent.vodId,
-        });
-        const response = await fetch(`/api/detail?${searchParams.toString()}`, {
+        },
+        {
           cache: 'no-store',
-        });
-        const payload = (await response.json()) as SearchResult & {
-          error?: string;
-        };
-
-        if (!response.ok) {
-          throw new Error(payload.error || '获取可下载剧集失败');
         }
-
-        return payload;
-      })(),
+      ),
       searchPlaybackSources({
         title: targetContent.title,
         year:
@@ -2672,25 +2666,12 @@ export function DownloadedContentDialog({
       setIsLoadingAdultGroupedContents(true);
       setMoreDownloadsError(null);
 
-      const response = await apiFetch('/search', {
-        cache: 'no-store',
-        credentials: 'same-origin',
-        searchParams: {
-          q: adultGroupingQuery,
-          adult: '1',
-        },
-      });
-      const payload = (await response.json()) as {
-        results?: SearchResult[];
-        error?: string;
-      };
-
-      if (!response.ok) {
-        throw new Error(payload.error || '获取归集资源失败');
-      }
-
       const normalizedResults = normalizeVodSearchResultsForPlayback(
-        Array.isArray(payload.results) ? payload.results : []
+        await fetchContentSearchResults(adultGroupingQuery, {
+          allowAdultResults: true,
+          cache: 'no-store',
+          credentials: 'same-origin',
+        })
       );
       const filteredResults = filterAdultGroupingSearchResults(
         normalizedResults,

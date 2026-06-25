@@ -15,6 +15,7 @@ import {
   useState,
 } from 'react';
 
+import { fetchContentDetail } from '@/lib/content-discovery-client';
 import {
   bindDesktopPlayerPresentationFullscreenState,
   toggleDesktopPlayerPresentationFullscreenState,
@@ -85,7 +86,6 @@ import {
 } from '@/lib/profile/client';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
-import { apiFetch } from '@/lib/transport/api-client';
 import { FollowRecord, SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 import { isAdultContentResult } from '@/lib/yellow';
@@ -1288,14 +1288,8 @@ function PlayPageClient() {
       id: string
     ): Promise<SearchResult[]> => {
       try {
-        const detailResponse = await apiFetch('/detail', {
-          searchParams: { source, id },
-        });
-        if (!detailResponse.ok) {
-          throw new Error('获取视频详情失败');
-        }
         const detailData = normalizeVodDetailForPlayback(
-          (await detailResponse.json()) as SearchResult
+          await fetchContentDetail({ source, id })
         );
         setAvailableSources([detailData]);
         return [detailData];

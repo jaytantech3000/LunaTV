@@ -10,6 +10,10 @@ import React, {
   useState,
 } from 'react';
 
+import {
+  buildContentSearchStreamUrl,
+  fetchContentSearchResults,
+} from '@/lib/content-discovery-client';
 import { getPreferredFluidSearchSetting } from '@/lib/fluid-search';
 import {
   addSearchHistory,
@@ -27,7 +31,6 @@ import {
   type SearchHistoryMode,
 } from '@/lib/search-history';
 import { apiFetch } from '@/lib/transport/api-client';
-import { buildApiUrl } from '@/lib/transport/endpoint';
 import { SearchResult } from '@/lib/types';
 
 import {
@@ -821,11 +824,7 @@ function LegacySearchPageClient({
 
       if (currentFluidSearch) {
         // 流式搜索：打开新的流式连接
-        const es = new EventSource(
-          buildApiUrl('/search/ws', {
-            q: trimmed,
-          })
-        );
+        const es = new EventSource(buildContentSearchStreamUrl(trimmed));
         eventSourceRef.current = es;
 
         es.onmessage = (event) => {
@@ -919,27 +918,20 @@ function LegacySearchPageClient({
         };
       } else {
         // 传统搜索：使用普通接口
-        apiFetch('/search', {
-          searchParams: {
-            q: trimmed,
-          },
-        })
-          .then((response) => response.json())
-          .then((data) => {
+        fetchContentSearchResults(trimmed)
+          .then((results) => {
             if (currentQueryRef.current !== trimmed) return;
 
-            if (data.results && Array.isArray(data.results)) {
-              const activeYearOrder =
-                viewMode === 'agg' ? filterAgg.yearOrder : filterAll.yearOrder;
-              const results: SearchResult[] =
-                activeYearOrder === 'none'
-                  ? sortBatchForNoOrder(data.results as SearchResult[])
-                  : (data.results as SearchResult[]);
+            const activeYearOrder =
+              viewMode === 'agg' ? filterAgg.yearOrder : filterAll.yearOrder;
+            const nextResults: SearchResult[] =
+              activeYearOrder === 'none'
+                ? sortBatchForNoOrder(results)
+                : results;
 
-              setSearchResults(results);
-              setTotalSources(1);
-              setCompletedSources(1);
-            }
+            setSearchResults(nextResults);
+            setTotalSources(1);
+            setCompletedSources(1);
             setIsLoading(false);
           })
           .catch(() => {
