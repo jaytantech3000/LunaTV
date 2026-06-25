@@ -26,10 +26,7 @@ import {
 } from './contracts';
 import { cacheManager, getCacheStatus } from './hybrid-cache';
 import {
-  clearLocalFavorites,
-  readLocalFavorites,
   readLocalFollowRecords,
-  writeLocalFavorites,
   writeLocalFollowRecords,
 } from './local-adapter';
 import {
@@ -45,6 +42,13 @@ import { generateStorageKey } from './storage-key';
 import { type FollowRecord, SkipConfig } from '../types';
 
 export type { Favorite, PlayRecord } from './contracts';
+export {
+  clearAllFavorites,
+  deleteFavorite,
+  getAllFavorites,
+  isFavorited,
+  saveFavorite,
+} from './favorites-client';
 export { getCacheStatus } from './hybrid-cache';
 export {
   clearAllPlayRecords,
@@ -115,7 +119,7 @@ export function getCachedFollowRecordsSnapshot(): Record<
  * 立即从数据库刷新对应类型的缓存以保持数据一致性
  */
 async function handleDatabaseOperationFailure(
-  dataType: 'favorites' | 'followRecords',
+  dataType: 'followRecords',
   error: any
 ): Promise<void> {
   if (wasRedirectedToLogin(error) || isUnauthorizedRequestError(error)) {
@@ -126,31 +130,11 @@ async function handleDatabaseOperationFailure(
   triggerGlobalError(`数据库操作失败`);
 
   try {
-    let freshData: any;
-    let eventType: ProfileCacheUpdateEvent;
-    let eventDetail: any;
-
-    switch (dataType) {
-      case 'favorites':
-        freshData = await fetchFromApi<Record<string, Favorite>>(
-          USER_DATA_API_PATHS.favorites
-        );
-        cacheManager.cacheFavorites(freshData);
-        eventType = 'favoritesUpdated';
-        eventDetail = freshData;
-        break;
-      case 'followRecords':
-        freshData = await fetchFromApi<Record<string, FollowRecord>>(
-          USER_DATA_API_PATHS.follows
-        );
-        cacheManager.cacheFollowRecords(freshData);
-        eventType = 'followRecordsUpdated';
-        eventDetail = freshData;
-        break;
-    }
-
-    // 触发更新事件通知组件
-    dispatchDataUpdate(eventType, eventDetail);
+    const freshData = await fetchFromApi<Record<string, FollowRecord>>(
+      USER_DATA_API_PATHS.follows
+    );
+    cacheManager.cacheFollowRecords(freshData);
+    dispatchDataUpdate('followRecordsUpdated', freshData);
   } catch (refreshErr) {
     if (
       wasRedirectedToLogin(refreshErr) ||
@@ -167,222 +151,6 @@ async function handleDatabaseOperationFailure(
 // 页面加载时清理过期缓存
 if (typeof window !== 'undefined') {
   setTimeout(() => cacheManager.clearExpiredCaches(), 1000);
-}
-
-// ---------------- 收藏相关 API ----------------
-
-/**
- * 获取全部收藏。
- * 数据库存储模式下使用混合缓存策略：优先返回缓存数据，后台异步同步最新数据。
- */
-export async function getAllFavorites(): Promise<Record<string, Favorite>> {
-  // 服务器端渲染阶段直接返回空
-  if (typeof window === 'undefined') {
-    return {};
-  }
-
-  // 数据库存储模式：使用混合缓存策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 优先从缓存获取数据
-    const cachedData = cacheManager.getCachedFavorites();
-
-    if (cachedData) {
-      // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, Favorite>>(USER_DATA_API_PATHS.favorites)
-        .then((freshData) => {
-          // 只有数据真正不同时才更新缓存
-          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
-            cacheManager.cacheFavorites(freshData);
-            // 触发数据更新事件
-            dispatchDataUpdate('favoritesUpdated', freshData);
-          }
-        })
-        .catch((err) => {
-          console.warn('后台同步收藏失败:', err);
-          triggerGlobalError('后台同步收藏失败');
-        });
-
-      return cachedData;
-    } else {
-      // 缓存为空，直接从 API 获取并缓存
-      try {
-        const freshData = await fetchFromApi<Record<string, Favorite>>(
-          USER_DATA_API_PATHS.favorites
-        );
-        cacheManager.cacheFavorites(freshData);
-        return freshData;
-      } catch (err) {
-        console.error('获取收藏失败:', err);
-        triggerGlobalError('获取收藏失败');
-        return {};
-      }
-    }
-  }
-
-  // localStorage 模式
-  try {
-    return readLocalFavorites();
-  } catch (err) {
-    console.error('读取收藏失败:', err);
-    triggerGlobalError('读取收藏失败');
-    return {};
-  }
-}
-
-/**
- * 保存收藏。
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function saveFavorite(
-  source: string,
-  id: string,
-  favorite: Favorite
-): Promise<void> {
-  const key = generateStorageKey(source, id);
-
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    const cachedFavorites = cacheManager.getCachedFavorites() || {};
-    cachedFavorites[key] = favorite;
-    cacheManager.cacheFavorites(cachedFavorites);
-
-    // 触发立即更新事件
-    dispatchDataUpdate('favoritesUpdated', cachedFavorites);
-
-    // 异步同步到数据库
-    try {
-      await postRemoteProfilePayload(USER_DATA_API_PATHS.favorites, {
-        key,
-        favorite,
-      });
-    } catch (err) {
-      await handleDatabaseOperationFailure('favorites', err);
-      triggerGlobalError('保存收藏失败');
-      throw err;
-    }
-    return;
-  }
-
-  // localStorage 模式
-  if (typeof window === 'undefined') {
-    console.warn('无法在服务端保存收藏到 localStorage');
-    return;
-  }
-
-  try {
-    const allFavorites = await getAllFavorites();
-    allFavorites[key] = favorite;
-    writeLocalFavorites(allFavorites);
-    dispatchDataUpdate('favoritesUpdated', allFavorites);
-  } catch (err) {
-    console.error('保存收藏失败:', err);
-    triggerGlobalError('保存收藏失败');
-    throw err;
-  }
-}
-
-/**
- * 删除收藏。
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function deleteFavorite(
-  source: string,
-  id: string
-): Promise<void> {
-  const key = generateStorageKey(source, id);
-
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    const cachedFavorites = cacheManager.getCachedFavorites() || {};
-    delete cachedFavorites[key];
-    cacheManager.cacheFavorites(cachedFavorites);
-
-    // 触发立即更新事件
-    dispatchDataUpdate('favoritesUpdated', cachedFavorites);
-
-    // 异步同步到数据库
-    try {
-      await deleteRemoteProfileResource(USER_DATA_API_PATHS.favorites, {
-        key,
-      });
-    } catch (err) {
-      await handleDatabaseOperationFailure('favorites', err);
-      triggerGlobalError('删除收藏失败');
-      throw err;
-    }
-    return;
-  }
-
-  // localStorage 模式
-  if (typeof window === 'undefined') {
-    console.warn('无法在服务端删除收藏到 localStorage');
-    return;
-  }
-
-  try {
-    const allFavorites = await getAllFavorites();
-    delete allFavorites[key];
-    writeLocalFavorites(allFavorites);
-    dispatchDataUpdate('favoritesUpdated', allFavorites);
-  } catch (err) {
-    console.error('删除收藏失败:', err);
-    triggerGlobalError('删除收藏失败');
-    throw err;
-  }
-}
-
-/**
- * 判断是否已收藏。
- * 数据库存储模式下使用混合缓存策略：优先返回缓存数据，后台异步同步最新数据。
- */
-export async function isFavorited(
-  source: string,
-  id: string
-): Promise<boolean> {
-  const key = generateStorageKey(source, id);
-
-  // 数据库存储模式：使用混合缓存策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    const cachedFavorites = cacheManager.getCachedFavorites();
-
-    if (cachedFavorites) {
-      // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, Favorite>>(USER_DATA_API_PATHS.favorites)
-        .then((freshData) => {
-          // 只有数据真正不同时才更新缓存
-          if (JSON.stringify(cachedFavorites) !== JSON.stringify(freshData)) {
-            cacheManager.cacheFavorites(freshData);
-            // 触发数据更新事件
-            dispatchDataUpdate('favoritesUpdated', freshData);
-          }
-        })
-        .catch((err) => {
-          console.warn('后台同步收藏失败:', err);
-          triggerGlobalError('后台同步收藏失败');
-        });
-
-      return !!cachedFavorites[key];
-    } else {
-      // 缓存为空，直接从 API 获取并缓存
-      try {
-        const freshData = await fetchFromApi<Record<string, Favorite>>(
-          USER_DATA_API_PATHS.favorites
-        );
-        cacheManager.cacheFavorites(freshData);
-        return !!freshData[key];
-      } catch (err) {
-        console.error('检查收藏状态失败:', err);
-        triggerGlobalError('检查收藏状态失败');
-        return false;
-      }
-    }
-  }
-
-  // localStorage 模式
-  const allFavorites = await getAllFavorites();
-  return !!allFavorites[key];
 }
 
 /**
@@ -540,36 +308,6 @@ export async function deleteFollowRecord(
     triggerGlobalError('删除追更记录失败');
     throw err;
   }
-}
-
-/**
- * 清空全部收藏
- * 数据库存储模式下使用乐观更新：先更新缓存，再异步同步到数据库。
- */
-export async function clearAllFavorites(): Promise<void> {
-  // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
-  if (shouldUseRemoteUserDataStorage()) {
-    // 立即更新缓存
-    cacheManager.cacheFavorites({});
-
-    // 触发立即更新事件
-    dispatchDataUpdate('favoritesUpdated', {});
-
-    // 异步同步到数据库
-    try {
-      await deleteRemoteProfileResource(USER_DATA_API_PATHS.favorites);
-    } catch (err) {
-      await handleDatabaseOperationFailure('favorites', err);
-      triggerGlobalError('清空收藏失败');
-      throw err;
-    }
-    return;
-  }
-
-  // localStorage 模式
-  if (typeof window === 'undefined') return;
-  clearLocalFavorites();
-  dispatchDataUpdate('favoritesUpdated', {});
 }
 
 // ---------------- 混合缓存辅助函数 ----------------
