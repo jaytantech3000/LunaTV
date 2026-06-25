@@ -1,6 +1,6 @@
 use axum::{
     body::{Body, to_bytes},
-    extract::Request,
+    extract::{Request, State},
     http::{
         HeaderValue, StatusCode,
         header::{CACHE_CONTROL, CONTENT_TYPE},
@@ -10,9 +10,58 @@ use axum::{
 use reqwest::Url;
 
 use crate::{
-    AppError, AppResult, AppState, ProfileSyncStatusResponse, RemoteServerConfigResponse,
-    ServiceConfig,
+    AppError, AppResult, AppState, ProfileSyncSession, ProfileSyncStatusResponse,
+    RemoteLoginResponse, RemoteServerConfigResponse, ServiceConfig, normalize_optional_string,
 };
+
+pub(crate) async fn proxy_profile_sync_login(
+    State(state): State<AppState>,
+    request: Request,
+) -> AppResult<Response> {
+    let upstream_response = send_profile_sync_request(&state, request).await?;
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::BAD_GATEWAY);
+    let content_type = upstream_response.headers().get(CONTENT_TYPE).cloned();
+    let body = upstream_response
+        .bytes()
+        .await
+        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+
+    if status.is_success() {
+        if let Ok(login_response) = serde_json::from_slice::<RemoteLoginResponse>(&body) {
+            if login_response.ok.unwrap_or(true) {
+                let username = normalize_optional_string(login_response.username);
+                let role = normalize_optional_string(login_response.role);
+                if let Some(username) = username {
+                    let role = role.unwrap_or_else(|| "user".to_string());
+                    *state.profile_sync_session.write().await =
+                        Some(ProfileSyncSession { username, role });
+                }
+            }
+        }
+    } else if status == StatusCode::UNAUTHORIZED {
+        *state.profile_sync_session.write().await = None;
+    }
+
+    response_from_parts(status, content_type.as_ref(), body.to_vec())
+}
+
+pub(crate) async fn proxy_profile_sync_logout(
+    State(state): State<AppState>,
+    request: Request,
+) -> AppResult<Response> {
+    let upstream_response = send_profile_sync_request(&state, request).await?;
+    *state.profile_sync_session.write().await = None;
+    response_from_upstream(upstream_response).await
+}
+
+pub(crate) async fn proxy_profile_sync_change_password(
+    State(state): State<AppState>,
+    request: Request,
+) -> AppResult<Response> {
+    let upstream_response = send_profile_sync_request(&state, request).await?;
+    response_from_upstream(upstream_response).await
+}
 
 pub(crate) async fn proxy_profile_sync_passthrough(
     state: &AppState,
