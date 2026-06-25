@@ -7,6 +7,7 @@
 - `dev-plan/desktop-foundation/desktop-local-service-protocol-v1.md`
 - `dev-plan/desktop-foundation/desktop-rustification-roadmap.md`
 - `dev-plan/desktop-foundation/desktop-rust-evolution-execution-plan.md`
+- `dev-plan/desktop-foundation/desktop-profile-sync-troubleshooting.md`
 
 > 状态说明（2026-06-25）
 >
@@ -27,6 +28,7 @@
 > - 桌面管理页与桌面设置页现已共用 profile sync 状态文案，并能区分“本地服务读取失败导致的状态未知”与“未启用远端同步”。
 > - 桌面运行时在 profile sync 从启用切回禁用时，会立即清理残留的 `desktop-profile-sync` 浏览器态，避免遗留远端会话。
 > - Rust 回归测试现已覆盖 admin data migration 在 sync mode 下的 export / import 透传，避免只验证导出、不验证导入的半截覆盖。
+> - Phase 6 所需的故障排查文档现已独立落到 `desktop-profile-sync-troubleshooting.md`，把状态文案、错误分类、会话语义和 diagnostics 使用方式收口到一处。
 > - 当前剩余工作主要集中在 Phase 6 的旧分支进一步收缩，以及更大范围的桌面 Rust 化主线继续推进。
 
 ## 1. 目标
@@ -562,6 +564,7 @@ src/lib/profile/
 - 桌面管理页与桌面设置页已经收口到同一套 profile sync 状态文案 helper，并补上“状态未知”分支，避免把本地服务读取失败误显示成“未启用”。
 - 桌面 profile sync runtime 在切回本地模式时也会主动清理 `desktop-profile-sync` 浏览器态，减少 sync off 后残留远端会话的歧义。
 - Rust 测试已经补齐 admin data migration 在 sync mode 下的导出 / 导入透传覆盖，减少桌面管理数据迁移只测单向、不测双向的风险。
+- Phase 6 所需的故障排查文档已经输出，后续排查可直接按 `desktop-profile-sync-troubleshooting.md` 的状态词典和联调基线执行。
 
 #### 验收标准
 
