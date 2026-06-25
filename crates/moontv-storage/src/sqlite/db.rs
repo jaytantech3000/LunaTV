@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use super::migrations;
@@ -95,6 +96,61 @@ impl DesktopSqlite {
                 [DOWNLOAD_STORE_SNAPSHOT_KEY],
             )
             .context("failed to clear desktop download store snapshot")?;
+        Ok(deleted > 0)
+    }
+
+    pub fn read_app_metadata<T>(&self, key: &str) -> Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
+        let connection = open_connection(&self.path)?;
+        let payload = connection
+            .query_row(
+                "SELECT value_json FROM app_metadata WHERE metadata_key = ?1",
+                [key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .with_context(|| format!("failed to read app metadata for key {key}"))?;
+
+        payload
+            .map(|raw| {
+                serde_json::from_str::<T>(&raw)
+                    .with_context(|| format!("failed to deserialize app metadata for key {key}"))
+            })
+            .transpose()
+    }
+
+    pub fn write_app_metadata<T>(&self, key: &str, value: &T) -> Result<()>
+    where
+        T: Serialize + ?Sized,
+    {
+        let connection = open_connection(&self.path)?;
+        let payload = serde_json::to_string(value)
+            .with_context(|| format!("failed to serialize app metadata for key {key}"))?;
+
+        connection
+            .execute(
+                "INSERT INTO app_metadata (
+                    metadata_key,
+                    value_json,
+                    updated_at_ms
+                ) VALUES (?1, ?2, ?3)
+                ON CONFLICT(metadata_key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at_ms = excluded.updated_at_ms",
+                params![key, payload, current_timestamp_ms()],
+            )
+            .with_context(|| format!("failed to write app metadata for key {key}"))?;
+
+        Ok(())
+    }
+
+    pub fn delete_app_metadata(&self, key: &str) -> Result<bool> {
+        let connection = open_connection(&self.path)?;
+        let deleted = connection
+            .execute("DELETE FROM app_metadata WHERE metadata_key = ?1", [key])
+            .with_context(|| format!("failed to delete app metadata for key {key}"))?;
         Ok(deleted > 0)
     }
 }
@@ -256,6 +312,39 @@ mod tests {
             database
                 .read_download_store_snapshot()
                 .expect("read after clear"),
+            None
+        );
+    }
+
+    #[test]
+    fn app_metadata_round_trips_typed_payloads() {
+        let temp_dir = TestDir::new();
+        let database =
+            DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite");
+        let payload = serde_json::json!({
+            "domains": ["playrecords", "favorites"],
+            "enabled": true
+        });
+
+        database
+            .write_app_metadata("profile:demo:manifest", &payload)
+            .expect("write metadata");
+
+        let stored = database
+            .read_app_metadata::<Value>("profile:demo:manifest")
+            .expect("read metadata")
+            .expect("metadata should exist");
+
+        assert_eq!(stored, payload);
+        assert!(
+            database
+                .delete_app_metadata("profile:demo:manifest")
+                .expect("delete metadata")
+        );
+        assert_eq!(
+            database
+                .read_app_metadata::<Value>("profile:demo:manifest")
+                .expect("read metadata after delete"),
             None
         );
     }

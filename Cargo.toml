@@ -2,6 +2,7 @@
 members = [
     "src-tauri",
     "crates/moontv-local-service",
+    "crates/moontv-profile",
     "crates/moontv-storage",
     "crates/moontv-sync",
 ]

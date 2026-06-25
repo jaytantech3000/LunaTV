@@ -2363,11 +2363,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "moontv-profile"
+version = "200.0.1"
+dependencies = [
+ "anyhow",
+ "moontv-storage",
+ "serde",
+]
+
+[[package]]
 name = "moontv-storage"
 version = "200.0.1"
 dependencies = [
  "anyhow",
  "rusqlite",
+ "serde",
  "serde_json",
 ]
 
