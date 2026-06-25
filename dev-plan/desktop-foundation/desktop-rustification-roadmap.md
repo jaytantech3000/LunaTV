@@ -9,13 +9,13 @@
 
 > 最新进展（2026-06-25）：
 >
-> - Phase 3 中最关键的 profile 资料域收口已经基本打通：`moontv-profile`、`moontv-sync`、local-service profile facade 与桌面前端 profile SDK 都已落地。
+> - Phase 3 的 profile / sync 主线验收现已满足：`moontv-profile`、`moontv-sync`、local-service profile facade 与桌面前端 profile SDK 都已落地，并已通过 `desktop-profile-sync-execution-plan.md` 收口到完成态。
 > - 桌面本地五个 profile 域已经从浏览器 `localStorage` 真源切到 Rust 本地 store，并带有旧数据兼容迁移。
 > - `src/lib/profile/client.ts` 已成为桌面 profile 的唯一前端入口，旧的 `src/lib/db.client.ts` 兼容出口也已删除。
 > - profile sync 状态接口现已带稳定错误分类与同步域元数据，桌面诊断报告也能直接展示这部分状态。
 > - `moontv-sync` 现已继续接手 forwarded response 读取、登录 session mutation 与透传 `401` clear-session 判定；local service 的 `profile_sync.rs` 进一步收缩为 axum facade、request 适配与本地/远端分流层。
-> - Phase 4 已开始收口一块可落地的桌面后台能力：桌面模式下的版本检查与 release history 拉取现已优先走 Tauri / Rust 命令，浏览器侧只保留 Web / 预览态 fallback。
-> - 桌面 release history 的过滤、manifest 解析与排序也已下沉到 Tauri / Rust，桌面前端直接消费最终 `DesktopReleaseHistoryItem`。
+> - Phase 4 的桌面后台能力主路径也已完成收口：桌面模式下的版本检查与 release history 拉取优先走 Tauri / Rust；release history 的过滤、manifest 解析与排序同样在 Rust 完成，前端直接消费最终 `DesktopReleaseHistoryItem`。
+> - `DesktopSettingsSection` 现已通过 Tauri IPC 统一承接本地服务启停、配置读写、诊断、诊断日志保存与上传；桌面专用后台控制面不再依赖浏览器侧自行拼装这些系统能力。
 > - Phase 2A 也开始落下第一刀：桌面模式下的 `searchPlaybackSources` 已优先走 local service 新增的 `/api/playback/search-sources`，把查询组合、候选聚合和结果预筛选从前端下沉到 Rust。
 > - Phase 2A 已继续收口第二刀：`src/lib/playback-source-client.ts` 现已成为播放源统一入口，播放页与下载相关链路不再直接 import `playback-source-prefetch`；桌面运行时在 `/api/playback/search-sources` 失败时也不再回退到旧的 TS 查询聚合分支。
 > - Phase 2A 已继续收口第三刀：local service 内部的播放源预抓取 facade 已从 `crates/moontv-local-service/src/lib.rs` 拆到独立的 `crates/moontv-local-service/src/playback_prefetch.rs`，本地服务路由层只再负责装配与复用。
@@ -25,6 +25,7 @@
 > - Phase 2B 也补上了第一刀结构性收口：`/media/vod/m3u8`、`/media/vod/segment`、`/media/vod/key` handler 已从 `crates/moontv-local-service/src/lib.rs` 抽到独立的 `crates/moontv-local-service/src/vod_proxy.rs`，为后续继续下沉资源抓取与图片代理留出明确模块边界。
 > - Phase 2B 又继续补了一刀：`/live/precheck`、`/media/live/m3u8`、`/media/live/segment`、`/media/live/key`、`/media/live/logo` 与对应 legacy `/api/proxy/*` live handler 已抽到独立的 `crates/moontv-local-service/src/live_proxy.rs`，`lib.rs` 不再继续承载这组 live proxy facade。
 > - Phase 2B 继续补上了图片代理入口：local service 新增 `/api/image-proxy`（兼容 `/image-proxy`），桌面端 `buildApiUrl('/image-proxy')` 在 `server` 模式下已可直接由 Rust 本地服务代抓 Douban 图片，不再只依赖 Next route。
+> - 桌面管理后台与导入导出链路也已统一复用本地服务协议：`/api/admin/config`、`/api/admin/config_subscription/fetch`、`/api/admin/data_migration/*` 等入口均由 `moontv-local-service` 提供，桌面前端通过共享 transport 命中本地服务，而不是直接依赖 Next route 实现。
 > - Phase 1 已从“下载引擎骨架”推进到“桌面 runtime 主执行器闭环”：`moontv-download` crate、`/api/download-runtime/tasks*` 协议、SQLite `app_metadata` 快照，以及 Rust worker 调度 / 执行链路都已落地。
 > - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot；SSE 不可用或断流时，桌面 SDK 会回退到 `/api/download-runtime/tasks` 轻量轮询。
 > - Phase 1 又补齐了一组关键控制面：local service 现已新增 `GET /api/download-runtime/tasks/:taskId`、`POST /api/download-runtime/tasks/:taskId/retry` 与 `POST /api/download-runtime/tasks/bulk`；桌面 `manager` 在 runtime 模式下也已把单任务 `error -> retry` 与 `pauseAll / resumeAll / cancelAll` 切到这组新接口。
@@ -32,7 +33,7 @@
 > - Phase 1 的灰度 / 回退窗口已完成历史任务并在迁移稳定后删除：桌面构建不再暴露 TS 兼容执行器开关或 legacy 下载脚本，下载设置页也不再展示 compat 模式，桌面下载主路径固定为 Rust 本地运行时。
 > - Phase 1 也已开始统一 download runtime 的结构化错误：local service HTTP 错误会返回稳定 `code`，桌面 SDK 会抛出 `DownloadDomainError`，`manager` 与 runtime 镜像同步不再依赖中文字符串猜测。
 > - `src/components/DesktopDownloadStoreSync.tsx` 现在也会把 runtime `done` 任务回填到 `library`，避免已完成任务只停留在 snapshot 而不生成离线片库条目。
-> - 当前 Rust 化主线的后续重点重新回到 Phase 2、Phase 3 与 Phase 4：内容发现 / 媒体网络层、profile / sync 边界，以及桌面后台能力继续收口。
+> - 基于 2026-06-25 的代码审计，Phase 1-4 的验收标准均已满足，M1-M4 里程碑已达成；本文转入完成态。Phase 5 继续作为后续演进时的边界约束，而不再是本轮 Rust 化的阻塞项。
 
 ## 目标
 
@@ -70,14 +71,15 @@
 - Tauri 壳已经负责本地服务启停、配置读写、诊断、认证和更新入口，见 `src-tauri/src/lib.rs`
 - 桌面本地下载运行时已经存在，提供缓存、资源索引、下载 engine 快照存储，以及 `tasks/settings/pause/resume/cancel/delete` 命令骨架，见 `crates/moontv-local-service/src/lib.rs`
 - 应用更新下载已经走桌面 Rust 链路，并支持断点续传
+- 桌面搜索、详情、播放源预抓取、图片代理以及 VOD / Live 代理主路径已经由 `moontv-local-service` 承接，桌面构建下的 `/api/search`、`/api/detail`、`/api/playback/search-sources`、`/media/*` 与 `/api/image-proxy` 协议默认都指向本地服务
+- 桌面管理后台需要保留的平台能力也已拆清边界：系统级能力走 Tauri IPC，管理配置 / 订阅拉取 / 导入导出走本地服务 HTTP 协议
 
-### 仍在 TypeScript 的关键后台逻辑
+### 仍保留在 TypeScript 的前端编排 / 兼容逻辑
 
-- 视频下载任务调度、暂停/继续、并发与重试：`src/lib/download/manager.ts`
-- 播放源搜索与详情聚合：`src/lib/playback-source-prefetch.ts`
-- 版本比较与少量 release 元数据归一化仍在 TypeScript；桌面模式下的远程版本检查与 release history 抓取已切到 Tauri / Rust：`src/lib/version_check.ts`、`src/lib/desktop-release-history.ts`
-- 桌面前端仍然大量依赖 `fetch` 与 `src/app/api/*`
-- 媒体代理在桌面版虽然已能通过本地服务承接，但协议和适配仍有 TS/Next 历史包袱
+- 页面级状态机、播放器交互与轻量 UI 编排：例如 `src/app/play/page.tsx`、`src/lib/app-update.ts`
+- Web 侧与浏览器预览态兼容分支：例如 `src/lib/playback-source-prefetch.ts` 中的 Web 搜索聚合 fallback，以及 `src/components/DesktopReleaseHistoryDialog.tsx` 的非桌面 fallback
+- 少量前端辅助逻辑仍保留在 TS：例如 semver 比较、播放器侧 `preferBestPlaybackSource` 对代理 URL 的探测，以及更新状态展示文案
+- 桌面前端依然通过统一 `apiFetch/buildApiUrl` 发起 HTTP 请求，但在桌面构建下这些 `/api/*` 协议默认解析到本地服务 `API_BASE_URL`，不再等同于直接依赖 `src/app/api/*` 的 Next route 实现
 
 ### 当前的根问题
 
@@ -299,7 +301,7 @@ Rust Shared Crates
 - `crates/moontv-local-service/src/vod_proxy.rs` 现已开始接手 VOD proxy handler；`lib.rs` 不再直接承载 `/media/vod/*` 路由实现，且桌面下载 runtime 的 `/api/download-runtime/cache/fetch` 已能在 Rust 侧直接复用这层逻辑抓取 VOD segment / key / m3u8 资源，不再通过前端自调用 HTTP 回环。
 - `crates/moontv-local-service/src/live_proxy.rs` 现已接手 `/live/precheck`、`/media/live/*` 与 legacy `/api/proxy/(m3u8|segment|key|logo)` live handler；`lib.rs` 不再直接承载这组 live proxy facade。
 - `crates/moontv-local-service/src/image_proxy.rs` 现已接手 `/api/image-proxy`（兼容 `/image-proxy`）；桌面端 `processImageUrl(...)->buildApiUrl('/image-proxy')` 在 `server` 模式下已可直接命中本地服务，不再缺少 Rust 侧图片代理承接点。
-- Web 路径仍保留原有 TypeScript `playback-source-prefetch` 逻辑，因此这一刀解决的是“桌面主路径继续收口”，还没有完成整段搜索 / 详情链路对 Web 侧兼容层的全量清理。
+- 基于当前审计，Phase 2 验收标准已满足：桌面播放页、下载页与播放器相关链路已统一经由 `playback-source-client`、`content-discovery-client` 与媒体代理协议访问本地服务；`preferBestPlaybackSource` 虽仍留在前端，但它探测的是已经规范化到代理 URL 的媒体资源，不再自行聚合远端搜索 / 详情数据。Web 路径保留的 TypeScript fallback 只作为跨平台兼容层存在，不再阻塞桌面主路径收口。
 
 #### Phase 2B：媒体代理
 
@@ -364,9 +366,12 @@ Rust Shared Crates
 
 当前进展（2026-06-25）：
 
-- 这一阶段已经落下第一刀：桌面模式下的远程 `VERSION.txt` 检查与 GitHub desktop release history 获取，不再优先依赖前端 `fetch`，而是通过 Tauri 命令转到 Rust 执行。
+- 桌面模式下的远程 `VERSION.txt` 检查与 GitHub desktop release history 获取，不再优先依赖前端 `fetch`，而是通过 Tauri 命令转到 Rust 执行。
 - release history 的桌面主路径已经进一步收口：release 过滤、`latest.json` manifest 解析和版本排序都在 Rust 完成，前端不再在桌面模式下重复做这一层归一化。
-- Web 路径、浏览器预览态与桌面代理地址仍保留兼容 fallback，因此这一步是“收口主路径”而不是“一次性删除全部 TS/Next 兼容层”。
+- `DesktopSettingsSection` 已通过 Tauri IPC 统一承接本地服务启停、配置读写、诊断与诊断日志导出 / 上传；这组桌面后台能力不再需要浏览器侧调用 Next route 兜底。
+- `DataMigration`、管理页配置订阅拉取，以及其它 `/api/admin/*` 桌面后台请求都通过共享 transport 命中 `API_BASE_URL`；桌面 dev/build 默认把该地址指向 `http://127.0.0.1:8787`，因此实际后端入口已经是 `moontv-local-service` 而不是 `src/app/api/*`。
+- Web 路径、浏览器预览态与桌面 release proxy 地址仍保留兼容 fallback，但它们只服务于 Web / preview / 远程代理场景；不再构成桌面版后台主路径依赖。
+- 基于当前审计，Phase 4 验收标准已满足。
 
 ### 验收标准
 
@@ -458,7 +463,7 @@ Tauri 壳应该越来越薄，而不是把所有桌面逻辑重新堆回 `src-ta
 
 ## 推荐实施顺序
 
-按执行优先级排序：
+按执行优先级排序（截至 2026-06-25，这 1-7 步已经按该顺序基本完成，以下保留为实施记录）：
 
 1. 冻结桌面边界，新增能力优先走 Rust
 2. 下载系统 Rust 化
@@ -477,6 +482,8 @@ Tauri 壳应该越来越薄，而不是把所有桌面逻辑重新堆回 `src-ta
 - 桌面下载主执行路径从 TS 迁到 Rust
 - TS 仅保留 UI 与命令发起
 
+状态（2026-06-25）：已完成。
+
 ### M2：桌面播放链路不再依赖 TS 业务级联网
 
 完成标志：
@@ -484,11 +491,15 @@ Tauri 壳应该越来越薄，而不是把所有桌面逻辑重新堆回 `src-ta
 - 搜索、详情、代理由本地服务提供
 - 桌面前端不再自己聚合远程资源
 
+状态（2026-06-25）：已完成。
+
 ### M3：桌面 profile 与配置以 Rust 为真源
 
 完成标志：
 
 - 收藏、播放记录、搜索历史、配置等桌面本地数据读写全部收口
+
+状态（2026-06-25）：已完成。
 
 ### M4：桌面版形成“Rust 后端 + TS 纯前端”主架构
 
@@ -496,6 +507,8 @@ Tauri 壳应该越来越薄，而不是把所有桌面逻辑重新堆回 `src-ta
 
 - 桌面主要后台能力由 Rust 承担
 - TS 主要承担 UI 和播放器交互
+
+状态（2026-06-25）：已完成。
 
 ## 验收命令
 
@@ -527,4 +540,4 @@ pnpm exec jest --runInBand
 - 让 TS 退出后台执行层
 - 让 Rust 成为桌面模式的主业务底座
 
-如果后续正式启动实施，建议第一批工作直接围绕下载器和内容发现链路展开，因为这两块最能快速拉开“桌面版”和“Web 版”的架构差异，也最能体现 Rust 化的实际收益。
+这轮实施已经按“下载器 -> 内容发现/代理 -> profile/sync -> 桌面后台能力”的顺序完成主路径收口。后续如继续演进，应把 Phase 5 作为长期约束：保持 Rust 侧能力可复用，同时避免让桌面主链路重新回退到 Next route / TS 后台实现。
