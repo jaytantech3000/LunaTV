@@ -14,6 +14,7 @@
 > - `src/lib/db.client.ts` 已退化为 `src/lib/profile/client.ts` 的兼容出口，桌面 profile 读写主路径不再依赖旧 Web 存储实现。
 > - profile sync 状态接口现已带稳定错误分类与同步域元数据，桌面诊断报告也能直接展示这部分状态。
 > - Phase 4 已开始收口一块可落地的桌面后台能力：桌面模式下的版本检查与 release history 拉取现已优先走 Tauri / Rust 命令，浏览器侧只保留 Web / 预览态 fallback。
+> - 桌面 release history 的过滤、manifest 解析与排序也已下沉到 Tauri / Rust，桌面前端直接消费最终 `DesktopReleaseHistoryItem`。
 > - 当前 Rust 化主线的后续重点重新回到 Phase 1、Phase 2 与 Phase 4：下载执行器、内容发现 / 媒体网络层，以及桌面后台能力继续收口。
 
 ## 目标
@@ -310,6 +311,7 @@ Rust Shared Crates
 当前进展（2026-06-25）：
 
 - 这一阶段已经落下第一刀：桌面模式下的远程 `VERSION.txt` 检查与 GitHub desktop release history 获取，不再优先依赖前端 `fetch`，而是通过 Tauri 命令转到 Rust 执行。
+- release history 的桌面主路径已经进一步收口：release 过滤、`latest.json` manifest 解析和版本排序都在 Rust 完成，前端不再在桌面模式下重复做这一层归一化。
 - Web 路径、浏览器预览态与桌面代理地址仍保留兼容 fallback，因此这一步是“收口主路径”而不是“一次性删除全部 TS/Next 兼容层”。
 
 ### 验收标准

@@ -7,7 +7,7 @@ import type { AppUpdateState } from '@/lib/app-update';
 
 const mockInstallDesktopReleaseVersion = jest.fn();
 const mockOpenExternalUrl = jest.fn();
-const mockFetchDesktopReleaseHistoryPayload = jest.fn();
+const mockFetchDesktopReleaseHistory = jest.fn();
 const mockIsDesktopTauriRuntimeAvailable = jest.fn(() => true);
 
 jest.mock('@/lib/app-update', () => ({
@@ -24,8 +24,8 @@ jest.mock('@/lib/open-external-url', () => ({
 }));
 
 jest.mock('@/lib/desktop/tauri-client', () => ({
-  fetchDesktopReleaseHistoryPayload: (...args: unknown[]) =>
-    mockFetchDesktopReleaseHistoryPayload(...args),
+  fetchDesktopReleaseHistory: (...args: unknown[]) =>
+    mockFetchDesktopReleaseHistory(...args),
   isDesktopTauriRuntimeAvailable: () => mockIsDesktopTauriRuntimeAvailable(),
 }));
 
@@ -68,6 +68,44 @@ function createTextFetchResponse(
     text: async () => body,
     json: async () => JSON.parse(body),
   };
+}
+
+function createDesktopReleaseHistoryItems() {
+  return [
+    {
+      id: 'beta-16',
+      version: '200.0.0-beta.16',
+      tagName: 'desktop-v200.0.0-beta.16',
+      name: 'Beta 16',
+      notes: null,
+      prerelease: true,
+      publishedAt: '2026-06-19T05:01:04Z',
+      htmlUrl: 'https://example.com/beta-16',
+      manifestUrl: 'https://example.com/beta-16/latest.json',
+    },
+    {
+      id: 'beta-15',
+      version: '200.0.0-beta.15',
+      tagName: 'desktop-v200.0.0-beta.15',
+      name: 'Beta 15',
+      notes: null,
+      prerelease: true,
+      publishedAt: '2026-06-19T04:01:04Z',
+      htmlUrl: 'https://example.com/beta-15',
+      manifestUrl: 'https://example.com/beta-15/latest.json',
+    },
+    {
+      id: 'beta-13',
+      version: '200.0.0-beta.13',
+      tagName: 'desktop-v200.0.0-beta.13',
+      name: 'Beta 13',
+      notes: null,
+      prerelease: true,
+      publishedAt: '2026-06-19T02:01:04Z',
+      htmlUrl: 'https://example.com/beta-13',
+      manifestUrl: 'https://example.com/beta-13/latest.json',
+    },
+  ];
 }
 
 function createGithubReleasePayload() {
@@ -172,51 +210,17 @@ describe('DesktopReleaseHistoryDialog', () => {
     localStorage.clear();
     mockInstallDesktopReleaseVersion.mockReset();
     mockOpenExternalUrl.mockReset();
-    mockFetchDesktopReleaseHistoryPayload.mockReset();
+    mockFetchDesktopReleaseHistory.mockReset();
     mockIsDesktopTauriRuntimeAvailable.mockReset();
     mockOpenExternalUrl.mockResolvedValue(undefined);
-    mockFetchDesktopReleaseHistoryPayload.mockResolvedValue(
-      createGithubReleasePayload()
+    mockFetchDesktopReleaseHistory.mockResolvedValue(
+      createDesktopReleaseHistoryItems()
     );
     mockIsDesktopTauriRuntimeAvailable.mockReturnValue(true);
     delete window.RUNTIME_CONFIG;
     global.fetch = jest.fn(async () =>
       createJsonFetchResponse({
-        releases: [
-          {
-            id: 'beta-16',
-            version: '200.0.0-beta.16',
-            tagName: 'desktop-v200.0.0-beta.16',
-            name: 'Beta 16',
-            notes: null,
-            prerelease: true,
-            publishedAt: '2026-06-19T05:01:04Z',
-            htmlUrl: 'https://example.com/beta-16',
-            manifestUrl: 'https://example.com/beta-16/latest.json',
-          },
-          {
-            id: 'beta-15',
-            version: '200.0.0-beta.15',
-            tagName: 'desktop-v200.0.0-beta.15',
-            name: 'Beta 15',
-            notes: null,
-            prerelease: true,
-            publishedAt: '2026-06-19T04:01:04Z',
-            htmlUrl: 'https://example.com/beta-15',
-            manifestUrl: 'https://example.com/beta-15/latest.json',
-          },
-          {
-            id: 'beta-13',
-            version: '200.0.0-beta.13',
-            tagName: 'desktop-v200.0.0-beta.13',
-            name: 'Beta 13',
-            notes: null,
-            prerelease: true,
-            publishedAt: '2026-06-19T02:01:04Z',
-            htmlUrl: 'https://example.com/beta-13',
-            manifestUrl: 'https://example.com/beta-13/latest.json',
-          },
-        ],
+        releases: createDesktopReleaseHistoryItems(),
       })
     ) as unknown as typeof fetch;
   });
@@ -238,7 +242,7 @@ describe('DesktopReleaseHistoryDialog', () => {
     expect(
       await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15')
     ).toBeInTheDocument();
-    expect(mockFetchDesktopReleaseHistoryPayload).toHaveBeenCalledWith(
+    expect(mockFetchDesktopReleaseHistory).toHaveBeenCalledWith(
       'jaytantech3000/LunaTV'
     );
     expect(global.fetch).not.toHaveBeenCalled();
@@ -257,7 +261,7 @@ describe('DesktopReleaseHistoryDialog', () => {
     expect(
       await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15')
     ).toBeInTheDocument();
-    expect(mockFetchDesktopReleaseHistoryPayload).toHaveBeenCalledWith(
+    expect(mockFetchDesktopReleaseHistory).toHaveBeenCalledWith(
       'jaytantech3000/LunaTV'
     );
     expect(global.fetch).not.toHaveBeenCalled();
@@ -268,7 +272,7 @@ describe('DesktopReleaseHistoryDialog', () => {
       APP_TARGET: 'desktop',
       DESKTOP_RELEASE_PROXY_BASE_URL: 'https://proxy.example.com/',
     };
-    mockFetchDesktopReleaseHistoryPayload.mockRejectedValueOnce(
+    mockFetchDesktopReleaseHistory.mockRejectedValueOnce(
       new Error('network timeout')
     );
     const fetchMock = jest.fn();
@@ -299,7 +303,7 @@ describe('DesktopReleaseHistoryDialog', () => {
     expect(
       await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.16')
     ).toBeInTheDocument();
-    expect(mockFetchDesktopReleaseHistoryPayload).toHaveBeenCalledWith(
+    expect(mockFetchDesktopReleaseHistory).toHaveBeenCalledWith(
       'jaytantech3000/LunaTV'
     );
     expect(global.fetch).toHaveBeenCalledWith(
@@ -325,7 +329,7 @@ describe('DesktopReleaseHistoryDialog', () => {
     expect(
       await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15')
     ).toBeInTheDocument();
-    expect(mockFetchDesktopReleaseHistoryPayload).not.toHaveBeenCalled();
+    expect(mockFetchDesktopReleaseHistory).not.toHaveBeenCalled();
     expect(global.fetch).toHaveBeenCalledWith(
       'https://api.github.com/repos/jaytantech3000/LunaTV/releases?per_page=100',
       expect.objectContaining({

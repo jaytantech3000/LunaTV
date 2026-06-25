@@ -18,13 +18,12 @@ import {
   installDesktopReleaseVersion,
 } from '@/lib/app-update';
 import {
-  fetchDesktopReleaseHistoryPayload,
+  fetchDesktopReleaseHistory,
   isDesktopTauriRuntimeAvailable,
 } from '@/lib/desktop/tauri-client';
 import {
   type DesktopReleaseHistoryItem,
   fetchDesktopReleaseHistoryFromGithub,
-  normalizeDesktopReleaseHistory,
 } from '@/lib/desktop-release-history';
 import { openExternalUrl } from '@/lib/open-external-url';
 import {
@@ -198,11 +197,7 @@ async function fetchDesktopReleaseHistoryFromProxy(
 }
 
 async function fetchDesktopReleaseHistoryFromDesktopShell() {
-  const payload = await fetchDesktopReleaseHistoryPayload(
-    getReleaseRepository()
-  );
-
-  return normalizeDesktopReleaseHistory(payload);
+  return fetchDesktopReleaseHistory(getReleaseRepository());
 }
 
 async function loadDesktopReleaseHistory(signal: AbortSignal) {

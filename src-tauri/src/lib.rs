@@ -20,6 +20,7 @@ use reqwest::{
     ClientBuilder, StatusCode,
     header::{ACCEPT, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap, HeaderValue, RANGE},
 };
+use semver::Version;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tauri::{AppHandle, Manager, RunEvent, State, ipc::Channel};
 use tauri_plugin_updater::{Update as DesktopUpdateHandle, UpdaterExt};
@@ -51,6 +52,8 @@ const DESKTOP_UPDATER_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 const DESKTOP_UPDATER_NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
+const DESKTOP_RELEASE_TAG_PREFIX: &str = "desktop-v";
+const DESKTOP_RELEASE_MANIFEST_NAME: &str = "latest.json";
 
 const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
 const PROFILE_SYNC_USER_DATA_DOMAINS: [&str; 5] = [
@@ -163,6 +166,20 @@ struct GithubReleasePayload {
     created_at: Option<String>,
     html_url: Option<String>,
     assets: Option<Vec<GithubReleaseAssetPayload>>,
+}
+
+#[derive(Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DesktopReleaseHistoryItem {
+    id: String,
+    version: String,
+    tag_name: String,
+    name: String,
+    notes: Option<String>,
+    prerelease: bool,
+    published_at: Option<String>,
+    html_url: Option<String>,
+    manifest_url: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -636,7 +653,7 @@ async fn fetch_latest_remote_version(urls: Vec<String>) -> Result<Option<String>
 #[tauri::command]
 async fn fetch_desktop_release_history(
     repository: String,
-) -> Result<Vec<GithubReleasePayload>, String> {
+) -> Result<Vec<DesktopReleaseHistoryItem>, String> {
     fetch_desktop_release_history_impl(repository)
         .await
         .map_err(|error| error.to_string())
@@ -4291,6 +4308,109 @@ fn build_release_history_api_url(repository: &str) -> String {
     format!("{GITHUB_API_BASE_URL}/repos/{repository}/releases?per_page=100")
 }
 
+fn normalize_optional_trimmed_string(value: Option<&str>) -> Option<String> {
+    let normalized = value?.trim();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.to_string())
+    }
+}
+
+fn extract_desktop_release_version(tag_name: Option<&str>) -> Option<String> {
+    let normalized_tag = tag_name?.trim();
+    let version = normalized_tag
+        .strip_prefix(DESKTOP_RELEASE_TAG_PREFIX)?
+        .trim();
+    if version.is_empty() {
+        return None;
+    }
+
+    Version::parse(version).ok()?;
+    Some(version.to_string())
+}
+
+fn find_desktop_release_manifest_url(
+    assets: Option<&[GithubReleaseAssetPayload]>,
+) -> Option<String> {
+    assets?.iter().find_map(|asset| {
+        let name = asset.name.as_deref()?.trim();
+        if name != DESKTOP_RELEASE_MANIFEST_NAME {
+            return None;
+        }
+
+        normalize_optional_trimmed_string(asset.browser_download_url.as_deref())
+    })
+}
+
+fn stringify_github_release_identifier(
+    id: &Option<GithubReleaseIdentifier>,
+    fallback: &str,
+) -> String {
+    match id {
+        Some(GithubReleaseIdentifier::String(value)) => {
+            let normalized = value.trim();
+            if normalized.is_empty() {
+                fallback.to_string()
+            } else {
+                normalized.to_string()
+            }
+        }
+        Some(GithubReleaseIdentifier::Number(value)) => value.to_string(),
+        None => fallback.to_string(),
+    }
+}
+
+fn normalize_desktop_release_history(
+    releases: Vec<GithubReleasePayload>,
+) -> Vec<DesktopReleaseHistoryItem> {
+    let mut items = releases
+        .into_iter()
+        .filter_map(|release| {
+            if release.draft == Some(true) {
+                return None;
+            }
+
+            let tag_name = normalize_optional_trimmed_string(release.tag_name.as_deref())?;
+            let version = extract_desktop_release_version(Some(&tag_name))?;
+            let manifest_url = find_desktop_release_manifest_url(release.assets.as_deref())?;
+
+            Some(DesktopReleaseHistoryItem {
+                id: stringify_github_release_identifier(&release.id, &tag_name),
+                version,
+                tag_name: tag_name.clone(),
+                name: normalize_optional_trimmed_string(release.name.as_deref())
+                    .unwrap_or_else(|| tag_name.clone()),
+                notes: normalize_optional_trimmed_string(release.body.as_deref()),
+                prerelease: release.prerelease == Some(true),
+                published_at: normalize_optional_trimmed_string(release.published_at.as_deref())
+                    .or_else(|| normalize_optional_trimmed_string(release.created_at.as_deref())),
+                html_url: normalize_optional_trimmed_string(release.html_url.as_deref()),
+                manifest_url,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    items.sort_by(|left, right| {
+        let version_order = Version::parse(&right.version)
+            .ok()
+            .zip(Version::parse(&left.version).ok())
+            .map(|(right_version, left_version)| right_version.cmp(&left_version))
+            .unwrap_or(std::cmp::Ordering::Equal);
+        if version_order != std::cmp::Ordering::Equal {
+            return version_order;
+        }
+
+        right
+            .published_at
+            .as_deref()
+            .unwrap_or_default()
+            .cmp(left.published_at.as_deref().unwrap_or_default())
+    });
+
+    items
+}
+
 #[derive(Deserialize)]
 struct GithubApiErrorPayload {
     message: Option<String>,
@@ -4384,7 +4504,7 @@ async fn fetch_latest_remote_version_impl(urls: Vec<String>) -> Result<Option<St
 
 async fn fetch_desktop_release_history_impl(
     repository: String,
-) -> Result<Vec<GithubReleasePayload>> {
+) -> Result<Vec<DesktopReleaseHistoryItem>> {
     let repository = normalize_release_repository_slug(&repository)
         .ok_or_else(|| anyhow::anyhow!("invalid desktop release repository configuration"))?;
     let client = reqwest::Client::builder()
@@ -4413,8 +4533,10 @@ async fn fetch_desktop_release_history_impl(
         );
     }
 
-    serde_json::from_str::<Vec<GithubReleasePayload>>(&body_text)
-        .context("unexpected desktop release payload")
+    let payload = serde_json::from_str::<Vec<GithubReleasePayload>>(&body_text)
+        .context("unexpected desktop release payload")?;
+
+    Ok(normalize_desktop_release_history(payload))
 }
 
 async fn load_latest_desktop_update(app: &AppHandle) -> Result<Option<DesktopUpdateHandle>> {
@@ -4819,13 +4941,16 @@ impl RuntimePaths {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_DESKTOP_OWNER_USERNAME, LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus,
-        LocalServiceStartupFailure, PortOccupant, SidecarTrialResult, append_cache_busting_query,
+        DEFAULT_DESKTOP_OWNER_USERNAME, GithubReleaseAssetPayload, GithubReleasePayload,
+        LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus, LocalServiceStartupFailure,
+        PortOccupant, SidecarTrialResult, append_cache_busting_query,
         build_profile_sync_status_diagnostic_detail, collect_diagnostics_error_text,
         describe_primary_port_issue, ensure_default_desktop_owner_auth_value,
-        extract_profile_sync_api_base_url, local_service_health_check,
-        normalize_release_repository_slug, set_desktop_local_user_password_value,
-        set_desktop_owner_password_value, summarize_trial_output,
+        extract_desktop_release_version, extract_profile_sync_api_base_url,
+        find_desktop_release_manifest_url, local_service_health_check,
+        normalize_desktop_release_history, normalize_release_repository_slug,
+        set_desktop_local_user_password_value, set_desktop_owner_password_value,
+        summarize_trial_output,
     };
     use std::time::Duration;
     use tokio::{
@@ -4950,6 +5075,136 @@ mod tests {
             query_pairs
                 .iter()
                 .any(|(key, value)| key == "_t" && !value.is_empty())
+        );
+    }
+
+    #[test]
+    fn extracts_desktop_release_versions_from_tags() {
+        assert_eq!(
+            extract_desktop_release_version(Some("desktop-v200.0.0")),
+            Some("200.0.0".to_string())
+        );
+        assert_eq!(
+            extract_desktop_release_version(Some("desktop-v200.0.0-beta.16")),
+            Some("200.0.0-beta.16".to_string())
+        );
+        assert_eq!(extract_desktop_release_version(Some("v200.0.0")), None);
+        assert_eq!(
+            extract_desktop_release_version(Some("desktop-vnot-a-version")),
+            None
+        );
+    }
+
+    #[test]
+    fn finds_desktop_release_manifest_asset_url() {
+        assert_eq!(
+            find_desktop_release_manifest_url(Some(&[GithubReleaseAssetPayload {
+                name: Some("latest.json".to_string()),
+                browser_download_url: Some("https://example.com/latest.json".to_string()),
+            }])),
+            Some("https://example.com/latest.json".to_string())
+        );
+        assert_eq!(
+            find_desktop_release_manifest_url(Some(&[GithubReleaseAssetPayload {
+                name: Some("LunaTV.Desktop_200.0.0_x64-setup.exe".to_string()),
+                browser_download_url: Some("https://example.com/setup.exe".to_string()),
+            }])),
+            None
+        );
+    }
+
+    #[test]
+    fn normalizes_desktop_release_history_items_and_sorts_by_semver() {
+        let releases = normalize_desktop_release_history(vec![
+            GithubReleasePayload {
+                id: None,
+                tag_name: Some("desktop-v200.0.0-beta.15".to_string()),
+                name: Some("Beta 15".to_string()),
+                body: None,
+                draft: None,
+                prerelease: Some(true),
+                published_at: Some("2026-06-19T04:01:04Z".to_string()),
+                created_at: None,
+                html_url: Some("https://example.com/beta-15".to_string()),
+                assets: Some(vec![GithubReleaseAssetPayload {
+                    name: Some("latest.json".to_string()),
+                    browser_download_url: Some(
+                        "https://example.com/beta-15/latest.json".to_string(),
+                    ),
+                }]),
+            },
+            GithubReleasePayload {
+                id: None,
+                tag_name: Some("desktop-v200.0.0".to_string()),
+                name: Some("Stable".to_string()),
+                body: None,
+                draft: None,
+                prerelease: Some(false),
+                published_at: Some("2026-06-20T04:01:04Z".to_string()),
+                created_at: None,
+                html_url: Some("https://example.com/stable".to_string()),
+                assets: Some(vec![GithubReleaseAssetPayload {
+                    name: Some("latest.json".to_string()),
+                    browser_download_url: Some(
+                        "https://example.com/stable/latest.json".to_string(),
+                    ),
+                }]),
+            },
+            GithubReleasePayload {
+                id: None,
+                tag_name: Some("local-service-nova-2026-06-17.3".to_string()),
+                name: Some("Ignore me".to_string()),
+                body: None,
+                draft: None,
+                prerelease: Some(true),
+                published_at: Some("2026-06-17T04:01:04Z".to_string()),
+                created_at: None,
+                html_url: None,
+                assets: Some(vec![GithubReleaseAssetPayload {
+                    name: Some("latest.json".to_string()),
+                    browser_download_url: Some(
+                        "https://example.com/local-service/latest.json".to_string(),
+                    ),
+                }]),
+            },
+            GithubReleasePayload {
+                id: None,
+                tag_name: Some("desktop-v200.0.0-beta.16".to_string()),
+                name: Some("Beta 16".to_string()),
+                body: None,
+                draft: None,
+                prerelease: Some(true),
+                published_at: Some("2026-06-19T05:01:04Z".to_string()),
+                created_at: None,
+                html_url: Some("https://example.com/beta-16".to_string()),
+                assets: Some(vec![GithubReleaseAssetPayload {
+                    name: Some("latest.json".to_string()),
+                    browser_download_url: Some(
+                        "https://example.com/beta-16/latest.json".to_string(),
+                    ),
+                }]),
+            },
+            GithubReleasePayload {
+                id: None,
+                tag_name: Some("desktop-v200.0.1".to_string()),
+                name: Some("Missing manifest".to_string()),
+                body: None,
+                draft: None,
+                prerelease: Some(false),
+                published_at: Some("2026-06-21T04:01:04Z".to_string()),
+                created_at: None,
+                html_url: None,
+                assets: Some(vec![]),
+            },
+        ]);
+
+        assert_eq!(releases.len(), 3);
+        assert_eq!(
+            releases
+                .iter()
+                .map(|item| item.version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["200.0.0", "200.0.0-beta.16", "200.0.0-beta.15"]
         );
     }
 

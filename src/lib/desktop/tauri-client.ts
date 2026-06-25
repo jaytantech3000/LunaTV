@@ -1,4 +1,4 @@
-import type { GithubReleasePayload } from '@/lib/desktop-release-history';
+import type { DesktopReleaseHistoryItem } from '@/lib/desktop-release-history';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
 export interface DesktopLocalServiceStatus {
@@ -216,10 +216,10 @@ export function fetchLatestRemoteVersionFromDesktop(
   });
 }
 
-export function fetchDesktopReleaseHistoryPayload(
+export function fetchDesktopReleaseHistory(
   repository: string
-): Promise<GithubReleasePayload[]> {
-  return invokeDesktopCommand<GithubReleasePayload[]>(
+): Promise<DesktopReleaseHistoryItem[]> {
+  return invokeDesktopCommand<DesktopReleaseHistoryItem[]>(
     'fetch_desktop_release_history',
     {
       repository,
