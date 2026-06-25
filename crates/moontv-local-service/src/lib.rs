@@ -50,6 +50,7 @@ use hyper::server::conn::http1;
 #[cfg(target_os = "windows")]
 use hyper_util::{rt::TokioIo, service::TowerToHyperService};
 use md5::Md5;
+use moontv_profile::LocalDesktopProfileStore;
 use moontv_storage::sqlite::{DesktopSqlite, SqliteDatabaseInfo};
 use moontv_sync::{
     ProfileSyncClient, ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncStatusResponse,
@@ -68,6 +69,7 @@ use tower::ServiceExt;
 use tracing::{info, warn};
 use url::{Url, form_urlencoded};
 
+mod profile_local;
 mod profile_sync;
 
 use profile_sync::{
@@ -399,6 +401,10 @@ impl AppState {
 
     fn sqlite_info(&self) -> &SqliteDatabaseInfo {
         self.sqlite.info()
+    }
+
+    fn profile_store(&self) -> LocalDesktopProfileStore {
+        LocalDesktopProfileStore::new(self.sqlite.clone())
     }
 
     fn download_runtime_dir(&self) -> PathBuf {
@@ -2087,35 +2093,65 @@ async fn proxy_profile_sync_playrecords(
     State(state): State<AppState>,
     request: Request,
 ) -> AppResult<Response> {
-    proxy_profile_sync_passthrough(&state, request).await
+    if should_proxy_profile_user_data(&state)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return proxy_profile_sync_passthrough(&state, request).await;
+    }
+
+    profile_local::handle_profile_playrecords(&state, request).await
 }
 
 async fn proxy_profile_sync_favorites(
     State(state): State<AppState>,
     request: Request,
 ) -> AppResult<Response> {
-    proxy_profile_sync_passthrough(&state, request).await
+    if should_proxy_profile_user_data(&state)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return proxy_profile_sync_passthrough(&state, request).await;
+    }
+
+    profile_local::handle_profile_favorites(&state, request).await
 }
 
 async fn proxy_profile_sync_follows(
     State(state): State<AppState>,
     request: Request,
 ) -> AppResult<Response> {
-    proxy_profile_sync_passthrough(&state, request).await
+    if should_proxy_profile_user_data(&state)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return proxy_profile_sync_passthrough(&state, request).await;
+    }
+
+    profile_local::handle_profile_follows(&state, request).await
 }
 
 async fn proxy_profile_sync_search_history(
     State(state): State<AppState>,
     request: Request,
 ) -> AppResult<Response> {
-    proxy_profile_sync_passthrough(&state, request).await
+    if should_proxy_profile_user_data(&state)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return proxy_profile_sync_passthrough(&state, request).await;
+    }
+
+    profile_local::handle_profile_search_history(&state, request).await
 }
 
 async fn proxy_profile_sync_skip_configs(
     State(state): State<AppState>,
     request: Request,
 ) -> AppResult<Response> {
-    proxy_profile_sync_passthrough(&state, request).await
+    if should_proxy_profile_user_data(&state)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return proxy_profile_sync_passthrough(&state, request).await;
+    }
+
+    profile_local::handle_profile_skip_configs(&state, request).await
 }
 
 fn build_local_auth_status_payload(state: &AppState) -> Result<LocalAuthStatusResponse> {
@@ -5204,6 +5240,10 @@ fn normalize_user_config(
 }
 
 fn should_proxy_admin_data_migration(state: &AppState) -> Result<bool> {
+    Ok(state.load_config()?.profile_sync_api_base_url.is_some())
+}
+
+fn should_proxy_profile_user_data(state: &AppState) -> Result<bool> {
     Ok(state.load_config()?.profile_sync_api_base_url.is_some())
 }
 
@@ -9935,6 +9975,512 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn profile_playrecords_route_uses_owner_fallback_when_local_auth_is_optional() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "auth": {
+                "username": "desktop-owner"
+              },
+              "api_site": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        let app = build_router(state.clone());
+
+        let post_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/playrecords")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "key": "demo+1",
+                          "record": {
+                            "title": "Demo Episode",
+                            "source_name": "Demo Source",
+                            "year": "2026",
+                            "cover": "cover.jpg",
+                            "index": 1,
+                            "total_episodes": 12,
+                            "play_time": 30,
+                            "total_time": 60,
+                            "save_time": 1,
+                            "search_title": "Demo Search",
+                            "playback_mode": "online",
+                            "offline_content_id": null,
+                            "is_adult": false
+                          }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("local playrecords post request"),
+            )
+            .await
+            .expect("local playrecords post response");
+
+        assert_eq!(post_response.status(), StatusCode::OK);
+
+        let get_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/playrecords")
+                    .body(Body::empty())
+                    .expect("local playrecords get request"),
+            )
+            .await
+            .expect("local playrecords get response");
+
+        assert_eq!(get_response.status(), StatusCode::OK);
+        let payload = read_json_body(get_response).await;
+        assert_eq!(
+            payload
+                .get("demo+1")
+                .and_then(|record| record.get("title"))
+                .and_then(Value::as_str),
+            Some("Demo Episode")
+        );
+        assert_eq!(
+            state
+                .profile_store()
+                .load_play_records("desktop-owner")
+                .expect("owner play records")
+                .get("demo+1")
+                .map(|record| record.title.as_str()),
+            Some("Demo Episode")
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_playrecords_route_requires_auth_when_local_password_is_enabled() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "auth": {
+                "username": "desktop-owner",
+                "password": "owner-secret"
+              },
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/playrecords")
+                    .body(Body::empty())
+                    .expect("unauthorized local playrecords request"),
+            )
+            .await
+            .expect("unauthorized local playrecords response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload.get("error").and_then(Value::as_str),
+            Some("Unauthorized")
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_local_routes_round_trip_all_domains_for_authenticated_user() {
+        let temp_dir = TestDir::new();
+        let raw_config = json!({
+          "auth": {
+            "username": "desktop-owner",
+            "password": "owner-secret"
+          },
+          "api_site": {}
+        });
+        let config_path = write_test_config(&temp_dir, raw_config);
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        let mut persistence = state
+            .load_admin_persistence()
+            .expect("load default admin persistence");
+        persistence
+            .config
+            .user_config
+            .users
+            .push(DesktopUserConfigItem {
+                username: "kid".to_string(),
+                role: "user".to_string(),
+                banned: false,
+                enabled_apis: Vec::new(),
+                tags: Vec::new(),
+            });
+        persistence
+            .user_passwords
+            .insert("kid".to_string(), "kid-secret".to_string());
+        state
+            .save_admin_persistence(&persistence)
+            .expect("save updated admin persistence");
+        let auth_cookie = build_test_auth_cookie("kid", "user", "desktop-local");
+        let app = build_router(state.clone());
+
+        let playrecords_post = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/playrecords")
+                    .header("cookie", auth_cookie.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "key": "demo+1",
+                          "record": {
+                            "title": "Kid Episode",
+                            "source_name": "Demo Source",
+                            "year": "2026",
+                            "cover": "cover.jpg",
+                            "index": 2,
+                            "total_episodes": 24,
+                            "play_time": 90,
+                            "total_time": 180,
+                            "save_time": 10,
+                            "search_title": "Kid Search",
+                            "playback_mode": "online",
+                            "offline_content_id": null,
+                            "is_adult": false
+                          }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("kid playrecords post request"),
+            )
+            .await
+            .expect("kid playrecords post response");
+        assert_eq!(playrecords_post.status(), StatusCode::OK);
+
+        let playrecords_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/playrecords")
+                    .header("cookie", auth_cookie.clone())
+                    .body(Body::empty())
+                    .expect("kid playrecords get request"),
+            )
+            .await
+            .expect("kid playrecords get response");
+        let playrecords_payload = read_json_body(playrecords_get).await;
+        assert_eq!(
+            playrecords_payload
+                .get("demo+1")
+                .and_then(|record| record.get("index"))
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+
+        let favorites_post = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/favorites")
+                    .header("cookie", auth_cookie.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "key": "demo+1",
+                          "favorite": {
+                            "title": "Kid Favorite",
+                            "source_name": "Demo Source",
+                            "year": "2026",
+                            "cover": "favorite.jpg",
+                            "total_episodes": 24,
+                            "save_time": 20,
+                            "search_title": "Kid Favorite Search",
+                            "playback_mode": "online",
+                            "offline_content_id": null,
+                            "is_adult": false,
+                            "origin": "vod"
+                          }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("kid favorites post request"),
+            )
+            .await
+            .expect("kid favorites post response");
+        assert_eq!(favorites_post.status(), StatusCode::OK);
+
+        let favorites_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/favorites?key=demo%2B1")
+                    .header("cookie", auth_cookie.clone())
+                    .body(Body::empty())
+                    .expect("kid favorites get request"),
+            )
+            .await
+            .expect("kid favorites get response");
+        let favorites_payload = read_json_body(favorites_get).await;
+        assert_eq!(
+            favorites_payload.get("title").and_then(Value::as_str),
+            Some("Kid Favorite")
+        );
+
+        let follows_post = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/follows")
+                    .header("cookie", auth_cookie.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "key": "demo+1",
+                          "follow": {
+                            "title": "Kid Follow",
+                            "source_name": "Demo Source",
+                            "year": "2026",
+                            "cover": "follow.jpg",
+                            "search_title": "Kid Follow Search",
+                            "followed_at": 100,
+                            "followed_episode_count": 2,
+                            "acknowledged_episode_count": 0,
+                            "latest_episode_count": 0,
+                            "last_checked_at": 0
+                          }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("kid follows post request"),
+            )
+            .await
+            .expect("kid follows post response");
+        assert_eq!(follows_post.status(), StatusCode::OK);
+
+        let follows_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/follows?key=demo%2B1")
+                    .header("cookie", auth_cookie.clone())
+                    .body(Body::empty())
+                    .expect("kid follows get request"),
+            )
+            .await
+            .expect("kid follows get response");
+        let follows_payload = read_json_body(follows_get).await;
+        assert_eq!(
+            follows_payload
+                .get("acknowledged_episode_count")
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+        assert_eq!(
+            follows_payload
+                .get("latest_episode_count")
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+
+        let search_history_post = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/searchhistory")
+                    .header("cookie", auth_cookie.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "keyword": "  Demo Query  "
+                        })
+                        .to_string(),
+                    ))
+                    .expect("kid search history post request"),
+            )
+            .await
+            .expect("kid search history post response");
+        assert_eq!(search_history_post.status(), StatusCode::OK);
+        let search_history_post_payload = read_json_body(search_history_post).await;
+        assert_eq!(
+            search_history_post_payload
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(Value::as_str),
+            Some("Demo Query")
+        );
+
+        let search_history_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/searchhistory")
+                    .header("cookie", auth_cookie.clone())
+                    .body(Body::empty())
+                    .expect("kid search history get request"),
+            )
+            .await
+            .expect("kid search history get response");
+        let search_history_payload = read_json_body(search_history_get).await;
+        assert_eq!(
+            search_history_payload
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(Value::as_str),
+            Some("Demo Query")
+        );
+
+        let skip_configs_post = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/skipconfigs")
+                    .header("cookie", auth_cookie.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "key": "demo+1",
+                          "config": {
+                            "enable": true,
+                            "intro_time": 12,
+                            "outro_time": 34
+                          }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("kid skip configs post request"),
+            )
+            .await
+            .expect("kid skip configs post response");
+        assert_eq!(skip_configs_post.status(), StatusCode::OK);
+
+        let skip_configs_get = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/skipconfigs?source=demo&id=1")
+                    .header("cookie", auth_cookie)
+                    .body(Body::empty())
+                    .expect("kid skip configs get request"),
+            )
+            .await
+            .expect("kid skip configs get response");
+        let skip_configs_payload = read_json_body(skip_configs_get).await;
+        assert_eq!(
+            skip_configs_payload
+                .get("intro_time")
+                .and_then(Value::as_i64),
+            Some(12)
+        );
+
+        let kid_snapshot = state
+            .profile_store()
+            .load_snapshot("kid")
+            .expect("load kid profile snapshot");
+        assert_eq!(kid_snapshot.play_records.len(), 1);
+        assert_eq!(kid_snapshot.favorites.len(), 1);
+        assert_eq!(kid_snapshot.follow_records.len(), 1);
+        assert_eq!(kid_snapshot.search_history, vec!["Demo Query".to_string()]);
+        assert_eq!(kid_snapshot.skip_configs.len(), 1);
+
+        let owner_snapshot = state
+            .profile_store()
+            .load_snapshot("desktop-owner")
+            .expect("load owner profile snapshot");
+        assert!(owner_snapshot.play_records.is_empty());
+        assert!(owner_snapshot.favorites.is_empty());
+        assert!(owner_snapshot.follow_records.is_empty());
+        assert!(owner_snapshot.search_history.is_empty());
+        assert!(owner_snapshot.skip_configs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn profile_playrecords_route_proxies_profile_sync_mode() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/playrecords",
+            get(|| async move {
+                Json(json!({
+                  "demo+remote": {
+                    "title": "Remote Demo",
+                    "source_name": "Remote Source",
+                    "year": "2026",
+                    "cover": "remote.jpg",
+                    "index": 1,
+                    "total_episodes": 12,
+                    "play_time": 30,
+                    "total_time": 60,
+                    "save_time": 99,
+                    "search_title": null,
+                    "playback_mode": null,
+                    "offline_content_id": null,
+                    "is_adult": false
+                  }
+                }))
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": upstream.base_url()
+              },
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/playrecords")
+                    .body(Body::empty())
+                    .expect("proxied playrecords request"),
+            )
+            .await
+            .expect("proxied playrecords response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload
+                .get("demo+remote")
+                .and_then(|record| record.get("title"))
+                .and_then(Value::as_str),
+            Some("Remote Demo")
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
     async fn admin_source_disable_affects_runtime_search() {
         let upstream = spawn_mock_server(mock_upstream_router()).await;
         let temp_dir = TestDir::new();
@@ -10870,6 +11416,24 @@ segment0.ts
         fn abort(self) {
             self.task.abort();
         }
+    }
+
+    async fn read_json_body(response: Response) -> Value {
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        serde_json::from_slice(&body).expect("parse response json")
+    }
+
+    fn build_test_auth_cookie(username: &str, role: &str, session_mode: &str) -> String {
+        let payload = serde_json::to_string(&json!({
+            "username": username,
+            "role": role,
+            "sessionMode": session_mode
+        }))
+        .expect("serialize auth cookie payload");
+        let encoded = form_urlencoded::byte_serialize(payload.as_bytes()).collect::<String>();
+        format!("auth={encoded}")
     }
 
     fn build_multipart_form_data(boundary: &str, encrypted: &str, password: &str) -> String {

@@ -18,6 +18,7 @@ html-escape.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 md-5 = "0.10.6"
+moontv-profile = { path = "../moontv-profile" }
 moontv-storage = { path = "../moontv-storage" }
 moontv-sync = { path = "../moontv-sync" }
 rand = "0.9.4"

@@ -2345,6 +2345,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "md-5",
+ "moontv-profile",
  "moontv-storage",
  "moontv-sync",
  "rand",
