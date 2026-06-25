@@ -270,6 +270,58 @@ describe('desktop download runtime task sdk', () => {
     );
   });
 
+  it('resolves desktop download manifests through the local runtime endpoint', async () => {
+    const manifestResult = {
+      rootManifestUrl:
+        '/api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fcdn.example.com%2Froot.m3u8',
+      playbackManifestUrl:
+        'http://127.0.0.1:8787/media/vod/m3u8?source=demo&url=https%3A%2F%2Fcdn.example.com%2Fplayback.m3u8',
+      resources: [
+        {
+          type: 'manifest',
+          url: '/api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fcdn.example.com%2Froot.m3u8',
+        },
+        {
+          type: 'segment',
+          url: 'http://127.0.0.1:8787/media/vod/segment?source=demo&url=https%3A%2F%2Fcdn.example.com%2F0001.ts',
+        },
+      ],
+      resourceUrls: [
+        '/api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fcdn.example.com%2Froot.m3u8',
+        'http://127.0.0.1:8787/media/vod/segment?source=demo&url=https%3A%2F%2Fcdn.example.com%2F0001.ts',
+      ],
+      isMasterPlaylist: false,
+    };
+
+    (global.fetch as jest.Mock).mockResolvedValueOnce(
+      buildJsonResponse(manifestResult)
+    );
+
+    await expect(
+      desktopRuntime.resolveDesktopDownloadManifest([
+        '/api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fcdn.example.com%2Froot.m3u8',
+      ])
+    ).resolves.toEqual(manifestResult);
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/download-runtime/manifest/resolve',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          entryManifestUrls: [
+            '/api/proxy/vod/m3u8?source=demo&url=https%3A%2F%2Fcdn.example.com%2Froot.m3u8',
+          ],
+        }),
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: undefined,
+      }
+    );
+  });
+
   it('subscribes to desktop download engine snapshots over EventSource', () => {
     const snapshot = {
       maxConcurrentTasks: 4,

@@ -1,4 +1,8 @@
 import { putDownloadResponse } from './cache';
+import {
+  isDesktopLocalDownloadRuntimeEnabled,
+  resolveDesktopDownloadManifest,
+} from './desktop-runtime';
 import { looksLikeManifestUrl } from './proxy-url';
 import {
   createTimeoutAbortSignal,
@@ -323,6 +327,12 @@ export async function parseManifestForDownloadWithFallback(
 
   if (candidates.length === 0) {
     throw new Error('当前剧集缺少可下载的播放地址');
+  }
+
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    return resolveDesktopDownloadManifest(candidates, {
+      signal: options.signal,
+    });
   }
 
   let lastError: Error | null = null;

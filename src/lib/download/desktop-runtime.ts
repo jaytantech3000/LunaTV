@@ -1,7 +1,11 @@
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { buildApiUrl } from '@/lib/transport/endpoint';
 
-import { DownloadTask, ResourceIndexRecord } from './types';
+import {
+  DownloadTask,
+  ManifestParseResult,
+  ResourceIndexRecord,
+} from './types';
 
 interface DesktopDownloadCacheMetaResponse {
   exists: boolean;
@@ -86,9 +90,27 @@ function buildDesktopDownloadRuntimeUrl(
 
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    throw new Error(
-      `Desktop download runtime request failed: ${response.status}`
-    );
+    let errorMessage = `Desktop download runtime request failed: ${response.status}`;
+
+    try {
+      const payload = (await response.clone().json()) as {
+        error?: string;
+      };
+      if (typeof payload.error === 'string' && payload.error.trim()) {
+        errorMessage = payload.error.trim();
+      }
+    } catch {
+      try {
+        const fallbackText = (await response.text()).trim();
+        if (fallbackText) {
+          errorMessage = fallbackText;
+        }
+      } catch {
+        // Ignore secondary parsing failures and keep the status fallback.
+      }
+    }
+
+    throw new Error(errorMessage);
   }
 
   return response.json() as Promise<T>;
@@ -337,6 +359,32 @@ export async function clearDesktopDownloadStoreSnapshot(): Promise<void> {
   });
 
   await parseJsonResponse(response);
+}
+
+export async function resolveDesktopDownloadManifest(
+  entryManifestUrls: string[],
+  options: {
+    signal?: AbortSignal;
+  } = {}
+): Promise<ManifestParseResult> {
+  ensureDesktopLocalDownloadRuntime();
+  const response = await fetch(
+    buildDesktopDownloadRuntimeUrl('/manifest/resolve'),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        entryManifestUrls,
+      }),
+      cache: 'no-store',
+      credentials: 'omit',
+      signal: options.signal,
+    }
+  );
+
+  return parseJsonResponse<ManifestParseResult>(response);
 }
 
 export async function getDesktopDownloadEngineSnapshot(): Promise<DesktopDownloadEngineSnapshot> {

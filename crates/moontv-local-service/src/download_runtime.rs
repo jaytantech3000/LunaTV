@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use std::{collections::BTreeSet, convert::Infallible, sync::OnceLock, time::Duration};
 
 use axum::{
     Json,
@@ -20,6 +20,7 @@ use moontv_download::{
     DesktopDownloadEngine, DesktopDownloadEngineSettingsUpdate, DesktopDownloadEngineSnapshot,
     DesktopDownloadTask,
 };
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
@@ -84,6 +85,114 @@ pub(crate) struct DesktopDownloadResourceIndexRecord {
     pub(crate) urls: Vec<String>,
     pub(crate) created_at: u64,
     pub(crate) updated_at: u64,
+}
+
+const DOWNLOAD_MANIFEST_FETCH_TIMEOUT_MS: u64 = 20_000;
+const MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES: usize = 2;
+const DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER: &str = "x-moontv-download-intent";
+const BACKGROUND_DOWNLOAD_REQUEST_INTENT: &str = "background";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopDownloadManifestResolveRequest {
+    entry_manifest_urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum DesktopDownloadManifestResourceType {
+    Manifest,
+    Segment,
+    Key,
+    Map,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDownloadManifestResource {
+    url: String,
+    #[serde(rename = "type")]
+    resource_type: DesktopDownloadManifestResourceType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDownloadManifestResolveResponse {
+    root_manifest_url: String,
+    playback_manifest_url: String,
+    resources: Vec<DesktopDownloadManifestResource>,
+    resource_urls: Vec<String>,
+    is_master_playlist: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadManifestErrorKind {
+    Http,
+    Network,
+    Timeout,
+    Invalid,
+    Internal,
+}
+
+#[derive(Debug, Clone)]
+struct DownloadManifestError {
+    kind: DownloadManifestErrorKind,
+    status: Option<StatusCode>,
+    message: String,
+}
+
+impl DownloadManifestError {
+    fn http(_url: impl Into<String>, status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            kind: DownloadManifestErrorKind::Http,
+            status: Some(status),
+            message: message.into(),
+        }
+    }
+
+    fn network(_url: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: DownloadManifestErrorKind::Network,
+            status: None,
+            message: message.into(),
+        }
+    }
+
+    fn timeout(_url: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: DownloadManifestErrorKind::Timeout,
+            status: None,
+            message: message.into(),
+        }
+    }
+
+    fn invalid(_url: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: DownloadManifestErrorKind::Invalid,
+            status: None,
+            message: message.into(),
+        }
+    }
+
+    fn internal(_url: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: DownloadManifestErrorKind::Internal,
+            status: None,
+            message: message.into(),
+        }
+    }
+
+    fn into_app_error(self) -> AppError {
+        let status = match self.kind {
+            DownloadManifestErrorKind::Invalid => StatusCode::BAD_REQUEST,
+            DownloadManifestErrorKind::Http
+            | DownloadManifestErrorKind::Network
+            | DownloadManifestErrorKind::Timeout => StatusCode::BAD_GATEWAY,
+            DownloadManifestErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        AppError::new(status, self.message)
+    }
 }
 
 pub(crate) async fn put_download_runtime_cache(
@@ -274,6 +383,659 @@ pub(crate) async fn clear_download_runtime_store_snapshot(
         "ok": true,
         "deleted": deleted,
     }))
+}
+
+pub(crate) async fn resolve_download_runtime_manifest(
+    State(state): State<AppState>,
+    Json(request): Json<DesktopDownloadManifestResolveRequest>,
+) -> AppResult<Response> {
+    let candidate_urls = normalize_download_manifest_candidate_urls(request.entry_manifest_urls)?;
+    let mut last_error: Option<DownloadManifestError> = None;
+
+    for candidate_url in candidate_urls {
+        for attempt in 1..=MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES + 1 {
+            match parse_download_manifest_for_candidate(&state, &candidate_url).await {
+                Ok(result) => return no_store_json_response(&result),
+                Err(error) => {
+                    let should_retry = attempt <= MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES
+                        && is_retryable_download_manifest_error(&error);
+                    last_error = Some(error);
+
+                    if should_retry {
+                        wait_for_download_manifest_retry(attempt).await;
+                        continue;
+                    }
+
+                    break;
+                }
+            }
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| {
+            DownloadManifestError::invalid(
+                "desktop-download-manifest",
+                "missing download manifest candidates",
+            )
+        })
+        .into_app_error())
+}
+
+fn normalize_download_manifest_candidate_urls(
+    candidate_urls: Vec<String>,
+) -> AppResult<Vec<String>> {
+    let mut normalized = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for candidate_url in candidate_urls {
+        let trimmed = candidate_url.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if seen.insert(trimmed.to_string()) {
+            normalized.push(trimmed.to_string());
+        }
+    }
+
+    if normalized.is_empty() {
+        return Err(AppError::bad_request(
+            "missing desktop download manifest candidates",
+        ));
+    }
+
+    Ok(normalized)
+}
+
+async fn parse_download_manifest_for_candidate(
+    state: &AppState,
+    candidate_url: &str,
+) -> Result<DesktopDownloadManifestResolveResponse, DownloadManifestError> {
+    let root_manifest_text = fetch_download_manifest_text(state, candidate_url).await?;
+    let is_master_playlist = is_download_manifest_master_playlist(&root_manifest_text);
+
+    if !is_master_playlist {
+        let resources = dedupe_download_manifest_resources(
+            std::iter::once(build_download_manifest_resource(
+                candidate_url,
+                DesktopDownloadManifestResourceType::Manifest,
+            ))
+            .chain(collect_download_media_playlist_resources(
+                &root_manifest_text,
+                candidate_url,
+            )?)
+            .collect(),
+        );
+
+        return Ok(DesktopDownloadManifestResolveResponse {
+            root_manifest_url: candidate_url.to_string(),
+            playback_manifest_url: candidate_url.to_string(),
+            resource_urls: resources.iter().map(|resource| resource.url.clone()).collect(),
+            resources,
+            is_master_playlist: false,
+        });
+    }
+
+    let playback_manifest_url =
+        select_download_playback_manifest_url(&root_manifest_text).ok_or_else(|| {
+            DownloadManifestError::invalid(
+                candidate_url,
+                format!("missing playable media playlist: {candidate_url}"),
+            )
+        })?;
+    let playback_manifest_text =
+        fetch_download_manifest_text(state, &playback_manifest_url).await?;
+    let resources = dedupe_download_manifest_resources(
+        std::iter::once(build_download_manifest_resource(
+            candidate_url,
+            DesktopDownloadManifestResourceType::Manifest,
+        ))
+        .chain(std::iter::once(build_download_manifest_resource(
+            &playback_manifest_url,
+            DesktopDownloadManifestResourceType::Manifest,
+        )))
+        .chain(collect_download_media_playlist_resources(
+            &playback_manifest_text,
+            &playback_manifest_url,
+        )?)
+        .collect(),
+    );
+
+    Ok(DesktopDownloadManifestResolveResponse {
+        root_manifest_url: candidate_url.to_string(),
+        playback_manifest_url,
+        resource_urls: resources.iter().map(|resource| resource.url.clone()).collect(),
+        resources,
+        is_master_playlist: true,
+    })
+}
+
+async fn fetch_download_manifest_text(
+    state: &AppState,
+    request_url: &str,
+) -> Result<String, DownloadManifestError> {
+    if let Some(cached_manifest_text) = read_cached_download_manifest_text(state, request_url)? {
+        return Ok(cached_manifest_text);
+    }
+
+    if let Some(proxy_request) = parse_download_manifest_proxy_request(request_url) {
+        return fetch_download_manifest_text_via_proxy(
+            state,
+            request_url,
+            proxy_request.source,
+            proxy_request.upstream_url,
+            proxy_request.adfilter,
+        )
+        .await;
+    }
+
+    fetch_download_manifest_text_direct(state, request_url).await
+}
+
+fn read_cached_download_manifest_text(
+    state: &AppState,
+    request_url: &str,
+) -> Result<Option<String>, DownloadManifestError> {
+    let Some(_) = state
+        .read_cached_download_entry(request_url)
+        .map_err(|error| {
+            DownloadManifestError::internal(
+                request_url,
+                format!("failed to read cached manifest entry: {error}"),
+            )
+        })?
+    else {
+        return Ok(None);
+    };
+
+    let Some(body) = state.read_cached_download_body(request_url).map_err(|error| {
+        DownloadManifestError::internal(
+            request_url,
+            format!("failed to read cached manifest body: {error}"),
+        )
+    })? else {
+        return Ok(None);
+    };
+
+    let Ok(manifest_text) = String::from_utf8(body) else {
+        return Ok(None);
+    };
+
+    if !manifest_text.contains("#EXTM3U") {
+        return Ok(None);
+    }
+
+    Ok(Some(manifest_text))
+}
+
+#[derive(Debug)]
+struct DownloadManifestProxyRequest {
+    source: String,
+    upstream_url: String,
+    adfilter: Option<String>,
+}
+
+fn parse_download_manifest_proxy_request(
+    request_url: &str,
+) -> Option<DownloadManifestProxyRequest> {
+    let parsed_url = Url::parse(request_url)
+        .ok()
+        .or_else(|| Url::parse(&format!("http://moontv.local{request_url}")).ok())?;
+    let path = parsed_url.path();
+
+    if !matches!(path, "/api/proxy/vod/m3u8" | "/media/vod/m3u8") {
+        return None;
+    }
+
+    let mut source = None;
+    let mut upstream_url = None;
+    let mut adfilter = None;
+
+    for (key, value) in parsed_url.query_pairs() {
+        match key.as_ref() {
+            "source" => source = Some(value.into_owned()),
+            "url" => upstream_url = Some(value.into_owned()),
+            "adfilter" => adfilter = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+
+    Some(DownloadManifestProxyRequest {
+        source: source?.trim().to_string(),
+        upstream_url: upstream_url?.trim().to_string(),
+        adfilter: adfilter.map(|value| value.trim().to_string()),
+    })
+}
+
+async fn fetch_download_manifest_text_via_proxy(
+    state: &AppState,
+    request_url: &str,
+    source: String,
+    upstream_url: String,
+    adfilter: Option<String>,
+) -> Result<String, DownloadManifestError> {
+    let config = state.load_config().map_err(|error| {
+        DownloadManifestError::internal(
+            request_url,
+            format!("failed to load local service config: {error}"),
+        )
+    })?;
+    let ad_filter_query_mode = crate::parse_bool_flag(adfilter.as_deref());
+    let resolved = crate::resolve_vod_proxy_request(
+        &config,
+        crate::VodProxyQueryParams {
+            source: Some(source),
+            url: Some(upstream_url),
+            adfilter,
+        },
+    )
+    .map_err(|error| DownloadManifestError::invalid(request_url, error.message))?;
+    let upstream_response = crate::fetch_vod_proxy_upstream(
+        &state.client,
+        &resolved.api_site,
+        &resolved.upstream_url,
+        &HeaderMap::new(),
+    )
+    .await
+    .map_err(|error| DownloadManifestError::network(request_url, error.message))?;
+    let status = upstream_response.status();
+    let meta = crate::upstream_response_meta(&upstream_response);
+    let manifest_content = upstream_response.text().await.map_err(|error| {
+        DownloadManifestError::network(
+            request_url,
+            format!("Failed to read manifest body: {request_url} ({error})"),
+        )
+    })?;
+
+    if !status.is_success() {
+        let detail = summarize_manifest_error_body(&manifest_content);
+        let message = if detail.is_empty() {
+            format!("Failed to fetch manifest: {request_url} ({status})")
+        } else {
+            format!("Failed to fetch manifest: {request_url} ({status}, {detail})")
+        };
+        return Err(DownloadManifestError::http(request_url, status, message));
+    }
+
+    let rewritten_content = crate::rewrite_vod_manifest_content(
+        &manifest_content,
+        &meta.final_url,
+        &resolved.source,
+        &state.public_base_url,
+    );
+    let ad_filter_result =
+        if crate::should_apply_vod_ad_filter(&config, &resolved.api_site, ad_filter_query_mode) {
+            crate::filter_vod_manifest_ads(
+                &rewritten_content,
+                &crate::build_vod_ad_filter_config(true),
+            )
+        } else {
+            crate::FilteredVodManifest {
+                filtered: rewritten_content.clone(),
+                ads_removed: 0,
+                ads_duration: 0.0,
+                changed: false,
+            }
+        };
+    let response_content = if ad_filter_result.changed {
+        ad_filter_result.filtered
+    } else {
+        rewritten_content
+    };
+
+    cache_manifest_text(
+        state,
+        request_url,
+        meta.status,
+        meta.content_type.as_deref(),
+        response_content.as_bytes(),
+    )?;
+
+    ensure_manifest_text(request_url, response_content)
+}
+
+async fn fetch_download_manifest_text_direct(
+    state: &AppState,
+    request_url: &str,
+) -> Result<String, DownloadManifestError> {
+    let fetch_url = resolve_download_manifest_fetch_url(&state.public_base_url, request_url)?;
+    let response = state
+        .client
+        .get(&fetch_url)
+        .header(
+            HeaderName::from_static(DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER),
+            HeaderValue::from_static(BACKGROUND_DOWNLOAD_REQUEST_INTENT),
+        )
+        .timeout(Duration::from_millis(DOWNLOAD_MANIFEST_FETCH_TIMEOUT_MS))
+        .send()
+        .await
+        .map_err(|error| {
+            if error.is_timeout() {
+                DownloadManifestError::timeout(
+                    request_url,
+                    format!("Failed to fetch manifest: {request_url} (timeout)"),
+                )
+            } else {
+                DownloadManifestError::network(
+                    request_url,
+                    format!("Failed to fetch manifest: {request_url} ({error})"),
+                )
+            }
+        })?;
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body_bytes = response.bytes().await.map_err(|error| {
+        DownloadManifestError::network(
+            request_url,
+            format!("Failed to read manifest body: {request_url} ({error})"),
+        )
+    })?;
+
+    if !status.is_success() {
+        let detail = summarize_manifest_error_body(&String::from_utf8_lossy(&body_bytes));
+        let message = if detail.is_empty() {
+            format!("Failed to fetch manifest: {request_url} ({status})")
+        } else {
+            format!("Failed to fetch manifest: {request_url} ({status}, {detail})")
+        };
+        return Err(DownloadManifestError::http(request_url, status, message));
+    }
+
+    cache_manifest_text(
+        state,
+        request_url,
+        status,
+        content_type.as_deref(),
+        body_bytes.as_ref(),
+    )?;
+
+    ensure_manifest_text(
+        request_url,
+        String::from_utf8(body_bytes.to_vec()).map_err(|_| {
+            DownloadManifestError::invalid(
+                request_url,
+                format!("Upstream content is not valid UTF-8: {request_url}"),
+            )
+        })?,
+    )
+}
+
+fn cache_manifest_text(
+    state: &AppState,
+    request_url: &str,
+    status: StatusCode,
+    content_type: Option<&str>,
+    body: &[u8],
+) -> Result<(), DownloadManifestError> {
+    state
+        .write_cached_download(request_url, status, content_type, body)
+        .map_err(|error| {
+            DownloadManifestError::internal(
+                request_url,
+                format!("failed to cache manifest: {request_url} ({error})"),
+            )
+        })?;
+    Ok(())
+}
+
+fn ensure_manifest_text(
+    request_url: &str,
+    manifest_text: String,
+) -> Result<String, DownloadManifestError> {
+    if !manifest_text.contains("#EXTM3U") {
+        return Err(DownloadManifestError::invalid(
+            request_url,
+            format!("Upstream content is not a valid HLS manifest: {request_url}"),
+        ));
+    }
+
+    Ok(manifest_text)
+}
+
+fn resolve_download_manifest_fetch_url(
+    public_base_url: &str,
+    request_url: &str,
+) -> Result<String, DownloadManifestError> {
+    if Url::parse(request_url).is_ok() {
+        return Ok(request_url.to_string());
+    }
+
+    Url::parse(public_base_url)
+        .and_then(|base_url| base_url.join(request_url))
+        .map(|url| url.to_string())
+        .map_err(|_| {
+            DownloadManifestError::invalid(
+                request_url,
+                format!("Invalid download manifest url: {request_url}"),
+            )
+        })
+}
+
+fn summarize_manifest_error_body(body: &str) -> String {
+    let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return String::new();
+    }
+
+    if normalized.len() > 160 {
+        format!("{}...", &normalized[..157])
+    } else {
+        normalized
+    }
+}
+
+fn split_manifest_lines(content: &str) -> Vec<String> {
+    content
+        .split('\n')
+        .map(|line| line.trim().to_string())
+        .collect()
+}
+
+fn manifest_attribute_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"([A-Z0-9-]+)=("[^"]*"|[^,]*)"#).expect("manifest attribute regex")
+    })
+}
+
+fn read_manifest_attribute(line: &str, key: &str) -> Option<String> {
+    let attribute_line = line.split_once(':').map(|(_, tail)| tail).unwrap_or(line);
+
+    manifest_attribute_regex()
+        .captures_iter(attribute_line)
+        .find_map(|capture| {
+            let capture_key = capture.get(1)?.as_str();
+            if capture_key != key {
+                return None;
+            }
+
+            Some(capture.get(2)?.as_str().trim_matches('"').to_string())
+        })
+}
+
+fn extract_manifest_uri_attribute(line: &str) -> Option<String> {
+    read_manifest_attribute(line, "URI")
+}
+
+fn extract_manifest_key_method(line: &str) -> Option<String> {
+    read_manifest_attribute(line, "METHOD")
+}
+
+fn is_download_manifest_master_playlist(content: &str) -> bool {
+    split_manifest_lines(content)
+        .iter()
+        .any(|line| line.starts_with("#EXT-X-STREAM-INF:"))
+}
+
+fn select_download_playback_manifest_url(content: &str) -> Option<String> {
+    let lines = split_manifest_lines(content);
+    let mut variants = Vec::new();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index].trim();
+        if !line.starts_with("#EXT-X-STREAM-INF:") {
+            index += 1;
+            continue;
+        }
+
+        let bandwidth = read_manifest_attribute(line, "BANDWIDTH")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        let next_line = lines.get(index + 1).map(|value| value.trim()).unwrap_or("");
+
+        if !next_line.is_empty() && !next_line.starts_with('#') {
+            variants.push((next_line.to_string(), bandwidth));
+        }
+
+        index += 2;
+    }
+
+    variants.sort_by(|left, right| right.1.cmp(&left.1));
+    variants.into_iter().next().map(|item| item.0)
+}
+
+fn collect_download_media_playlist_resources(
+    content: &str,
+    manifest_url: &str,
+) -> Result<Vec<DesktopDownloadManifestResource>, DownloadManifestError> {
+    let mut resources = Vec::new();
+
+    for line in split_manifest_lines(content) {
+        if line.is_empty() {
+            continue;
+        }
+
+        if line.starts_with("#EXT-X-KEY:") || line.starts_with("#EXT-X-SESSION-KEY:") {
+            if let Some(method) = extract_manifest_key_method(&line) {
+                let normalized_method = method.trim().to_ascii_uppercase();
+                if normalized_method != "AES-128" && normalized_method != "NONE" {
+                    return Err(DownloadManifestError::invalid(
+                        manifest_url,
+                        format!("Unsupported DRM/HLS encryption method: {method}"),
+                    ));
+                }
+            }
+
+            if let Some(url) = extract_manifest_uri_attribute(&line) {
+                resources.push(build_download_manifest_resource(
+                    &url,
+                    DesktopDownloadManifestResourceType::Key,
+                ));
+            }
+            continue;
+        }
+
+        if line.starts_with("#EXT-X-MAP:") {
+            if let Some(url) = extract_manifest_uri_attribute(&line) {
+                resources.push(build_download_manifest_resource(
+                    &url,
+                    DesktopDownloadManifestResourceType::Map,
+                ));
+            }
+            continue;
+        }
+
+        if line.starts_with("#EXT-X-PART:") {
+            if let Some(url) = extract_manifest_uri_attribute(&line) {
+                resources.push(build_download_manifest_resource(
+                    &url,
+                    DesktopDownloadManifestResourceType::Segment,
+                ));
+            }
+            continue;
+        }
+
+        if line.starts_with("#EXT-X-PRELOAD-HINT:")
+            || line.starts_with("#EXT-X-RENDITION-REPORT:")
+        {
+            continue;
+        }
+
+        if !line.starts_with('#') {
+            let resource_type = if looks_like_download_manifest_url(&line) {
+                DesktopDownloadManifestResourceType::Manifest
+            } else {
+                DesktopDownloadManifestResourceType::Segment
+            };
+            resources.push(build_download_manifest_resource(&line, resource_type));
+        }
+    }
+
+    Ok(resources)
+}
+
+fn build_download_manifest_resource(
+    url: &str,
+    resource_type: DesktopDownloadManifestResourceType,
+) -> DesktopDownloadManifestResource {
+    DesktopDownloadManifestResource {
+        url: url.trim().to_string(),
+        resource_type,
+    }
+}
+
+fn dedupe_download_manifest_resources(
+    resources: Vec<DesktopDownloadManifestResource>,
+) -> Vec<DesktopDownloadManifestResource> {
+    let mut deduped = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for resource in resources {
+        if resource.url.is_empty() || !seen.insert(resource.url.clone()) {
+            continue;
+        }
+
+        deduped.push(resource);
+    }
+
+    deduped
+}
+
+fn looks_like_download_manifest_url(url: &str) -> bool {
+    if manifest_url_regex().is_match(url) {
+        return true;
+    }
+
+    let path = Url::parse(url)
+        .ok()
+        .map(|parsed_url| parsed_url.path().to_string())
+        .unwrap_or_else(|| url.split('?').next().unwrap_or(url).to_string());
+
+    matches!(path.as_str(), "/api/proxy/vod/m3u8" | "/media/vod/m3u8")
+}
+
+fn manifest_url_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"(?i)\.m3u8($|[?#])").expect("manifest url regex"))
+}
+
+fn is_retryable_download_manifest_error(error: &DownloadManifestError) -> bool {
+    match error.kind {
+        DownloadManifestErrorKind::Network | DownloadManifestErrorKind::Timeout => true,
+        DownloadManifestErrorKind::Http => matches!(
+            error.status,
+            Some(StatusCode::REQUEST_TIMEOUT)
+                | Some(StatusCode::TOO_EARLY)
+                | Some(StatusCode::TOO_MANY_REQUESTS)
+                | Some(StatusCode::INTERNAL_SERVER_ERROR)
+                | Some(StatusCode::BAD_GATEWAY)
+                | Some(StatusCode::SERVICE_UNAVAILABLE)
+                | Some(StatusCode::GATEWAY_TIMEOUT)
+        ),
+        DownloadManifestErrorKind::Invalid | DownloadManifestErrorKind::Internal => false,
+    }
+}
+
+async fn wait_for_download_manifest_retry(attempt: usize) {
+    let clamped_attempt = attempt.max(1) as u64;
+    let delay_ms = (250_u64 * clamped_attempt).min(1_500);
+    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 }
 
 fn download_runtime_task_not_found() -> AppError {

@@ -83,7 +83,8 @@ use download_runtime::{
     get_download_runtime_store_snapshot, get_download_runtime_tasks, pause_download_runtime_task,
     post_download_runtime_task, put_download_runtime_cache, put_download_runtime_resource_index,
     put_download_runtime_store_snapshot, put_download_runtime_task_settings,
-    resume_download_runtime_task, stream_download_runtime_tasks,
+    resolve_download_runtime_manifest, resume_download_runtime_task,
+    stream_download_runtime_tasks,
 };
 use profile_sync::{
     build_profile_sync_status_payload, get_profile_bootstrap, get_profile_sync_server_config,
@@ -1427,10 +1428,10 @@ struct DetailQueryParams {
 }
 
 #[derive(Debug, Deserialize)]
-struct VodProxyQueryParams {
-    source: Option<String>,
-    url: Option<String>,
-    adfilter: Option<String>,
+pub(crate) struct VodProxyQueryParams {
+    pub(crate) source: Option<String>,
+    pub(crate) url: Option<String>,
+    pub(crate) adfilter: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1696,6 +1697,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/download-runtime/storage-info",
             get(get_download_runtime_storage_info),
+        )
+        .route(
+            "/api/download-runtime/manifest/resolve",
+            post(resolve_download_runtime_manifest),
         )
         .route(
             "/api/download-runtime/resource-index",
@@ -3814,7 +3819,7 @@ fn try_build_cached_vod_proxy_response(
     )))
 }
 
-async fn get_vod_m3u8(
+pub(crate) async fn get_vod_m3u8(
     method: Method,
     original_uri: OriginalUri,
     State(state): State<AppState>,
@@ -10755,6 +10760,233 @@ segment0.ts
 
         assert!(updated_text.contains(task_id));
         assert!(updated_text.contains("\"status\":\"queued\""));
+    }
+
+    #[tokio::test]
+    async fn download_runtime_manifest_resolve_endpoint_falls_back_and_caches_manifest() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/blocked.m3u8",
+                    get(|| async {
+                        Response::builder()
+                            .status(StatusCode::FORBIDDEN)
+                            .header(CONTENT_TYPE, "application/json")
+                            .body(Body::from(r#"{"error":"blocked"}"#))
+                            .expect("blocked manifest response")
+                    }),
+                )
+                .route(
+                    "/playable.m3u8",
+                    get(|| async {
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(CONTENT_TYPE, "application/vnd.apple.mpegurl")
+                            .body(Body::from(
+                                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5000000\nplayback-1080.m3u8\n",
+                            ))
+                            .expect("playable manifest response")
+                    }),
+                )
+                .route(
+                    "/playback-1080.m3u8",
+                    get(|| async {
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(CONTENT_TYPE, "application/vnd.apple.mpegurl")
+                            .body(Body::from(
+                                "#EXTM3U\n#EXTINF:4.0,\nsegment-0001.ts\n",
+                            ))
+                            .expect("playback manifest response")
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Resource"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let blocked_candidate_url = format!(
+            "/api/proxy/vod/m3u8?source=mock&url={}",
+            url::form_urlencoded::byte_serialize(
+                format!("{}/blocked.m3u8", upstream.base_url()).as_bytes()
+            )
+            .collect::<String>()
+        );
+        let playable_candidate_url = format!(
+            "/api/proxy/vod/m3u8?source=mock&url={}",
+            url::form_urlencoded::byte_serialize(
+                format!("{}/playable.m3u8", upstream.base_url()).as_bytes()
+            )
+            .collect::<String>()
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/manifest/resolve")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "entryManifestUrls": [
+                                blocked_candidate_url.clone(),
+                                playable_candidate_url.clone(),
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("download runtime manifest resolve request"),
+            )
+            .await
+            .expect("download runtime manifest resolve response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload.get("rootManifestUrl").and_then(Value::as_str),
+            Some(playable_candidate_url.as_str())
+        );
+        assert_eq!(
+            payload
+                .get("playbackManifestUrl")
+                .and_then(Value::as_str)
+                .map(|value| value.contains("playback-1080.m3u8")),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .get("resourceUrls")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(3)
+        );
+        let playback_manifest_url = payload
+            .get("playbackManifestUrl")
+            .and_then(Value::as_str)
+            .expect("playback manifest url")
+            .to_string();
+
+        let cache_meta_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/cache/meta?url={}",
+                        url::form_urlencoded::byte_serialize(playback_manifest_url.as_bytes())
+                            .collect::<String>()
+                    ))
+                    .body(Body::empty())
+                    .expect("download runtime cache meta request"),
+            )
+            .await
+            .expect("download runtime cache meta response");
+
+        assert_eq!(cache_meta_response.status(), StatusCode::OK);
+        let cache_meta_payload = read_json_body(cache_meta_response).await;
+        assert_eq!(
+            cache_meta_payload.get("exists").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn download_runtime_manifest_resolve_endpoint_retries_retryable_failures() {
+        let attempt_count = std::sync::Arc::new(AtomicU64::new(0));
+        let upstream_attempt_count = attempt_count.clone();
+        let upstream = spawn_mock_server(Router::new().route(
+            "/flaky.m3u8",
+            get(move || {
+                let attempt_count = upstream_attempt_count.clone();
+                async move {
+                    let current_attempt = attempt_count.fetch_add(1, Ordering::SeqCst);
+
+                    if current_attempt == 0 {
+                        Response::builder()
+                            .status(StatusCode::BAD_GATEWAY)
+                            .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+                            .body(Body::from("bad gateway"))
+                            .expect("retryable error response")
+                    } else {
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(CONTENT_TYPE, "application/vnd.apple.mpegurl")
+                            .body(Body::from(
+                                "#EXTM3U\n#EXTINF:4.0,\nsegment-0001.ts\n",
+                            ))
+                            .expect("successful retry response")
+                    }
+                }
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Resource"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let candidate_url = format!(
+            "/api/proxy/vod/m3u8?source=mock&url={}",
+            url::form_urlencoded::byte_serialize(
+                format!("{}/flaky.m3u8", upstream.base_url()).as_bytes()
+            )
+            .collect::<String>()
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/manifest/resolve")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "entryManifestUrls": [candidate_url.clone()]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("retryable manifest resolve request"),
+            )
+            .await
+            .expect("retryable manifest resolve response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(attempt_count.load(Ordering::SeqCst), 2);
+
+        upstream.abort();
     }
 
     #[tokio::test]
