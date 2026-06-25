@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import { dispatchProfileSearchHistoryUpdated } from './cache';
 import { PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS } from './contracts';
+import { ensureDesktopLocalProfileStoreHydrated } from './desktop-local-migration';
 import { cacheManager } from './hybrid-cache';
 import {
   clearLocalSearchHistoryValues,
@@ -16,7 +17,7 @@ import {
   postRemoteProfilePayload,
   wasRemoteProfileRequestRedirectedToLogin as wasRedirectedToLogin,
 } from './remote-adapter';
-import { shouldUseRemoteProfileStorage } from './runtime';
+import { shouldUseProfileApiStorage } from './runtime';
 import {
   type SearchHistoryEntry,
   type SearchHistoryMode,
@@ -37,7 +38,7 @@ function triggerGlobalError(message: string) {
 }
 
 function shouldUseRemoteUserDataStorage(): boolean {
-  return shouldUseRemoteProfileStorage();
+  return shouldUseProfileApiStorage();
 }
 
 export function dispatchSearchHistoryUpdated(rawHistory: string[]): void {
@@ -102,6 +103,7 @@ export async function getSearchHistory(): Promise<SearchHistoryEntry[]> {
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedSearchHistory();
 
     if (cachedData) {
@@ -158,6 +160,7 @@ export async function addSearchHistory(
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedHistory = cacheManager.getCachedSearchHistory() || [];
     const newHistory = [
       encodedKeyword,
@@ -216,6 +219,7 @@ export async function addSearchHistory(
 
 export async function clearSearchHistory(): Promise<void> {
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     cacheManager.cacheSearchHistory([]);
     dispatchSearchHistoryUpdated([]);
 
@@ -253,6 +257,7 @@ export async function deleteSearchHistory(
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedHistory = cacheManager.getCachedSearchHistory() || [];
     const newHistory = cachedHistory.filter((value) =>
       typeof entry === 'string'

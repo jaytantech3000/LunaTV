@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import { dispatchProfileCacheUpdate } from './cache';
 import { PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS } from './contracts';
+import { ensureDesktopLocalProfileStoreHydrated } from './desktop-local-migration';
 import { cacheManager } from './hybrid-cache';
 import {
   readLocalFollowRecords,
@@ -13,7 +14,7 @@ import {
   postRemoteProfilePayload,
   wasRemoteProfileRequestRedirectedToLogin as wasRedirectedToLogin,
 } from './remote-adapter';
-import { shouldUseRemoteProfileStorage } from './runtime';
+import { shouldUseProfileApiStorage } from './runtime';
 import { generateStorageKey } from './storage-key';
 import { type FollowRecord } from '../types';
 
@@ -28,7 +29,7 @@ function triggerGlobalError(message: string) {
 }
 
 function shouldUseRemoteUserDataStorage(): boolean {
-  return shouldUseRemoteProfileStorage();
+  return shouldUseProfileApiStorage();
 }
 
 function dispatchFollowRecordsUpdated(
@@ -94,6 +95,7 @@ export async function getAllFollowRecords(): Promise<
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedFollowRecords();
 
     if (cachedData) {
@@ -150,6 +152,7 @@ export async function saveFollowRecord(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedFollows = cacheManager.getCachedFollowRecords() || {};
     cachedFollows[key] = follow;
     cacheManager.cacheFollowRecords(cachedFollows);
@@ -192,6 +195,7 @@ export async function deleteFollowRecord(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedFollows = cacheManager.getCachedFollowRecords() || {};
     delete cachedFollows[key];
     cacheManager.cacheFollowRecords(cachedFollows);

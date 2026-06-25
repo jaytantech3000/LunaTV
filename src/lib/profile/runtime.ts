@@ -59,6 +59,11 @@ export function shouldUseRemoteProfileStorage(
   return resolveProfileRuntime(config).usesRemoteUserData;
 }
 
+export function shouldUseProfileApiStorage(config?: AppRuntimeConfig): boolean {
+  const runtime = resolveProfileRuntime(config);
+  return runtime.runtimeKind === 'desktop-local' || runtime.usesRemoteUserData;
+}
+
 export function isDesktopProfileSyncRuntime(
   config?: AppRuntimeConfig
 ): boolean {

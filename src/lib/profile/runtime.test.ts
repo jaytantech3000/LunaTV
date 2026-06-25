@@ -2,6 +2,7 @@ import {
   isDesktopLocalProfileRuntime,
   isDesktopProfileSyncRuntime,
   resolveProfileRuntime,
+  shouldUseProfileApiStorage,
   shouldUseRemoteProfileStorage,
 } from '@/lib/profile/runtime';
 
@@ -48,6 +49,12 @@ describe('profile runtime resolver', () => {
         STORAGE_TYPE: 'localstorage',
       })
     ).toBe(true);
+    expect(
+      shouldUseProfileApiStorage({
+        APP_TARGET: 'desktop',
+        STORAGE_TYPE: 'localstorage',
+      })
+    ).toBe(true);
   });
 
   it('prefers sync-projected storage and profile mode for desktop sync runtime', () => {
@@ -68,6 +75,13 @@ describe('profile runtime resolver', () => {
       usesRemoteUserData: true,
     });
     expect(shouldUseRemoteProfileStorage(config)).toBe(true);
+    expect(shouldUseProfileApiStorage(config)).toBe(true);
     expect(isDesktopProfileSyncRuntime(config)).toBe(true);
+  });
+
+  it('keeps local web storage on the browser fallback path', () => {
+    expect(shouldUseProfileApiStorage({ STORAGE_TYPE: 'localstorage' })).toBe(
+      false
+    );
   });
 });

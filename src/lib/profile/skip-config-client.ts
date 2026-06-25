@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import { dispatchProfileCacheUpdate } from './cache';
 import { PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS } from './contracts';
+import { ensureDesktopLocalProfileStoreHydrated } from './desktop-local-migration';
 import { cacheManager } from './hybrid-cache';
 import { readLocalSkipConfigs, writeLocalSkipConfigs } from './local-adapter';
 import {
@@ -8,7 +9,7 @@ import {
   fetchRemoteProfileJson as fetchFromApi,
   postRemoteProfilePayload,
 } from './remote-adapter';
-import { shouldUseRemoteProfileStorage } from './runtime';
+import { shouldUseProfileApiStorage } from './runtime';
 import { generateStorageKey } from './storage-key';
 import { SkipConfig } from '../types';
 
@@ -23,7 +24,7 @@ function triggerGlobalError(message: string) {
 }
 
 function shouldUseRemoteUserDataStorage(): boolean {
-  return shouldUseRemoteProfileStorage();
+  return shouldUseProfileApiStorage();
 }
 
 function dispatchSkipConfigsUpdated(configs: Record<string, SkipConfig>): void {
@@ -41,6 +42,7 @@ export async function getSkipConfig(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedSkipConfigs();
 
     if (cachedData) {
@@ -89,6 +91,7 @@ export async function saveSkipConfig(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedConfigs = cacheManager.getCachedSkipConfigs() || {};
     cachedConfigs[key] = config;
     cacheManager.cacheSkipConfigs(cachedConfigs);
@@ -129,6 +132,7 @@ export async function getAllSkipConfigs(): Promise<Record<string, SkipConfig>> {
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedSkipConfigs();
 
     if (cachedData) {
@@ -176,6 +180,7 @@ export async function deleteSkipConfig(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedConfigs = cacheManager.getCachedSkipConfigs() || {};
     delete cachedConfigs[key];
     cacheManager.cacheSkipConfigs(cachedConfigs);

@@ -2,7 +2,8 @@
 'use client';
 
 /**
- * 仅在浏览器端使用的数据库工具，目前基于 localStorage 实现。
+ * 仅在浏览器端使用的资料数据客户端。
+ * 桌面端优先走本地服务 API，Web 本地模式仍退回到 localStorage。
  * 之所以单独拆分文件，是为了避免在客户端 bundle 中引入 `fs`, `path` 等 Node.js 内置模块，
  * 从而解决诸如 "Module not found: Can't resolve 'fs'" 的问题。
  *
@@ -24,9 +25,10 @@ import {
   type ProfileCacheUpdateEvent,
   PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS,
 } from './contracts';
+import { ensureDesktopLocalProfileStoreHydrated } from './desktop-local-migration';
 import { cacheManager, getCacheStatus } from './hybrid-cache';
 import { fetchRemoteProfileJson as fetchFromApi } from './remote-adapter';
-import { shouldUseRemoteProfileStorage } from './runtime';
+import { shouldUseProfileApiStorage } from './runtime';
 import { dispatchSearchHistoryUpdated } from './search-history-client';
 import { type FollowRecord, SkipConfig } from '../types';
 
@@ -79,7 +81,7 @@ function triggerGlobalError(message: string) {
 }
 
 function shouldUseRemoteUserDataStorage(): boolean {
-  return shouldUseRemoteProfileStorage();
+  return shouldUseProfileApiStorage();
 }
 
 function dispatchDataUpdate<T>(
@@ -114,6 +116,7 @@ export async function refreshAllCache(): Promise<void> {
   if (!shouldUseRemoteUserDataStorage()) return;
 
   try {
+    await ensureDesktopLocalProfileStoreHydrated();
     // 并行刷新所有数据
     const [playRecords, favorites, followRecords, searchHistory, skipConfigs] =
       await Promise.allSettled([

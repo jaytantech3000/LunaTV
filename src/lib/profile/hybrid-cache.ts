@@ -1,6 +1,6 @@
 /* eslint-disable no-console */
 import { type Favorite, type PlayRecord } from './contracts';
-import { shouldUseRemoteProfileStorage } from './runtime';
+import { shouldUseProfileApiStorage } from './runtime';
 import { getAuthInfoFromBrowserCookie } from '../auth';
 import { type FollowRecord, SkipConfig } from '../types';
 
@@ -23,7 +23,7 @@ const CACHE_VERSION = '1.0.0';
 const CACHE_EXPIRE_TIME = 60 * 60 * 1000;
 
 function shouldUseRemoteUserDataStorage(): boolean {
-  return shouldUseRemoteProfileStorage();
+  return shouldUseProfileApiStorage();
 }
 
 class HybridCacheManager {

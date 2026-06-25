@@ -4,6 +4,7 @@ import {
   type PlayRecord,
   PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS,
 } from './contracts';
+import { ensureDesktopLocalProfileStoreHydrated } from './desktop-local-migration';
 import { cacheManager } from './hybrid-cache';
 import {
   clearLocalPlayRecords,
@@ -17,7 +18,7 @@ import {
   postRemoteProfilePayload,
   wasRemoteProfileRequestRedirectedToLogin as wasRedirectedToLogin,
 } from './remote-adapter';
-import { shouldUseRemoteProfileStorage } from './runtime';
+import { shouldUseProfileApiStorage } from './runtime';
 import { generateStorageKey } from './storage-key';
 
 function triggerGlobalError(message: string) {
@@ -31,7 +32,7 @@ function triggerGlobalError(message: string) {
 }
 
 function shouldUseRemoteUserDataStorage(): boolean {
-  return shouldUseRemoteProfileStorage();
+  return shouldUseProfileApiStorage();
 }
 
 function dispatchPlayRecordsUpdated(records: Record<string, PlayRecord>): void {
@@ -91,6 +92,7 @@ export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedPlayRecords();
 
     if (cachedData) {
@@ -139,6 +141,7 @@ export async function savePlayRecord(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedRecords = cacheManager.getCachedPlayRecords() || {};
     cachedRecords[key] = record;
     cacheManager.cachePlayRecords(cachedRecords);
@@ -181,6 +184,7 @@ export async function deletePlayRecord(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedRecords = cacheManager.getCachedPlayRecords() || {};
     delete cachedRecords[key];
     cacheManager.cachePlayRecords(cachedRecords);
@@ -217,6 +221,7 @@ export async function deletePlayRecord(
 
 export async function clearAllPlayRecords(): Promise<void> {
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     cacheManager.cachePlayRecords({});
     dispatchPlayRecordsUpdated({});
 

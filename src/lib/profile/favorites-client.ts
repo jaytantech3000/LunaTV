@@ -4,6 +4,7 @@ import {
   type Favorite,
   PROFILE_USER_DATA_API_PATHS as USER_DATA_API_PATHS,
 } from './contracts';
+import { ensureDesktopLocalProfileStoreHydrated } from './desktop-local-migration';
 import { cacheManager } from './hybrid-cache';
 import {
   clearLocalFavorites,
@@ -17,7 +18,7 @@ import {
   postRemoteProfilePayload,
   wasRemoteProfileRequestRedirectedToLogin as wasRedirectedToLogin,
 } from './remote-adapter';
-import { shouldUseRemoteProfileStorage } from './runtime';
+import { shouldUseProfileApiStorage } from './runtime';
 import { generateStorageKey } from './storage-key';
 
 function triggerGlobalError(message: string) {
@@ -31,7 +32,7 @@ function triggerGlobalError(message: string) {
 }
 
 function shouldUseRemoteUserDataStorage(): boolean {
-  return shouldUseRemoteProfileStorage();
+  return shouldUseProfileApiStorage();
 }
 
 function dispatchFavoritesUpdated(favorites: Record<string, Favorite>): void {
@@ -71,6 +72,7 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedFavorites();
 
     if (cachedData) {
@@ -119,6 +121,7 @@ export async function saveFavorite(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedFavorites = cacheManager.getCachedFavorites() || {};
     cachedFavorites[key] = favorite;
     cacheManager.cacheFavorites(cachedFavorites);
@@ -161,6 +164,7 @@ export async function deleteFavorite(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedFavorites = cacheManager.getCachedFavorites() || {};
     delete cachedFavorites[key];
     cacheManager.cacheFavorites(cachedFavorites);
@@ -202,6 +206,7 @@ export async function isFavorited(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     const cachedFavorites = cacheManager.getCachedFavorites();
 
     if (cachedFavorites) {
@@ -239,6 +244,7 @@ export async function isFavorited(
 
 export async function clearAllFavorites(): Promise<void> {
   if (shouldUseRemoteUserDataStorage()) {
+    await ensureDesktopLocalProfileStoreHydrated();
     cacheManager.cacheFavorites({});
     dispatchFavoritesUpdated({});
 
