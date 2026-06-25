@@ -16,7 +16,7 @@
 
 import { getAuthInfoFromBrowserCookie } from './auth';
 import { purgeOfflineDownloads } from './download/session';
-import { getRuntimeConfig } from './runtime-config';
+import { shouldUseRemoteProfileStorage } from './profile/runtime';
 import {
   type SearchHistoryEntry,
   type SearchHistoryMode,
@@ -105,33 +105,8 @@ const USER_DATA_API_PATHS = {
   skipConfigs: '/skipconfigs',
 } as const;
 
-// ---- 环境变量 ----
-const STORAGE_TYPE = (() => {
-  const raw =
-    (typeof window !== 'undefined' &&
-      (window as any).RUNTIME_CONFIG?.STORAGE_TYPE) ||
-    (process.env.STORAGE_TYPE as
-      | 'localstorage'
-      | 'redis'
-      | 'upstash'
-      | undefined) ||
-    'localstorage';
-  return raw;
-})();
-
-function getEffectiveUserDataStorageType(): string {
-  const runtimeConfig = getRuntimeConfig();
-  const runtimeStorageType =
-    runtimeConfig.APP_TARGET === 'desktop' &&
-    runtimeConfig.PROFILE_SYNC_ENABLED === true
-      ? runtimeConfig.PROFILE_SYNC_STORAGE_TYPE || runtimeConfig.STORAGE_TYPE
-      : runtimeConfig.STORAGE_TYPE;
-
-  return runtimeStorageType || STORAGE_TYPE;
-}
-
 function shouldUseRemoteUserDataStorage(): boolean {
-  return getEffectiveUserDataStorageType() !== 'localstorage';
+  return shouldUseRemoteProfileStorage();
 }
 
 // ---------------- 搜索历史相关常量 ----------------

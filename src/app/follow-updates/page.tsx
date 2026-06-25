@@ -29,7 +29,7 @@ import {
 } from '@/lib/db.client';
 import { buildLoginPath } from '@/lib/desktop/auth-session';
 import { hasNewEpisodes, refreshFollowRecords } from '@/lib/follow-updates';
-import { getRuntimeConfig } from '@/lib/runtime-config';
+import { resolveProfileRuntime } from '@/lib/profile/runtime';
 import { type FollowRecord } from '@/lib/types';
 
 import PageLayout from '@/components/PageLayout';
@@ -573,16 +573,9 @@ export default function FollowUpdatesPage() {
     let active = true;
 
     const syncPageState = async () => {
-      const runtimeConfig = getRuntimeConfig();
-      const desktopTarget = runtimeConfig.APP_TARGET === 'desktop';
-      const effectiveStorageType =
-        desktopTarget && runtimeConfig.PROFILE_SYNC_ENABLED === true
-          ? runtimeConfig.PROFILE_SYNC_STORAGE_TYPE ||
-            runtimeConfig.STORAGE_TYPE
-          : runtimeConfig.STORAGE_TYPE;
-      const needsLogin = Boolean(
-        effectiveStorageType && effectiveStorageType !== 'localstorage'
-      );
+      const profileRuntime = resolveProfileRuntime();
+      const desktopTarget = profileRuntime.appTarget === 'desktop';
+      const needsLogin = profileRuntime.usesRemoteUserData;
       const nextAuthInfo = getAuthInfoFromBrowserCookie();
 
       if (!active) {

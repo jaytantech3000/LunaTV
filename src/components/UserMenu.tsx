@@ -49,6 +49,7 @@ import {
   resetPlayerEnhancementPreferences,
   updatePlayerEnhancementPreference,
 } from '@/lib/player-enhancements';
+import { resolveProfileRuntime } from '@/lib/profile/runtime';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { apiFetch } from '@/lib/transport/api-client';
@@ -173,21 +174,16 @@ export const UserMenu: React.FC = () => {
 
       const auth = getAuthInfoFromBrowserCookie();
       const runtimeConfig = getRuntimeConfig();
-      const isDesktop = runtimeConfig.APP_TARGET === 'desktop';
+      const profileRuntime = resolveProfileRuntime(runtimeConfig);
+      const isDesktop = profileRuntime.appTarget === 'desktop';
       const profileSyncEnabled =
-        isDesktop && runtimeConfig.PROFILE_SYNC_ENABLED === true;
+        profileRuntime.runtimeKind === 'desktop-profile-sync';
       if (!active) {
         return;
       }
 
       setAuthInfo(auth);
-      setStorageType(
-        profileSyncEnabled
-          ? runtimeConfig.PROFILE_SYNC_STORAGE_TYPE ||
-              runtimeConfig.STORAGE_TYPE ||
-              'localstorage'
-          : runtimeConfig.STORAGE_TYPE || 'localstorage'
-      );
+      setStorageType(profileRuntime.storageType);
       setAdminPanelEnabled(runtimeConfig.ENABLE_ADMIN_PANEL !== false);
       setIsDesktopTarget(isDesktop);
       setDesktopProfileSyncEnabled(profileSyncEnabled);

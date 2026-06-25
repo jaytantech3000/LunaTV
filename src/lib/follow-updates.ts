@@ -8,7 +8,7 @@ import {
   saveFollowRecord,
 } from './db.client';
 import { normalizeVodDetailForPlayback } from './download/normalize';
-import { getRuntimeConfig } from './runtime-config';
+import { resolveProfileRuntime } from './profile/runtime';
 import { apiFetch } from './transport/api-client';
 import { FollowRecord, SearchResult } from './types';
 
@@ -169,18 +169,11 @@ async function runWithConcurrency<T>(
 }
 
 export function isDesktopFollowUpdatesEnabled(): boolean {
-  return getRuntimeConfig().APP_TARGET === 'desktop';
+  return resolveProfileRuntime().appTarget === 'desktop';
 }
 
 function usesRemoteFollowStorage(): boolean {
-  const runtimeConfig = getRuntimeConfig();
-  const runtimeStorageType =
-    runtimeConfig.APP_TARGET === 'desktop' &&
-    runtimeConfig.PROFILE_SYNC_ENABLED === true
-      ? runtimeConfig.PROFILE_SYNC_STORAGE_TYPE || runtimeConfig.STORAGE_TYPE
-      : runtimeConfig.STORAGE_TYPE;
-
-  return Boolean(runtimeStorageType && runtimeStorageType !== 'localstorage');
+  return resolveProfileRuntime().usesRemoteUserData;
 }
 
 export function canManageFollowUpdates(

@@ -13,6 +13,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { isDesktopLocalProfileRuntime } from '@/lib/profile/runtime';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 
@@ -157,9 +158,7 @@ const AlertModal = ({
 
 const DataMigration = ({ onRefreshConfig }: DataMigrationProps) => {
   const runtimeConfig = getRuntimeConfig();
-  const isDesktopLocalMigration =
-    runtimeConfig.APP_TARGET === 'desktop' &&
-    runtimeConfig.PROFILE_SYNC_ENABLED !== true;
+  const isDesktopLocalMigration = isDesktopLocalProfileRuntime(runtimeConfig);
   const exportItems = isDesktopLocalMigration
     ? ['管理员配置', '本地账号与密码', '订阅设置', '视频源 / 分类 / 直播配置']
     : [
