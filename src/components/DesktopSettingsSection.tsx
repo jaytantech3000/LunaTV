@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Bug,
   CheckCircle2,
+  Cloud,
   Copy,
   Download,
   RefreshCw,
@@ -16,6 +17,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { BROWSER_AUTH_UPDATED_EVENT } from '@/lib/auth';
+import {
+  type DesktopProfileSyncStatus,
+  getDesktopProfileSyncStatus,
+} from '@/lib/desktop/profile-sync';
+import {
+  buildDesktopProfileSyncStatusDetail,
+  buildDesktopProfileSyncStatusValue,
+} from '@/lib/desktop/profile-sync-status-copy';
 import { requestDesktopRuntimeRefresh } from '@/lib/desktop/runtime-config';
 import {
   DesktopAuthStatus,
@@ -69,6 +78,23 @@ function getErrorMessage(error: unknown): string {
   }
 
   return '桌面本地服务操作失败';
+}
+
+async function readDesktopProfileSyncStatusState(): Promise<{
+  status: DesktopProfileSyncStatus | null | undefined;
+  error: string;
+}> {
+  try {
+    return {
+      status: await getDesktopProfileSyncStatus(),
+      error: '',
+    };
+  } catch (error) {
+    return {
+      status: undefined,
+      error: getErrorMessage(error),
+    };
+  }
 }
 
 async function copyText(value: string): Promise<boolean> {
@@ -419,6 +445,9 @@ export default function DesktopSettingsSection({
   const [serviceStatus, setServiceStatus] =
     useState<DesktopLocalServiceStatus | null>(null);
   const [authStatus, setAuthStatus] = useState<DesktopAuthStatus | null>(null);
+  const [profileSyncStatus, setProfileSyncStatus] =
+    useState<DesktopProfileSyncStatus | null>();
+  const [profileSyncStatusError, setProfileSyncStatusError] = useState('');
   const [configText, setConfigText] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -442,6 +471,8 @@ export default function DesktopSettingsSection({
     if (!available) {
       setServiceStatus(null);
       setAuthStatus(null);
+      setProfileSyncStatus(undefined);
+      setProfileSyncStatusError('');
       return;
     }
 
@@ -449,17 +480,54 @@ export default function DesktopSettingsSection({
     setErrorMessage('');
 
     try {
-      const [nextStatus, nextConfig, nextAuthStatus] = await Promise.all([
+      const [
+        nextStatusResult,
+        nextConfigResult,
+        nextAuthStatusResult,
+        nextProfileSyncResult,
+      ] = await Promise.allSettled([
         getLocalServiceStatus(),
         readDesktopAppConfig(),
         getDesktopAuthStatus(),
+        readDesktopProfileSyncStatusState(),
       ]);
 
-      setServiceStatus(nextStatus);
-      setConfigText(JSON.stringify(nextConfig, null, 2));
-      setAuthStatus(nextAuthStatus);
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error));
+      let nextErrorMessage = '';
+
+      if (nextStatusResult.status === 'fulfilled') {
+        setServiceStatus(nextStatusResult.value);
+      } else {
+        setServiceStatus(null);
+        nextErrorMessage = getErrorMessage(nextStatusResult.reason);
+      }
+
+      if (nextConfigResult.status === 'fulfilled') {
+        setConfigText(JSON.stringify(nextConfigResult.value, null, 2));
+      } else if (!nextErrorMessage) {
+        nextErrorMessage = getErrorMessage(nextConfigResult.reason);
+      }
+
+      if (nextAuthStatusResult.status === 'fulfilled') {
+        setAuthStatus(nextAuthStatusResult.value);
+      } else {
+        setAuthStatus(null);
+        if (!nextErrorMessage) {
+          nextErrorMessage = getErrorMessage(nextAuthStatusResult.reason);
+        }
+      }
+
+      if (nextProfileSyncResult.status === 'fulfilled') {
+        setProfileSyncStatus(nextProfileSyncResult.value.status);
+        setProfileSyncStatusError(nextProfileSyncResult.value.error);
+      } else {
+        const message = getErrorMessage(nextProfileSyncResult.reason);
+        setProfileSyncStatus(undefined);
+        setProfileSyncStatusError(message);
+      }
+
+      if (nextErrorMessage) {
+        setErrorMessage(nextErrorMessage);
+      }
     } finally {
       setIsRefreshing(false);
     }
@@ -471,6 +539,28 @@ export default function DesktopSettingsSection({
     }
 
     void refreshDesktopState();
+  }, [isOpen, refreshDesktopState]);
+
+  useEffect(() => {
+    if (!isOpen || typeof window === 'undefined') {
+      return;
+    }
+
+    const handleBrowserAuthUpdated = () => {
+      void refreshDesktopState();
+    };
+
+    window.addEventListener(
+      BROWSER_AUTH_UPDATED_EVENT,
+      handleBrowserAuthUpdated
+    );
+
+    return () => {
+      window.removeEventListener(
+        BROWSER_AUTH_UPDATED_EVENT,
+        handleBrowserAuthUpdated
+      );
+    };
   }, [isOpen, refreshDesktopState]);
 
   const handleCopy = useCallback(async (value: string) => {
@@ -494,20 +584,19 @@ export default function DesktopSettingsSection({
         await stopLocalService();
       }
 
-      const [nextStatus, nextAuthStatus] = await Promise.all([
-        startLocalService(),
-        getDesktopAuthStatus(),
-      ]);
-      setServiceStatus(nextStatus);
-      setAuthStatus(nextAuthStatus);
+      await startLocalService();
+      await refreshDesktopState();
       requestDesktopRuntimeRefresh();
       setInfoMessage('本地服务已重启。');
     } catch (error) {
-      setErrorMessage(getErrorMessage(error));
+      const message = getErrorMessage(error);
+      setErrorMessage(message);
+      setProfileSyncStatus(undefined);
+      setProfileSyncStatusError(message);
     } finally {
       setIsRestarting(false);
     }
-  }, [ipcAvailable, serviceStatus?.running]);
+  }, [ipcAvailable, refreshDesktopState, serviceStatus?.running]);
 
   const handleSaveConfig = useCallback(async () => {
     if (!ipcAvailable) {
@@ -521,12 +610,8 @@ export default function DesktopSettingsSection({
     try {
       const parsedConfig = JSON.parse(configText) as Record<string, unknown>;
       await writeDesktopAppConfig(parsedConfig);
-      const [nextStatus, nextAuthStatus] = await Promise.all([
-        startLocalService(),
-        getDesktopAuthStatus(),
-      ]);
-      setServiceStatus(nextStatus);
-      setAuthStatus(nextAuthStatus);
+      await startLocalService();
+      await refreshDesktopState();
       requestDesktopRuntimeRefresh();
       window.dispatchEvent(new Event(BROWSER_AUTH_UPDATED_EVENT));
       setInfoMessage('配置已保存，并已重新加载本地服务。');
@@ -534,12 +619,15 @@ export default function DesktopSettingsSection({
       if (error instanceof SyntaxError) {
         setErrorMessage('配置 JSON 格式无效，请先修正后再保存。');
       } else {
-        setErrorMessage(getErrorMessage(error));
+        const message = getErrorMessage(error);
+        setErrorMessage(message);
+        setProfileSyncStatus(undefined);
+        setProfileSyncStatusError(message);
       }
     } finally {
       setIsSaving(false);
     }
-  }, [configText, ipcAvailable]);
+  }, [configText, ipcAvailable, refreshDesktopState]);
 
   const resolveDiagnosticsUploadBaseUrl = useCallback(async () => {
     try {
@@ -816,6 +904,24 @@ export default function DesktopSettingsSection({
                   首次安装且 `owner`
                   未设置密码时会直接进入应用。若忘记密码，可编辑上方 `Config
                   Path` 对应配置文件，将 `auth.password` 清空后重新打开应用。
+                </p>
+              </div>
+              <div className='rounded-lg border border-gray-200 bg-white px-3 py-3 dark:border-gray-700 dark:bg-gray-900'>
+                <div className='flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-200'>
+                  <Cloud className='h-3.5 w-3.5 text-gray-500 dark:text-gray-400' />
+                  账号同步状态
+                </div>
+                <div className='mt-2 text-sm font-medium text-gray-900 dark:text-gray-100'>
+                  {buildDesktopProfileSyncStatusValue(
+                    profileSyncStatus,
+                    profileSyncStatusError
+                  )}
+                </div>
+                <p className='mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400'>
+                  {buildDesktopProfileSyncStatusDetail(
+                    profileSyncStatus,
+                    profileSyncStatusError
+                  )}
                 </p>
               </div>
               <div className='grid gap-2 sm:grid-cols-2'>
