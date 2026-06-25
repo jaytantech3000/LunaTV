@@ -166,7 +166,7 @@
 - [x] 明确桌面下载页、当前集下载控件、批量下载弹窗只能通过统一下载 SDK 访问运行时
 - [x] 停止新增直接依赖 `downloadManager` 的桌面 UI 调用点
 - [x] 为桌面模式保留“执行器选择开关”，便于 pre 阶段灰度切换（现已收口为 runtime config + 构建脚本 override；默认 Rust，`pnpm desktop:dev:legacy-download` / `pnpm desktop:build:legacy-download` 可显式切回 TS 兼容执行器）
-- [ ] 保证 Web 版路径不被桌面下载器迁移误伤
+- [x] 保证 Web 版路径不被桌面下载器迁移误伤（桌面 runtime / 非 runtime 分流仍由 `manager.runtime.test.ts` 与 `manifest.runtime.test.ts` 覆盖，Web 版继续走原有 TS 下载实现）
 
 当前进展（2026-06-25）：
 
@@ -175,17 +175,17 @@
 
 ### B. 定义 Rust 下载任务模型与持久化边界
 
-- [ ] 定义任务主模型、状态枚举、命令模型、事件模型
-- [ ] 定义任务快照、资源进度、失败原因、断点续传元数据
-- [ ] 复用现有 cache/resource-index/store 结构，补齐缺少的任务仓储抽象
-- [ ] 明确哪些状态是内存态，哪些状态必须落盘
+- [x] 定义任务主模型、状态枚举、命令模型、事件模型
+- [x] 定义任务快照、资源进度、失败原因、断点续传元数据
+- [x] 复用现有 cache/resource-index/store 结构，补齐缺少的任务仓储抽象
+- [x] 明确哪些状态是内存态，哪些状态必须落盘
 
 ### C. 在本地服务补齐任务 CRUD 与控制接口
 
 - [x] 提供任务创建、列表、详情、暂停、继续、取消、重试接口
 - [x] 提供批量控制接口，覆盖下载页的全部暂停、全部继续 / 重试、全部停止
 - [ ] 统一错误码和错误消息，避免前端依赖字符串猜测
-- [ ] 保持旧有 cache/index/store 接口兼容
+- [x] 保持旧有 cache/index/store 接口兼容
 
 当前进展（2026-06-25）：
 
@@ -217,7 +217,7 @@
 - [x] `DownloadsClient` 改为消费下载 SDK，不再直接驱动 TS 执行器
 - [x] `CurrentEpisodeDownloadControl` 改为只发命令和订阅状态
 - [x] `BatchEpisodeDownloadDialog` 改为消费统一任务视图
-- [ ] 保持现有页面文案、批量操作和状态展示的一致性
+- [x] 保持现有页面文案、批量操作和状态展示的一致性（下载设置页已显式展示当前执行器模式；批量控制、状态回填与离线片库展示继续由 `DownloadsClient.test.tsx`、`manager.runtime.test.ts` 等回归覆盖）
 
 ### G. 清理旧路径
 
