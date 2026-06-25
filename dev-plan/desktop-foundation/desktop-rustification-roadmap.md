@@ -22,6 +22,7 @@
 > - Phase 2A 已继续收口第五刀：`src/lib/content-discovery-client.ts` 已成为前端共享的 `search/detail/suggestions` 入口，播放页、下载解析、追更刷新、搜索建议与传统搜索 fallback 不再各自拼装这组内容发现请求。
 > - Phase 2A 已继续收口第六刀：`crates/moontv-local-service/src/content_search.rs` 已接管 `/api/search`、`/api/search/ws`、`/api/search/suggestions` 与共享下游搜索 helper，local service 的内容发现 facade 进一步从 `lib.rs` 脱身。
 > - Phase 2B 也补上了第一刀结构性收口：`/media/vod/m3u8`、`/media/vod/segment`、`/media/vod/key` handler 已从 `crates/moontv-local-service/src/lib.rs` 抽到独立的 `crates/moontv-local-service/src/vod_proxy.rs`，为后续继续下沉资源抓取与图片代理留出明确模块边界。
+> - Phase 2B 又继续补了一刀：`/live/precheck`、`/media/live/m3u8`、`/media/live/segment`、`/media/live/key`、`/media/live/logo` 与对应 legacy `/api/proxy/*` live handler 已抽到独立的 `crates/moontv-local-service/src/live_proxy.rs`，`lib.rs` 不再继续承载这组 live proxy facade。
 > - Phase 1 也已经开始落下“先搭骨架、不切主流程”的第一刀：新增 `moontv-download` crate，桌面本地服务补齐 `/api/download-runtime/tasks*` 命令 / 状态查询 skeleton，并把下载引擎快照持久化到 SQLite `app_metadata`。
 > - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot。
 > - Phase 1 继续补上了资源抓取主路径：local service 新增 `/api/download-runtime/cache/fetch`，桌面 runtime 开启时会由 Rust 直接解析并抓取 `/media/vod/*` 资源、写入 runtime cache；前端 `src/lib/download/manager.ts` 只保留进度测量与任务编排，不再自己执行这一段 `fetch + cache put`。
@@ -288,6 +289,7 @@ Rust Shared Crates
 - 在已完全切走的调用点上，也补了 ESLint 限制，防止这些模块重新直接 import 底层 transport 层回到散点请求。
 - `crates/moontv-local-service/src/content_search.rs` 现已继续接手 `/api/search`、`/api/search/ws`、`/api/search/suggestions` 与共享站点搜索 helper；`playback_prefetch` 与管理页的源校验复用这层搜索能力，而不再要求 `lib.rs` 继续承载整段搜索 facade。
 - `crates/moontv-local-service/src/vod_proxy.rs` 现已开始接手 VOD proxy handler；`lib.rs` 不再直接承载 `/media/vod/*` 路由实现，且桌面下载 runtime 的 `/api/download-runtime/cache/fetch` 已能在 Rust 侧直接复用这层逻辑抓取 VOD segment / key / m3u8 资源，不再通过前端自调用 HTTP 回环。
+- `crates/moontv-local-service/src/live_proxy.rs` 现已接手 `/live/precheck`、`/media/live/*` 与 legacy `/api/proxy/(m3u8|segment|key|logo)` live handler；`lib.rs` 不再直接承载这组 live proxy facade，为后续继续拆 image proxy 与共享媒体 helper 留出空间。
 - Web 路径仍保留原有 TypeScript `playback-source-prefetch` 逻辑，因此这一刀解决的是“桌面主路径继续收口”，还没有完成整段搜索 / 详情链路对 Web 侧兼容层的全量清理。
 
 #### Phase 2B：媒体代理
