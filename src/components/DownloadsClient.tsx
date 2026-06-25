@@ -20,7 +20,8 @@ import { downloadClient } from '@/lib/download/client';
 import { syncDesktopDownloadEngineSettings } from '@/lib/download/desktop-engine-sync';
 import {
   type DesktopDownloadRuntimeStorageInfoResponse,
-  getDesktopDownloadRuntimeLabel,
+  getDesktopDownloadExecutorLabel,
+  getDesktopDownloadExecutorMode,
   getDesktopDownloadRuntimeStorageInfo,
   isDesktopLocalDownloadRuntimeEnabled,
 } from '@/lib/download/desktop-runtime';
@@ -936,6 +937,7 @@ interface DownloadSettingsDialogProps {
   storageOrigin: string;
   storageLabel: string;
   isDesktopStorage: boolean;
+  isDesktopFallbackExecutor: boolean;
   isStorageInfoLoading: boolean;
   desktopStorageInfo: DesktopDownloadRuntimeStorageInfoResponse | null;
   adultContentFilterEnabled: boolean;
@@ -3763,6 +3765,7 @@ function DownloadSettingsDialog({
   storageOrigin,
   storageLabel,
   isDesktopStorage,
+  isDesktopFallbackExecutor,
   isStorageInfoLoading,
   desktopStorageInfo,
   adultContentFilterEnabled,
@@ -3847,14 +3850,18 @@ function DownloadSettingsDialog({
 
             <div className='rounded-2xl border border-white/10 bg-white/5 p-4'>
               <div className='text-base font-semibold text-white'>
-                离线保存位置
+                下载执行器与离线保存位置
               </div>
               <div className='mt-3 inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-200'>
-                {isDesktopStorage ? '桌面应用本地目录' : storageLabel}
+                {storageLabel}
               </div>
               <div className='mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4'>
                 <div className='text-xs font-medium uppercase tracking-wide text-emerald-200'>
-                  {isDesktopStorage ? '本地保存路径' : '逻辑存储位置'}
+                  {isDesktopStorage
+                    ? '本地保存路径'
+                    : isDesktopFallbackExecutor
+                    ? '兼容模式存储位置'
+                    : '逻辑存储位置'}
                 </div>
                 {isDesktopStorage ? (
                   <div className='mt-4 space-y-4'>
@@ -3914,34 +3921,42 @@ function DownloadSettingsDialog({
                     )}
                   </div>
                 ) : (
-                  <div className='mt-4 grid gap-3 text-xs text-gray-300'>
-                    <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                      <span className='font-medium text-gray-200'>站点</span>
-                      <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                        {storageOrigin || '当前站点'}
-                      </code>
-                    </div>
-                    <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                      <span className='font-medium text-gray-200'>Cache</span>
-                      <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                        {DOWNLOAD_CACHE_NAME}
-                      </code>
-                    </div>
-                    <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                      <span className='font-medium text-gray-200'>
-                        IndexedDB
-                      </span>
-                      <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                        {DOWNLOAD_RESOURCE_DB_NAME}
-                      </code>
-                    </div>
-                    <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
-                      <span className='font-medium text-gray-200'>
-                        对象仓库
-                      </span>
-                      <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
-                        {DOWNLOAD_RESOURCE_STORE_NAME}
-                      </code>
+                  <div className='mt-4 space-y-4'>
+                    {isDesktopFallbackExecutor ? (
+                      <p className='text-xs leading-5 text-amber-100'>
+                        当前桌面构建仍保留 TypeScript 兼容下载执行器回退窗口，
+                        方便 pre 验证期快速切回旧路径。
+                      </p>
+                    ) : null}
+                    <div className='grid gap-3 text-xs text-gray-300'>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>站点</span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {storageOrigin || '当前站点'}
+                        </code>
+                      </div>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>Cache</span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {DOWNLOAD_CACHE_NAME}
+                        </code>
+                      </div>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>
+                          IndexedDB
+                        </span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {DOWNLOAD_RESOURCE_DB_NAME}
+                        </code>
+                      </div>
+                      <div className='grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)] sm:items-center'>
+                        <span className='font-medium text-gray-200'>
+                          对象仓库
+                        </span>
+                        <code className='break-all rounded-lg bg-black/20 px-3 py-2 text-[11px] text-gray-100'>
+                          {DOWNLOAD_RESOURCE_STORE_NAME}
+                        </code>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -3949,6 +3964,8 @@ function DownloadSettingsDialog({
               <p className='mt-4 text-xs leading-5 text-gray-400'>
                 {isDesktopStorage
                   ? '桌面版会通过本地下载运行时保存离线资源；页面内展示的是当前构建实际使用的本地目录。'
+                  : isDesktopFallbackExecutor
+                  ? '当前桌面构建使用兼容下载执行器，离线资源仍保存在 WebView 的 Cache Storage 和 IndexedDB 沙箱中。'
                   : '实际磁盘位置由浏览器站点沙箱托管，Web 版暂不支持直接显示系统路径、打开系统文件夹或自定义磁盘目录。'}
               </p>
               {isDevelopment && (
@@ -3997,8 +4014,11 @@ export default function DownloadsClient() {
   const [selectedContentId, setSelectedContentId] = useState<string | null>(
     null
   );
-  const isDesktopStorage = isDesktopLocalDownloadRuntimeEnabled();
-  const storageLabel = getDesktopDownloadRuntimeLabel();
+  const desktopDownloadExecutorMode = getDesktopDownloadExecutorMode();
+  const isDesktopStorage = desktopDownloadExecutorMode === 'desktop-runtime';
+  const isDesktopFallbackExecutor =
+    desktopDownloadExecutorMode === 'desktop-compat';
+  const storageLabel = getDesktopDownloadExecutorLabel();
   const isDevelopment = process.env.NODE_ENV === 'development';
   const hasHydrated = useDownloadStore((state) => state.hasHydrated);
   const tasks = useDownloadStore((state) => state.tasks);
@@ -4391,6 +4411,7 @@ export default function DownloadsClient() {
           storageOrigin={storageOrigin}
           storageLabel={storageLabel}
           isDesktopStorage={isDesktopStorage}
+          isDesktopFallbackExecutor={isDesktopFallbackExecutor}
           isStorageInfoLoading={isStorageInfoLoading}
           desktopStorageInfo={desktopStorageInfo}
           adultContentFilterEnabled={adultContentFilterEnabled}

@@ -18,13 +18,18 @@ const temporarilyMovedPaths = [];
 const desktopEnv = {
   ...process.env,
   NEXT_BUILD_TARGET: 'desktop',
-  NEXT_PUBLIC_APP_TARGET: 'desktop',
-  NEXT_PUBLIC_STORAGE_TYPE: 'localstorage',
-  NEXT_PUBLIC_API_BASE_URL: 'http://127.0.0.1:8787',
-  NEXT_PUBLIC_MEDIA_PROXY_BASE_URL: 'http://127.0.0.1:8787',
-  NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME: 'true',
-  NEXT_PUBLIC_FLUID_SEARCH: 'true',
-  NEXT_PUBLIC_ENABLE_ADMIN_PANEL: 'false',
+  NEXT_PUBLIC_APP_TARGET: process.env.NEXT_PUBLIC_APP_TARGET || 'desktop',
+  NEXT_PUBLIC_STORAGE_TYPE:
+    process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage',
+  NEXT_PUBLIC_API_BASE_URL:
+    process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8787',
+  NEXT_PUBLIC_MEDIA_PROXY_BASE_URL:
+    process.env.NEXT_PUBLIC_MEDIA_PROXY_BASE_URL || 'http://127.0.0.1:8787',
+  NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME:
+    process.env.NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME || 'true',
+  NEXT_PUBLIC_FLUID_SEARCH: process.env.NEXT_PUBLIC_FLUID_SEARCH || 'true',
+  NEXT_PUBLIC_ENABLE_ADMIN_PANEL:
+    process.env.NEXT_PUBLIC_ENABLE_ADMIN_PANEL || 'false',
 };
 
 function moveForDesktopBuild(relativePath, tempName) {

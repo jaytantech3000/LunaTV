@@ -75,6 +75,11 @@ export interface DesktopDownloadEngineSnapshotSubscriptionOptions {
   onError?: (error: Error) => void;
 }
 
+export type DesktopDownloadExecutorMode =
+  | 'desktop-runtime'
+  | 'desktop-compat'
+  | 'web-cache';
+
 const DESKTOP_DOWNLOAD_RUNTIME_POLL_INTERVAL_MS = 2_000;
 
 function ensureDesktopLocalDownloadRuntime(): void {
@@ -86,6 +91,12 @@ function ensureDesktopLocalDownloadRuntime(): void {
 }
 
 function isDesktopLocalDownloadRuntimeBuildEnabled(): boolean {
+  const runtimeConfig = getRuntimeConfig();
+
+  if (typeof runtimeConfig.DESKTOP_LOCAL_DOWNLOAD_RUNTIME === 'boolean') {
+    return runtimeConfig.DESKTOP_LOCAL_DOWNLOAD_RUNTIME;
+  }
+
   return process.env.NEXT_PUBLIC_DESKTOP_LOCAL_DOWNLOAD_RUNTIME === 'true';
 }
 
@@ -137,10 +148,36 @@ export function isDesktopLocalDownloadRuntimeEnabled(): boolean {
   );
 }
 
+export function getDesktopDownloadExecutorMode(): DesktopDownloadExecutorMode {
+  const runtimeConfig = getRuntimeConfig();
+
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    return 'desktop-runtime';
+  }
+
+  if (runtimeConfig.APP_TARGET === 'desktop') {
+    return 'desktop-compat';
+  }
+
+  return 'web-cache';
+}
+
+export function getDesktopDownloadExecutorLabel(): string {
+  const executorMode = getDesktopDownloadExecutorMode();
+
+  if (executorMode === 'desktop-runtime') {
+    return '桌面本地下载运行时（Rust）';
+  }
+
+  if (executorMode === 'desktop-compat') {
+    return '桌面兼容下载执行器（TypeScript）';
+  }
+
+  return '浏览器离线缓存';
+}
+
 export function getDesktopDownloadRuntimeLabel(): string {
-  return isDesktopLocalDownloadRuntimeEnabled()
-    ? '桌面本地下载运行时'
-    : '浏览器离线缓存';
+  return getDesktopDownloadExecutorLabel();
 }
 
 export async function getDesktopDownloadRuntimeStorageInfo(): Promise<DesktopDownloadRuntimeStorageInfoResponse> {

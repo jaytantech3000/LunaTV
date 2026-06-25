@@ -46,8 +46,9 @@ jest.mock('@/lib/download/desktop-runtime', () => {
   return {
     __esModule: true,
     ...actual,
+    getDesktopDownloadExecutorLabel: jest.fn(() => '浏览器离线缓存'),
+    getDesktopDownloadExecutorMode: jest.fn(() => 'web-cache'),
     getDesktopDownloadRuntimeStorageInfo: jest.fn(),
-    getDesktopDownloadRuntimeLabel: jest.fn(() => '浏览器离线缓存'),
     isDesktopLocalDownloadRuntimeEnabled: jest.fn(() => false),
   };
 });
@@ -103,8 +104,11 @@ describe('DownloadedContentDialog', () => {
   const mockGetDesktopDownloadRuntimeStorageInfo = jest.mocked(
     desktopRuntime.getDesktopDownloadRuntimeStorageInfo
   );
-  const mockGetDesktopDownloadRuntimeLabel = jest.mocked(
-    desktopRuntime.getDesktopDownloadRuntimeLabel
+  const mockGetDesktopDownloadExecutorLabel = jest.mocked(
+    desktopRuntime.getDesktopDownloadExecutorLabel
+  );
+  const mockGetDesktopDownloadExecutorMode = jest.mocked(
+    desktopRuntime.getDesktopDownloadExecutorMode
   );
   const mockIsDesktopLocalDownloadRuntimeEnabled = jest.mocked(
     desktopRuntime.isDesktopLocalDownloadRuntimeEnabled
@@ -138,7 +142,8 @@ describe('DownloadedContentDialog', () => {
       writable: true,
     });
     mockGetDesktopDownloadRuntimeStorageInfo.mockReset();
-    mockGetDesktopDownloadRuntimeLabel.mockReturnValue('浏览器离线缓存');
+    mockGetDesktopDownloadExecutorLabel.mockReturnValue('浏览器离线缓存');
+    mockGetDesktopDownloadExecutorMode.mockReturnValue('web-cache');
     mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(false);
     mockSyncDesktopDownloadEngineSettings.mockReset();
     mockSyncDesktopDownloadEngineSettings.mockResolvedValue(undefined as never);
@@ -695,7 +700,10 @@ describe('DownloadedContentDialog', () => {
   });
 
   it('shows local desktop download paths in settings when the desktop runtime is enabled', async () => {
-    mockGetDesktopDownloadRuntimeLabel.mockReturnValue('桌面本地下载运行时');
+    mockGetDesktopDownloadExecutorLabel.mockReturnValue(
+      '桌面本地下载运行时（Rust）'
+    );
+    mockGetDesktopDownloadExecutorMode.mockReturnValue('desktop-runtime');
     mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(true);
     mockGetDesktopDownloadRuntimeStorageInfo.mockResolvedValue({
       runtimeKind: 'desktop-local',
@@ -717,7 +725,7 @@ describe('DownloadedContentDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '下载设置' }));
 
-    expect(screen.getByText('桌面应用本地目录')).toBeInTheDocument();
+    expect(screen.getByText('桌面本地下载运行时（Rust）')).toBeInTheDocument();
     expect(
       screen.getByText(
         '桌面版会把离线资源写入本机数据目录，不走浏览器 Cache Storage。'
@@ -728,11 +736,14 @@ describe('DownloadedContentDialog', () => {
         'C:\\Users\\jay\\.lunatv-desktop\\download-runtime'
       )
     ).toBeInTheDocument();
-    expect(screen.queryByText('当前浏览器离线缓存')).not.toBeInTheDocument();
+    expect(screen.queryByText('浏览器离线缓存')).not.toBeInTheDocument();
   });
 
   it('pushes concurrency changes to the desktop runtime when enabled', async () => {
-    mockGetDesktopDownloadRuntimeLabel.mockReturnValue('桌面本地下载运行时');
+    mockGetDesktopDownloadExecutorLabel.mockReturnValue(
+      '桌面本地下载运行时（Rust）'
+    );
+    mockGetDesktopDownloadExecutorMode.mockReturnValue('desktop-runtime');
     mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(true);
     mockGetDesktopDownloadRuntimeStorageInfo.mockResolvedValue({
       runtimeKind: 'desktop-local',
@@ -761,5 +772,34 @@ describe('DownloadedContentDialog', () => {
       expect(mockSyncDesktopDownloadEngineSettings).toHaveBeenCalledWith(5);
     });
     expect(useDownloadStore.getState().maxConcurrentTasks).toBe(5);
+  });
+
+  it('shows the desktop fallback executor copy when the Rust runtime is disabled', async () => {
+    mockGetDesktopDownloadExecutorLabel.mockReturnValue(
+      '桌面兼容下载执行器（TypeScript）'
+    );
+    mockGetDesktopDownloadExecutorMode.mockReturnValue('desktop-compat');
+
+    render(
+      <SiteProvider siteName='LunaTV'>
+        <DownloadsClient />
+      </SiteProvider>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '下载设置' }));
+
+    expect(
+      screen.getByText('桌面兼容下载执行器（TypeScript）')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /当前桌面构建仍保留 TypeScript 兼容下载执行器回退窗口，\s*方便 pre 验证期快速切回旧路径。/
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '当前桌面构建使用兼容下载执行器，离线资源仍保存在 WebView 的 Cache Storage 和 IndexedDB 沙箱中。'
+      )
+    ).toBeInTheDocument();
   });
 });

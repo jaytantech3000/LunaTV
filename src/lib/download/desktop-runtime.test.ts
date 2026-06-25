@@ -555,6 +555,43 @@ describe('desktop download runtime task sdk', () => {
     }
   });
 
+  it('derives the desktop executor label from runtime config when the Rust runtime is disabled', () => {
+    const runtimeConfigModule = jest.requireMock('@/lib/runtime-config') as {
+      getRuntimeConfig: jest.Mock;
+    };
+
+    runtimeConfigModule.getRuntimeConfig.mockReturnValue({
+      APP_TARGET: 'desktop',
+      API_BASE_URL: 'http://127.0.0.1:8787',
+      DESKTOP_LOCAL_DOWNLOAD_RUNTIME: false,
+    });
+
+    expect(desktopRuntime.isDesktopLocalDownloadRuntimeEnabled()).toBe(false);
+    expect(desktopRuntime.getDesktopDownloadExecutorMode()).toBe(
+      'desktop-compat'
+    );
+    expect(desktopRuntime.getDesktopDownloadExecutorLabel()).toBe(
+      '桌面兼容下载执行器（TypeScript）'
+    );
+  });
+
+  it('reports browser offline cache when not running in desktop mode', () => {
+    const runtimeConfigModule = jest.requireMock('@/lib/runtime-config') as {
+      getRuntimeConfig: jest.Mock;
+    };
+
+    runtimeConfigModule.getRuntimeConfig.mockReturnValue({
+      APP_TARGET: 'web',
+      API_BASE_URL: '',
+      DESKTOP_LOCAL_DOWNLOAD_RUNTIME: false,
+    });
+
+    expect(desktopRuntime.getDesktopDownloadExecutorMode()).toBe('web-cache');
+    expect(desktopRuntime.getDesktopDownloadExecutorLabel()).toBe(
+      '浏览器离线缓存'
+    );
+  });
+
   it('rejects calls when the desktop local runtime is unavailable', async () => {
     const runtimeConfigModule = jest.requireMock('@/lib/runtime-config') as {
       getRuntimeConfig: jest.Mock;

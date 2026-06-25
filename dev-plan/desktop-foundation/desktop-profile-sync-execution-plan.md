@@ -33,6 +33,7 @@
 > - Phase 6 所需的故障排查文档现已独立落到 `desktop-profile-sync-troubleshooting.md`，把状态文案、错误分类、会话语义和 diagnostics 使用方式收口到一处。
 > - 基于当前代码审计，Phase 0-5 的功能性目标已基本落地；本文当前主要处于 Phase 6 的旧分支收缩与最终验收审计阶段。
 > - 当前剩余工作主要集中在 Phase 6 的旧分支进一步收缩，以及更大范围的桌面 Rust 化主线继续推进。
+> - 与下载 Rust 化主线并行验证时，桌面端现已具备显式下载执行器回退窗口（`pnpm desktop:dev:legacy-download` / `pnpm desktop:build:legacy-download`）；因此 profile sync 的预验证不需要等待下载迁移完全收尾。
 
 ## 1. 目标
 
