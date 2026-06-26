@@ -4,9 +4,9 @@
 
 import { ListPlus, Play, Waves } from 'lucide-react';
 
+import { cn } from '@/lib/cn';
 import { formatDurationMs } from '@/lib/music/format';
 import type { MusicTrack } from '@/lib/music/types';
-import { cn } from '@/lib/cn';
 
 interface MusicTrackListProps {
   title: string;
@@ -57,8 +57,19 @@ export default function MusicTrackList({
                 <div className='flex items-center gap-3'>
                   <button
                     type='button'
+                    aria-label={
+                      track.playable
+                        ? `播放 ${track.title}`
+                        : `${track.title} 暂不可播`
+                    }
+                    disabled={!track.playable}
                     onClick={() => onPlayTrack(tracks, index)}
-                    className='flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-slate-950 text-white transition-colors hover:bg-emerald-600 dark:bg-white dark:text-slate-950 dark:hover:bg-emerald-300'
+                    className={cn(
+                      'flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white transition-colors dark:text-slate-950',
+                      track.playable
+                        ? 'bg-slate-950 hover:bg-emerald-600 dark:bg-white dark:hover:bg-emerald-300'
+                        : 'cursor-not-allowed bg-slate-300 dark:bg-slate-700'
+                    )}
                   >
                     <Play className='h-4 w-4 fill-current' />
                   </button>
@@ -86,6 +97,11 @@ export default function MusicTrackList({
                         正在播放
                       </span>
                     ) : null}
+                    {!track.playable ? (
+                      <span className='rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300'>
+                        暂不可播
+                      </span>
+                    ) : null}
                   </div>
                   <div className='mt-1 truncate text-sm text-slate-500 dark:text-slate-400'>
                     {track.artists.map((artist) => artist.name).join(' / ')}
@@ -104,8 +120,14 @@ export default function MusicTrackList({
                   </span>
                   <button
                     type='button'
+                    disabled={!track.playable}
                     onClick={() => onQueueTrack(track)}
-                    className='inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:border-emerald-400 hover:text-emerald-700 dark:border-slate-700 dark:text-slate-300 dark:hover:border-emerald-400 dark:hover:text-emerald-300'
+                    className={cn(
+                      'inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-medium transition-colors',
+                      track.playable
+                        ? 'border-slate-200 text-slate-600 hover:border-emerald-400 hover:text-emerald-700 dark:border-slate-700 dark:text-slate-300 dark:hover:border-emerald-400 dark:hover:text-emerald-300'
+                        : 'cursor-not-allowed border-slate-200/70 text-slate-400 dark:border-slate-700 dark:text-slate-500'
+                    )}
                   >
                     <ListPlus className='h-3.5 w-3.5' />
                     下一首

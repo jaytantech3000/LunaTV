@@ -9,15 +9,31 @@ import {
   type MusicTrackPayload,
 } from '@/lib/music/types';
 
-import { getApiBaseUrl } from './endpoint';
 import { apiFetch } from './api-client';
+import { getApiBaseUrl } from './endpoint';
 
 async function parseJsonResponse<T>(
   response: Response,
   fallbackMessage: string
 ): Promise<T> {
   if (!response.ok) {
-    throw new Error(fallbackMessage);
+    let errorMessage = fallbackMessage;
+
+    try {
+      const payload = (await response.json()) as unknown;
+      if (
+        payload &&
+        typeof payload === 'object' &&
+        'error' in payload &&
+        typeof payload.error === 'string'
+      ) {
+        errorMessage = payload.error;
+      }
+    } catch {
+      // Ignore invalid error payloads and fall back to the caller-provided copy.
+    }
+
+    throw new Error(errorMessage);
   }
 
   return (await response.json()) as T;

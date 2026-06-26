@@ -7,6 +7,11 @@ import { GET as getMusicSearch } from './search/route';
 import { GET as getMusicSources } from './sources/route';
 import { GET as getMusicTrack } from './track/route';
 
+interface MusicFetchMockOptions {
+  failToplistDetail?: boolean;
+  paidTrackId?: number;
+}
+
 function createJsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
     ...init,
@@ -18,12 +23,16 @@ function createJsonResponse(body: unknown, init?: ResponseInit): Response {
   });
 }
 
-function createMusicFetchMock(): jest.MockedFunction<typeof fetch> {
+function createMusicFetchMock(
+  options: MusicFetchMockOptions = {}
+): jest.MockedFunction<typeof fetch> {
   return jest.fn(async (input) => {
     const requestUrl = new URL(String(input));
     const pathname = requestUrl.pathname;
     const type = requestUrl.searchParams.get('type');
     const id = requestUrl.searchParams.get('id');
+    const ids = requestUrl.searchParams.get('ids');
+    const paidTrackId = options.paidTrackId || 0;
 
     if (pathname === '/api/toplist') {
       return createJsonResponse({
@@ -83,6 +92,7 @@ function createMusicFetchMock(): jest.MockedFunction<typeof fetch> {
             {
               id: 9001,
               name: 'Search Song',
+              fee: 0,
               duration: 187000,
               artists: [{ id: 1, name: 'Search Artist' }],
               album: {
@@ -91,6 +101,22 @@ function createMusicFetchMock(): jest.MockedFunction<typeof fetch> {
                 picUrl: 'http://cdn.example.com/search-album.jpg',
               },
             },
+            ...(paidTrackId
+              ? [
+                  {
+                    id: paidTrackId,
+                    name: 'Paid Search Song',
+                    fee: 1,
+                    duration: 201000,
+                    artists: [{ id: 8, name: 'Premium Artist' }],
+                    album: {
+                      id: 88,
+                      name: 'Premium Album',
+                      picUrl: 'http://cdn.example.com/premium-album.jpg',
+                    },
+                  },
+                ]
+              : []),
           ],
         },
       });
@@ -111,6 +137,7 @@ function createMusicFetchMock(): jest.MockedFunction<typeof fetch> {
             {
               id: 9001,
               name: 'Playlist Song',
+              fee: 0,
               duration: 187000,
               artists: [{ id: 1, name: 'Search Artist' }],
               album: {
@@ -121,6 +148,13 @@ function createMusicFetchMock(): jest.MockedFunction<typeof fetch> {
             },
           ],
         },
+      });
+    }
+
+    if (pathname === '/api/playlist/detail' && options.failToplistDetail) {
+      return createJsonResponse({
+        code: -447,
+        msg: '服务器忙碌，请稍后再试！',
       });
     }
 
@@ -138,6 +172,7 @@ function createMusicFetchMock(): jest.MockedFunction<typeof fetch> {
             {
               id: 9001,
               name: 'Top Song 1',
+              fee: 0,
               duration: 187000,
               artists: [{ id: 1, name: 'Search Artist' }],
               album: {
@@ -149,6 +184,7 @@ function createMusicFetchMock(): jest.MockedFunction<typeof fetch> {
             {
               id: 9002,
               name: 'Top Song 2',
+              fee: 0,
               duration: 188000,
               artists: [{ id: 2, name: 'Second Artist' }],
               album: {
@@ -162,6 +198,26 @@ function createMusicFetchMock(): jest.MockedFunction<typeof fetch> {
       });
     }
 
+    if (pathname === '/api/song/detail' && ids === `[${paidTrackId}]`) {
+      return createJsonResponse({
+        code: 200,
+        songs: [
+          {
+            id: paidTrackId,
+            name: 'Paid Track Detail',
+            fee: 1,
+            duration: 201000,
+            artists: [{ id: 8, name: 'Premium Artist' }],
+            album: {
+              id: 88,
+              name: 'Premium Album',
+              picUrl: 'http://cdn.example.com/premium-album.jpg',
+            },
+          },
+        ],
+      });
+    }
+
     if (pathname === '/api/song/detail') {
       return createJsonResponse({
         code: 200,
@@ -169,6 +225,7 @@ function createMusicFetchMock(): jest.MockedFunction<typeof fetch> {
           {
             id: 9001,
             name: 'Track Detail',
+            fee: 0,
             duration: 187000,
             artists: [{ id: 1, name: 'Track Artist' }],
             album: {
@@ -268,6 +325,7 @@ describe('/api/music route handlers', () => {
     expect(collectionPayload.title).toBe('Focus Playlist');
     expect(collectionPayload.tracks[0].title).toBe('Playlist Song');
     expect(trackPayload.track.title).toBe('Track Detail');
+    expect(trackPayload.track.playable).toBe(true);
     expect(trackPayload.streamUrl).toBe(
       '/media/audio/stream?source=netease&id=9001&quality=standard'
     );
@@ -287,6 +345,57 @@ describe('/api/music route handlers', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: 'Unsupported music source',
+    });
+  });
+
+  it('keeps the music home payload available when spotlight detail fetch fails', async () => {
+    global.fetch = createMusicFetchMock({
+      failToplistDetail: true,
+    });
+
+    const response = await getMusicHome(
+      new NextRequest('http://localhost/api/music/home?source=netease')
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.spotlight).toEqual([]);
+    expect(payload.sections[0].collections[0].title).toBe('Top Rank');
+    expect(payload.sections[2].collections[0].title).toBe('Focus Playlist');
+  });
+
+  it('marks paid search tracks as unavailable for playback', async () => {
+    global.fetch = createMusicFetchMock({
+      paidTrackId: 9901,
+    });
+
+    const response = await getMusicSearch(
+      new NextRequest('http://localhost/api/music/search?source=netease&q=test')
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.tracks[1]).toEqual(
+      expect.objectContaining({
+        id: '9901',
+        playable: false,
+        title: 'Paid Search Song',
+      })
+    );
+  });
+
+  it('rejects playback for tracks blocked by copyright or membership', async () => {
+    global.fetch = createMusicFetchMock({
+      paidTrackId: 9901,
+    });
+
+    const response = await getMusicTrack(
+      new NextRequest('http://localhost/api/music/track?source=netease&id=9901')
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: '当前曲目受版权或会员限制，暂不可播放',
     });
   });
 });

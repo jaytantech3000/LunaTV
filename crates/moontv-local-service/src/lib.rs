@@ -9645,6 +9645,7 @@ segment0.ts
                                       {
                                         "id": 9001,
                                         "name": "Search Song",
+                                        "fee": 0,
                                         "duration": 187000,
                                         "artists": [{ "id": 1, "name": "Search Artist" }],
                                         "album": {
@@ -9680,6 +9681,7 @@ segment0.ts
                                       {
                                         "id": 9001,
                                         "name": "Playlist Song",
+                                        "fee": 0,
                                         "duration": 187000,
                                         "artists": [{ "id": 1, "name": "Search Artist" }],
                                         "album": {
@@ -9705,6 +9707,7 @@ segment0.ts
                                       {
                                         "id": 9001,
                                         "name": "Top Song 1",
+                                        "fee": 0,
                                         "duration": 187000,
                                         "artists": [{ "id": 1, "name": "Search Artist" }],
                                         "album": {
@@ -9716,6 +9719,7 @@ segment0.ts
                                       {
                                         "id": 9002,
                                         "name": "Top Song 2",
+                                        "fee": 0,
                                         "duration": 188000,
                                         "artists": [{ "id": 2, "name": "Second Artist" }],
                                         "album": {
@@ -9741,6 +9745,7 @@ segment0.ts
                             {
                               "id": 9001,
                               "name": "Track Detail",
+                              "fee": 0,
                               "duration": 187000,
                               "artists": [{ "id": 1, "name": "Track Artist" }],
                               "album": {
@@ -9974,6 +9979,186 @@ segment0.ts
         assert_eq!(
             unsupported_source_response.status(),
             StatusCode::BAD_REQUEST
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn music_home_route_tolerates_spotlight_detail_business_errors() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/toplist",
+                    get(|| async move {
+                        Json(json!({
+                          "code": 200,
+                          "list": [
+                            {
+                              "id": 101,
+                              "name": "Top Rank",
+                              "coverImgUrl": "http://cdn.example.com/top-rank.jpg",
+                              "description": "Top rank description",
+                              "trackCount": 2,
+                              "updateFrequency": "刚刚更新"
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/personalized/playlist",
+                    get(|| async move {
+                        Json(json!({
+                          "code": 200,
+                          "result": [
+                            {
+                              "id": 301,
+                              "name": "Focus Playlist",
+                              "picUrl": "http://cdn.example.com/focus-playlist.jpg",
+                              "copywriter": "适合夜晚循环",
+                              "trackCount": 2
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/playlist/detail",
+                    get(
+                        |Query(params): Query<BTreeMap<String, String>>| async move {
+                            match params.get("id").map(String::as_str) {
+                                Some("301") => Json(json!({
+                                  "code": 200,
+                                  "result": {
+                                    "id": 301,
+                                    "name": "Focus Playlist",
+                                    "coverImgUrl": "http://cdn.example.com/focus-playlist.jpg",
+                                    "description": "适合夜晚循环",
+                                    "trackCount": 2,
+                                    "creator": { "nickname": "Playlist Curator" },
+                                    "updateFrequency": "每日更新",
+                                    "tracks": []
+                                  }
+                                }))
+                                .into_response(),
+                                _ => Json(json!({
+                                  "code": -447,
+                                  "msg": "服务器忙碌，请稍后再试！"
+                                }))
+                                .into_response(),
+                            }
+                        },
+                    ),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.netease_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/home?source=netease")
+                    .body(Body::empty())
+                    .expect("music home request"),
+            )
+            .await
+            .expect("music home response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload
+                .get("spotlight")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            payload
+                .get("sections")
+                .and_then(Value::as_array)
+                .and_then(|sections| sections.first())
+                .and_then(|section| section.get("tab"))
+                .and_then(Value::as_str),
+            Some("rank")
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn music_track_route_rejects_paid_tracks() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/song/detail",
+            get(|| async move {
+                Json(json!({
+                  "code": 200,
+                  "songs": [
+                    {
+                      "id": 9901,
+                      "name": "Paid Track Detail",
+                      "fee": 1,
+                      "duration": 201000,
+                      "artists": [{ "id": 8, "name": "Premium Artist" }],
+                      "album": {
+                        "id": 88,
+                        "name": "Premium Album",
+                        "picUrl": "http://cdn.example.com/premium-album.jpg"
+                      }
+                    }
+                  ]
+                }))
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.netease_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/track?source=netease&id=9901")
+                    .body(Body::empty())
+                    .expect("music track request"),
+            )
+            .await
+            .expect("music track response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload.get("error").and_then(Value::as_str),
+            Some("当前曲目受版权或会员限制，暂不可播放")
         );
 
         upstream.abort();

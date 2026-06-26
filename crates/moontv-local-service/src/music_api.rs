@@ -181,7 +181,13 @@ struct MusicLyricLinePayload {
 #[derive(Debug, Deserialize)]
 struct NeteaseToplistResponse {
     #[serde(default)]
+    code: Option<i64>,
+    #[serde(default)]
     list: Vec<NeteaseToplist>,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -202,6 +208,12 @@ struct NeteaseToplist {
 #[derive(Debug, Deserialize)]
 struct NeteasePersonalizedPlaylistResponse {
     #[serde(default)]
+    code: Option<i64>,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
     result: Vec<NeteasePlaylistRecommendation>,
 }
 
@@ -220,6 +232,12 @@ struct NeteasePlaylistRecommendation {
 
 #[derive(Debug, Deserialize)]
 struct NeteaseSearchResponse {
+    #[serde(default)]
+    code: Option<i64>,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
     result: Option<NeteaseSearchResult>,
 }
 
@@ -246,7 +264,13 @@ struct NeteaseSearchPlaylist {
 
 #[derive(Debug, Deserialize)]
 struct NeteasePlaylistDetailResponse {
-    result: NeteasePlaylistDetail,
+    #[serde(default)]
+    code: Option<i64>,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    result: Option<NeteasePlaylistDetail>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -276,6 +300,12 @@ struct NeteaseCreator {
 #[derive(Debug, Deserialize)]
 struct NeteaseSongDetailResponse {
     #[serde(default)]
+    code: Option<i64>,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
     songs: Vec<NeteaseSong>,
 }
 
@@ -284,6 +314,8 @@ struct NeteaseSongDetailResponse {
 struct NeteaseSong {
     id: i64,
     name: String,
+    #[serde(default)]
+    fee: i64,
     #[serde(default)]
     duration: u64,
     #[serde(default)]
@@ -310,7 +342,13 @@ struct NeteaseAlbum {
 #[derive(Debug, Deserialize)]
 struct NeteaseLyricResponse {
     #[serde(default)]
+    code: Option<i64>,
+    #[serde(default)]
     lrc: Option<NeteaseLyricBlock>,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
     #[serde(default)]
     tlyric: Option<NeteaseLyricBlock>,
 }
@@ -366,16 +404,40 @@ pub(crate) async fn get_music_home(
     Query(params): Query<MusicSourceQuery>,
 ) -> AppResult<Response> {
     resolve_netease_source(params.source.as_deref())?;
-    let toplists = fetch_netease_toplists(&state).await?;
-    let playlists = fetch_netease_recommended_playlists(&state).await?;
+    let (toplists_result, playlists_result) = tokio::join!(
+        fetch_netease_toplists(&state),
+        fetch_netease_recommended_playlists(&state)
+    );
+    let toplists = match &toplists_result {
+        Ok(value) => value.clone(),
+        Err(_) => Vec::new(),
+    };
+    let playlists = match &playlists_result {
+        Ok(value) => value.clone(),
+        Err(_) => Vec::new(),
+    };
+
+    if toplists.is_empty() && playlists.is_empty() {
+        if let Err(error) = toplists_result {
+            return Err(error);
+        }
+
+        if let Err(error) = playlists_result {
+            return Err(error);
+        }
+    }
+
     let spotlight = if let Some(first_toplist) = toplists.first() {
-        fetch_netease_playlist_detail(&state, &first_toplist.id)
-            .await?
-            .tracks
-            .into_iter()
-            .take(8)
-            .map(to_music_track_payload)
-            .collect()
+        match fetch_netease_playlist_detail(&state, &first_toplist.id).await {
+            Ok(playlist) => playlist
+                .tracks
+                .into_iter()
+                .map(to_music_track_payload)
+                .filter(|track| track.playable)
+                .take(8)
+                .collect(),
+            Err(_) => Vec::new(),
+        }
     } else {
         Vec::new()
     };
@@ -403,38 +465,47 @@ pub(crate) async fn get_music_home(
         })
         .unwrap_or_else(|| "来自网易云公开榜单。".to_string());
 
+    let mut sections = Vec::new();
+    if !toplists.is_empty() {
+        sections.push(MusicHomeSectionPayload {
+            id: "netease-rank".to_string(),
+            title: "官方榜单".to_string(),
+            tab: "rank".to_string(),
+            kind: "collection-list".to_string(),
+            description: Some("直接取自网易云公开榜单接口。".to_string()),
+            collections: Some(rank_collections),
+            tracks: None,
+        });
+        sections.push(MusicHomeSectionPayload {
+            id: "netease-hot".to_string(),
+            title: "热门单曲".to_string(),
+            tab: "hot".to_string(),
+            kind: "track-list".to_string(),
+            description: Some(hot_description),
+            collections: None,
+            tracks: Some(spotlight),
+        });
+    }
+    if !playlists.is_empty() {
+        sections.push(MusicHomeSectionPayload {
+            id: "netease-playlist".to_string(),
+            title: "推荐歌单".to_string(),
+            tab: "playlist".to_string(),
+            kind: "collection-list".to_string(),
+            description: Some("来自网易云公开推荐歌单接口。".to_string()),
+            collections: Some(playlist_collections),
+            tracks: None,
+        });
+    }
+
     Ok(no_store_json_response(MusicHomePayload {
         source: NETEASE_SOURCE_KEY.to_string(),
-        spotlight: spotlight.clone(),
-        sections: vec![
-            MusicHomeSectionPayload {
-                id: "netease-rank".to_string(),
-                title: "官方榜单".to_string(),
-                tab: "rank".to_string(),
-                kind: "collection-list".to_string(),
-                description: Some("直接取自网易云公开榜单接口。".to_string()),
-                collections: Some(rank_collections),
-                tracks: None,
-            },
-            MusicHomeSectionPayload {
-                id: "netease-hot".to_string(),
-                title: "热门单曲".to_string(),
-                tab: "hot".to_string(),
-                kind: "track-list".to_string(),
-                description: Some(hot_description),
-                collections: None,
-                tracks: Some(spotlight),
-            },
-            MusicHomeSectionPayload {
-                id: "netease-playlist".to_string(),
-                title: "推荐歌单".to_string(),
-                tab: "playlist".to_string(),
-                kind: "collection-list".to_string(),
-                description: Some("来自网易云公开推荐歌单接口。".to_string()),
-                collections: Some(playlist_collections),
-                tracks: None,
-            },
-        ],
+        spotlight: sections
+            .iter()
+            .find(|section| section.id == "netease-hot")
+            .and_then(|section| section.tracks.clone())
+            .unwrap_or_default(),
+        sections,
     }))
 }
 
@@ -524,9 +595,17 @@ pub(crate) async fn get_music_track(
             .map_err(|_| AppError::bad_request("Invalid track id"))?,
     )
     .await?;
+    let track = to_music_track_payload(song);
+
+    if !track.playable {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "当前曲目受版权或会员限制，暂不可播放",
+        ));
+    }
 
     Ok(no_store_json_response(MusicTrackDetailPayload {
-        track: to_music_track_payload(song),
+        track,
         stream_url: format!(
             "/media/audio/stream?source={NETEASE_SOURCE_KEY}&id={track_id}&quality={quality}"
         ),
@@ -615,23 +694,32 @@ pub(crate) async fn get_music_audio_stream(
 }
 
 async fn fetch_netease_toplists(state: &AppState) -> AppResult<Vec<NeteaseToplist>> {
-    Ok(
-        fetch_netease_json::<NeteaseToplistResponse>(state, "/api/toplist", &[])
-            .await?
-            .list,
-    )
+    let payload = fetch_netease_json::<NeteaseToplistResponse>(state, "/api/toplist", &[]).await?;
+    ensure_netease_success(
+        payload.code,
+        payload.msg.as_deref(),
+        payload.message.as_deref(),
+        "获取榜单失败",
+    )?;
+    Ok(payload.list)
 }
 
 async fn fetch_netease_recommended_playlists(
     state: &AppState,
 ) -> AppResult<Vec<NeteasePlaylistRecommendation>> {
-    Ok(fetch_netease_json::<NeteasePersonalizedPlaylistResponse>(
+    let payload = fetch_netease_json::<NeteasePersonalizedPlaylistResponse>(
         state,
         "/api/personalized/playlist",
         &[("limit", HOME_PLAYLIST_LIMIT.to_string())],
     )
-    .await?
-    .result)
+    .await?;
+    ensure_netease_success(
+        payload.code,
+        payload.msg.as_deref(),
+        payload.message.as_deref(),
+        "获取推荐歌单失败",
+    )?;
+    Ok(payload.result)
 }
 
 async fn fetch_netease_search_tracks(
@@ -652,6 +740,12 @@ async fn fetch_netease_search_tracks(
         ],
     )
     .await?;
+    ensure_netease_success(
+        payload.code,
+        payload.msg.as_deref(),
+        payload.message.as_deref(),
+        "搜索曲目失败",
+    )?;
     Ok(payload.result.unwrap_or_default().songs)
 }
 
@@ -673,6 +767,12 @@ async fn fetch_netease_search_playlists(
         ],
     )
     .await?;
+    ensure_netease_success(
+        payload.code,
+        payload.msg.as_deref(),
+        payload.message.as_deref(),
+        "搜索歌单失败",
+    )?;
     Ok(payload.result.unwrap_or_default().playlists)
 }
 
@@ -680,13 +780,21 @@ async fn fetch_netease_playlist_detail(
     state: &AppState,
     playlist_id: &i64,
 ) -> AppResult<NeteasePlaylistDetail> {
-    Ok(fetch_netease_json::<NeteasePlaylistDetailResponse>(
+    let payload = fetch_netease_json::<NeteasePlaylistDetailResponse>(
         state,
         "/api/playlist/detail",
         &[("id", playlist_id.to_string())],
     )
-    .await?
-    .result)
+    .await?;
+    ensure_netease_success(
+        payload.code,
+        payload.msg.as_deref(),
+        payload.message.as_deref(),
+        "获取歌单详情失败",
+    )?;
+    payload
+        .result
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "合集不存在"))
 }
 
 async fn fetch_netease_song_detail(state: &AppState, track_id: &i64) -> AppResult<NeteaseSong> {
@@ -696,6 +804,12 @@ async fn fetch_netease_song_detail(state: &AppState, track_id: &i64) -> AppResul
         &[("ids", format!("[{track_id}]"))],
     )
     .await?;
+    ensure_netease_success(
+        payload.code,
+        payload.msg.as_deref(),
+        payload.message.as_deref(),
+        "获取曲目信息失败",
+    )?;
     payload
         .songs
         .into_iter()
@@ -704,7 +818,7 @@ async fn fetch_netease_song_detail(state: &AppState, track_id: &i64) -> AppResul
 }
 
 async fn fetch_netease_lyric(state: &AppState, track_id: &i64) -> AppResult<NeteaseLyricResponse> {
-    fetch_netease_json(
+    let payload = fetch_netease_json::<NeteaseLyricResponse>(
         state,
         "/api/song/lyric",
         &[
@@ -713,7 +827,14 @@ async fn fetch_netease_lyric(state: &AppState, track_id: &i64) -> AppResult<Nete
             ("tv", "-1".to_string()),
         ],
     )
-    .await
+    .await?;
+    ensure_netease_success(
+        payload.code,
+        payload.msg.as_deref(),
+        payload.message.as_deref(),
+        "获取歌词失败",
+    )?;
+    Ok(payload)
 }
 
 async fn fetch_netease_stream_upstream(
@@ -858,6 +979,7 @@ fn to_search_playlist_summary(
 }
 
 fn to_music_track_payload(song: NeteaseSong) -> MusicTrackPayload {
+    let playable = is_netease_track_playable(&song);
     let album = song.album.as_ref().map(|album| MusicAlbumPayload {
         id: Some(album.id.to_string()),
         title: album.name.clone(),
@@ -887,7 +1009,7 @@ fn to_music_track_payload(song: NeteaseSong) -> MusicTrackPayload {
         album,
         cover,
         duration_ms: (song.duration > 0).then_some(song.duration),
-        playable: true,
+        playable,
         subtitle,
     }
 }
@@ -962,6 +1084,44 @@ fn normalize_remote_url(url: &str) -> Option<String> {
             value
         }
     })
+}
+
+fn resolve_netease_error_status(code: Option<i64>) -> StatusCode {
+    if code == Some(-110) {
+        StatusCode::FORBIDDEN
+    } else {
+        StatusCode::BAD_GATEWAY
+    }
+}
+
+fn resolve_netease_error_message(
+    msg: Option<&str>,
+    message: Option<&str>,
+    fallback: &str,
+) -> String {
+    normalize_optional_text(message.map(str::to_string))
+        .or_else(|| normalize_optional_text(msg.map(str::to_string)))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn ensure_netease_success(
+    code: Option<i64>,
+    msg: Option<&str>,
+    message: Option<&str>,
+    fallback: &str,
+) -> AppResult<()> {
+    if matches!(code, Some(200) | None) {
+        return Ok(());
+    }
+
+    Err(AppError::new(
+        resolve_netease_error_status(code),
+        resolve_netease_error_message(msg, message, fallback),
+    ))
+}
+
+fn is_netease_track_playable(song: &NeteaseSong) -> bool {
+    song.fee == 0
 }
 
 fn normalize_optional_text(value: Option<String>) -> Option<String> {

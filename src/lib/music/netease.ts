@@ -57,6 +57,7 @@ interface NeteaseAlbum {
 interface NeteaseSong {
   id?: number;
   name?: string;
+  fee?: number;
   duration?: number;
   artists?: NeteaseArtist[];
   album?: NeteaseAlbum;
@@ -72,7 +73,10 @@ interface NeteaseToplist {
 }
 
 interface NeteaseToplistResponse {
+  code?: number;
   list?: NeteaseToplist[];
+  msg?: string;
+  message?: string;
 }
 
 interface NeteasePlaylistRecommendation {
@@ -84,6 +88,9 @@ interface NeteasePlaylistRecommendation {
 }
 
 interface NeteasePersonalizedPlaylistResponse {
+  code?: number;
+  msg?: string;
+  message?: string;
   result?: NeteasePlaylistRecommendation[];
 }
 
@@ -101,6 +108,9 @@ interface NeteaseSearchResult {
 }
 
 interface NeteaseSearchResponse {
+  code?: number;
+  msg?: string;
+  message?: string;
   result?: NeteaseSearchResult;
 }
 
@@ -120,10 +130,16 @@ interface NeteasePlaylistDetail {
 }
 
 interface NeteasePlaylistDetailResponse {
+  code?: number;
+  msg?: string;
+  message?: string;
   result?: NeteasePlaylistDetail;
 }
 
 interface NeteaseSongDetailResponse {
+  code?: number;
+  msg?: string;
+  message?: string;
   songs?: NeteaseSong[];
 }
 
@@ -132,7 +148,10 @@ interface NeteaseLyricBlock {
 }
 
 interface NeteaseLyricResponse {
+  code?: number;
   lrc?: NeteaseLyricBlock;
+  msg?: string;
+  message?: string;
   tlyric?: NeteaseLyricBlock;
 }
 
@@ -215,6 +234,46 @@ function normalizeRemoteUrl(
   }
 
   return normalized;
+}
+
+function resolveNeteaseErrorStatus(code: number | undefined): number {
+  if (code === -110) {
+    return 403;
+  }
+
+  return 502;
+}
+
+function resolveNeteaseErrorMessage(
+  payload: {
+    msg?: string;
+    message?: string;
+  },
+  fallbackMessage: string
+): string {
+  return (
+    normalizeOptionalText(payload.message) ||
+    normalizeOptionalText(payload.msg) ||
+    fallbackMessage
+  );
+}
+
+function assertNeteaseSuccess(
+  payload: {
+    code?: number;
+    msg?: string;
+    message?: string;
+  },
+  fallbackMessage: string
+): void {
+  if (typeof payload.code !== 'number' || payload.code === 200) {
+    return;
+  }
+
+  throw new MusicApiError(
+    resolveNeteaseErrorMessage(payload, fallbackMessage),
+    resolveNeteaseErrorStatus(payload.code)
+  );
 }
 
 function createRequestHeaders(range?: string | null): Record<string, string> {
@@ -329,6 +388,10 @@ function pickAccentColor(index: number): string {
   return SUMMARY_ACCENT_COLORS[index % SUMMARY_ACCENT_COLORS.length];
 }
 
+function isNeteaseSongPlayable(song: NeteaseSong): boolean {
+  return typeof song.fee === 'number' ? song.fee === 0 : true;
+}
+
 function toMusicTrack(song: NeteaseSong): MusicTrack {
   const albumTitle = normalizeOptionalText(song.album?.name);
   const cover = normalizeRemoteUrl(song.album?.picUrl);
@@ -366,7 +429,7 @@ function toMusicTrack(song: NeteaseSong): MusicTrack {
       typeof song.id === 'number' && Number.isFinite(song.id)
         ? String(song.id)
         : '',
-    playable: true,
+    playable: isNeteaseSongPlayable(song),
     source: NETEASE_SOURCE_KEY,
     subtitle: albumTitle,
     title: normalizeOptionalText(song.name) || '未知曲目',
@@ -439,6 +502,7 @@ async function fetchToplists(): Promise<NeteaseToplist[]> {
   const payload = await fetchNeteaseJson<NeteaseToplistResponse>(
     '/api/toplist'
   );
+  assertNeteaseSuccess(payload, '获取榜单失败');
   return payload.list || [];
 }
 
@@ -451,6 +515,7 @@ async function fetchRecommendedPlaylists(): Promise<
       limit: String(HOME_PLAYLIST_LIMIT),
     }
   );
+  assertNeteaseSuccess(payload, '获取推荐歌单失败');
 
   return payload.result || [];
 }
@@ -470,6 +535,7 @@ async function fetchSearchTracks(
       type: '1',
     }
   );
+  assertNeteaseSuccess(payload, '搜索曲目失败');
 
   return payload.result?.songs || [];
 }
@@ -489,6 +555,7 @@ async function fetchSearchPlaylists(
       type: '1000',
     }
   );
+  assertNeteaseSuccess(payload, '搜索歌单失败');
 
   return payload.result?.playlists || [];
 }
@@ -502,6 +569,7 @@ async function fetchPlaylistDetail(
       id: String(playlistId),
     }
   );
+  assertNeteaseSuccess(payload, '获取歌单详情失败');
 
   if (!payload.result) {
     throw new MusicApiError('合集不存在', 404);
@@ -517,6 +585,7 @@ async function fetchSongDetail(trackId: number): Promise<NeteaseSong> {
       ids: `[${trackId}]`,
     }
   );
+  assertNeteaseSuccess(payload, '获取曲目信息失败');
 
   const song = payload.songs?.[0];
   if (!song) {
@@ -527,11 +596,16 @@ async function fetchSongDetail(trackId: number): Promise<NeteaseSong> {
 }
 
 async function fetchLyric(trackId: number): Promise<NeteaseLyricResponse> {
-  return fetchNeteaseJson<NeteaseLyricResponse>('/api/song/lyric', {
-    id: String(trackId),
-    lv: '-1',
-    tv: '-1',
-  });
+  const payload = await fetchNeteaseJson<NeteaseLyricResponse>(
+    '/api/song/lyric',
+    {
+      id: String(trackId),
+      lv: '-1',
+      tv: '-1',
+    }
+  );
+  assertNeteaseSuccess(payload, '获取歌词失败');
+  return payload;
 }
 
 export function getMusicSourcesPayload(): { sources: MusicSource[] } {
@@ -570,22 +644,47 @@ export async function getMusicHomePayload(params: {
 }): Promise<MusicHomePayload> {
   resolveSource(params.source);
 
-  const toplists = await fetchToplists();
-  const playlists = await fetchRecommendedPlaylists();
-  const spotlight =
-    typeof toplists[0]?.id === 'number'
-      ? (await fetchPlaylistDetail(toplists[0].id)).tracks
-          ?.slice(0, 8)
-          .map(toMusicTrack) || []
-      : [];
+  const [toplistsResult, playlistsResult] = await Promise.allSettled([
+    fetchToplists(),
+    fetchRecommendedPlaylists(),
+  ]);
+  const toplists =
+    toplistsResult.status === 'fulfilled' ? toplistsResult.value : [];
+  const playlists =
+    playlistsResult.status === 'fulfilled' ? playlistsResult.value : [];
+
+  if (!toplists.length && !playlists.length) {
+    if (toplistsResult.status === 'rejected') {
+      throw toplistsResult.reason;
+    }
+
+    if (playlistsResult.status === 'rejected') {
+      throw playlistsResult.reason;
+    }
+  }
+
+  let spotlight: MusicTrack[] = [];
+  if (typeof toplists[0]?.id === 'number') {
+    try {
+      spotlight =
+        (await fetchPlaylistDetail(toplists[0].id)).tracks
+          ?.map(toMusicTrack)
+          .filter((track) => track.playable)
+          .slice(0, 8) || [];
+    } catch {
+      spotlight = [];
+    }
+  }
+
   const hotDescription = toplists[0]
     ? `来自 ${normalizeOptionalText(toplists[0].name) || '官方榜单'} · ${
         normalizeOptionalText(toplists[0].updateFrequency) || '实时更新'
       }`
     : '来自网易云公开榜单。';
 
-  const sections: MusicHomeSection[] = [
-    {
+  const sections: MusicHomeSection[] = [];
+  if (toplists.length) {
+    sections.push({
       collections: toplists
         .slice(0, HOME_TOPLIST_LIMIT)
         .map((item, index) => toToplistSummary(item, index)),
@@ -594,16 +693,18 @@ export async function getMusicHomePayload(params: {
       kind: 'collection-list',
       tab: 'rank',
       title: '官方榜单',
-    },
-    {
+    });
+    sections.push({
       description: hotDescription,
       id: 'netease-hot',
       kind: 'track-list',
       tab: 'hot',
       title: '热门单曲',
       tracks: spotlight,
-    },
-    {
+    });
+  }
+  if (playlists.length) {
+    sections.push({
       collections: playlists
         .slice(0, HOME_PLAYLIST_LIMIT)
         .map((item, index) => toPlaylistSummary(item, index)),
@@ -612,8 +713,8 @@ export async function getMusicHomePayload(params: {
       kind: 'collection-list',
       tab: 'playlist',
       title: '推荐歌单',
-    },
-  ];
+    });
+  }
 
   return {
     source: NETEASE_SOURCE_KEY,
@@ -692,11 +793,16 @@ export async function getMusicTrackPayload(params: {
   const trackId = requireNumericId(params.id, '曲目');
   const quality = resolveQuality(params.quality);
   const song = await fetchSongDetail(trackId);
+  const track = toMusicTrack(song);
+
+  if (!track.playable) {
+    throw new MusicApiError('当前曲目受版权或会员限制，暂不可播放', 403);
+  }
 
   return {
     quality,
     streamUrl: `/media/audio/stream?source=${NETEASE_SOURCE_KEY}&id=${trackId}&quality=${quality}`,
-    track: toMusicTrack(song),
+    track,
   };
 }
 

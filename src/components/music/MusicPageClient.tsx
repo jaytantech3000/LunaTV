@@ -14,6 +14,7 @@ import {
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type FormEvent, startTransition, useEffect, useState } from 'react';
 
+import { cn } from '@/lib/cn';
 import { formatDurationSeconds } from '@/lib/music/format';
 import {
   type MusicPlayRecord,
@@ -144,6 +145,10 @@ function buildResumeTrackFromPlayRecord(record: MusicPlayRecord): MusicTrack {
     ...buildMusicTrackFromQueueItem(record),
     subtitle: resumeLabel,
   };
+}
+
+function getMusicTrackKey(track: Pick<MusicTrack, 'source' | 'id'>): string {
+  return `${track.source}:${track.id}`;
 }
 
 export default function MusicPageClient() {
@@ -568,14 +573,28 @@ export default function MusicPageClient() {
   };
 
   const handlePlayTracks = (tracks: MusicTrack[], startIndex = 0) => {
-    if (!tracks.length) {
+    const targetTrack = tracks[startIndex];
+    if (!targetTrack?.playable) {
       return;
     }
 
-    playQueue(tracks.map(buildQueueItemFromTrack), startIndex);
+    const playableTracks = tracks.filter((track) => track.playable);
+    const playableStartIndex = playableTracks.findIndex(
+      (track) => getMusicTrackKey(track) === getMusicTrackKey(targetTrack)
+    );
+
+    if (!playableTracks.length || playableStartIndex < 0) {
+      return;
+    }
+
+    playQueue(playableTracks.map(buildQueueItemFromTrack), playableStartIndex);
   };
 
   const handleQueueTrack = (track: MusicTrack) => {
+    if (!track.playable) {
+      return;
+    }
+
     enqueueTracks([buildQueueItemFromTrack(track)]);
   };
 
@@ -694,10 +713,16 @@ export default function MusicPageClient() {
                   <button
                     key={`${track.source}:${track.id}`}
                     type='button'
+                    disabled={!track.playable}
                     onClick={() =>
                       handlePlayTracks(homePayload.spotlight, index)
                     }
-                    className='group flex items-center gap-4 rounded-[28px] border border-white/75 bg-gradient-to-r from-slate-950 via-slate-900 to-emerald-900/90 p-4 text-left text-white shadow-lg shadow-slate-950/10 transition-transform hover:-translate-y-0.5 dark:border-slate-700'
+                    className={cn(
+                      'group flex items-center gap-4 rounded-[28px] border border-white/75 bg-gradient-to-r from-slate-950 via-slate-900 to-emerald-900/90 p-4 text-left text-white shadow-lg shadow-slate-950/10 transition-transform dark:border-slate-700',
+                      track.playable
+                        ? 'hover:-translate-y-0.5'
+                        : 'cursor-not-allowed opacity-60'
+                    )}
                   >
                     <div className='relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-white/10'>
                       {track.cover ? (
@@ -723,8 +748,18 @@ export default function MusicPageClient() {
                           {track.subtitle}
                         </div>
                       ) : null}
+                      {!track.playable ? (
+                        <div className='mt-2 inline-flex rounded-full bg-white/14 px-2.5 py-1 text-[11px] uppercase tracking-[0.18em] text-white/80'>
+                          暂不可播
+                        </div>
+                      ) : null}
                     </div>
-                    <div className='flex h-11 w-11 items-center justify-center rounded-full bg-white text-slate-950 transition-transform group-hover:scale-105'>
+                    <div
+                      className={cn(
+                        'flex h-11 w-11 items-center justify-center rounded-full bg-white text-slate-950 transition-transform',
+                        track.playable ? 'group-hover:scale-105' : ''
+                      )}
+                    >
                       <Play className='h-4 w-4 fill-current' />
                     </div>
                   </button>
