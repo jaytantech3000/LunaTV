@@ -9,6 +9,13 @@ import {
   setMusicMediaSessionPlaybackState,
   setMusicMediaSessionPositionState,
 } from '@/lib/music/media-session';
+import {
+  deleteMusicFavorite,
+  isMusicFavorited,
+  saveMusicFavorite,
+  saveMusicPlayRecord,
+  saveMusicRecentTrack,
+} from '@/lib/music/profile';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import {
   buildMusicStreamUrl,
@@ -41,11 +48,18 @@ function resolveSidebarCollapsed() {
   );
 }
 
+function logMusicProfileFailure(message: string, error: unknown): void {
+  // eslint-disable-next-line no-console
+  console.error(message, error);
+}
+
 export default function MusicPlayerRoot() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const resolvedTrackKeyRef = useRef('');
-  const [enabled, setEnabled] = useState(false);
+  const [enabled, setEnabled] = useState<boolean | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isFavorited, setIsFavorited] = useState(false);
+  const [favoriteLoading, setFavoriteLoading] = useState(false);
 
   const hasHydrated = useMusicPlayerStore((state) => state.hasHydrated);
   const currentTrack = useMusicPlayerStore(getCurrentQueueTrack);
@@ -140,7 +154,7 @@ export default function MusicPlayerRoot() {
   }, [currentTrack, enabled, hasHydrated]);
 
   useEffect(() => {
-    if (enabled) {
+    if (enabled !== false) {
       return;
     }
 
@@ -202,6 +216,9 @@ export default function MusicPlayerRoot() {
         setDurationSec((trackPayload.track.durationMs || 0) / 1000);
         setTrackLoading(false);
         syncRecentTrack(currentTrack);
+        void saveMusicRecentTrack(currentTrack).catch((error) => {
+          logMusicProfileFailure('保存音乐最近播放失败:', error);
+        });
       } catch (error) {
         if (cancelled) {
           return;
@@ -239,6 +256,39 @@ export default function MusicPlayerRoot() {
     streamUrl,
     syncRecentTrack,
   ]);
+
+  useEffect(() => {
+    if (!currentTrack) {
+      setIsFavorited(false);
+      setFavoriteLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncFavoriteState = async () => {
+      try {
+        const favorited = await isMusicFavorited(
+          currentTrack.source,
+          currentTrack.trackId
+        );
+        if (!cancelled) {
+          setIsFavorited(favorited);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setIsFavorited(false);
+        }
+        logMusicProfileFailure('读取音乐收藏状态失败:', error);
+      }
+    };
+
+    void syncFavoriteState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -356,6 +406,52 @@ export default function MusicPlayerRoot() {
     setMuted(nextVolume <= 0);
   };
 
+  const persistPlaybackSnapshot = (completed = false) => {
+    if (!currentTrack) {
+      return;
+    }
+
+    const normalizedDurationSec =
+      Number.isFinite(durationSec) && durationSec >= 0
+        ? durationSec
+        : Math.max((currentTrack.durationMs || 0) / 1000, 0);
+    const normalizedPlayTimeSec = completed
+      ? normalizedDurationSec
+      : Number.isFinite(currentTimeSec) && currentTimeSec >= 0
+      ? currentTimeSec
+      : 0;
+
+    void saveMusicPlayRecord(currentTrack, {
+      playTimeSec: normalizedPlayTimeSec,
+      durationSec: normalizedDurationSec,
+      completed,
+    }).catch((error) => {
+      logMusicProfileFailure('保存音乐播放记录失败:', error);
+    });
+  };
+
+  const handleToggleFavorite = async () => {
+    if (!currentTrack || favoriteLoading) {
+      return;
+    }
+
+    setFavoriteLoading(true);
+
+    try {
+      if (isFavorited) {
+        await deleteMusicFavorite(currentTrack.source, currentTrack.trackId);
+        setIsFavorited(false);
+      } else {
+        await saveMusicFavorite(currentTrack);
+        setIsFavorited(true);
+      }
+    } catch (error) {
+      logMusicProfileFailure('切换音乐收藏状态失败:', error);
+    } finally {
+      setFavoriteLoading(false);
+    }
+  };
+
   return (
     <>
       <audio
@@ -390,6 +486,7 @@ export default function MusicPlayerRoot() {
         onPause={() => {
           const audio = audioRef.current;
           if (!audio?.ended && !isTrackLoading) {
+            persistPlaybackSnapshot(false);
             setIsPlaying(false);
           }
         }}
@@ -399,6 +496,7 @@ export default function MusicPlayerRoot() {
           }
         }}
         onEnded={() => {
+          persistPlaybackSnapshot(true);
           playNext();
         }}
         onError={() => {
@@ -440,6 +538,8 @@ export default function MusicPlayerRoot() {
             volume={volume}
             muted={muted}
             lyrics={lyrics}
+            isFavorited={isFavorited}
+            isFavoriteLoading={favoriteLoading}
             onClose={() => setExpanded(false)}
             onTogglePlay={togglePlay}
             onPlayPrevious={playPrevious}
@@ -448,6 +548,9 @@ export default function MusicPlayerRoot() {
             onSeek={handleSeek}
             onVolumeChange={handleVolumeChange}
             onToggleMute={() => setMuted(!muted)}
+            onToggleFavorite={() => {
+              void handleToggleFavorite();
+            }}
             onSelectQueueIndex={(index) => selectQueueIndex(index, true)}
           />
         </>

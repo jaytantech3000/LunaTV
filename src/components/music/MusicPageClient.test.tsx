@@ -13,6 +13,7 @@ import { useMusicPlayerStore } from '@/stores/musicPlayerStore';
 import MusicPageClient from './MusicPageClient';
 
 const mockReplace = jest.fn();
+let mockSearchParams = 'source=netease&tab=rank&id=netease-rank-city';
 
 const mockSources: MusicSource[] = [
   {
@@ -79,9 +80,7 @@ jest.mock('next/navigation', () => ({
   useRouter: jest.fn(() => ({
     replace: mockReplace,
   })),
-  useSearchParams: jest.fn(
-    () => new URLSearchParams('source=netease&tab=rank&id=netease-rank-city')
-  ),
+  useSearchParams: jest.fn(() => new URLSearchParams(mockSearchParams)),
 }));
 
 jest.mock('@/lib/transport/music-client', () => ({
@@ -96,6 +95,54 @@ jest.mock('@/lib/transport/music-client', () => ({
     tracks: [],
     collections: [],
   })),
+}));
+
+jest.mock('@/lib/music/profile', () => ({
+  buildMusicTrackFromQueueItem: jest.fn((track) => ({
+    id: track.trackId,
+    source: track.source,
+    title: track.title,
+    artists: track.artistsText
+      .split(' / ')
+      .filter(Boolean)
+      .map((name: string) => ({ name })),
+    album: track.albumTitle
+      ? {
+          title: track.albumTitle,
+        }
+      : undefined,
+    cover: track.cover,
+    durationMs: track.durationMs,
+    playable: true,
+    subtitle: track.subtitle,
+  })),
+  getMusicFavoritesList: jest.fn(async () => [
+    {
+      trackId: 'favorite-track',
+      source: 'netease',
+      title: '收藏歌曲',
+      artistsText: '歌手甲',
+      cover: 'https://example.com/favorite.jpg',
+      durationMs: 198000,
+      albumTitle: '收藏专辑',
+      subtitle: '收藏条目',
+      savedAt: 3000,
+    },
+  ]),
+  getMusicRecentTracks: jest.fn(async () => [
+    {
+      trackId: 'recent-track',
+      source: 'qq',
+      title: '最近播放歌曲',
+      artistsText: '歌手乙',
+      cover: 'https://example.com/recent.jpg',
+      durationMs: 205000,
+      albumTitle: '最近专辑',
+      subtitle: '最近播放',
+      playedAt: 4000,
+    },
+  ]),
+  subscribeToMusicProfileUpdates: jest.fn(() => () => undefined),
 }));
 
 function resetMusicPlayerStore() {
@@ -121,6 +168,7 @@ function resetMusicPlayerStore() {
 describe('MusicPageClient', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockSearchParams = 'source=netease&tab=rank&id=netease-rank-city';
     resetMusicPlayerStore();
   });
 
@@ -149,5 +197,23 @@ describe('MusicPageClient', () => {
         }
       );
     });
+  });
+
+  it('appends the local library tab and renders favorite and recent tracks', async () => {
+    mockSearchParams = 'source=netease&tab=library';
+
+    render(<MusicPageClient />);
+
+    expect(
+      await screen.findByRole('button', { name: '曲库' })
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: '我的收藏' })
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: '最近播放' })
+    ).toBeInTheDocument();
+    expect(await screen.findByText('收藏歌曲')).toBeInTheDocument();
+    expect(await screen.findByText('最近播放歌曲')).toBeInTheDocument();
   });
 });

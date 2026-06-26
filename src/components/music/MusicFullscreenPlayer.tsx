@@ -5,6 +5,7 @@
 import {
   ChevronDown,
   Disc3,
+  Heart,
   ListMusic,
   Loader2,
   Pause,
@@ -48,6 +49,8 @@ interface MusicFullscreenPlayerProps {
   volume: number;
   muted: boolean;
   lyrics: MusicLyricPayload | null;
+  isFavorited: boolean;
+  isFavoriteLoading: boolean;
   onClose: () => void;
   onTogglePlay: () => void;
   onPlayPrevious: () => void;
@@ -56,6 +59,7 @@ interface MusicFullscreenPlayerProps {
   onSeek: (nextTimeSec: number) => void;
   onVolumeChange: (nextVolume: number) => void;
   onToggleMute: () => void;
+  onToggleFavorite: () => void;
   onSelectQueueIndex: (index: number) => void;
 }
 
@@ -85,6 +89,8 @@ export default function MusicFullscreenPlayer({
   volume,
   muted,
   lyrics,
+  isFavorited,
+  isFavoriteLoading,
   onClose,
   onTogglePlay,
   onPlayPrevious,
@@ -93,6 +99,7 @@ export default function MusicFullscreenPlayer({
   onSeek,
   onVolumeChange,
   onToggleMute,
+  onToggleFavorite,
   onSelectQueueIndex,
 }: MusicFullscreenPlayerProps) {
   const [mounted, setMounted] = useState(false);
@@ -255,6 +262,29 @@ export default function MusicFullscreenPlayer({
                     aria-label='下一首'
                   >
                     <SkipForward className='h-5 w-5' />
+                  </button>
+                  <button
+                    type='button'
+                    onClick={onToggleFavorite}
+                    disabled={isFavoriteLoading}
+                    className='inline-flex h-12 items-center gap-2 rounded-full border border-white/12 bg-white/5 px-4 text-sm text-white/75 transition-colors hover:border-white/25 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60'
+                    aria-label={
+                      isFavorited ? '取消收藏当前歌曲' : '收藏当前歌曲'
+                    }
+                  >
+                    {isFavoriteLoading ? (
+                      <Loader2 className='h-4 w-4 animate-spin' />
+                    ) : (
+                      <Heart
+                        className={cn(
+                          'h-4 w-4',
+                          isFavorited
+                            ? 'fill-rose-500 text-rose-500'
+                            : 'text-white/75'
+                        )}
+                      />
+                    )}
+                    <span>{isFavorited ? '已收藏' : '收藏'}</span>
                   </button>
                   <button
                     type='button'

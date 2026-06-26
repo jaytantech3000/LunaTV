@@ -15,6 +15,12 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type FormEvent, startTransition, useEffect, useState } from 'react';
 
 import {
+  buildMusicTrackFromQueueItem,
+  getMusicFavoritesList,
+  getMusicRecentTracks,
+  subscribeToMusicProfileUpdates,
+} from '@/lib/music/profile';
+import {
   type MusicCollection,
   type MusicCollectionSummary,
   type MusicHomePayload,
@@ -42,12 +48,7 @@ import MusicSectionTabs from './MusicSectionTabs';
 import MusicSourceTabs from './MusicSourceTabs';
 import MusicTrackList from './MusicTrackList';
 
-const COLLECTION_TABS = new Set<MusicSectionTab>([
-  'rank',
-  'playlist',
-  'album',
-  'library',
-]);
+const COLLECTION_TABS = new Set<MusicSectionTab>(['rank', 'playlist', 'album']);
 
 function isCollectionTab(tab: MusicSectionTab) {
   return COLLECTION_TABS.has(tab);
@@ -106,6 +107,27 @@ function MusicSectionSkeleton() {
   );
 }
 
+function withLocalLibraryTab(source: MusicSource): MusicSource {
+  if (source.tabs.includes('library')) {
+    return source;
+  }
+
+  const searchIndex = source.tabs.indexOf('search');
+  const nextTabs: MusicSectionTab[] =
+    searchIndex >= 0
+      ? [
+          ...source.tabs.slice(0, searchIndex),
+          'library',
+          ...source.tabs.slice(searchIndex),
+        ]
+      : [...source.tabs, 'library'];
+
+  return {
+    ...source,
+    tabs: nextTabs,
+  };
+}
+
 export default function MusicPageClient() {
   const router = useRouter();
   const pathname = usePathname();
@@ -128,6 +150,13 @@ export default function MusicPageClient() {
   const [collectionLoading, setCollectionLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
+  const [favoriteLibraryTracks, setFavoriteLibraryTracks] = useState<
+    MusicTrack[]
+  >([]);
+  const [recentLibraryTracks, setRecentLibraryTracks] = useState<MusicTrack[]>(
+    []
+  );
+  const [libraryLoading, setLibraryLoading] = useState(true);
 
   const activeQueueTrackKey = useMusicPlayerStore((state) =>
     getCurrentTrackKey(getCurrentQueueTrack(state))
@@ -157,9 +186,9 @@ export default function MusicPageClient() {
 
     const loadSources = async () => {
       try {
-        const nextSources = (await fetchMusicSources()).filter(
-          (source) => source.enabled
-        );
+        const nextSources = (await fetchMusicSources())
+          .filter((source) => source.enabled)
+          .map(withLocalLibraryTab);
         if (cancelled) {
           return;
         }
@@ -182,6 +211,48 @@ export default function MusicPageClient() {
 
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncLibrary = async () => {
+      setLibraryLoading(true);
+
+      const [favorites, recentTracks] = await Promise.all([
+        getMusicFavoritesList(),
+        getMusicRecentTracks(),
+      ]);
+
+      if (cancelled) {
+        return;
+      }
+
+      setFavoriteLibraryTracks(favorites.map(buildMusicTrackFromQueueItem));
+      setRecentLibraryTracks(recentTracks.map(buildMusicTrackFromQueueItem));
+      setLibraryLoading(false);
+    };
+
+    void syncLibrary();
+
+    const unsubscribeFavorites = subscribeToMusicProfileUpdates(
+      'musicFavoritesUpdated',
+      () => {
+        void syncLibrary();
+      }
+    );
+    const unsubscribeRecentTracks = subscribeToMusicProfileUpdates(
+      'musicRecentTracksUpdated',
+      () => {
+        void syncLibrary();
+      }
+    );
+
+    return () => {
+      cancelled = true;
+      unsubscribeFavorites();
+      unsubscribeRecentTracks();
     };
   }, []);
 
@@ -650,6 +721,40 @@ export default function MusicPageClient() {
           <MusicSectionSkeleton />
         ) : null}
 
+        {activeTab === 'library' ? (
+          libraryLoading ? (
+            <MusicSectionSkeleton />
+          ) : favoriteLibraryTracks.length || recentLibraryTracks.length ? (
+            <div className='space-y-6'>
+              {recentLibraryTracks.length ? (
+                <MusicTrackList
+                  title='最近播放'
+                  description='这里会保留最近实际开听过的曲目，方便快速续播。'
+                  tracks={recentLibraryTracks}
+                  activeTrackKey={activeQueueTrackKey}
+                  onPlayTrack={handlePlayTracks}
+                  onQueueTrack={handleQueueTrack}
+                />
+              ) : null}
+              {favoriteLibraryTracks.length ? (
+                <MusicTrackList
+                  title='我的收藏'
+                  description='独立于具体平台页面的本地收藏列表，后续可平滑切到统一 profile 真源。'
+                  tracks={favoriteLibraryTracks}
+                  activeTrackKey={activeQueueTrackKey}
+                  onPlayTrack={handlePlayTracks}
+                  onQueueTrack={handleQueueTrack}
+                />
+              ) : null}
+            </div>
+          ) : (
+            <MusicEmptyState
+              title='你的音乐资料库还是空的'
+              description='开始播放或收藏曲目后，这里会逐步沉淀最近播放与本地收藏。'
+            />
+          )
+        ) : null}
+
         {activeTab === 'search' ? (
           searchLoading ? (
             <div className='flex min-h-[240px] items-center justify-center rounded-[32px] border border-white/70 bg-white/80 dark:border-slate-800 dark:bg-slate-900/80'>
@@ -695,7 +800,9 @@ export default function MusicPageClient() {
           )
         ) : null}
 
-        {activeTab !== 'search' && visibleSections.length > 0 ? (
+        {activeTab !== 'search' &&
+        activeTab !== 'library' &&
+        visibleSections.length > 0 ? (
           <div className='space-y-6'>
             {visibleSections.map(renderHomeSection)}
           </div>
@@ -802,6 +909,7 @@ export default function MusicPageClient() {
         ) : null}
 
         {activeTab !== 'search' &&
+        activeTab !== 'library' &&
         !visibleSections.length &&
         !homeLoading &&
         !contentError &&
