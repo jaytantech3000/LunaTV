@@ -97,8 +97,10 @@ use profile_sync::{
     build_profile_sync_status_payload, get_profile_bootstrap, get_profile_sync_server_config,
     get_profile_sync_status, proxy_profile_sync_change_password, proxy_profile_sync_favorites,
     proxy_profile_sync_follows, proxy_profile_sync_login, proxy_profile_sync_logout,
-    proxy_profile_sync_passthrough, proxy_profile_sync_playrecords,
-    proxy_profile_sync_search_history, proxy_profile_sync_skip_configs,
+    proxy_profile_sync_music_favorites, proxy_profile_sync_music_play_records,
+    proxy_profile_sync_music_recent_tracks, proxy_profile_sync_passthrough,
+    proxy_profile_sync_playrecords, proxy_profile_sync_search_history,
+    proxy_profile_sync_skip_configs,
 };
 use vod_proxy::{get_vod_key, get_vod_m3u8, get_vod_segment};
 
@@ -1479,11 +1481,7 @@ impl AppError {
         }
     }
 
-    fn with_code(
-        status: StatusCode,
-        code: &'static str,
-        message: impl Into<String>,
-    ) -> Self {
+    fn with_code(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
         Self {
             status,
             code: Some(code),
@@ -1809,6 +1807,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/follows", any(proxy_profile_sync_follows))
         .route("/api/searchhistory", any(proxy_profile_sync_search_history))
         .route("/api/skipconfigs", any(proxy_profile_sync_skip_configs))
+        .route(
+            "/api/music/profile/favorites",
+            any(proxy_profile_sync_music_favorites),
+        )
+        .route(
+            "/api/music/profile/recent-tracks",
+            any(proxy_profile_sync_music_recent_tracks),
+        )
+        .route(
+            "/api/music/profile/play-records",
+            any(proxy_profile_sync_music_play_records),
+        )
         .route("/api/admin/config", get(get_admin_config))
         .route("/api/admin/reset", get(reset_admin_config))
         .route("/api/admin/config_file", post(update_admin_config_file))
@@ -9337,6 +9347,201 @@ segment0.ts
         assert!(owner_snapshot.follow_records.is_empty());
         assert!(owner_snapshot.search_history.is_empty());
         assert!(owner_snapshot.skip_configs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn profile_local_music_routes_round_trip_all_domains_for_authenticated_user() {
+        let temp_dir = TestDir::new();
+        let raw_config = json!({
+          "auth": {
+            "username": "desktop-owner",
+            "password": "owner-secret"
+          },
+          "api_site": {}
+        });
+        let config_path = write_test_config(&temp_dir, raw_config);
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        let mut persistence = state
+            .load_admin_persistence()
+            .expect("load default admin persistence");
+        persistence
+            .config
+            .user_config
+            .users
+            .push(DesktopUserConfigItem {
+                username: "kid".to_string(),
+                role: "user".to_string(),
+                banned: false,
+                enabled_apis: Vec::new(),
+                tags: Vec::new(),
+            });
+        persistence
+            .user_passwords
+            .insert("kid".to_string(), "kid-secret".to_string());
+        state
+            .save_admin_persistence(&persistence)
+            .expect("save updated admin persistence");
+        let auth_cookie = build_test_auth_cookie("kid", "user", "desktop-local");
+        let app = build_router(state.clone());
+
+        let favorites_post = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/music/profile/favorites")
+                    .header("cookie", auth_cookie.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "key": "netease+track-1",
+                          "favorite": {
+                            "trackId": "track-1",
+                            "source": "netease",
+                            "title": "Kid Favorite",
+                            "artistsText": "Luna Drive",
+                            "cover": "favorite.jpg",
+                            "durationMs": 188000,
+                            "albumTitle": "Midnight Circuits",
+                            "subtitle": "夜色电子",
+                            "savedAt": 20
+                          }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("kid music favorites post request"),
+            )
+            .await
+            .expect("kid music favorites post response");
+        assert_eq!(favorites_post.status(), StatusCode::OK);
+
+        let favorites_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/profile/favorites?key=netease%2Btrack-1")
+                    .header("cookie", auth_cookie.clone())
+                    .body(Body::empty())
+                    .expect("kid music favorites get request"),
+            )
+            .await
+            .expect("kid music favorites get response");
+        let favorites_payload = read_json_body(favorites_get).await;
+        assert_eq!(
+            favorites_payload.get("title").and_then(Value::as_str),
+            Some("Kid Favorite")
+        );
+
+        let recent_tracks_post = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/music/profile/recent-tracks")
+                    .header("cookie", auth_cookie.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "track": {
+                            "trackId": "track-1",
+                            "source": "netease",
+                            "title": "Kid Recent",
+                            "artistsText": "Luna Drive",
+                            "cover": "recent.jpg",
+                            "durationMs": 188000,
+                            "albumTitle": "Midnight Circuits",
+                            "subtitle": "夜色电子",
+                            "playedAt": 30
+                          }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("kid music recent tracks post request"),
+            )
+            .await
+            .expect("kid music recent tracks post response");
+        assert_eq!(recent_tracks_post.status(), StatusCode::OK);
+
+        let recent_tracks_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/profile/recent-tracks")
+                    .header("cookie", auth_cookie.clone())
+                    .body(Body::empty())
+                    .expect("kid music recent tracks get request"),
+            )
+            .await
+            .expect("kid music recent tracks get response");
+        let recent_tracks_payload = read_json_body(recent_tracks_get).await;
+        assert_eq!(
+            recent_tracks_payload
+                .as_array()
+                .and_then(|records| records.first())
+                .and_then(|record| record.get("title"))
+                .and_then(Value::as_str),
+            Some("Kid Recent")
+        );
+
+        let play_records_post = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/music/profile/play-records")
+                    .header("cookie", auth_cookie.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "key": "netease+track-1",
+                          "record": {
+                            "trackId": "track-1",
+                            "source": "netease",
+                            "title": "Kid Record",
+                            "artistsText": "Luna Drive",
+                            "cover": "record.jpg",
+                            "durationMs": 188000,
+                            "albumTitle": "Midnight Circuits",
+                            "subtitle": "夜色电子",
+                            "playedAt": 40,
+                            "playTimeSec": 42,
+                            "durationSec": 188,
+                            "completed": false
+                          }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("kid music play records post request"),
+            )
+            .await
+            .expect("kid music play records post response");
+        assert_eq!(play_records_post.status(), StatusCode::OK);
+
+        let play_records_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/profile/play-records")
+                    .header("cookie", auth_cookie.clone())
+                    .body(Body::empty())
+                    .expect("kid music play records get request"),
+            )
+            .await
+            .expect("kid music play records get response");
+        let play_records_payload = read_json_body(play_records_get).await;
+        assert_eq!(
+            play_records_payload
+                .get("netease+track-1")
+                .and_then(|record| record.get("playTimeSec"))
+                .and_then(Value::as_i64),
+            Some(42)
+        );
     }
 
     #[tokio::test]

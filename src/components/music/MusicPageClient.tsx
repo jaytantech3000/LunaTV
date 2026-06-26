@@ -14,8 +14,11 @@ import {
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type FormEvent, startTransition, useEffect, useState } from 'react';
 
+import { formatDurationSeconds } from '@/lib/music/format';
 import {
+  type MusicPlayRecord,
   buildMusicTrackFromQueueItem,
+  getAllMusicPlayRecords,
   getMusicFavoritesList,
   getMusicRecentTracks,
   subscribeToMusicProfileUpdates,
@@ -128,6 +131,21 @@ function withLocalLibraryTab(source: MusicSource): MusicSource {
   };
 }
 
+function buildResumeTrackFromPlayRecord(record: MusicPlayRecord): MusicTrack {
+  const durationSec =
+    record.durationSec > 0
+      ? record.durationSec
+      : Math.max((record.durationMs || 0) / 1000, 0);
+  const resumeLabel = `续播至 ${formatDurationSeconds(
+    record.playTimeSec
+  )} / ${formatDurationSeconds(durationSec)}`;
+
+  return {
+    ...buildMusicTrackFromQueueItem(record),
+    subtitle: resumeLabel,
+  };
+}
+
 export default function MusicPageClient() {
   const router = useRouter();
   const pathname = usePathname();
@@ -150,6 +168,9 @@ export default function MusicPageClient() {
   const [collectionLoading, setCollectionLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
+  const [resumeLibraryTracks, setResumeLibraryTracks] = useState<MusicTrack[]>(
+    []
+  );
   const [favoriteLibraryTracks, setFavoriteLibraryTracks] = useState<
     MusicTrack[]
   >([]);
@@ -220,15 +241,22 @@ export default function MusicPageClient() {
     const syncLibrary = async () => {
       setLibraryLoading(true);
 
-      const [favorites, recentTracks] = await Promise.all([
+      const [favorites, recentTracks, playRecords] = await Promise.all([
         getMusicFavoritesList(),
         getMusicRecentTracks(),
+        getAllMusicPlayRecords(),
       ]);
 
       if (cancelled) {
         return;
       }
 
+      setResumeLibraryTracks(
+        Object.values(playRecords)
+          .filter((record) => !record.completed && record.playTimeSec > 0)
+          .sort((left, right) => right.playedAt - left.playedAt)
+          .map(buildResumeTrackFromPlayRecord)
+      );
       setFavoriteLibraryTracks(favorites.map(buildMusicTrackFromQueueItem));
       setRecentLibraryTracks(recentTracks.map(buildMusicTrackFromQueueItem));
       setLibraryLoading(false);
@@ -248,11 +276,18 @@ export default function MusicPageClient() {
         void syncLibrary();
       }
     );
+    const unsubscribePlayRecords = subscribeToMusicProfileUpdates(
+      'musicPlayRecordsUpdated',
+      () => {
+        void syncLibrary();
+      }
+    );
 
     return () => {
       cancelled = true;
       unsubscribeFavorites();
       unsubscribeRecentTracks();
+      unsubscribePlayRecords();
     };
   }, []);
 
@@ -724,8 +759,20 @@ export default function MusicPageClient() {
         {activeTab === 'library' ? (
           libraryLoading ? (
             <MusicSectionSkeleton />
-          ) : favoriteLibraryTracks.length || recentLibraryTracks.length ? (
+          ) : resumeLibraryTracks.length ||
+            favoriteLibraryTracks.length ||
+            recentLibraryTracks.length ? (
             <div className='space-y-6'>
+              {resumeLibraryTracks.length ? (
+                <MusicTrackList
+                  title='继续收听'
+                  description='根据最近一次保存的播放进度，优先回到上次还没听完的曲目。'
+                  tracks={resumeLibraryTracks}
+                  activeTrackKey={activeQueueTrackKey}
+                  onPlayTrack={handlePlayTracks}
+                  onQueueTrack={handleQueueTrack}
+                />
+              ) : null}
               {recentLibraryTracks.length ? (
                 <MusicTrackList
                   title='最近播放'
@@ -750,7 +797,7 @@ export default function MusicPageClient() {
           ) : (
             <MusicEmptyState
               title='你的音乐资料库还是空的'
-              description='开始播放或收藏曲目后，这里会逐步沉淀最近播放与本地收藏。'
+              description='开始播放、暂停或收藏曲目后，这里会逐步沉淀续播记录、最近播放与本地收藏。'
             />
           )
         ) : null}

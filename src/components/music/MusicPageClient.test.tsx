@@ -129,6 +129,22 @@ jest.mock('@/lib/music/profile', () => ({
       savedAt: 3000,
     },
   ]),
+  getAllMusicPlayRecords: jest.fn(async () => ({
+    'netease+resume-track': {
+      trackId: 'resume-track',
+      source: 'netease',
+      title: '续播歌曲',
+      artistsText: '歌手丙',
+      cover: 'https://example.com/resume.jpg',
+      durationMs: 246000,
+      albumTitle: '续播专辑',
+      subtitle: '中断前播放',
+      playedAt: 5000,
+      playTimeSec: 84,
+      durationSec: 246,
+      completed: false,
+    },
+  })),
   getMusicRecentTracks: jest.fn(async () => [
     {
       trackId: 'recent-track',
@@ -208,11 +224,15 @@ describe('MusicPageClient', () => {
       await screen.findByRole('button', { name: '曲库' })
     ).toBeInTheDocument();
     expect(
+      await screen.findByRole('heading', { name: '继续收听' })
+    ).toBeInTheDocument();
+    expect(
       await screen.findByRole('heading', { name: '我的收藏' })
     ).toBeInTheDocument();
     expect(
       await screen.findByRole('heading', { name: '最近播放' })
     ).toBeInTheDocument();
+    expect(await screen.findByText('续播歌曲')).toBeInTheDocument();
     expect(await screen.findByText('收藏歌曲')).toBeInTheDocument();
     expect(await screen.findByText('最近播放歌曲')).toBeInTheDocument();
   });
