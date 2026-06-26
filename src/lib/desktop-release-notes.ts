@@ -32,6 +32,69 @@ const GITHUB_COMPARE_URL_PATTERN =
   /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/compare\/[^\s)]+/i;
 const CONVENTIONAL_COMMIT_PATTERN = /^([a-z]+)(?:\(([^)]+)\))?(!)?:\s*(.+)$/i;
 const FULL_CHANGELOG_LINE_PATTERN = /^\**\s*full changelog\s*\**\s*:?\s*/i;
+const CJK_TEXT_PATTERN = /[\u3400-\u9fff]/;
+
+const RELEASE_CHANGE_SCOPE_TRANSLATIONS_ZH = new Map([
+  ['admin', '管理端'],
+  ['app', '应用'],
+  ['auth', '登录'],
+  ['bootstrap', '启动配置'],
+  ['cache', '缓存'],
+  ['desktop', '桌面端'],
+  ['follow', '追更'],
+  ['music', '音乐'],
+  ['player', '播放器'],
+  ['profile', '资料'],
+  ['release', '发布'],
+  ['runtime', '运行时'],
+  ['search', '搜索'],
+  ['updater', '更新器'],
+]);
+
+const EXACT_RELEASE_CHANGE_TRANSLATIONS_ZH = new Map([
+  ['add bilingual beta release summaries', '增加 Beta 版本摘要的中英文切换'],
+  ['avoid stale release compare cache', '避免旧的版本对比缓存'],
+  ['avoid startup follow record toast', '避免启动时出现追更记录错误提示'],
+  ['compact desktop release cards', '精简桌面版本卡片'],
+  ['restore beta release summaries', '恢复 Beta 版本摘要'],
+  ['startup local auth flows', '启动阶段的本地登录流程'],
+]);
+
+const RELEASE_CHANGE_PHRASE_TRANSLATIONS_ZH = [
+  ['desktop music api', '桌面音乐 API'],
+  ['desktop release cards', '桌面版本卡片'],
+  ['desktop updater', '桌面更新器'],
+  ['follow record toast', '追更记录错误提示'],
+  ['follow record', '追更记录'],
+  ['follow records', '追更记录'],
+  ['local auth flows', '本地登录流程'],
+  ['netease routes', '网易云路由'],
+  ['netease route', '网易云路由'],
+  ['beta release summaries', 'Beta 版本摘要'],
+  ['release compare cache', '版本对比缓存'],
+  ['compare parser', '版本对比解析器'],
+  ['prerelease notes flow', '预发布说明流程'],
+  ['release summaries', '版本摘要'],
+  ['release summary', '版本摘要'],
+  ['play records', '播放记录'],
+  ['play record', '播放记录'],
+  ['web mocks', 'Web Mock'],
+  ['web mock', 'Web Mock'],
+  ['bilingual', '中英文'],
+  ['desktop', '桌面端'],
+  ['netease', '网易云'],
+  ['prerelease', '预发布'],
+  ['release', '发布'],
+  ['routes', '路由'],
+  ['route', '路由'],
+  ['cache', '缓存'],
+  ['toast', '错误提示'],
+  ['notes', '说明'],
+  ['note', '说明'],
+  ['music', '音乐'],
+  ['auth', '登录'],
+  ['api', 'API'],
+];
 
 function createEmptySummary(
   compareUrl: string | null = null
@@ -69,6 +132,206 @@ function humanizeScope(scope: string): string {
   return scope.trim().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
 }
 
+function containsCjkText(value: string): boolean {
+  return CJK_TEXT_PATTERN.test(value);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeTranslationLookupKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function replaceCaseInsensitive(
+  value: string,
+  searchValue: string,
+  replacement: string
+): string {
+  return value.replace(
+    new RegExp(escapeRegExp(searchValue), 'gi'),
+    replacement
+  );
+}
+
+function translatePhraseToChinese(value: string): string {
+  const trimmedValue = value.trim();
+  if (!trimmedValue || containsCjkText(trimmedValue)) {
+    return trimmedValue;
+  }
+
+  const normalizedValue = normalizeTranslationLookupKey(trimmedValue);
+  const exactTranslation =
+    EXACT_RELEASE_CHANGE_TRANSLATIONS_ZH.get(normalizedValue);
+  if (exactTranslation) {
+    return exactTranslation;
+  }
+
+  let translatedValue = trimmedValue;
+  for (const [
+    searchValue,
+    replacement,
+  ] of RELEASE_CHANGE_PHRASE_TRANSLATIONS_ZH) {
+    translatedValue = replaceCaseInsensitive(
+      translatedValue,
+      searchValue,
+      replacement
+    );
+  }
+
+  return translatedValue.replace(/\s+/g, ' ').trim();
+}
+
+function localizeReleaseChangeScope(
+  scope: string | undefined,
+  locale: ChangelogLocale
+): string | null {
+  if (!scope) {
+    return null;
+  }
+
+  const normalizedScope = humanizeScope(scope);
+  if (!normalizedScope || locale === 'en' || containsCjkText(normalizedScope)) {
+    return normalizedScope;
+  }
+
+  const exactTranslation = RELEASE_CHANGE_SCOPE_TRANSLATIONS_ZH.get(
+    normalizeTranslationLookupKey(normalizedScope)
+  );
+  if (exactTranslation) {
+    return exactTranslation;
+  }
+
+  return translatePhraseToChinese(normalizedScope);
+}
+
+function translateReleaseChangeTextToChinese(text: string): string {
+  const trimmedText = text.trim();
+  if (!trimmedText || containsCjkText(trimmedText)) {
+    return trimmedText;
+  }
+
+  const exactTranslation = EXACT_RELEASE_CHANGE_TRANSLATIONS_ZH.get(
+    normalizeTranslationLookupKey(trimmedText)
+  );
+  if (exactTranslation) {
+    return exactTranslation;
+  }
+
+  const translationRules: Array<{
+    pattern: RegExp;
+    build: (match: RegExpMatchArray) => string;
+  }> = [
+    {
+      pattern: /^replace (.+) with (.+)$/i,
+      build: ([, source, target]) =>
+        joinChineseVerbAndObject(
+          `用${translatePhraseToChinese(target)}替换`,
+          translatePhraseToChinese(source)
+        ),
+    },
+    {
+      pattern: /^power (.+) with (.+)$/i,
+      build: ([, target, source]) =>
+        `用${translatePhraseToChinese(source)}驱动${translatePhraseToChinese(
+          target
+        )}`,
+    },
+    {
+      pattern: /^route (.+) through (.+)$/i,
+      build: ([, target, source]) =>
+        `通过${translatePhraseToChinese(source)}转发${translatePhraseToChinese(
+          target
+        )}`,
+    },
+    {
+      pattern: /^move (.+) to (.+)$/i,
+      build: ([, target, destination]) =>
+        `将${translatePhraseToChinese(target)}移到${translatePhraseToChinese(
+          destination
+        )}`,
+    },
+    {
+      pattern: /^restore (.+)$/i,
+      build: ([, target]) =>
+        joinChineseVerbAndObject('恢复', translatePhraseToChinese(target)),
+    },
+    {
+      pattern: /^recover (.+)$/i,
+      build: ([, target]) =>
+        joinChineseVerbAndObject('恢复', translatePhraseToChinese(target)),
+    },
+    {
+      pattern: /^avoid (.+)$/i,
+      build: ([, target]) =>
+        joinChineseVerbAndObject('避免', translatePhraseToChinese(target)),
+    },
+    {
+      pattern: /^add (.+)$/i,
+      build: ([, target]) =>
+        joinChineseVerbAndObject('增加', translatePhraseToChinese(target)),
+    },
+    {
+      pattern: /^reuse (.+)$/i,
+      build: ([, target]) =>
+        joinChineseVerbAndObject('复用', translatePhraseToChinese(target)),
+    },
+    {
+      pattern: /^update (.+)$/i,
+      build: ([, target]) =>
+        joinChineseVerbAndObject('调整', translatePhraseToChinese(target)),
+    },
+    {
+      pattern: /^persist (.+)$/i,
+      build: ([, target]) =>
+        joinChineseVerbAndObject('持久化', translatePhraseToChinese(target)),
+    },
+    {
+      pattern: /^sync (.+)$/i,
+      build: ([, target]) =>
+        joinChineseVerbAndObject('同步', translatePhraseToChinese(target)),
+    },
+    {
+      pattern: /^compact (.+)$/i,
+      build: ([, target]) =>
+        joinChineseVerbAndObject('精简', translatePhraseToChinese(target)),
+    },
+    {
+      pattern: /^support (.+)$/i,
+      build: ([, target]) =>
+        joinChineseVerbAndObject('支持', translatePhraseToChinese(target)),
+    },
+  ];
+
+  for (const rule of translationRules) {
+    const match = trimmedText.match(rule.pattern);
+    if (match) {
+      return rule.build(match).replace(/\s+/g, ' ').trim();
+    }
+  }
+
+  return translatePhraseToChinese(trimmedText);
+}
+
+function localizeReleaseChangeText(
+  text: string,
+  locale: ChangelogLocale
+): string {
+  const normalizedText = text.trim();
+  if (!normalizedText || locale === 'en') {
+    return normalizedText;
+  }
+
+  return translateReleaseChangeTextToChinese(normalizedText);
+}
+
+function joinChineseVerbAndObject(prefix: string, object: string): string {
+  return /^[A-Za-z0-9(]/.test(object)
+    ? `${prefix} ${object}`
+    : `${prefix}${object}`;
+}
+
 function classifyReleaseChangeText(text: string): DesktopReleaseChangeBucket {
   const normalized = text.toLowerCase();
 
@@ -95,7 +358,10 @@ function classifyReleaseChangeText(text: string): DesktopReleaseChangeBucket {
   return 'changed';
 }
 
-function summarizeCommitMessage(message: string): {
+function summarizeCommitMessage(
+  message: string,
+  locale: ChangelogLocale
+): {
   bucket: DesktopReleaseChangeBucket;
   text: string;
 } | null {
@@ -108,15 +374,19 @@ function summarizeCommitMessage(message: string): {
   if (!conventionalCommitMatch) {
     return {
       bucket: classifyReleaseChangeText(subject),
-      text: subject,
+      text: localizeReleaseChangeText(subject, locale),
     };
   }
 
   const [, rawType, rawScope, , rawDescription] = conventionalCommitMatch;
   const type = rawType.toLowerCase();
   const description = rawDescription.trim();
-  const scope = rawScope?.trim();
-  const prefix = scope ? `${humanizeScope(scope)}: ` : '';
+  const localizedScope = localizeReleaseChangeScope(rawScope?.trim(), locale);
+  const prefix = localizedScope
+    ? locale === 'en'
+      ? `${localizedScope}: `
+      : `${localizedScope}：`
+    : '';
 
   let bucket: DesktopReleaseChangeBucket = 'other';
   switch (type) {
@@ -146,7 +416,7 @@ function summarizeCommitMessage(message: string): {
 
   return {
     bucket,
-    text: `${prefix}${description}`,
+    text: `${prefix}${localizeReleaseChangeText(description, locale)}`,
   };
 }
 
@@ -290,7 +560,8 @@ export function extractDesktopReleaseCompareUrl(
 }
 
 export function buildDesktopReleaseChangeSummaryFromNotes(
-  notes: string | null | undefined
+  notes: string | null | undefined,
+  locale: ChangelogLocale = 'en'
 ): DesktopReleaseChangeSummary | null {
   const normalizedNotes = notes?.replace(/\r\n?/g, '\n').trim();
   if (!normalizedNotes) {
@@ -357,13 +628,21 @@ export function buildDesktopReleaseChangeSummaryFromNotes(
     if (listItemMatch) {
       const itemText = listItemMatch[1].trim();
       const bucket = currentBucket || classifyReleaseChangeText(itemText);
-      pushUniqueChange(summary, bucket, itemText);
+      pushUniqueChange(
+        summary,
+        bucket,
+        localizeReleaseChangeText(itemText, locale)
+      );
       continue;
     }
 
     if (!GITHUB_COMPARE_URL_PATTERN.test(line)) {
       const bucket = currentBucket || classifyReleaseChangeText(line);
-      pushUniqueChange(summary, bucket, line);
+      pushUniqueChange(
+        summary,
+        bucket,
+        localizeReleaseChangeText(line, locale)
+      );
     }
   }
 
@@ -374,7 +653,8 @@ export function buildDesktopReleaseChangeSummaryFromNotes(
 
 export function buildDesktopReleaseChangeSummaryFromComparePayload(
   payload: GithubComparePayload,
-  compareUrl: string
+  compareUrl: string,
+  locale: ChangelogLocale = 'en'
 ): DesktopReleaseChangeSummary | null {
   const summary = createEmptySummary(compareUrl);
 
@@ -385,7 +665,7 @@ export function buildDesktopReleaseChangeSummaryFromComparePayload(
       return;
     }
 
-    const summarizedCommit = summarizeCommitMessage(commitMessage);
+    const summarizedCommit = summarizeCommitMessage(commitMessage, locale);
     if (!summarizedCommit) {
       return;
     }
@@ -428,6 +708,7 @@ export async function fetchDesktopReleaseChangeSummaryFromCompareUrl(
   compareUrl: string,
   options: {
     signal?: AbortSignal;
+    locale?: ChangelogLocale;
   } = {}
 ): Promise<DesktopReleaseChangeSummary | null> {
   const apiUrl = getDesktopReleaseCompareApiUrl(compareUrl);
@@ -452,6 +733,7 @@ export async function fetchDesktopReleaseChangeSummaryFromCompareUrl(
   const payload = (await response.json()) as GithubComparePayload;
   return buildDesktopReleaseChangeSummaryFromComparePayload(
     payload,
-    compareUrl
+    compareUrl,
+    options.locale ?? 'en'
   );
 }

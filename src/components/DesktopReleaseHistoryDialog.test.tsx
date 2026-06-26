@@ -468,11 +468,9 @@ describe('DesktopReleaseHistoryDialog', () => {
     await waitFor(() => {
       expect(releaseCard).toHaveTextContent('本次变更');
       expect(releaseCard).toHaveTextContent('新增功能');
-      expect(releaseCard).toHaveTextContent('compact desktop release cards');
+      expect(releaseCard).toHaveTextContent('精简桌面版本卡片');
       expect(releaseCard).toHaveTextContent('问题修复');
-      expect(releaseCard).toHaveTextContent(
-        'avoid stale release compare cache'
-      );
+      expect(releaseCard).toHaveTextContent('避免旧的版本对比缓存');
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
@@ -484,6 +482,70 @@ describe('DesktopReleaseHistoryDialog', () => {
         }),
       })
     );
+  });
+
+  it('rebuilds compare summaries when switching changelog locales', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+    };
+    const compareUrl =
+      'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.7...desktop-v200.0.1-beta.8';
+    mockFetchDesktopReleaseHistory.mockResolvedValueOnce([
+      {
+        id: 'beta-8',
+        version: '200.0.1-beta.8',
+        tagName: 'desktop-v200.0.1-beta.8',
+        name: 'Beta 8',
+        notes: `**Full Changelog**: ${compareUrl}`,
+        prerelease: true,
+        publishedAt: '2026-06-26T06:36:02Z',
+        htmlUrl: 'https://example.com/beta-8',
+        manifestUrl: 'https://example.com/beta-8/latest.json',
+      },
+    ]);
+    const fetchMock = jest.fn(async () =>
+      createJsonFetchResponse({
+        commits: [
+          {
+            commit: {
+              message: 'fix(desktop): restore beta release summaries',
+            },
+          },
+        ],
+      })
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const view = renderDialog({
+      currentVersion: '200.0.1-beta.7',
+      changelogLocale: 'zh-CN',
+    });
+
+    const releaseCard = await screen.findByTestId(
+      'desktop-release-card-desktop-v200.0.1-beta.8'
+    );
+
+    await waitFor(() => {
+      expect(releaseCard).toHaveTextContent('桌面端：恢复 Beta 版本摘要');
+    });
+
+    view.rerender(
+      <DesktopReleaseHistoryDialog
+        isOpen={true}
+        onClose={jest.fn()}
+        currentVersion='200.0.1-beta.7'
+        updateState={createUpdateState()}
+        changelogLocale='en'
+      />
+    );
+
+    await waitFor(() => {
+      expect(releaseCard).toHaveTextContent(
+        'desktop: restore beta release summaries'
+      );
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('prefers localized changelog summaries when a release version matches the local changelog', async () => {
@@ -575,12 +637,8 @@ describe('DesktopReleaseHistoryDialog', () => {
     );
 
     await waitFor(() => {
-      expect(releaseCard).toHaveTextContent(
-        'add bilingual beta release summaries'
-      );
-      expect(releaseCard).toHaveTextContent(
-        'avoid startup follow record toast'
-      );
+      expect(releaseCard).toHaveTextContent('增加 Beta 版本摘要的中英文切换');
+      expect(releaseCard).toHaveTextContent('避免启动时出现追更记录错误提示');
       expect(releaseCard).not.toHaveTextContent(
         '版本列表现优先参考本地变更日志摘要'
       );

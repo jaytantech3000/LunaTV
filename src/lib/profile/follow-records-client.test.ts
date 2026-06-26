@@ -11,6 +11,7 @@ jest.mock('@/lib/profile/remote-adapter', () => ({
   wasRemoteProfileRequestRedirectedToLogin: jest.fn(() => false),
 }));
 
+import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 import {
   deleteFollowRecord,
   getAllFollowRecords,
@@ -23,8 +24,10 @@ import {
   fetchRemoteProfileJson,
   postRemoteProfilePayload,
 } from '@/lib/profile/remote-adapter';
-import { shouldUseProfileApiStorage } from '@/lib/profile/runtime';
-import { isDesktopLocalProfileRuntime } from '@/lib/profile/runtime';
+import {
+  isDesktopLocalProfileRuntime,
+  shouldUseProfileApiStorage,
+} from '@/lib/profile/runtime';
 
 const mockedIsDesktopLocalProfileRuntime =
   isDesktopLocalProfileRuntime as jest.MockedFunction<
@@ -45,6 +48,26 @@ const mockedPostRemoteProfilePayload =
     typeof postRemoteProfilePayload
   >;
 
+function setDesktopBootstrapPayload(
+  payload: Window['__DESKTOP_PROFILE_BOOTSTRAP__'] = {
+    appTarget: 'desktop',
+  } as Window['__DESKTOP_PROFILE_BOOTSTRAP__']
+) {
+  (
+    window as Window & {
+      __DESKTOP_PROFILE_BOOTSTRAP__?: Window['__DESKTOP_PROFILE_BOOTSTRAP__'];
+    }
+  ).__DESKTOP_PROFILE_BOOTSTRAP__ = payload;
+}
+
+function clearDesktopBootstrapPayload() {
+  delete (
+    window as Window & {
+      __DESKTOP_PROFILE_BOOTSTRAP__?: Window['__DESKTOP_PROFILE_BOOTSTRAP__'];
+    }
+  ).__DESKTOP_PROFILE_BOOTSTRAP__;
+}
+
 function setDesktopAuthCookie(username = 'desktop-owner') {
   document.cookie = `auth=${encodeURIComponent(
     JSON.stringify({
@@ -59,6 +82,7 @@ describe('follow records client', () => {
     localStorage.clear();
     document.cookie = 'auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
     jest.clearAllMocks();
+    clearDesktopBootstrapPayload();
     mockedIsDesktopLocalProfileRuntime.mockReturnValue(false);
     mockedShouldUseProfileApiStorage.mockReturnValue(false);
     mockedFetchRemoteProfileJson.mockResolvedValue({});
@@ -109,6 +133,7 @@ describe('follow records client', () => {
     mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
     mockedShouldUseProfileApiStorage.mockReturnValue(true);
     setDesktopAuthCookie();
+    setDesktopBootstrapPayload();
 
     const remoteFollow = {
       title: 'Remote Follow',
@@ -154,6 +179,25 @@ describe('follow records client', () => {
       }
     );
     expect(getCachedFollowRecordsSnapshot()).toEqual({});
+  });
+
+  it('waits for desktop bootstrap readiness before reading follow records', async () => {
+    mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie();
+
+    const readPromise = getAllFollowRecords();
+
+    await Promise.resolve();
+    expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
+
+    setDesktopBootstrapPayload();
+    window.dispatchEvent(new Event(DESKTOP_RUNTIME_UPDATED_EVENT));
+
+    await expect(readPromise).resolves.toEqual({});
+    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/follows', {
+      redirectOnUnauthorized: false,
+    });
   });
 
   it('skips follow record api reads while desktop local auth is still pending', async () => {

@@ -82,9 +82,10 @@ const releaseChangeSummaryCache = new Map<
 >();
 
 function getReleaseChangeSummaryCacheKey(
-  release: Pick<DesktopReleaseHistoryItem, 'tagName' | 'notes'>
+  release: Pick<DesktopReleaseHistoryItem, 'tagName' | 'notes'>,
+  locale: ChangelogLocale
 ) {
-  return `${release.tagName}:${release.notes?.trim() || ''}`;
+  return `${locale}:${release.tagName}:${release.notes?.trim() || ''}`;
 }
 
 const RELEASE_HISTORY_COPY: Record<
@@ -863,12 +864,18 @@ export function DesktopReleaseHistoryDialog({
         return;
       }
 
-      const cacheKey = getReleaseChangeSummaryCacheKey(release);
+      const cacheKey = getReleaseChangeSummaryCacheKey(
+        release,
+        effectiveChangelogLocale
+      );
       const cachedSummary = releaseChangeSummaryCache.get(cacheKey);
       const initialSummary =
         cachedSummary !== undefined
           ? cachedSummary
-          : buildDesktopReleaseChangeSummaryFromNotes(release.notes);
+          : buildDesktopReleaseChangeSummaryFromNotes(
+              release.notes,
+              effectiveChangelogLocale
+            );
 
       if (cachedSummary === undefined) {
         releaseChangeSummaryCache.set(cacheKey, initialSummary || null);
@@ -925,6 +932,7 @@ export function DesktopReleaseHistoryDialog({
               target.compareUrl,
               {
                 signal: controller.signal,
+                locale: effectiveChangelogLocale,
               }
             );
           if (controller.signal.aborted) {

@@ -112,7 +112,8 @@ describe('desktop release notes helpers', () => {
             },
           ],
         },
-        compareUrl
+        compareUrl,
+        'en'
       )
     ).toEqual({
       compareUrl,
@@ -120,6 +121,46 @@ describe('desktop release notes helpers', () => {
       changed: ['release: reuse compare parser'],
       fixed: ['avoid stale release compare cache'],
       other: ['update prerelease notes flow'],
+    });
+  });
+
+  it('localizes compare commits when the changelog locale is Chinese', () => {
+    const compareUrl =
+      'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.7...desktop-v200.0.1-beta.8';
+
+    expect(
+      buildDesktopReleaseChangeSummaryFromComparePayload(
+        {
+          commits: [
+            {
+              commit: {
+                message: 'feat(music): power desktop music api with netease',
+              },
+            },
+            {
+              commit: {
+                message: 'feat(music): replace web mocks with netease routes',
+              },
+            },
+            {
+              commit: {
+                message: 'fix(desktop): restore beta release summaries',
+              },
+            },
+          ],
+        },
+        compareUrl,
+        'zh-CN'
+      )
+    ).toEqual({
+      compareUrl,
+      added: [
+        '音乐：用网易云驱动桌面音乐 API',
+        '音乐：用网易云路由替换 Web Mock',
+      ],
+      changed: [],
+      fixed: ['桌面端：恢复 Beta 版本摘要'],
+      other: [],
     });
   });
 });
