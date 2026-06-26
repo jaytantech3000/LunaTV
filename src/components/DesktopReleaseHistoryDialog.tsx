@@ -25,6 +25,12 @@ import {
   type DesktopReleaseHistoryItem,
   fetchDesktopReleaseHistoryFromGithub,
 } from '@/lib/desktop-release-history';
+import {
+  type DesktopReleaseChangeSummary,
+  buildDesktopReleaseChangeSummaryFromNotes,
+  fetchDesktopReleaseChangeSummaryFromCompareUrl,
+  hasDesktopReleaseChangeItems,
+} from '@/lib/desktop-release-notes';
 import { openExternalUrl } from '@/lib/open-external-url';
 import {
   getDesktopReleaseHistoryProxyUrl,
@@ -59,6 +65,16 @@ interface DesktopReleaseHistoryResponse {
 
 const FAVORITE_RELEASES_STORAGE_KEY =
   'lunatv:desktop-release-history:favorites';
+const releaseChangeSummaryCache = new Map<
+  string,
+  DesktopReleaseChangeSummary | null
+>();
+
+function getReleaseChangeSummaryCacheKey(
+  release: Pick<DesktopReleaseHistoryItem, 'tagName' | 'notes'>
+) {
+  return `${release.tagName}:${release.notes?.trim() || ''}`;
+}
 
 function readFavoriteReleaseTags(): string[] {
   if (typeof window === 'undefined') {
@@ -244,9 +260,142 @@ async function loadDesktopReleaseHistory(signal: AbortSignal) {
   }
 }
 
+function shouldLoadReleaseCompareSummary(
+  summary: DesktopReleaseChangeSummary | null | undefined
+) {
+  return Boolean(summary?.compareUrl && !hasDesktopReleaseChangeItems(summary));
+}
+
+function ReleaseChangeSummaryPanel({
+  version,
+  summary,
+  isLoading,
+}: {
+  version: string;
+  summary: DesktopReleaseChangeSummary | null | undefined;
+  isLoading: boolean;
+}) {
+  if (!summary && !isLoading) {
+    return null;
+  }
+
+  const hasSubstantiveChanges = Boolean(
+    summary &&
+      (summary.added.length > 0 ||
+        summary.changed.length > 0 ||
+        summary.fixed.length > 0)
+  );
+  const changeGroups = [
+    {
+      key: 'added',
+      label: '功能修改',
+      items: summary?.added || [],
+      toneClassName:
+        'bg-emerald-500/10 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200',
+      dotClassName: 'bg-emerald-500',
+    },
+    {
+      key: 'changed',
+      label: '优化调整',
+      items: summary?.changed || [],
+      toneClassName:
+        'bg-sky-500/10 text-sky-700 dark:bg-sky-500/15 dark:text-sky-200',
+      dotClassName: 'bg-sky-500',
+    },
+    {
+      key: 'fixed',
+      label: 'Bug 修复',
+      items: summary?.fixed || [],
+      toneClassName:
+        'bg-amber-500/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200',
+      dotClassName: 'bg-amber-500',
+    },
+    {
+      key: 'other',
+      label: '其他调整',
+      items: hasSubstantiveChanges && summary ? [] : summary?.other || [],
+      toneClassName:
+        'bg-gray-500/10 text-gray-700 dark:bg-gray-500/15 dark:text-gray-200',
+      dotClassName: 'bg-gray-500',
+    },
+  ].filter((group) => group.items.length > 0);
+
+  if (changeGroups.length === 0 && !isLoading && !summary?.compareUrl) {
+    return null;
+  }
+
+  return (
+    <div className='mt-3 rounded-xl border border-gray-200/80 bg-gray-50/80 px-3 py-3 dark:border-gray-700/70 dark:bg-gray-950/40'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <div className='text-[11px] font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
+          本次变更
+        </div>
+        {summary?.compareUrl ? (
+          <button
+            type='button'
+            onClick={() => void openExternalUrl(summary.compareUrl || '')}
+            className='text-[11px] font-medium text-emerald-700 transition-colors hover:text-emerald-800 dark:text-emerald-300 dark:hover:text-emerald-200'
+            aria-label={`查看 v${version} 完整对比`}
+          >
+            完整对比
+          </button>
+        ) : null}
+      </div>
+
+      {changeGroups.length > 0 ? (
+        <div className='mt-2.5 space-y-2.5'>
+          {changeGroups.map((group) => {
+            const visibleItems = group.items.slice(0, 2);
+            const hiddenCount = group.items.length - visibleItems.length;
+
+            return (
+              <div key={group.key} className='space-y-1.5'>
+                <span
+                  className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${group.toneClassName}`}
+                >
+                  {group.label}
+                </span>
+                <ul className='space-y-1 text-xs leading-5 text-gray-600 dark:text-gray-300'>
+                  {visibleItems.map((item) => (
+                    <li
+                      key={`${group.key}-${item}`}
+                      className='flex items-start gap-2'
+                    >
+                      <span
+                        className={`mt-[7px] h-1.5 w-1.5 flex-shrink-0 rounded-full ${group.dotClassName}`}
+                      />
+                      <span className='min-w-0 break-words'>{item}</span>
+                    </li>
+                  ))}
+                  {hiddenCount > 0 ? (
+                    <li className='text-[11px] text-gray-500 dark:text-gray-400'>
+                      还有 {hiddenCount} 项变更...
+                    </li>
+                  ) : null}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      ) : isLoading ? (
+        <div className='mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400'>
+          <Loader2 className='h-3.5 w-3.5 animate-spin' />
+          正在读取本次提交变更...
+        </div>
+      ) : summary?.compareUrl ? (
+        <div className='mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400'>
+          当前 release 只记录了 compare 链接，可通过“完整对比”查看本次提交详情。
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function VersionSection({
   description,
   releases,
+  releaseChangeSummaries,
+  loadingReleaseChangeSummaries,
   currentVersion,
   favoriteTagSet,
   updateState,
@@ -255,6 +404,8 @@ function VersionSection({
 }: {
   description: string;
   releases: DesktopReleaseHistoryItem[];
+  releaseChangeSummaries: Record<string, DesktopReleaseChangeSummary | null>;
+  loadingReleaseChangeSummaries: Record<string, boolean>;
   currentVersion: string;
   favoriteTagSet: Set<string>;
   updateState: AppUpdateState;
@@ -276,6 +427,11 @@ function VersionSection({
         const isFavorited = favoriteTagSet.has(release.tagName);
         const isActiveVersion =
           updateState.isBusy && updateState.latestVersion === release.version;
+        const releaseChangeSummary =
+          releaseChangeSummaries[release.tagName] || null;
+        const isLoadingReleaseChangeSummary = Boolean(
+          loadingReleaseChangeSummaries[release.tagName]
+        );
         const actionTitle = getReleaseActionMeta(
           release.version,
           currentVersion
@@ -379,6 +535,12 @@ function VersionSection({
                 </button>
               </div>
             </div>
+
+            <ReleaseChangeSummaryPanel
+              version={release.version}
+              summary={releaseChangeSummary}
+              isLoading={isLoadingReleaseChangeSummary}
+            />
           </div>
         );
       })}
@@ -396,6 +558,11 @@ export function DesktopReleaseHistoryDialog({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [releases, setReleases] = useState<DesktopReleaseHistoryItem[]>([]);
+  const [releaseChangeSummaries, setReleaseChangeSummaries] = useState<
+    Record<string, DesktopReleaseChangeSummary | null>
+  >({});
+  const [loadingReleaseChangeSummaries, setLoadingReleaseChangeSummaries] =
+    useState<Record<string, boolean>>({});
   const [favoriteTags, setFavoriteTags] = useState<string[]>([]);
   const [pendingRelease, setPendingRelease] =
     useState<DesktopReleaseHistoryItem | null>(null);
@@ -474,6 +641,105 @@ export function DesktopReleaseHistoryDialog({
       controller.abort();
     };
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!releases.length) {
+      setReleaseChangeSummaries({});
+      setLoadingReleaseChangeSummaries({});
+      return;
+    }
+
+    const controller = new AbortController();
+    const nextReleaseChangeSummaries: Record<
+      string,
+      DesktopReleaseChangeSummary | null
+    > = {};
+    const compareSummaryTargets: Array<{
+      cacheKey: string;
+      tagName: string;
+      compareUrl: string;
+      fallbackSummary: DesktopReleaseChangeSummary;
+    }> = [];
+
+    releases.forEach((release) => {
+      const cacheKey = getReleaseChangeSummaryCacheKey(release);
+      const cachedSummary = releaseChangeSummaryCache.get(cacheKey);
+      const initialSummary =
+        cachedSummary !== undefined
+          ? cachedSummary
+          : buildDesktopReleaseChangeSummaryFromNotes(release.notes);
+
+      nextReleaseChangeSummaries[release.tagName] = initialSummary || null;
+
+      if (cachedSummary === undefined) {
+        releaseChangeSummaryCache.set(cacheKey, initialSummary || null);
+      }
+
+      if (initialSummary && shouldLoadReleaseCompareSummary(initialSummary)) {
+        compareSummaryTargets.push({
+          cacheKey,
+          tagName: release.tagName,
+          compareUrl: initialSummary.compareUrl || '',
+          fallbackSummary: initialSummary,
+        });
+      }
+    });
+
+    setReleaseChangeSummaries(nextReleaseChangeSummaries);
+    setLoadingReleaseChangeSummaries(
+      compareSummaryTargets.reduce<Record<string, boolean>>(
+        (currentState, target) => {
+          currentState[target.tagName] = true;
+          return currentState;
+        },
+        {}
+      )
+    );
+
+    compareSummaryTargets.forEach((target) => {
+      void (async () => {
+        try {
+          const fetchedSummary =
+            await fetchDesktopReleaseChangeSummaryFromCompareUrl(
+              target.compareUrl,
+              {
+                signal: controller.signal,
+              }
+            );
+          if (controller.signal.aborted) {
+            return;
+          }
+
+          const nextSummary = fetchedSummary || target.fallbackSummary;
+          releaseChangeSummaryCache.set(target.cacheKey, nextSummary);
+          setReleaseChangeSummaries((current) => ({
+            ...current,
+            [target.tagName]: nextSummary,
+          }));
+        } catch {
+          if (controller.signal.aborted) {
+            return;
+          }
+
+          setReleaseChangeSummaries((current) => ({
+            ...current,
+            [target.tagName]: target.fallbackSummary,
+          }));
+        } finally {
+          if (!controller.signal.aborted) {
+            setLoadingReleaseChangeSummaries((current) => ({
+              ...current,
+              [target.tagName]: false,
+            }));
+          }
+        }
+      })();
+    });
+
+    return () => {
+      controller.abort();
+    };
+  }, [releases]);
 
   const handleToggleFavorite = (release: DesktopReleaseHistoryItem) => {
     setFavoriteTags((current) => {
@@ -583,6 +849,10 @@ export function DesktopReleaseHistoryDialog({
                   <VersionSection
                     description='暂时没有可用的稳定版本。'
                     releases={groupedReleases.stable}
+                    releaseChangeSummaries={releaseChangeSummaries}
+                    loadingReleaseChangeSummaries={
+                      loadingReleaseChangeSummaries
+                    }
                     currentVersion={currentVersion}
                     favoriteTagSet={favoriteTagSet}
                     updateState={updateState}
@@ -603,6 +873,10 @@ export function DesktopReleaseHistoryDialog({
                   <VersionSection
                     description='暂时没有可用的预发布版本。'
                     releases={groupedReleases.prerelease}
+                    releaseChangeSummaries={releaseChangeSummaries}
+                    loadingReleaseChangeSummaries={
+                      loadingReleaseChangeSummaries
+                    }
                     currentVersion={currentVersion}
                     favoriteTagSet={favoriteTagSet}
                     updateState={updateState}

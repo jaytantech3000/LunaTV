@@ -383,6 +383,72 @@ describe('DesktopReleaseHistoryDialog', () => {
     expect(currentCard).toHaveTextContent('v200.0.0-beta.15');
   });
 
+  it('shows compare-derived change summaries inside the release card', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+    };
+    const compareUrl =
+      'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.15...desktop-v200.0.0-beta.16';
+    mockFetchDesktopReleaseHistory.mockResolvedValueOnce([
+      {
+        id: 'beta-16',
+        version: '200.0.0-beta.16',
+        tagName: 'desktop-v200.0.0-beta.16',
+        name: 'Beta 16',
+        notes: `**Full Changelog**: ${compareUrl}`,
+        prerelease: true,
+        publishedAt: '2026-06-19T05:01:04Z',
+        htmlUrl: 'https://example.com/beta-16',
+        manifestUrl: 'https://example.com/beta-16/latest.json',
+      },
+    ]);
+    const fetchMock = jest.fn(async () =>
+      createJsonFetchResponse({
+        commits: [
+          {
+            commit: {
+              message: 'feat: compact desktop release cards',
+            },
+          },
+          {
+            commit: {
+              message: 'fix: avoid stale release compare cache',
+            },
+          },
+        ],
+      })
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderDialog({
+      currentVersion: '200.0.0-beta.15',
+    });
+
+    const releaseCard = await screen.findByTestId(
+      'desktop-release-card-desktop-v200.0.0-beta.16'
+    );
+
+    await waitFor(() => {
+      expect(releaseCard).toHaveTextContent('本次变更');
+      expect(releaseCard).toHaveTextContent('功能修改');
+      expect(releaseCard).toHaveTextContent('compact desktop release cards');
+      expect(releaseCard).toHaveTextContent('Bug 修复');
+      expect(releaseCard).toHaveTextContent(
+        'avoid stale release compare cache'
+      );
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://api.github.com/repos/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.15...desktop-v200.0.0-beta.16',
+      expect.objectContaining({
+        cache: 'no-store',
+        headers: expect.objectContaining({
+          Accept: 'application/vnd.github+json',
+        }),
+      })
+    );
+  });
+
   it('toggles favorite state and persists the release tag', async () => {
     renderDialog({
       currentVersion: '200.0.0-beta.12',
