@@ -3,6 +3,7 @@
 import { Buffer } from 'node:buffer';
 import { URL } from 'node:url';
 
+import assetNamingModule from './desktop-release-asset-naming.js';
 import {
   assertValidSemver,
   parseCliArgs,
@@ -11,6 +12,7 @@ import {
 } from './desktop-release-utils.mjs';
 
 const GITHUB_API_BASE = 'https://api.github.com';
+const { buildNormalizedReleaseAssetName } = assetNamingModule;
 
 function readEnvValue(name) {
   const value = process.env[name]?.trim();
@@ -160,86 +162,15 @@ async function uploadReleaseAsset(release, name, content, token) {
   return response.json();
 }
 
-function isPlatformNormalizedAssetName(name) {
-  return (
-    name.includes('_macos-arm64') ||
-    name.includes('_macos-x64') ||
-    name.includes('_windows-arm64') ||
-    name.includes('_windows-x64')
-  );
-}
-
-function normalizeArchitecture(architecture) {
-  switch (architecture) {
-    case 'aarch64':
-    case 'arm64':
-      return 'arm64';
-    case 'x86_64':
-    case 'x64':
-      return 'x64';
-    default:
-      return null;
-  }
-}
-
-function normalizeSuffix(suffix) {
-  if (suffix === '_portable.zip') {
-    return '-portable.zip';
-  }
-
-  return suffix;
-}
-
-function resolvePlatformFromSuffix(suffix) {
-  if (suffix === '.dmg' || suffix.startsWith('.app.tar.gz')) {
-    return 'macos';
-  }
-
-  if (
-    suffix.startsWith('-setup.exe') ||
-    suffix.startsWith('.msi') ||
-    suffix.endsWith('portable.zip')
-  ) {
-    return 'windows';
-  }
-
-  return null;
-}
-
-function buildNormalizedAssetName(assetName, releaseVersion) {
-  if (!assetName.startsWith('LunaTV.Desktop_')) {
-    return null;
-  }
-
-  if (isPlatformNormalizedAssetName(assetName)) {
-    return assetName;
-  }
-
-  const match = assetName.match(
-    /^LunaTV\.Desktop_(?:(.+?)_)?(aarch64|arm64|x64|x86_64)(\.dmg|\.app\.tar\.gz(?:\.sig)?|-setup\.exe(?:\.sig)?|\.msi(?:\.sig)?|-portable\.zip|_portable\.zip)$/
-  );
-  if (!match) {
-    return null;
-  }
-
-  const [, embeddedVersion, rawArchitecture, rawSuffix] = match;
-  const architecture = normalizeArchitecture(rawArchitecture);
-  const platform = resolvePlatformFromSuffix(rawSuffix);
-  if (!architecture || !platform) {
-    return null;
-  }
-
-  const version = embeddedVersion || releaseVersion;
-  const suffix = normalizeSuffix(rawSuffix);
-  return `LunaTV.Desktop_${version}_${platform}-${architecture}${suffix}`;
-}
-
 function buildRenamePlan(assets, releaseVersion) {
   const currentNames = new Set(assets.map((asset) => asset.name));
   const plannedNames = new Set();
 
   return assets.flatMap((asset) => {
-    const nextName = buildNormalizedAssetName(asset.name, releaseVersion);
+    const nextName = buildNormalizedReleaseAssetName({
+      assetName: asset.name,
+      releaseVersion,
+    });
     if (!nextName || nextName === asset.name) {
       return [];
     }

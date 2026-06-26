@@ -3,17 +3,9 @@
 import { spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import assetNamingModule from './desktop-release-asset-naming.js';
 
-const ARTIFACT_DISPLAY_NAMES = new Map([
-  ['lunatv-desktop-macos-intel', 'macOS-Intel'],
-  ['lunatv-desktop-macos-arm64', 'macOS-Apple-Silicon'],
-  ['lunatv-desktop-windows-x64', 'Windows-x64'],
-]);
-const ARTIFACT_ARCH_NAMES = new Map([
-  ['lunatv-desktop-macos-intel', 'x64'],
-  ['lunatv-desktop-macos-arm64', 'aarch64'],
-  ['lunatv-desktop-windows-x64', 'x64'],
-]);
+const { buildInternalReleaseAssetName } = assetNamingModule;
 
 function parseArgs(argv) {
   const args = new Map();
@@ -38,67 +30,18 @@ function parseArgs(argv) {
   return args;
 }
 
-function getArtifactDisplayName(artifactName) {
-  if (ARTIFACT_DISPLAY_NAMES.has(artifactName)) {
-    return ARTIFACT_DISPLAY_NAMES.get(artifactName);
-  }
-
-  return artifactName.replace(/^lunatv-desktop-/, '');
-}
-
-function getArtifactArchName(artifactName) {
-  return ARTIFACT_ARCH_NAMES.get(artifactName) || null;
-}
-
-function normalizePublishedAssetName(baseName) {
-  return baseName
-    .trim()
-    .replace(/^LunaTV Desktop/, 'LunaTV.Desktop')
-    .replace(/\s+/g, '.')
-    .replace(/\.{2,}/g, '.');
-}
-
-function insertQualifierBeforeExtension(fileName, qualifier) {
-  if (!qualifier || fileName.includes(`_${qualifier}`)) {
-    return fileName;
-  }
-
-  if (fileName.endsWith('.app.tar.gz')) {
-    return `${fileName.slice(0, -'.app.tar.gz'.length)}_${qualifier}.app.tar.gz`;
-  }
-
-  if (fileName.endsWith('.tar.gz')) {
-    return `${fileName.slice(0, -'.tar.gz'.length)}_${qualifier}.tar.gz`;
-  }
-
-  const extension = path.posix.extname(fileName);
-  if (!extension) {
-    return `${fileName}_${qualifier}`;
-  }
-
-  return `${fileName.slice(0, -extension.length)}_${qualifier}${extension}`;
-}
-
 function buildAssetName(artifactName, relativePath, assets) {
-  const baseName = normalizePublishedAssetName(path.posix.basename(relativePath));
-  const architecture = getArtifactArchName(artifactName);
-  const candidate = relativePath.endsWith('.app.tar.gz')
-    ? insertQualifierBeforeExtension(baseName, architecture)
-    : baseName;
+  const candidate = buildInternalReleaseAssetName({
+    artifactName,
+    relativePath,
+  });
 
-  if (!assets.some(asset => asset.assetName === candidate)) {
+  if (!assets.some((asset) => asset.assetName === candidate)) {
     return candidate;
   }
 
-  const qualifiedCandidate = insertQualifierBeforeExtension(
-    candidate,
-    architecture || getArtifactDisplayName(artifactName)
-  );
-  if (!assets.some(asset => asset.assetName === qualifiedCandidate)) {
-    return qualifiedCandidate;
-  }
-
-  return `${getArtifactDisplayName(artifactName)}--${relativePath.replaceAll('/', '--')}`;
+  const [platformLabel] = candidate.split(' - ', 1);
+  return `${platformLabel} - ${relativePath.replaceAll('/', '--')}`;
 }
 
 function isPublishedReleaseAsset(relativePath) {
@@ -149,11 +92,21 @@ async function archiveAppBundle({
   assetsDir,
   assets,
 }) {
-  const assetName = buildAssetName(artifactName, `${relativePath}.tar.gz`, assets);
+  const assetName = buildAssetName(
+    artifactName,
+    `${relativePath}.tar.gz`,
+    assets
+  );
   const outputPath = path.join(assetsDir, assetName);
   const result = spawnSync(
     'tar',
-    ['-czf', outputPath, '-C', path.dirname(sourcePath), path.basename(sourcePath)],
+    [
+      '-czf',
+      outputPath,
+      '-C',
+      path.dirname(sourcePath),
+      path.basename(sourcePath),
+    ],
     { stdio: 'inherit' }
   );
 
@@ -237,7 +190,7 @@ async function collectAssets({
 }
 
 function readJson(filePath) {
-  return fs.readFile(filePath, 'utf8').then(content => JSON.parse(content));
+  return fs.readFile(filePath, 'utf8').then((content) => JSON.parse(content));
 }
 
 function getMetadata(version) {
@@ -275,7 +228,9 @@ async function writeReleaseOutputs(githubOutputPath, outputs) {
     return;
   }
 
-  const lines = Object.entries(outputs).map(([key, value]) => `${key}=${value}`);
+  const lines = Object.entries(outputs).map(
+    ([key, value]) => `${key}=${value}`
+  );
   await fs.appendFile(githubOutputPath, `${lines.join('\n')}\n`, 'utf8');
 }
 
@@ -290,19 +245,24 @@ async function main() {
     projectRoot,
     args.get('output-dir') || '.desktop-release/dist'
   );
-  const githubOutputPath = args.get('github-output') || process.env.GITHUB_OUTPUT || '';
+  const githubOutputPath =
+    args.get('github-output') || process.env.GITHUB_OUTPUT || '';
   const assetsDir = path.join(outputDir, 'assets');
 
-  const tauriConfig = await readJson(path.join(projectRoot, 'src-tauri', 'tauri.conf.json'));
+  const tauriConfig = await readJson(
+    path.join(projectRoot, 'src-tauri', 'tauri.conf.json')
+  );
   const metadata = getMetadata(tauriConfig.version);
 
   await fs.rm(outputDir, { recursive: true, force: true });
   await fs.mkdir(assetsDir, { recursive: true });
 
-  const artifactEntries = await fs.readdir(artifactsRoot, { withFileTypes: true });
+  const artifactEntries = await fs.readdir(artifactsRoot, {
+    withFileTypes: true,
+  });
   const artifactDirs = artifactEntries
-    .filter(entry => entry.isDirectory())
-    .map(entry => entry.name)
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right));
 
   if (artifactDirs.length === 0) {
@@ -350,7 +310,7 @@ async function main() {
     '## Assets',
     '',
     '- This internal release includes end-user install packages, a Windows portable zip, and macOS app archives.',
-    ...assets.map(asset => `- \`${asset.assetName}\` (${asset.size} bytes)`),
+    ...assets.map((asset) => `- \`${asset.assetName}\` (${asset.size} bytes)`),
     '',
   ];
 
@@ -371,7 +331,7 @@ async function main() {
   console.log(`Release tag: ${metadata.tag}`);
 }
 
-main().catch(error => {
+main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
