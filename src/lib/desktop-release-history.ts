@@ -64,7 +64,7 @@ function isValidSemverVersion(value: string | null | undefined) {
 
 export function isDesktopReleaseLineVersion(value: string | null | undefined) {
   const normalizedValue = value?.trim();
-  if (!isValidSemverVersion(normalizedValue)) {
+  if (!normalizedValue || !isValidSemverVersion(normalizedValue)) {
     return false;
   }
 
