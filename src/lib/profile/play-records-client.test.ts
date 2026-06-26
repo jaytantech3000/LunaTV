@@ -11,6 +11,7 @@ jest.mock('@/lib/profile/remote-adapter', () => ({
   wasRemoteProfileRequestRedirectedToLogin: jest.fn(() => false),
 }));
 
+import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 import {
   clearAllPlayRecords,
   deletePlayRecord,
@@ -45,6 +46,26 @@ const mockedPostRemoteProfilePayload =
     typeof postRemoteProfilePayload
   >;
 
+function setDesktopBootstrapPayload(
+  payload: Window['__DESKTOP_PROFILE_BOOTSTRAP__'] = {
+    appTarget: 'desktop',
+  } as Window['__DESKTOP_PROFILE_BOOTSTRAP__']
+) {
+  (
+    window as Window & {
+      __DESKTOP_PROFILE_BOOTSTRAP__?: Window['__DESKTOP_PROFILE_BOOTSTRAP__'];
+    }
+  ).__DESKTOP_PROFILE_BOOTSTRAP__ = payload;
+}
+
+function clearDesktopBootstrapPayload() {
+  delete (
+    window as Window & {
+      __DESKTOP_PROFILE_BOOTSTRAP__?: Window['__DESKTOP_PROFILE_BOOTSTRAP__'];
+    }
+  ).__DESKTOP_PROFILE_BOOTSTRAP__;
+}
+
 function setDesktopAuthCookie(username = 'desktop-owner') {
   document.cookie = `auth=${encodeURIComponent(
     JSON.stringify({
@@ -59,6 +80,7 @@ describe('play records client', () => {
     localStorage.clear();
     document.cookie = 'auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
     jest.clearAllMocks();
+    clearDesktopBootstrapPayload();
     mockedIsDesktopLocalProfileRuntime.mockReturnValue(false);
     mockedShouldUseProfileApiStorage.mockReturnValue(false);
     mockedFetchRemoteProfileJson.mockResolvedValue({});
@@ -119,6 +141,7 @@ describe('play records client', () => {
     mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
     mockedShouldUseProfileApiStorage.mockReturnValue(true);
     setDesktopAuthCookie();
+    setDesktopBootstrapPayload();
 
     const remoteRecord = {
       title: 'Remote Demo',
@@ -166,6 +189,25 @@ describe('play records client', () => {
     expect(getCachedPlayRecordsSnapshot()).toEqual({});
   });
 
+  it('waits for desktop bootstrap readiness before reading play records', async () => {
+    mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie();
+
+    const readPromise = getAllPlayRecords();
+
+    await Promise.resolve();
+    expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
+
+    setDesktopBootstrapPayload();
+    window.dispatchEvent(new Event(DESKTOP_RUNTIME_UPDATED_EVENT));
+
+    await expect(readPromise).resolves.toEqual({});
+    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/playrecords', {
+      redirectOnUnauthorized: false,
+    });
+  });
+
   it('skips play record api reads while desktop local auth is still pending', async () => {
     mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
     mockedShouldUseProfileApiStorage.mockReturnValue(true);
@@ -187,6 +229,7 @@ describe('play records client', () => {
     mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
     mockedShouldUseProfileApiStorage.mockReturnValue(true);
     setDesktopAuthCookie();
+    setDesktopBootstrapPayload();
 
     const legacyRecord = {
       title: 'Legacy Demo',

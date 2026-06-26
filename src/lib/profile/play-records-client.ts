@@ -1,4 +1,6 @@
 /* eslint-disable no-console */
+import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
+
 import { dispatchProfileCacheUpdate } from './cache';
 import {
   type PlayRecord,
@@ -22,8 +24,16 @@ import {
   isProfileApiAuthPending,
   PROFILE_API_NO_REDIRECT_OPTIONS,
 } from './request-state';
-import { shouldUseProfileApiStorage } from './runtime';
+import {
+  isDesktopLocalProfileRuntime,
+  shouldUseProfileApiStorage,
+} from './runtime';
 import { generateStorageKey } from './storage-key';
+
+const DESKTOP_PROFILE_BOOTSTRAP_WAIT_TIMEOUT_MS = 12000;
+const DESKTOP_PROFILE_BOOTSTRAP_POLL_INTERVAL_MS = 200;
+
+let desktopProfileBootstrapWaitPromise: Promise<void> | null = null;
 
 function triggerGlobalError(message: string) {
   if (typeof window !== 'undefined') {
@@ -37,6 +47,89 @@ function triggerGlobalError(message: string) {
 
 function shouldUseRemoteUserDataStorage(): boolean {
   return shouldUseProfileApiStorage();
+}
+
+function hasDesktopProfileBootstrapPayload(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return Boolean(
+    (window as Window & { __DESKTOP_PROFILE_BOOTSTRAP__?: unknown })
+      .__DESKTOP_PROFILE_BOOTSTRAP__
+  );
+}
+
+async function waitForDesktopProfileBootstrapReady(): Promise<void> {
+  if (
+    typeof window === 'undefined' ||
+    !isDesktopLocalProfileRuntime() ||
+    hasDesktopProfileBootstrapPayload()
+  ) {
+    return;
+  }
+
+  if (!desktopProfileBootstrapWaitPromise) {
+    desktopProfileBootstrapWaitPromise = new Promise((resolve) => {
+      let settled = false;
+      let pollTimer: number | null = null;
+      let timeoutTimer: number | null = null;
+
+      const cleanup = () => {
+        if (pollTimer !== null) {
+          window.clearInterval(pollTimer);
+          pollTimer = null;
+        }
+
+        if (timeoutTimer !== null) {
+          window.clearTimeout(timeoutTimer);
+          timeoutTimer = null;
+        }
+
+        window.removeEventListener(
+          DESKTOP_RUNTIME_UPDATED_EVENT,
+          handleRuntimeUpdated
+        );
+        desktopProfileBootstrapWaitPromise = null;
+      };
+
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
+        resolve();
+      };
+
+      const handleRuntimeUpdated = () => {
+        if (hasDesktopProfileBootstrapPayload()) {
+          finish();
+        }
+      };
+
+      window.addEventListener(
+        DESKTOP_RUNTIME_UPDATED_EVENT,
+        handleRuntimeUpdated
+      );
+      pollTimer = window.setInterval(() => {
+        if (hasDesktopProfileBootstrapPayload()) {
+          finish();
+        }
+      }, DESKTOP_PROFILE_BOOTSTRAP_POLL_INTERVAL_MS);
+      timeoutTimer = window.setTimeout(
+        finish,
+        DESKTOP_PROFILE_BOOTSTRAP_WAIT_TIMEOUT_MS
+      );
+
+      if (hasDesktopProfileBootstrapPayload()) {
+        finish();
+      }
+    });
+  }
+
+  await desktopProfileBootstrapWaitPromise;
 }
 
 function dispatchPlayRecordsUpdated(records: Record<string, PlayRecord>): void {
@@ -100,6 +193,7 @@ export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
       return {};
     }
 
+    await waitForDesktopProfileBootstrapReady();
     await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedPlayRecords();
 
@@ -161,6 +255,7 @@ export async function savePlayRecord(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await waitForDesktopProfileBootstrapReady();
     await ensureDesktopLocalProfileStoreHydrated();
     const cachedRecords = cacheManager.getCachedPlayRecords() || {};
     cachedRecords[key] = record;
@@ -204,6 +299,7 @@ export async function deletePlayRecord(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    await waitForDesktopProfileBootstrapReady();
     await ensureDesktopLocalProfileStoreHydrated();
     const cachedRecords = cacheManager.getCachedPlayRecords() || {};
     delete cachedRecords[key];
@@ -241,6 +337,7 @@ export async function deletePlayRecord(
 
 export async function clearAllPlayRecords(): Promise<void> {
   if (shouldUseRemoteUserDataStorage()) {
+    await waitForDesktopProfileBootstrapReady();
     await ensureDesktopLocalProfileStoreHydrated();
     cacheManager.cachePlayRecords({});
     dispatchPlayRecordsUpdated({});
