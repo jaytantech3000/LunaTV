@@ -188,6 +188,24 @@ describe('MusicPageClient', () => {
     resetMusicPlayerStore();
   });
 
+  it('describes the current music rollout accurately', async () => {
+    render(<MusicPageClient />);
+
+    expect(
+      await screen.findByText(
+        /统一 music client 已接通平台切换、榜单、热门、歌单、搜索和全局播放器/,
+        {
+          selector: 'p',
+        }
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Web 与桌面本地模式都已接入网易云真实数据/, {
+        selector: 'p',
+      })
+    ).toBeInTheDocument();
+  });
+
   it('clears the selected collection id when switching source from a detail view', async () => {
     render(<MusicPageClient />);
 

@@ -45,8 +45,7 @@ function MusicPageGuard() {
             音乐模块暂未对当前运行环境开放
           </h2>
           <p className='mt-3 max-w-xl text-sm leading-7 text-slate-500 dark:text-slate-400'>
-            当前首批版本默认只在 Web 侧启用。桌面端等桌面 Rust
-            化路线里的本地服务数据面接好后，再继续补真实平台接入与离线能力。
+            当前运行环境的音乐数据链路已经可用，但入口被站点运行时开关关闭。管理员可在站点设置中开启“网页音乐”开关；当前已支持网易云真实数据，更多平台与离线能力仍在后续阶段补齐。
           </p>
         </div>
       </PageLayout>

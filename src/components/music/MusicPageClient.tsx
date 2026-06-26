@@ -628,9 +628,9 @@ export default function MusicPageClient() {
                   音乐
                 </h1>
                 <p className='max-w-2xl text-sm leading-7 text-slate-600 dark:text-slate-300'>
-                  先用统一 music client
-                  跑通平台切换、榜单、热门、歌单、搜索和全局播放器。桌面端等本地
-                  Rust service 接入后，再接真实数据源。
+                  统一 music client
+                  已接通平台切换、榜单、热门、歌单、搜索和全局播放器；当前 Web
+                  与桌面本地模式都已接入网易云真实数据，更多平台与离线能力会在后续阶段补齐。
                 </p>
                 {activeSourceModel?.description ? (
                   <div className='text-sm text-slate-500 dark:text-slate-400'>
