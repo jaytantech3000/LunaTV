@@ -1,0 +1,3 @@
+allowBuilds:
+  javascript-obfuscator: false
+  unrs-resolver: false
