@@ -17,6 +17,11 @@ import {
   type AppUpdateState,
   installDesktopReleaseVersion,
 } from '@/lib/app-update';
+import { type ChangelogLocale, changelog } from '@/lib/changelog';
+import {
+  CHANGELOG_LOCALE_OPTIONS,
+  normalizeChangelogLocale,
+} from '@/lib/changelog-locale';
 import {
   fetchDesktopReleaseHistory,
   isDesktopTauriRuntimeAvailable,
@@ -27,6 +32,7 @@ import {
 } from '@/lib/desktop-release-history';
 import {
   type DesktopReleaseChangeSummary,
+  buildDesktopReleaseChangeSummaryFromChangelogEntry,
   buildDesktopReleaseChangeSummaryFromNotes,
   fetchDesktopReleaseChangeSummaryFromCompareUrl,
   hasDesktopReleaseChangeItems,
@@ -50,12 +56,15 @@ import {
   AppIconButton,
   AppSurfaceCard,
 } from '@/components/AppChrome';
+import CapsuleSwitch from '@/components/CapsuleSwitch';
 
 interface DesktopReleaseHistoryDialogProps {
   isOpen: boolean;
   onClose: () => void;
   currentVersion: string;
   updateState: AppUpdateState;
+  changelogLocale?: ChangelogLocale;
+  onChangelogLocaleChange?: (locale: ChangelogLocale) => void;
 }
 
 interface DesktopReleaseHistoryResponse {
@@ -75,6 +84,122 @@ function getReleaseChangeSummaryCacheKey(
 ) {
   return `${release.tagName}:${release.notes?.trim() || ''}`;
 }
+
+const RELEASE_HISTORY_COPY: Record<
+  ChangelogLocale,
+  {
+    dialogLabel: string;
+    dialogTitle: string;
+    dialogSubtitle: string;
+    closeDialogLabel: string;
+    loadingList: string;
+    stableSectionTitle: string;
+    stableSectionDescription: string;
+    stableEmptyText: string;
+    prereleaseSectionTitle: string;
+    prereleaseSectionDescription: string;
+    prereleaseEmptyText: string;
+    currentBadge: string;
+    releaseBadge: string;
+    prereleaseBadge: string;
+    unknownPublishedAt: string;
+    favoriteLabel: (version: string, active: boolean) => string;
+    openReleasePageLabel: (version: string) => string;
+    currentVersionActionLabel: string;
+    confirmDialogLabel: string;
+    confirmCloseLabel: string;
+    currentVersionLabel: string;
+    targetVersionLabel: string;
+    installFlowHint: string;
+    cancelLabel: string;
+    changeSummaryTitle: string;
+    compareLabel: string;
+    addedLabel: string;
+    changedLabel: string;
+    fixedLabel: string;
+    otherLabel: string;
+    moreItemsLabel: (count: number) => string;
+    loadingSummary: string;
+    compareOnlyHint: string;
+  }
+> = {
+  'zh-CN': {
+    dialogLabel: '版本列表',
+    dialogTitle: '版本列表',
+    dialogSubtitle: '选择指定版本后，将按桌面更新链路静默安装并自动重启。',
+    closeDialogLabel: '关闭版本列表',
+    loadingList: '正在加载版本列表...',
+    stableSectionTitle: '正式版',
+    stableSectionDescription: '稳定版本列表。',
+    stableEmptyText: '暂时没有可用的稳定版本。',
+    prereleaseSectionTitle: '预发布',
+    prereleaseSectionDescription: '预发布版本列表。',
+    prereleaseEmptyText: '暂时没有可用的预发布版本。',
+    currentBadge: '当前',
+    releaseBadge: '正式版',
+    prereleaseBadge: '预发布',
+    unknownPublishedAt: '发布时间未知',
+    favoriteLabel: (version, active) =>
+      `${active ? '取消收藏' : '收藏'} v${version}`,
+    openReleasePageLabel: (version) => `打开 v${version} 发布页`,
+    currentVersionActionLabel: '当前版本',
+    confirmDialogLabel: '确认版本切换',
+    confirmCloseLabel: '关闭版本确认',
+    currentVersionLabel: '当前版本',
+    targetVersionLabel: '目标版本',
+    installFlowHint: '安装完成后会自动重启，整个流程会复用当前的桌面更新逻辑。',
+    cancelLabel: '取消',
+    changeSummaryTitle: '本次变更',
+    compareLabel: '完整对比',
+    addedLabel: '新增功能',
+    changedLabel: '优化调整',
+    fixedLabel: '问题修复',
+    otherLabel: '其他调整',
+    moreItemsLabel: (count) => `还有 ${count} 项变更...`,
+    loadingSummary: '正在读取本次提交变更...',
+    compareOnlyHint:
+      '当前 release 只记录了 compare 链接，可通过“完整对比”查看本次提交详情。',
+  },
+  en: {
+    dialogLabel: 'Version history',
+    dialogTitle: 'Version history',
+    dialogSubtitle:
+      'Select a target version to install it quietly through the desktop updater flow and restart automatically.',
+    closeDialogLabel: 'Close version history',
+    loadingList: 'Loading version history...',
+    stableSectionTitle: 'Release',
+    stableSectionDescription: 'Stable releases.',
+    stableEmptyText: 'No stable releases are available right now.',
+    prereleaseSectionTitle: 'Prerelease',
+    prereleaseSectionDescription: 'Prerelease builds.',
+    prereleaseEmptyText: 'No prerelease builds are available right now.',
+    currentBadge: 'Current',
+    releaseBadge: 'Release',
+    prereleaseBadge: 'Prerelease',
+    unknownPublishedAt: 'Published date unavailable',
+    favoriteLabel: (version, active) =>
+      `${active ? 'Unfavorite' : 'Favorite'} v${version}`,
+    openReleasePageLabel: (version) => `Open v${version} release page`,
+    currentVersionActionLabel: 'Current version',
+    confirmDialogLabel: 'Confirm version switch',
+    confirmCloseLabel: 'Close version confirmation',
+    currentVersionLabel: 'Current version',
+    targetVersionLabel: 'Target version',
+    installFlowHint:
+      'The app will restart automatically after installation and reuse the current desktop update flow.',
+    cancelLabel: 'Cancel',
+    changeSummaryTitle: 'Changes',
+    compareLabel: 'Full compare',
+    addedLabel: 'Added',
+    changedLabel: 'Changed',
+    fixedLabel: 'Fixed',
+    otherLabel: 'Other',
+    moreItemsLabel: (count) => `${count} more changes...`,
+    loadingSummary: 'Loading commit summary...',
+    compareOnlyHint:
+      'This release only includes a compare link. Use “Full compare” to inspect the commit details.',
+  },
+};
 
 function readFavoriteReleaseTags(): string[] {
   if (typeof window === 'undefined') {
@@ -149,30 +274,54 @@ function sortReleaseSection(
   });
 }
 
-function getReleaseActionMeta(version: string, currentVersion: string) {
+function getReleaseActionMeta(
+  version: string,
+  currentVersion: string,
+  locale: ChangelogLocale
+) {
   const isRollback = compareSemver(version, currentVersion) < 0;
+  const copy =
+    locale === 'en'
+      ? {
+          rollbackTo: 'Rollback to',
+          switchTo: 'Switch to',
+          rollbackDialogTitle: 'Confirm rollback',
+          switchDialogTitle: 'Confirm version switch',
+          rollbackDialogMessage: `MoonTV will roll back to v${version}, install it quietly, and restart automatically.`,
+          switchDialogMessage: `MoonTV will switch to v${version}, install it quietly, and restart automatically.`,
+          rollbackConfirmText: 'Confirm rollback',
+          switchConfirmText: 'Install now',
+          rollbackBadgeText: 'Rollback',
+          switchBadgeText: 'Switch',
+        }
+      : {
+          rollbackTo: '回退到',
+          switchTo: '切换到',
+          rollbackDialogTitle: '确认回退版本',
+          switchDialogTitle: '确认切换版本',
+          rollbackDialogMessage: `将回退到 v${version}，应用会静默安装并自动重启。`,
+          switchDialogMessage: `将切换到 v${version}，应用会静默安装并自动重启。`,
+          rollbackConfirmText: '确认回退',
+          switchConfirmText: '立即切换',
+          rollbackBadgeText: '回退',
+          switchBadgeText: '切换',
+        };
 
   return {
     isRollback,
-    actionTitle: `${
-      isRollback ? '\u56de\u9000\u5230' : '\u5207\u6362\u5230'
-    } v${version}`,
-    dialogTitle: isRollback
-      ? '\u786e\u8ba4\u56de\u9000\u7248\u672c'
-      : '\u786e\u8ba4\u5207\u6362\u7248\u672c',
+    actionTitle: `${isRollback ? copy.rollbackTo : copy.switchTo} v${version}`,
+    dialogTitle: isRollback ? copy.rollbackDialogTitle : copy.switchDialogTitle,
     dialogMessage: isRollback
-      ? `\u5c06\u56de\u9000\u5230 v${version}\uff0c\u5e94\u7528\u4f1a\u9759\u9ed8\u5b89\u88c5\u5e76\u81ea\u52a8\u91cd\u542f\u3002`
-      : `\u5c06\u5207\u6362\u5230 v${version}\uff0c\u5e94\u7528\u4f1a\u9759\u9ed8\u5b89\u88c5\u5e76\u81ea\u52a8\u91cd\u542f\u3002`,
-    confirmText: isRollback
-      ? '\u786e\u8ba4\u56de\u9000'
-      : '\u7acb\u5373\u5207\u6362',
-    badgeText: isRollback ? '\u56de\u9000' : '\u5207\u6362',
+      ? copy.rollbackDialogMessage
+      : copy.switchDialogMessage,
+    confirmText: isRollback ? copy.rollbackConfirmText : copy.switchConfirmText,
+    badgeText: isRollback ? copy.rollbackBadgeText : copy.switchBadgeText,
   };
 }
 
-function formatPublishedAt(value: string | null) {
+function formatPublishedAt(value: string | null, locale: ChangelogLocale) {
   if (!value) {
-    return '发布时间未知';
+    return RELEASE_HISTORY_COPY[locale].unknownPublishedAt;
   }
 
   const timestamp = Date.parse(value);
@@ -180,7 +329,7 @@ function formatPublishedAt(value: string | null) {
     return value;
   }
 
-  return new Date(timestamp).toLocaleString('zh-CN');
+  return new Date(timestamp).toLocaleString(locale === 'en' ? 'en' : 'zh-CN');
 }
 
 function isJsonResponse(response: Response) {
@@ -270,14 +419,18 @@ function ReleaseChangeSummaryPanel({
   version,
   summary,
   isLoading,
+  locale,
 }: {
   version: string;
   summary: DesktopReleaseChangeSummary | null | undefined;
   isLoading: boolean;
+  locale: ChangelogLocale;
 }) {
   if (!summary && !isLoading) {
     return null;
   }
+
+  const releaseHistoryCopy = RELEASE_HISTORY_COPY[locale];
 
   const hasSubstantiveChanges = Boolean(
     summary &&
@@ -288,7 +441,7 @@ function ReleaseChangeSummaryPanel({
   const changeGroups = [
     {
       key: 'added',
-      label: '功能修改',
+      label: releaseHistoryCopy.addedLabel,
       items: summary?.added || [],
       toneClassName:
         'bg-emerald-500/10 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200',
@@ -296,7 +449,7 @@ function ReleaseChangeSummaryPanel({
     },
     {
       key: 'changed',
-      label: '优化调整',
+      label: releaseHistoryCopy.changedLabel,
       items: summary?.changed || [],
       toneClassName:
         'bg-sky-500/10 text-sky-700 dark:bg-sky-500/15 dark:text-sky-200',
@@ -304,7 +457,7 @@ function ReleaseChangeSummaryPanel({
     },
     {
       key: 'fixed',
-      label: 'Bug 修复',
+      label: releaseHistoryCopy.fixedLabel,
       items: summary?.fixed || [],
       toneClassName:
         'bg-amber-500/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200',
@@ -312,7 +465,7 @@ function ReleaseChangeSummaryPanel({
     },
     {
       key: 'other',
-      label: '其他调整',
+      label: releaseHistoryCopy.otherLabel,
       items: hasSubstantiveChanges && summary ? [] : summary?.other || [],
       toneClassName:
         'bg-gray-500/10 text-gray-700 dark:bg-gray-500/15 dark:text-gray-200',
@@ -328,16 +481,16 @@ function ReleaseChangeSummaryPanel({
     <div className='mt-3 rounded-xl border border-gray-200/80 bg-gray-50/80 px-3 py-3 dark:border-gray-700/70 dark:bg-gray-950/40'>
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <div className='text-[11px] font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
-          本次变更
+          {releaseHistoryCopy.changeSummaryTitle}
         </div>
         {summary?.compareUrl ? (
           <button
             type='button'
             onClick={() => void openExternalUrl(summary.compareUrl || '')}
             className='text-[11px] font-medium text-emerald-700 transition-colors hover:text-emerald-800 dark:text-emerald-300 dark:hover:text-emerald-200'
-            aria-label={`查看 v${version} 完整对比`}
+            aria-label={`${releaseHistoryCopy.compareLabel} v${version}`}
           >
-            完整对比
+            {releaseHistoryCopy.compareLabel}
           </button>
         ) : null}
       </div>
@@ -369,7 +522,7 @@ function ReleaseChangeSummaryPanel({
                   ))}
                   {hiddenCount > 0 ? (
                     <li className='text-[11px] text-gray-500 dark:text-gray-400'>
-                      还有 {hiddenCount} 项变更...
+                      {releaseHistoryCopy.moreItemsLabel(hiddenCount)}
                     </li>
                   ) : null}
                 </ul>
@@ -380,11 +533,11 @@ function ReleaseChangeSummaryPanel({
       ) : isLoading ? (
         <div className='mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400'>
           <Loader2 className='h-3.5 w-3.5 animate-spin' />
-          正在读取本次提交变更...
+          {releaseHistoryCopy.loadingSummary}
         </div>
       ) : summary?.compareUrl ? (
         <div className='mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400'>
-          当前 release 只记录了 compare 链接，可通过“完整对比”查看本次提交详情。
+          {releaseHistoryCopy.compareOnlyHint}
         </div>
       ) : null}
     </div>
@@ -399,6 +552,7 @@ function VersionSection({
   currentVersion,
   favoriteTagSet,
   updateState,
+  locale,
   onSelectRelease,
   onToggleFavorite,
 }: {
@@ -409,6 +563,7 @@ function VersionSection({
   currentVersion: string;
   favoriteTagSet: Set<string>;
   updateState: AppUpdateState;
+  locale: ChangelogLocale;
   onSelectRelease: (release: DesktopReleaseHistoryItem) => void;
   onToggleFavorite: (release: DesktopReleaseHistoryItem) => void;
 }) {
@@ -423,6 +578,7 @@ function VersionSection({
   return (
     <div className='space-y-2.5'>
       {releases.map((release) => {
+        const releaseHistoryCopy = RELEASE_HISTORY_COPY[locale];
         const isCurrentVersion = release.version === currentVersion;
         const isFavorited = favoriteTagSet.has(release.tagName);
         const isActiveVersion =
@@ -434,11 +590,13 @@ function VersionSection({
         );
         const actionTitle = getReleaseActionMeta(
           release.version,
-          currentVersion
+          currentVersion,
+          locale
         ).actionTitle;
-        const favoriteTitle = isFavorited
-          ? `取消收藏 v${release.version}`
-          : `收藏 v${release.version}`;
+        const favoriteTitle = releaseHistoryCopy.favoriteLabel(
+          release.version,
+          isFavorited
+        );
 
         return (
           <div
@@ -465,13 +623,15 @@ function VersionSection({
                         : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-200'
                     }`}
                   >
-                    {release.prerelease ? 'Prerelease' : 'Release'}
+                    {release.prerelease
+                      ? releaseHistoryCopy.prereleaseBadge
+                      : releaseHistoryCopy.releaseBadge}
                   </span>
                 </div>
                 <div className='flex flex-wrap items-center gap-x-2 gap-y-0 text-[11px] leading-5 text-gray-500 dark:text-gray-400'>
                   <span className='break-all'>{release.tagName}</span>
                   <span className='whitespace-nowrap'>
-                    {formatPublishedAt(release.publishedAt)}
+                    {formatPublishedAt(release.publishedAt, locale)}
                   </span>
                 </div>
               </div>
@@ -479,7 +639,7 @@ function VersionSection({
               <div className='flex items-center gap-1.5'>
                 {isCurrentVersion ? (
                   <span className='inline-flex h-7 items-center rounded-full bg-emerald-100 px-2.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200'>
-                    当前
+                    {releaseHistoryCopy.currentBadge}
                   </span>
                 ) : null}
 
@@ -506,8 +666,12 @@ function VersionSection({
                     onClick={() => void openExternalUrl(release.htmlUrl || '')}
                     variant='ghost'
                     className='h-8 w-8'
-                    aria-label={`打开 v${release.version} 发布页`}
-                    title='打开发布页'
+                    aria-label={releaseHistoryCopy.openReleasePageLabel(
+                      release.version
+                    )}
+                    title={releaseHistoryCopy.openReleasePageLabel(
+                      release.version
+                    )}
                   >
                     <ExternalLink className='h-3.5 w-3.5' />
                   </AppIconButton>
@@ -522,8 +686,16 @@ function VersionSection({
                       ? 'cursor-default bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200'
                       : 'bg-gray-900 text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200'
                   }`}
-                  aria-label={isCurrentVersion ? '当前版本' : actionTitle}
-                  title={isCurrentVersion ? '当前版本' : actionTitle}
+                  aria-label={
+                    isCurrentVersion
+                      ? releaseHistoryCopy.currentVersionActionLabel
+                      : actionTitle
+                  }
+                  title={
+                    isCurrentVersion
+                      ? releaseHistoryCopy.currentVersionActionLabel
+                      : actionTitle
+                  }
                 >
                   {isCurrentVersion ? (
                     <CheckCircle2 className='h-3.5 w-3.5' />
@@ -540,6 +712,7 @@ function VersionSection({
               version={release.version}
               summary={releaseChangeSummary}
               isLoading={isLoadingReleaseChangeSummary}
+              locale={locale}
             />
           </div>
         );
@@ -553,6 +726,8 @@ export function DesktopReleaseHistoryDialog({
   onClose,
   currentVersion,
   updateState,
+  changelogLocale,
+  onChangelogLocaleChange,
 }: DesktopReleaseHistoryDialogProps) {
   const [mounted, setMounted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -567,9 +742,15 @@ export function DesktopReleaseHistoryDialog({
   const [pendingRelease, setPendingRelease] =
     useState<DesktopReleaseHistoryItem | null>(null);
 
+  const effectiveChangelogLocale = normalizeChangelogLocale(changelogLocale);
+  const releaseHistoryCopy = RELEASE_HISTORY_COPY[effectiveChangelogLocale];
   const favoriteTagSet = useMemo(() => new Set(favoriteTags), [favoriteTags]);
   const pendingReleaseAction = pendingRelease
-    ? getReleaseActionMeta(pendingRelease.version, currentVersion)
+    ? getReleaseActionMeta(
+        pendingRelease.version,
+        currentVersion,
+        effectiveChangelogLocale
+      )
     : null;
 
   const groupedReleases = useMemo(() => {
@@ -662,6 +843,20 @@ export function DesktopReleaseHistoryDialog({
     }> = [];
 
     releases.forEach((release) => {
+      const matchedChangelogEntry = changelog.find(
+        (entry) => entry.version === release.version
+      );
+      const changelogSummary =
+        buildDesktopReleaseChangeSummaryFromChangelogEntry(
+          matchedChangelogEntry,
+          effectiveChangelogLocale
+        );
+
+      if (changelogSummary) {
+        nextReleaseChangeSummaries[release.tagName] = changelogSummary;
+        return;
+      }
+
       const cacheKey = getReleaseChangeSummaryCacheKey(release);
       const cachedSummary = releaseChangeSummaryCache.get(cacheKey);
       const initialSummary =
@@ -739,7 +934,7 @@ export function DesktopReleaseHistoryDialog({
     return () => {
       controller.abort();
     };
-  }, [releases]);
+  }, [effectiveChangelogLocale, releases]);
 
   const handleToggleFavorite = (release: DesktopReleaseHistoryItem) => {
     setFavoriteTags((current) => {
@@ -786,6 +981,10 @@ export function DesktopReleaseHistoryDialog({
     });
   };
 
+  const handleChangelogLocaleChange = (value: string) => {
+    onChangelogLocaleChange?.(normalizeChangelogLocale(value));
+  };
+
   if (!mounted || !isOpen) {
     return null;
   }
@@ -800,7 +999,7 @@ export function DesktopReleaseHistoryDialog({
       <AppDialogPanel
         role='dialog'
         aria-modal='true'
-        aria-label='\u7248\u672c\u5217\u8868'
+        aria-label={releaseHistoryCopy.dialogLabel}
         className='fixed left-1/2 top-1/2 z-[1011] flex max-h-[88vh] w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col'
       >
         <AppDialogHeader>
@@ -809,18 +1008,29 @@ export function DesktopReleaseHistoryDialog({
               <History className='h-5 w-5' />
             </AppIconBadge>
             <AppDialogTitleBlock
-              title='版本列表'
-              subtitle='选择指定版本后，将按桌面更新链路静默安装并自动重启。'
+              title={releaseHistoryCopy.dialogTitle}
+              subtitle={releaseHistoryCopy.dialogSubtitle}
             />
           </div>
 
-          <AppIconButton onClick={handleClose} aria-label='关闭版本列表'>
+          <AppIconButton
+            onClick={handleClose}
+            aria-label={releaseHistoryCopy.closeDialogLabel}
+          >
             <X className='h-5 w-5' />
           </AppIconButton>
         </AppDialogHeader>
 
         <div className='flex-1 overflow-y-auto px-5 py-5 sm:px-6'>
           <div className='space-y-6'>
+            <div className='flex justify-end'>
+              <CapsuleSwitch
+                options={[...CHANGELOG_LOCALE_OPTIONS]}
+                active={effectiveChangelogLocale}
+                onChange={handleChangelogLocaleChange}
+              />
+            </div>
+
             {errorMessage ? (
               <div className='flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-100'>
                 <AlertCircle className='mt-0.5 h-4 w-4 flex-shrink-0' />
@@ -832,7 +1042,7 @@ export function DesktopReleaseHistoryDialog({
               <div className='flex min-h-[240px] items-center justify-center rounded-2xl border border-gray-200 bg-gray-50/80 dark:border-gray-800 dark:bg-gray-800/30'>
                 <div className='flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400'>
                   <Loader2 className='h-4 w-4 animate-spin' />
-                  正在加载版本列表...
+                  {releaseHistoryCopy.loadingList}
                 </div>
               </div>
             ) : (
@@ -840,14 +1050,14 @@ export function DesktopReleaseHistoryDialog({
                 <section className='space-y-3'>
                   <div>
                     <h4 className='text-sm font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
-                      Release
+                      {releaseHistoryCopy.stableSectionTitle}
                     </h4>
                     <p className='mt-1 text-sm text-gray-500 dark:text-gray-400'>
-                      稳定版本列表。
+                      {releaseHistoryCopy.stableSectionDescription}
                     </p>
                   </div>
                   <VersionSection
-                    description='暂时没有可用的稳定版本。'
+                    description={releaseHistoryCopy.stableEmptyText}
                     releases={groupedReleases.stable}
                     releaseChangeSummaries={releaseChangeSummaries}
                     loadingReleaseChangeSummaries={
@@ -856,6 +1066,7 @@ export function DesktopReleaseHistoryDialog({
                     currentVersion={currentVersion}
                     favoriteTagSet={favoriteTagSet}
                     updateState={updateState}
+                    locale={effectiveChangelogLocale}
                     onSelectRelease={handleSelectRelease}
                     onToggleFavorite={handleToggleFavorite}
                   />
@@ -864,14 +1075,14 @@ export function DesktopReleaseHistoryDialog({
                 <section className='space-y-3'>
                   <div>
                     <h4 className='text-sm font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
-                      Prerelease
+                      {releaseHistoryCopy.prereleaseSectionTitle}
                     </h4>
                     <p className='mt-1 text-sm text-gray-500 dark:text-gray-400'>
-                      预发布版本列表。
+                      {releaseHistoryCopy.prereleaseSectionDescription}
                     </p>
                   </div>
                   <VersionSection
-                    description='暂时没有可用的预发布版本。'
+                    description={releaseHistoryCopy.prereleaseEmptyText}
                     releases={groupedReleases.prerelease}
                     releaseChangeSummaries={releaseChangeSummaries}
                     loadingReleaseChangeSummaries={
@@ -880,6 +1091,7 @@ export function DesktopReleaseHistoryDialog({
                     currentVersion={currentVersion}
                     favoriteTagSet={favoriteTagSet}
                     updateState={updateState}
+                    locale={effectiveChangelogLocale}
                     onSelectRelease={handleSelectRelease}
                     onToggleFavorite={handleToggleFavorite}
                   />
@@ -900,7 +1112,7 @@ export function DesktopReleaseHistoryDialog({
             <AppDialogPanel
               role='dialog'
               aria-modal='true'
-              aria-label='\u786e\u8ba4\u7248\u672c\u5207\u6362'
+              aria-label={releaseHistoryCopy.confirmDialogLabel}
               data-testid='desktop-release-confirm-dialog'
               className='overflow-hidden'
             >
@@ -934,7 +1146,7 @@ export function DesktopReleaseHistoryDialog({
                 </div>
                 <AppIconButton
                   onClick={() => setPendingRelease(null)}
-                  aria-label='关闭版本确认'
+                  aria-label={releaseHistoryCopy.confirmCloseLabel}
                 >
                   <X className='h-5 w-5' />
                 </AppIconButton>
@@ -944,7 +1156,7 @@ export function DesktopReleaseHistoryDialog({
                 <div className='grid gap-3 sm:grid-cols-2'>
                   <AppSurfaceCard className='bg-gray-50/80 px-4 py-3 dark:bg-gray-800/60'>
                     <p className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
-                      {'\u5f53\u524d\u7248\u672c'}
+                      {releaseHistoryCopy.currentVersionLabel}
                     </p>
                     <p className='mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100'>
                       v{currentVersion}
@@ -952,7 +1164,7 @@ export function DesktopReleaseHistoryDialog({
                   </AppSurfaceCard>
                   <AppSurfaceCard className='bg-gray-50/80 px-4 py-3 dark:bg-gray-800/60'>
                     <p className='text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400'>
-                      {'\u76ee\u6807\u7248\u672c'}
+                      {releaseHistoryCopy.targetVersionLabel}
                     </p>
                     <p className='mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100'>
                       v{pendingRelease.version}
@@ -961,14 +1173,12 @@ export function DesktopReleaseHistoryDialog({
                 </div>
 
                 <AppSurfaceCard className='px-4 py-3 text-sm text-gray-600 dark:text-gray-300'>
-                  {
-                    '\u5b89\u88c5\u5b8c\u6210\u540e\u4f1a\u81ea\u52a8\u91cd\u542f\uff0c\u6574\u4e2a\u6d41\u7a0b\u4f1a\u590d\u7528\u5f53\u524d\u7684\u684c\u9762\u66f4\u65b0\u903b\u8f91\u3002'
-                  }
+                  {releaseHistoryCopy.installFlowHint}
                 </AppSurfaceCard>
 
                 <div className='flex flex-col-reverse gap-3 sm:flex-row sm:justify-end'>
                   <AppButton onClick={() => setPendingRelease(null)}>
-                    {'\u53d6\u6d88'}
+                    {releaseHistoryCopy.cancelLabel}
                   </AppButton>
                   <AppButton onClick={handleConfirmRelease} variant='primary'>
                     {pendingReleaseAction.confirmText}

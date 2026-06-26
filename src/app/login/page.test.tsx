@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const mockRouter = {
   replace: jest.fn(),
@@ -6,6 +6,7 @@ const mockRouter = {
 const mockSearchParams = new URLSearchParams();
 
 const mockHasExplicitDesktopLogout = jest.fn(() => false);
+const mockGetDesktopAuthRequirement = jest.fn();
 const mockLoginDesktopSession = jest.fn();
 const mockLoadDesktopProfileBootstrapState = jest.fn();
 const mockGetRuntimeConfig = jest.fn();
@@ -21,6 +22,8 @@ jest.mock('@/lib/auth', () => ({
 }));
 
 jest.mock('@/lib/desktop/auth-session', () => ({
+  getDesktopAuthRequirement: (...args: unknown[]) =>
+    mockGetDesktopAuthRequirement(...args),
   hasExplicitDesktopLogout: () => mockHasExplicitDesktopLogout(),
   loginDesktopSession: (...args: unknown[]) => mockLoginDesktopSession(...args),
 }));
@@ -124,6 +127,14 @@ describe('LoginPage desktop profile sync branches', () => {
     });
     mockCheckForUpdates.mockResolvedValue('fetch_failed');
     mockHasExplicitDesktopLogout.mockReturnValue(false);
+    mockGetDesktopAuthRequirement.mockResolvedValue(null);
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+    };
+  });
+
+  afterEach(() => {
+    delete window.RUNTIME_CONFIG;
   });
 
   it('shows the remote sync login branch when desktop profile sync is enabled', async () => {
@@ -185,5 +196,67 @@ describe('LoginPage desktop profile sync branches', () => {
     expect(screen.queryByPlaceholderText('输入用户名')).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText('输入访问密码')).toBeInTheDocument();
     expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  it('requires manual username input after an explicit desktop logout', async () => {
+    mockHasExplicitDesktopLogout.mockReturnValue(true);
+    const payload = createDesktopBootstrapPayload({
+      profileSyncEnabled: false,
+      profileMode: 'single-user-local',
+      storageType: null,
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: false,
+        ownerPasswordConfigured: true,
+      },
+    });
+    mockLoadDesktopProfileBootstrapState.mockResolvedValue({
+      payload,
+      localAuth: payload.localAuth,
+    });
+
+    render(<LoginPageClient />);
+
+    const usernameInput = await screen.findByPlaceholderText('输入用户名');
+    const passwordInput = screen.getByPlaceholderText('输入访问密码');
+
+    fireEvent.change(usernameInput, {
+      target: { value: 'alice' },
+    });
+    fireEvent.change(passwordInput, {
+      target: { value: 'secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '登录' }));
+
+    await waitFor(() => {
+      expect(mockLoginDesktopSession).toHaveBeenCalledWith('alice', 'secret');
+    });
+  });
+
+  it('falls back to direct desktop auth when desktop bootstrap is unavailable', async () => {
+    mockHasExplicitDesktopLogout.mockReturnValue(true);
+    mockLoadDesktopProfileBootstrapState.mockRejectedValue(
+      new Error('bootstrap unavailable')
+    );
+    mockGetDesktopAuthRequirement.mockResolvedValue({
+      username: 'owner',
+      passwordRequired: true,
+      multiUser: false,
+      ownerPasswordConfigured: true,
+    });
+
+    render(<LoginPageClient />);
+
+    const usernameInput = await screen.findByPlaceholderText('输入用户名');
+
+    expect(usernameInput).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('输入访问密码')).toBeInTheDocument();
+    expect(
+      screen.getByText('本地服务当前不可用，已切换到桌面本地登录。')
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('桌面登录服务不可用，请通过桌面壳启动应用。')
+    ).not.toBeInTheDocument();
   });
 });

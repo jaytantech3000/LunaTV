@@ -430,9 +430,9 @@ describe('DesktopReleaseHistoryDialog', () => {
 
     await waitFor(() => {
       expect(releaseCard).toHaveTextContent('本次变更');
-      expect(releaseCard).toHaveTextContent('功能修改');
+      expect(releaseCard).toHaveTextContent('新增功能');
       expect(releaseCard).toHaveTextContent('compact desktop release cards');
-      expect(releaseCard).toHaveTextContent('Bug 修复');
+      expect(releaseCard).toHaveTextContent('问题修复');
       expect(releaseCard).toHaveTextContent(
         'avoid stale release compare cache'
       );
@@ -447,6 +447,63 @@ describe('DesktopReleaseHistoryDialog', () => {
         }),
       })
     );
+  });
+
+  it('prefers localized changelog summaries when a release version matches the local changelog', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+    };
+    const compareUrl =
+      'https://github.com/jaytantech3000/LunaTV/compare/desktop-v100.1.3...desktop-v200.0.0';
+    mockFetchDesktopReleaseHistory.mockResolvedValueOnce([
+      {
+        id: 'release-200',
+        version: '200.0.0',
+        tagName: 'desktop-v200.0.0',
+        name: 'Desktop 200',
+        notes: `**Full Changelog**: ${compareUrl}`,
+        prerelease: false,
+        publishedAt: '2026-06-16T00:00:00Z',
+        htmlUrl: 'https://example.com/desktop-200',
+        manifestUrl: 'https://example.com/desktop-200/latest.json',
+      },
+    ]);
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderDialog({
+      currentVersion: '100.1.3',
+      changelogLocale: 'en',
+    });
+
+    const releaseCard = await screen.findByTestId(
+      'desktop-release-card-desktop-v200.0.0'
+    );
+
+    await waitFor(() => {
+      expect(releaseCard).toHaveTextContent('Changes');
+      expect(releaseCard).toHaveTextContent(
+        'Desktop versioning now starts from an independent 200.x line.'
+      );
+      expect(releaseCard).toHaveTextContent('Changed');
+    });
+
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('forwards changelog locale switch events', async () => {
+    const onChangelogLocaleChange = jest.fn();
+
+    renderDialog({
+      changelogLocale: 'zh-CN',
+      onChangelogLocaleChange,
+    });
+
+    await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15');
+
+    fireEvent.click(screen.getByRole('button', { name: 'English' }));
+
+    expect(onChangelogLocaleChange).toHaveBeenCalledWith('en');
   });
 
   it('toggles favorite state and persists the release tag', async () => {

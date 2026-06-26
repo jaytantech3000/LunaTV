@@ -1,4 +1,6 @@
+import { changelog } from './changelog';
 import {
+  buildDesktopReleaseChangeSummaryFromChangelogEntry,
   buildDesktopReleaseChangeSummaryFromComparePayload,
   buildDesktopReleaseChangeSummaryFromNotes,
   extractDesktopReleaseCompareUrl,
@@ -32,6 +34,28 @@ describe('desktop release notes helpers', () => {
       added: ['新增版本卡片摘要'],
       changed: [],
       fixed: ['修复摘要加载时的重复请求'],
+      other: [],
+    });
+  });
+
+  it('builds localized summaries from changelog entries', () => {
+    expect(
+      buildDesktopReleaseChangeSummaryFromChangelogEntry(
+        changelog.find((entry) => entry.version === '200.0.0'),
+        'en'
+      )
+    ).toEqual({
+      compareUrl: null,
+      added: [],
+      changed: [
+        'Desktop versioning now starts from an independent 200.x line.',
+        'Desktop updater discovery now uses a dedicated updater manifest branch.',
+        'Desktop prerelease builds now follow semver prerelease suffixes such as `200.0.0-beta.1`.',
+        'Windows desktop updates now install quietly and restart automatically after confirmation.',
+      ],
+      fixed: [
+        'Avoid conflicting update messages when the in-app updater cannot be used.',
+      ],
       other: [],
     });
   });

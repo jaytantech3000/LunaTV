@@ -42,6 +42,10 @@ import {
   changelog,
   getLocalizedChangelogItems,
 } from '@/lib/changelog';
+import {
+  persistChangelogLocalePreference as persistStoredChangelogLocalePreference,
+  readChangelogLocalePreference as readStoredChangelogLocalePreference,
+} from '@/lib/changelog-locale';
 import { DESKTOP_UPSTREAM_VERSION } from '@/lib/desktop-release';
 import { openExternalUrl } from '@/lib/open-external-url';
 import { getChangelogFileUrl } from '@/lib/release-urls';
@@ -98,8 +102,6 @@ const INLINE_MARKDOWN_PATTERN =
   /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|\*\*([^*]+)\*\*|(https?:\/\/[^\s<]+)/g;
 const FULL_CHANGELOG_LINE_PATTERN = /^\**\s*full changelog\s*\**\s*:?\s*/i;
 
-const CHANGELOG_LOCALE_STORAGE_KEY = 'lunatv:version-panel:changelog-locale';
-
 const CHANGELOG_COPY: Record<
   ChangelogLocale,
   {
@@ -150,21 +152,11 @@ const CHANGELOG_LOCALE_OPTIONS = [
 ] as const;
 
 function readChangelogLocalePreference(): ChangelogLocale {
-  if (typeof window === 'undefined') {
-    return 'zh-CN';
-  }
-
-  return window.localStorage.getItem(CHANGELOG_LOCALE_STORAGE_KEY) === 'en'
-    ? 'en'
-    : 'zh-CN';
+  return readStoredChangelogLocalePreference();
 }
 
 function persistChangelogLocalePreference(locale: ChangelogLocale) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  window.localStorage.setItem(CHANGELOG_LOCALE_STORAGE_KEY, locale);
+  persistStoredChangelogLocalePreference(locale);
 }
 
 function resolveChangelogItems(
@@ -1510,6 +1502,8 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
           onClose={closeReleaseHistory}
           currentVersion={CURRENT_VERSION}
           updateState={updateState}
+          changelogLocale={changelogLocale}
+          onChangelogLocaleChange={handleChangelogLocaleChange}
         />
       ) : null}
     </>

@@ -8,10 +8,12 @@ import { useEffect, useState } from 'react';
 
 import { setAuthInfoInBrowser } from '@/lib/auth';
 import {
+  getDesktopAuthRequirement,
   hasExplicitDesktopLogout,
   loginDesktopSession,
 } from '@/lib/desktop/auth-session';
 import { loadDesktopProfileBootstrapState } from '@/lib/desktop/profile-bootstrap';
+import type { DesktopAuthStatus } from '@/lib/desktop/tauri-client';
 import { getProjectPageUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
@@ -136,6 +138,28 @@ export function LoginPageClient() {
     setDesktopAuthCheckDone(false);
     setRedirectingDesktopSession(false);
     setError(null);
+    setStatusMessage('');
+
+    const applyLocalDesktopAuthState = (
+      effectiveAuthStatus: DesktopAuthStatus,
+      nextStatusMessage = ''
+    ) => {
+      setDesktopProfileSyncEnabled(false);
+      setDesktopAuthUsername(effectiveAuthStatus.username);
+      setDesktopOwnerPasswordConfigured(
+        effectiveAuthStatus.ownerPasswordConfigured
+      );
+      const didExplicitDesktopLogout = hasExplicitDesktopLogout();
+      const requiresManualUsername =
+        effectiveAuthStatus.multiUser || didExplicitDesktopLogout;
+      setShouldAskUsername(requiresManualUsername);
+      setUsername('');
+      setStatusMessage(nextStatusMessage);
+
+      return {
+        didExplicitDesktopLogout,
+      };
+    };
 
     void (async () => {
       try {
@@ -185,17 +209,12 @@ export function LoginPageClient() {
           return;
         }
 
-        setDesktopProfileSyncEnabled(false);
-        setDesktopAuthUsername(effectiveAuthStatus.username);
-        setDesktopOwnerPasswordConfigured(
-          effectiveAuthStatus.ownerPasswordConfigured
-        );
-        setShouldAskUsername(effectiveAuthStatus.multiUser);
-        setStatusMessage('');
+        const { didExplicitDesktopLogout } =
+          applyLocalDesktopAuthState(effectiveAuthStatus);
 
         if (
           !effectiveAuthStatus.ownerPasswordConfigured &&
-          !hasExplicitDesktopLogout()
+          !didExplicitDesktopLogout
         ) {
           setRedirectingDesktopSession(true);
           const redirect = searchParams.get('redirect') || '/';
@@ -204,8 +223,37 @@ export function LoginPageClient() {
         }
 
         setDesktopAuthCheckDone(true);
-      } catch (_) {
+      } catch {
         if (active) {
+          try {
+            const fallbackAuthStatus = await getDesktopAuthRequirement();
+            if (!active) {
+              return;
+            }
+
+            if (fallbackAuthStatus) {
+              const { didExplicitDesktopLogout } = applyLocalDesktopAuthState(
+                fallbackAuthStatus,
+                '本地服务当前不可用，已切换到桌面本地登录。'
+              );
+
+              if (
+                !fallbackAuthStatus.ownerPasswordConfigured &&
+                !didExplicitDesktopLogout
+              ) {
+                setRedirectingDesktopSession(true);
+                const redirect = searchParams.get('redirect') || '/';
+                router.replace(redirect);
+                return;
+              }
+
+              setDesktopAuthCheckDone(true);
+              return;
+            }
+          } catch {
+            // Ignore the fallback failure and show the original desktop login error.
+          }
+
           setError('桌面登录服务不可用，请通过桌面壳启动应用。');
           setDesktopAuthCheckDone(true);
         }

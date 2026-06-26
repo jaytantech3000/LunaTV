@@ -1,3 +1,9 @@
+import {
+  type ChangelogEntry,
+  type ChangelogLocale,
+  getLocalizedChangelogItems,
+} from './changelog';
+
 export interface DesktopReleaseChangeSummary {
   compareUrl: string | null;
   added: string[];
@@ -183,6 +189,31 @@ export function hasDesktopReleaseChangeItems(
     summary.fixed.length > 0 ||
     summary.other.length > 0
   );
+}
+
+export function buildDesktopReleaseChangeSummaryFromChangelogEntry(
+  entry: ChangelogEntry | null | undefined,
+  locale: ChangelogLocale
+): DesktopReleaseChangeSummary | null {
+  if (!entry) {
+    return null;
+  }
+
+  const summary = createEmptySummary();
+
+  getLocalizedChangelogItems(entry.added, locale).forEach((item) => {
+    pushUniqueChange(summary, 'added', item);
+  });
+  getLocalizedChangelogItems(entry.changed, locale).forEach((item) => {
+    pushUniqueChange(summary, 'changed', item);
+  });
+  getLocalizedChangelogItems(entry.fixed, locale).forEach((item) => {
+    pushUniqueChange(summary, 'fixed', item);
+  });
+
+  return hasDesktopReleaseChangeItems(summary)
+    ? normalizeSummary(summary)
+    : null;
 }
 
 export function extractDesktopReleaseCompareUrl(
