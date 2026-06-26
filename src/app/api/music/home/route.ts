@@ -3,8 +3,8 @@ import { NextRequest } from 'next/server';
 import {
   createMusicErrorResponse,
   createMusicJsonResponse,
-  getMusicHomePayload,
 } from '@/lib/music/netease';
+import { getMusicHomePayload } from '@/lib/music/service';
 
 export const runtime = 'nodejs';
 

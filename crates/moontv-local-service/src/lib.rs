@@ -329,6 +329,7 @@ pub struct AppState {
     sqlite_path: PathBuf,
     sqlite: DesktopSqlite,
     client: reqwest::Client,
+    no_decode_client: reqwest::Client,
     no_redirect_client: reqwest::Client,
     download_engine: Arc<RwLock<DesktopDownloadEngine>>,
     download_engine_snapshot_tx: watch::Sender<DesktopDownloadEngineSnapshot>,
@@ -337,6 +338,9 @@ pub struct AppState {
     profile_sync: ProfileSyncClient,
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
     netease_api_base_url: String,
+    audius_api_base_url: String,
+    jamendo_api_base_url: String,
+    jamendo_client_id: Option<String>,
     bangumi_api_base_url: String,
     douban_api_base_url: String,
     douban_movie_api_base_url: String,
@@ -415,6 +419,12 @@ impl AppState {
             sqlite_path,
             sqlite,
             client: reqwest::Client::new(),
+            no_decode_client: reqwest::Client::builder()
+                .no_gzip()
+                .no_brotli()
+                .no_deflate()
+                .build()
+                .expect("failed to build no-decode http client"),
             no_redirect_client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
@@ -431,6 +441,17 @@ impl AppState {
             ),
             profile_sync_session: Arc::new(RwLock::new(None)),
             netease_api_base_url: DEFAULT_NETEASE_API_BASE_URL.to_string(),
+            audius_api_base_url: env::var("AUDIOUS_API_BASE_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "https://api.audius.co".to_string()),
+            jamendo_api_base_url: env::var("JAMENDO_API_BASE_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "https://api.jamendo.com/v3.0".to_string()),
+            jamendo_client_id: env::var("JAMENDO_CLIENT_ID")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
             bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
             douban_api_base_url: DEFAULT_DOUBAN_API_BASE_URL.to_string(),
             douban_movie_api_base_url: DEFAULT_DOUBAN_MOVIE_API_BASE_URL.to_string(),
@@ -9663,7 +9684,7 @@ segment0.ts
                     ),
                 )
                 .route(
-                    "/api/playlist/detail",
+                    "/api/v3/playlist/detail",
                     get(
                         |Query(params): Query<BTreeMap<String, String>>| async move {
                             match params.get("id").map(String::as_str) {
@@ -9818,6 +9839,33 @@ segment0.ts
                 .get("sources")
                 .and_then(Value::as_array)
                 .and_then(|sources| sources.get(1))
+                .and_then(|source| source.get("key"))
+                .and_then(Value::as_str),
+            Some("audius")
+        );
+        assert_eq!(
+            sources_payload
+                .get("sources")
+                .and_then(Value::as_array)
+                .and_then(|sources| sources.get(1))
+                .and_then(|source| source.get("enabled"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            sources_payload
+                .get("sources")
+                .and_then(Value::as_array)
+                .and_then(|sources| sources.get(2))
+                .and_then(|source| source.get("key"))
+                .and_then(Value::as_str),
+            Some("jamendo")
+        );
+        assert_eq!(
+            sources_payload
+                .get("sources")
+                .and_then(Value::as_array)
+                .and_then(|sources| sources.get(2))
                 .and_then(|source| source.get("enabled"))
                 .and_then(Value::as_bool),
             Some(false)
@@ -9985,6 +10033,573 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn music_routes_use_audius_provider_payloads() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/v1/tracks/trending",
+                    get(|| async move {
+                        Json(json!({
+                          "data": [
+                            {
+                              "id": "audius-track-1",
+                              "title": "Audius Spotlight",
+                              "duration": 201,
+                              "genre": "Electronic",
+                              "artwork": {
+                                "1000x1000": "https://cdn.audius.test/spotlight.jpg"
+                              },
+                              "user": {
+                                "id": "artist-1",
+                                "name": "Audius Artist"
+                              }
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/v1/playlists/trending",
+                    get(|| async move {
+                        Json(json!({
+                          "data": [
+                            {
+                              "id": "audius-playlist-1",
+                              "playlist_name": "Audius Trending Playlist",
+                              "description": "Fresh from Audius",
+                              "track_count": 2,
+                              "artwork": {
+                                "1000x1000": "https://cdn.audius.test/playlist.jpg"
+                              },
+                              "user": {
+                                "id": "curator-1",
+                                "name": "Audius Curator"
+                              }
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/v1/tracks/search",
+                    get(|| async move {
+                        Json(json!({
+                          "data": [
+                            {
+                              "id": "audius-search-track-1",
+                              "title": "Audius Search Track",
+                              "duration": 189,
+                              "genre": "House",
+                              "artwork": {
+                                "1000x1000": "https://cdn.audius.test/search-track.jpg"
+                              },
+                              "user": {
+                                "id": "artist-2",
+                                "name": "Search Artist"
+                              }
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/v1/playlists/search",
+                    get(|| async move {
+                        Json(json!({
+                          "data": [
+                            {
+                              "id": "audius-playlist-2",
+                              "playlist_name": "Audius Search Playlist",
+                              "description": "Search playlist",
+                              "track_count": 1,
+                              "artwork": {
+                                "1000x1000": "https://cdn.audius.test/search-playlist.jpg"
+                              },
+                              "user": {
+                                "id": "curator-2",
+                                "name": "Search Curator"
+                              }
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/v1/playlists/audius-playlist-1",
+                    get(|| async move {
+                        Json(json!({
+                          "data": [
+                            {
+                              "id": "audius-playlist-1",
+                              "playlist_name": "Audius Trending Playlist",
+                              "description": "Fresh from Audius",
+                              "track_count": 2,
+                              "artwork": {
+                                "1000x1000": "https://cdn.audius.test/playlist.jpg"
+                              },
+                              "user": {
+                                "id": "curator-1",
+                                "name": "Audius Curator"
+                              },
+                              "tracks": [
+                                {
+                                  "id": "audius-track-1",
+                                  "title": "Playlist Audius Track",
+                                  "duration": 201,
+                                  "genre": "Electronic",
+                                  "artwork": {
+                                    "1000x1000": "https://cdn.audius.test/playlist-track.jpg"
+                                  },
+                                  "user": {
+                                    "id": "artist-1",
+                                    "name": "Audius Artist"
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/v1/tracks/audius-track-1",
+                    get(|| async move {
+                        Json(json!({
+                          "data": {
+                            "id": "audius-track-1",
+                            "title": "Audius Track Detail",
+                            "duration": 201,
+                            "genre": "Electronic",
+                            "artwork": {
+                              "1000x1000": "https://cdn.audius.test/track-detail.jpg"
+                            },
+                            "stream": {
+                              "url": "https://stream.audius.test/audius-track-1.mp3"
+                            },
+                            "access": {
+                              "stream": true
+                            },
+                            "user": {
+                              "id": "artist-1",
+                              "name": "Audius Artist"
+                            }
+                          }
+                        }))
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.audius_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let home_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/home?source=audius")
+                    .body(Body::empty())
+                    .expect("audius music home request"),
+            )
+            .await
+            .expect("audius music home response");
+        assert_eq!(home_response.status(), StatusCode::OK);
+        let home_payload = read_json_body(home_response).await;
+        assert_eq!(
+            home_payload
+                .get("spotlight")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Audius Spotlight")
+        );
+        assert_eq!(
+            home_payload
+                .get("sections")
+                .and_then(Value::as_array)
+                .and_then(|sections| sections.first())
+                .and_then(|section| section.get("tab"))
+                .and_then(Value::as_str),
+            Some("hot")
+        );
+
+        let search_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/search?source=audius&q=test")
+                    .body(Body::empty())
+                    .expect("audius music search request"),
+            )
+            .await
+            .expect("audius music search response");
+        assert_eq!(search_response.status(), StatusCode::OK);
+        let search_payload = read_json_body(search_response).await;
+        assert_eq!(
+            search_payload
+                .get("tracks")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Audius Search Track")
+        );
+        assert_eq!(
+            search_payload
+                .get("collections")
+                .and_then(Value::as_array)
+                .and_then(|collections| collections.first())
+                .and_then(|collection| collection.get("id"))
+                .and_then(Value::as_str),
+            Some("audius-playlist-2")
+        );
+
+        let collection_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/collection?source=audius&id=audius-playlist-1")
+                    .body(Body::empty())
+                    .expect("audius music collection request"),
+            )
+            .await
+            .expect("audius music collection response");
+        assert_eq!(collection_response.status(), StatusCode::OK);
+        let collection_payload = read_json_body(collection_response).await;
+        assert_eq!(
+            collection_payload.get("title").and_then(Value::as_str),
+            Some("Audius Trending Playlist")
+        );
+        assert_eq!(
+            collection_payload
+                .get("tracks")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Playlist Audius Track")
+        );
+
+        let track_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/track?source=audius&id=audius-track-1")
+                    .body(Body::empty())
+                    .expect("audius music track request"),
+            )
+            .await
+            .expect("audius music track response");
+        assert_eq!(track_response.status(), StatusCode::OK);
+        let track_payload = read_json_body(track_response).await;
+        assert_eq!(
+            track_payload
+                .get("track")
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Audius Track Detail")
+        );
+        assert_eq!(
+            track_payload.get("streamUrl").and_then(Value::as_str),
+            Some("https://stream.audius.test/audius-track-1.mp3")
+        );
+
+        let lyric_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/lyric?source=audius&id=audius-track-1")
+                    .body(Body::empty())
+                    .expect("audius music lyric request"),
+            )
+            .await
+            .expect("audius music lyric response");
+        assert_eq!(lyric_response.status(), StatusCode::OK);
+        let lyric_payload = read_json_body(lyric_response).await;
+        assert_eq!(
+            lyric_payload
+                .get("lines")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn music_routes_use_jamendo_provider_payloads_when_configured() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/v3.0/tracks/",
+                    get(
+                        |Query(params): Query<BTreeMap<String, String>>| async move {
+                            match params.get("id").map(String::as_str) {
+                                Some("jamendo-track-1") => Json(json!({
+                                  "headers": {
+                                    "status": "success"
+                                  },
+                                  "results": [
+                                    {
+                                      "id": "jamendo-track-1",
+                                      "name": "Jamendo Track Detail",
+                                      "duration": 233,
+                                      "artist_name": "Jamendo Artist",
+                                      "album_id": "album-1",
+                                      "album_name": "Jamendo Album",
+                                      "image": "https://cdn.jamendo.test/track.jpg",
+                                      "audio": "https://stream.jamendo.test/jamendo-track-1.mp3"
+                                    }
+                                  ]
+                                }))
+                                .into_response(),
+                                _ => Json(json!({
+                                  "headers": {
+                                    "status": "success"
+                                  },
+                                  "results": [
+                                    {
+                                      "id": "jamendo-track-2",
+                                      "name": "Jamendo Search Track",
+                                      "duration": 244,
+                                      "artist_name": "Jamendo Search Artist",
+                                      "album_id": "album-2",
+                                      "album_name": "Jamendo Search Album",
+                                      "image": "https://cdn.jamendo.test/search-track.jpg",
+                                      "audio": "https://stream.jamendo.test/jamendo-track-2.mp3"
+                                    }
+                                  ]
+                                }))
+                                .into_response(),
+                            }
+                        },
+                    ),
+                )
+                .route(
+                    "/v3.0/playlists/",
+                    get(|| async move {
+                        Json(json!({
+                          "headers": {
+                            "status": "success"
+                          },
+                          "results": [
+                            {
+                              "id": "jamendo-playlist-1",
+                              "name": "Jamendo Featured Playlist",
+                              "creationdate": "2026-06-01",
+                              "user_name": "Jamendo Curator",
+                              "image": "https://cdn.jamendo.test/playlist.jpg"
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/v3.0/playlists/tracks/",
+                    get(|| async move {
+                        Json(json!({
+                          "headers": {
+                            "status": "success"
+                          },
+                          "results": [
+                            {
+                              "id": "jamendo-playlist-1",
+                              "name": "Jamendo Featured Playlist",
+                              "creationdate": "2026-06-01",
+                              "user_name": "Jamendo Curator",
+                              "image": "https://cdn.jamendo.test/playlist.jpg",
+                              "track_count": 1,
+                              "tracks": [
+                                {
+                                  "id": "jamendo-track-1",
+                                  "name": "Jamendo Playlist Track",
+                                  "duration": 233,
+                                  "artist_name": "Jamendo Artist",
+                                  "album_id": "album-1",
+                                  "album_name": "Jamendo Album",
+                                  "image": "https://cdn.jamendo.test/playlist-track.jpg",
+                                  "audio": "https://stream.jamendo.test/jamendo-track-1.mp3"
+                                }
+                              ]
+                            }
+                          ]
+                        }))
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.jamendo_api_base_url = format!("{}/v3.0", upstream.base_url());
+        state.jamendo_client_id = Some("jamendo-test-client".to_string());
+        let app = build_router(state);
+
+        let sources_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/sources")
+                    .body(Body::empty())
+                    .expect("jamendo music sources request"),
+            )
+            .await
+            .expect("jamendo music sources response");
+        let sources_payload = read_json_body(sources_response).await;
+        assert_eq!(
+            sources_payload
+                .get("sources")
+                .and_then(Value::as_array)
+                .and_then(|sources| sources.get(2))
+                .and_then(|source| source.get("enabled"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let home_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/home?source=jamendo")
+                    .body(Body::empty())
+                    .expect("jamendo music home request"),
+            )
+            .await
+            .expect("jamendo music home response");
+        assert_eq!(home_response.status(), StatusCode::OK);
+        let home_payload = read_json_body(home_response).await;
+        assert_eq!(
+            home_payload
+                .get("spotlight")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Jamendo Search Track")
+        );
+
+        let search_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/search?source=jamendo&q=test")
+                    .body(Body::empty())
+                    .expect("jamendo music search request"),
+            )
+            .await
+            .expect("jamendo music search response");
+        assert_eq!(search_response.status(), StatusCode::OK);
+        let search_payload = read_json_body(search_response).await;
+        assert_eq!(
+            search_payload
+                .get("tracks")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Jamendo Search Track")
+        );
+
+        let collection_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/collection?source=jamendo&id=jamendo-playlist-1")
+                    .body(Body::empty())
+                    .expect("jamendo music collection request"),
+            )
+            .await
+            .expect("jamendo music collection response");
+        assert_eq!(collection_response.status(), StatusCode::OK);
+        let collection_payload = read_json_body(collection_response).await;
+        assert_eq!(
+            collection_payload.get("title").and_then(Value::as_str),
+            Some("Jamendo Featured Playlist")
+        );
+        assert_eq!(
+            collection_payload
+                .get("tracks")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Jamendo Playlist Track")
+        );
+
+        let track_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/track?source=jamendo&id=jamendo-track-1")
+                    .body(Body::empty())
+                    .expect("jamendo music track request"),
+            )
+            .await
+            .expect("jamendo music track response");
+        assert_eq!(track_response.status(), StatusCode::OK);
+        let track_payload = read_json_body(track_response).await;
+        assert_eq!(
+            track_payload
+                .get("track")
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Jamendo Track Detail")
+        );
+        assert_eq!(
+            track_payload.get("streamUrl").and_then(Value::as_str),
+            Some("https://stream.jamendo.test/jamendo-track-1.mp3")
+        );
+
+        let lyric_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/lyric?source=jamendo&id=jamendo-track-1")
+                    .body(Body::empty())
+                    .expect("jamendo music lyric request"),
+            )
+            .await
+            .expect("jamendo music lyric response");
+        assert_eq!(lyric_response.status(), StatusCode::OK);
+        let lyric_payload = read_json_body(lyric_response).await;
+        assert_eq!(
+            lyric_payload
+                .get("lines")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
     async fn music_home_route_tolerates_spotlight_detail_business_errors() {
         let upstream = spawn_mock_server(
             Router::new()
@@ -10024,7 +10639,7 @@ segment0.ts
                     }),
                 )
                 .route(
-                    "/api/playlist/detail",
+                    "/api/v3/playlist/detail",
                     get(
                         |Query(params): Query<BTreeMap<String, String>>| async move {
                             match params.get("id").map(String::as_str) {
@@ -10097,6 +10712,287 @@ segment0.ts
                 .and_then(|section| section.get("tab"))
                 .and_then(Value::as_str),
             Some("rank")
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn music_collection_route_avoids_brotli_json_decode_failures() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/v3/playlist/detail",
+            get(
+                |headers: HeaderMap, Query(params): Query<BTreeMap<String, String>>| async move {
+                    let accept_encoding = headers
+                        .get("accept-encoding")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_string);
+
+                    if params.get("id").map(String::as_str) != Some("301") {
+                        return Json(json!({
+                          "code": 404,
+                          "msg": "no resource"
+                        }))
+                        .into_response();
+                    }
+
+                    if accept_encoding.as_deref() == Some("gzip") {
+                        let compressed = gzip_bytes(
+                            json!({
+                              "code": 200,
+                              "result": {
+                                "id": 301,
+                                "name": "Focus Playlist",
+                                "coverImgUrl": "http://cdn.example.com/focus-playlist.jpg",
+                                "description": "适合夜晚循环",
+                                "trackCount": 2,
+                                "creator": { "nickname": "Playlist Curator" },
+                                "updateFrequency": "每日更新",
+                                "tracks": [
+                                  {
+                                    "id": 9001,
+                                    "name": "Playlist Song",
+                                    "fee": 0,
+                                    "duration": 187000,
+                                    "artists": [{ "id": 1, "name": "Search Artist" }],
+                                    "album": {
+                                      "id": 11,
+                                      "name": "Search Album",
+                                      "picUrl": "http://cdn.example.com/search-album.jpg"
+                                    }
+                                  }
+                                ]
+                              }
+                            })
+                            .to_string()
+                            .as_bytes(),
+                        )
+                        .expect("gzip playlist detail payload");
+                        let mut response = Response::new(Body::from(compressed));
+                        *response.status_mut() = StatusCode::OK;
+                        response.headers_mut().insert(
+                            CONTENT_TYPE,
+                            HeaderValue::from_static("application/json;charset=utf-8"),
+                        );
+                        response.headers_mut().insert(
+                            axum::http::header::CONTENT_ENCODING,
+                            HeaderValue::from_static("gzip"),
+                        );
+                        return response;
+                    }
+
+                    let mut response = Response::new(Body::from(
+                        json!({
+                          "code": 200,
+                          "result": {
+                            "id": 301,
+                            "name": "Focus Playlist"
+                          }
+                        })
+                        .to_string(),
+                    ));
+                    *response.status_mut() = StatusCode::OK;
+                    response.headers_mut().insert(
+                        CONTENT_TYPE,
+                        HeaderValue::from_static("application/json;charset=utf-8"),
+                    );
+                    response.headers_mut().insert(
+                        axum::http::header::CONTENT_ENCODING,
+                        HeaderValue::from_static("br"),
+                    );
+                    response
+                },
+            ),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.netease_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/collection?source=netease&id=301")
+                    .body(Body::empty())
+                    .expect("music collection request"),
+            )
+            .await
+            .expect("music collection response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload.get("title").and_then(Value::as_str),
+            Some("Focus Playlist")
+        );
+        assert_eq!(
+            payload
+                .get("tracks")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Playlist Song")
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn music_routes_tolerate_nullable_netease_text_fields() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/toplist",
+                    get(|| async move {
+                        Json(json!({
+                          "code": 200,
+                          "list": [
+                            {
+                              "id": 101,
+                              "name": "Top Rank",
+                              "coverImgUrl": "http://cdn.example.com/top-rank.jpg",
+                              "description": null,
+                              "trackCount": 2,
+                              "updateFrequency": "刚刚更新"
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/personalized/playlist",
+                    get(|| async move {
+                        Json(json!({
+                          "code": 200,
+                          "result": [
+                            {
+                              "id": 301,
+                              "name": "Focus Playlist",
+                              "picUrl": "http://cdn.example.com/focus-playlist.jpg",
+                              "copywriter": "适合夜晚循环",
+                              "trackCount": 2
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/v3/playlist/detail",
+                    get(
+                        |Query(params): Query<BTreeMap<String, String>>| async move {
+                            let (id, name) = match params.get("id").map(String::as_str) {
+                                Some("301") => ("301", "Focus Playlist"),
+                                _ => ("101", "Top Rank"),
+                            };
+
+                            Json(json!({
+                              "code": 200,
+                              "result": {
+                                "id": id.parse::<i64>().expect("playlist id"),
+                                "name": name,
+                                "coverImgUrl": "http://cdn.example.com/focus-playlist.jpg",
+                                "description": "适合夜晚循环",
+                                "trackCount": 2,
+                                "creator": { "nickname": "Playlist Curator" },
+                                "updateFrequency": null,
+                                "tracks": [
+                                  {
+                                    "id": 9001,
+                                    "name": "Playlist Song",
+                                    "fee": 0,
+                                    "duration": 187000,
+                                    "artists": [{ "id": 1, "name": "Search Artist" }],
+                                    "album": {
+                                      "id": 11,
+                                      "name": "Search Album",
+                                      "picUrl": "http://cdn.example.com/search-album.jpg"
+                                    }
+                                  }
+                                ]
+                              }
+                            }))
+                            .into_response()
+                        },
+                    ),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.netease_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let home_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/home?source=netease")
+                    .body(Body::empty())
+                    .expect("music home request"),
+            )
+            .await
+            .expect("music home response");
+        assert_eq!(home_response.status(), StatusCode::OK);
+        let home_payload = read_json_body(home_response).await;
+        assert_eq!(
+            home_payload
+                .get("sections")
+                .and_then(Value::as_array)
+                .and_then(|sections| sections.first())
+                .and_then(|section| section.get("collections"))
+                .and_then(Value::as_array)
+                .and_then(|collections| collections.first())
+                .and_then(|collection| collection.get("title"))
+                .and_then(Value::as_str),
+            Some("Top Rank")
+        );
+
+        let collection_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/collection?source=netease&id=301")
+                    .body(Body::empty())
+                    .expect("music collection request"),
+            )
+            .await
+            .expect("music collection response");
+        assert_eq!(collection_response.status(), StatusCode::OK);
+        let collection_payload = read_json_body(collection_response).await;
+        assert_eq!(
+            collection_payload.get("title").and_then(Value::as_str),
+            Some("Focus Playlist")
+        );
+        assert_eq!(
+            collection_payload.get("updatedAtLabel").and_then(Value::as_str),
+            None
         );
 
         upstream.abort();

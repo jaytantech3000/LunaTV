@@ -1,4 +1,9 @@
-export type MusicPlatformKey = 'netease' | 'qq' | 'kugou';
+export type MusicPlatformKey =
+  | 'netease'
+  | 'audius'
+  | 'jamendo'
+  | 'qq'
+  | 'kugou';
 
 export type MusicSectionTab =
   | 'home'

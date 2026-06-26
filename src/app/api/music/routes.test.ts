@@ -28,11 +28,241 @@ function createMusicFetchMock(
 ): jest.MockedFunction<typeof fetch> {
   return jest.fn(async (input) => {
     const requestUrl = new URL(String(input));
+    const host = requestUrl.host;
     const pathname = requestUrl.pathname;
     const type = requestUrl.searchParams.get('type');
     const id = requestUrl.searchParams.get('id');
     const ids = requestUrl.searchParams.get('ids');
     const paidTrackId = options.paidTrackId || 0;
+
+    if (host === 'api.audius.co' && pathname === '/v1/tracks/trending') {
+      return createJsonResponse({
+        data: [
+          {
+            id: 'audius-track-1',
+            title: 'Audius Spotlight',
+            duration: 201,
+            genre: 'Electronic',
+            artwork: {
+              '1000x1000': 'https://cdn.audius.test/spotlight.jpg',
+            },
+            user: {
+              id: 'artist-1',
+              name: 'Audius Artist',
+            },
+          },
+        ],
+      });
+    }
+
+    if (host === 'api.audius.co' && pathname === '/v1/playlists/trending') {
+      return createJsonResponse({
+        data: [
+          {
+            id: 'audius-playlist-1',
+            playlist_name: 'Audius Trending Playlist',
+            description: 'Fresh from Audius',
+            track_count: 2,
+            artwork: {
+              '1000x1000': 'https://cdn.audius.test/playlist.jpg',
+            },
+            user: {
+              id: 'curator-1',
+              name: 'Audius Curator',
+            },
+          },
+        ],
+      });
+    }
+
+    if (host === 'api.audius.co' && pathname === '/v1/tracks/search') {
+      return createJsonResponse({
+        data: [
+          {
+            id: 'audius-search-track-1',
+            title: 'Audius Search Track',
+            duration: 189,
+            genre: 'House',
+            artwork: {
+              '1000x1000': 'https://cdn.audius.test/search-track.jpg',
+            },
+            user: {
+              id: 'artist-2',
+              name: 'Search Artist',
+            },
+          },
+        ],
+      });
+    }
+
+    if (host === 'api.audius.co' && pathname === '/v1/playlists/search') {
+      return createJsonResponse({
+        data: [
+          {
+            id: 'audius-playlist-2',
+            playlist_name: 'Audius Search Playlist',
+            description: 'Search playlist',
+            track_count: 1,
+            artwork: {
+              '1000x1000': 'https://cdn.audius.test/search-playlist.jpg',
+            },
+            user: {
+              id: 'curator-2',
+              name: 'Search Curator',
+            },
+          },
+        ],
+      });
+    }
+
+    if (
+      host === 'api.audius.co' &&
+      pathname === '/v1/playlists/audius-playlist-1'
+    ) {
+      return createJsonResponse({
+        data: [
+          {
+            id: 'audius-playlist-1',
+            playlist_name: 'Audius Trending Playlist',
+            description: 'Fresh from Audius',
+            track_count: 2,
+            artwork: {
+              '1000x1000': 'https://cdn.audius.test/playlist.jpg',
+            },
+            user: {
+              id: 'curator-1',
+              name: 'Audius Curator',
+            },
+            tracks: [
+              {
+                id: 'audius-track-1',
+                title: 'Playlist Audius Track',
+                duration: 201,
+                genre: 'Electronic',
+                artwork: {
+                  '1000x1000': 'https://cdn.audius.test/playlist-track.jpg',
+                },
+                user: {
+                  id: 'artist-1',
+                  name: 'Audius Artist',
+                },
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    if (host === 'api.audius.co' && pathname === '/v1/tracks/audius-track-1') {
+      return createJsonResponse({
+        data: {
+          id: 'audius-track-1',
+          title: 'Audius Track Detail',
+          duration: 201,
+          genre: 'Electronic',
+          artwork: {
+            '1000x1000': 'https://cdn.audius.test/track-detail.jpg',
+          },
+          stream: {
+            url: 'https://stream.audius.test/audius-track-1.mp3',
+          },
+          access: {
+            stream: true,
+          },
+          user: {
+            id: 'artist-1',
+            name: 'Audius Artist',
+          },
+        },
+      });
+    }
+
+    if (host === 'api.jamendo.com' && pathname === '/v3.0/tracks/') {
+      if (id === 'jamendo-track-1') {
+        return createJsonResponse({
+          headers: {
+            status: 'success',
+          },
+          results: [
+            {
+              id: 'jamendo-track-1',
+              name: 'Jamendo Track Detail',
+              duration: 233,
+              artist_name: 'Jamendo Artist',
+              album_id: 'album-1',
+              album_name: 'Jamendo Album',
+              image: 'https://cdn.jamendo.test/track.jpg',
+              audio: 'https://stream.jamendo.test/jamendo-track-1.mp3',
+            },
+          ],
+        });
+      }
+
+      return createJsonResponse({
+        headers: {
+          status: 'success',
+        },
+        results: [
+          {
+            id: 'jamendo-track-2',
+            name: 'Jamendo Search Track',
+            duration: 244,
+            artist_name: 'Jamendo Search Artist',
+            album_id: 'album-2',
+            album_name: 'Jamendo Search Album',
+            image: 'https://cdn.jamendo.test/search-track.jpg',
+            audio: 'https://stream.jamendo.test/jamendo-track-2.mp3',
+          },
+        ],
+      });
+    }
+
+    if (host === 'api.jamendo.com' && pathname === '/v3.0/playlists/') {
+      return createJsonResponse({
+        headers: {
+          status: 'success',
+        },
+        results: [
+          {
+            id: 'jamendo-playlist-1',
+            name: 'Jamendo Featured Playlist',
+            creationdate: '2026-06-01',
+            user_name: 'Jamendo Curator',
+            image: 'https://cdn.jamendo.test/playlist.jpg',
+          },
+        ],
+      });
+    }
+
+    if (host === 'api.jamendo.com' && pathname === '/v3.0/playlists/tracks/') {
+      return createJsonResponse({
+        headers: {
+          status: 'success',
+        },
+        results: [
+          {
+            id: 'jamendo-playlist-1',
+            name: 'Jamendo Featured Playlist',
+            creationdate: '2026-06-01',
+            user_name: 'Jamendo Curator',
+            image: 'https://cdn.jamendo.test/playlist.jpg',
+            track_count: 1,
+            tracks: [
+              {
+                id: 'jamendo-track-1',
+                name: 'Jamendo Playlist Track',
+                duration: 233,
+                artist_name: 'Jamendo Artist',
+                album_id: 'album-1',
+                album_name: 'Jamendo Album',
+                image: 'https://cdn.jamendo.test/playlist-track.jpg',
+                audio: 'https://stream.jamendo.test/jamendo-track-1.mp3',
+              },
+            ],
+          },
+        ],
+      });
+    }
 
     if (pathname === '/api/toplist') {
       return createJsonResponse({
@@ -260,15 +490,21 @@ describe('/api/music route handlers', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.NEXT_PUBLIC_API_BASE_URL = 'https://music.163.com';
+    delete process.env.AUDIOUS_API_BASE_URL;
+    delete process.env.JAMENDO_API_BASE_URL;
+    delete process.env.JAMENDO_CLIENT_ID;
     global.fetch = createMusicFetchMock();
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
     delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    delete process.env.AUDIOUS_API_BASE_URL;
+    delete process.env.JAMENDO_API_BASE_URL;
+    delete process.env.JAMENDO_CLIENT_ID;
   });
 
-  it('returns only netease as enabled and keeps unfinished providers disabled', async () => {
+  it('returns audius as enabled and keeps jamendo behind client id', async () => {
     const response = await getMusicSources();
     const payload = await response.json();
 
@@ -281,14 +517,29 @@ describe('/api/music route handlers', () => {
     );
     expect(payload.sources[1]).toEqual(
       expect.objectContaining({
-        key: 'qq',
-        enabled: false,
+        key: 'audius',
+        enabled: true,
       })
     );
     expect(payload.sources[2]).toEqual(
       expect.objectContaining({
-        key: 'kugou',
+        key: 'jamendo',
         enabled: false,
+      })
+    );
+  });
+
+  it('enables jamendo after client id is configured', async () => {
+    process.env.JAMENDO_CLIENT_ID = 'jamendo-test-client';
+
+    const response = await getMusicSources();
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.sources[2]).toEqual(
+      expect.objectContaining({
+        key: 'jamendo',
+        enabled: true,
       })
     );
   });
@@ -397,5 +648,93 @@ describe('/api/music route handlers', () => {
     await expect(response.json()).resolves.toEqual({
       error: '当前曲目受版权或会员限制，暂不可播放',
     });
+  });
+
+  it('hydrates audius music routes from audius upstream payloads', async () => {
+    const homeResponse = await getMusicHome(
+      new NextRequest('http://localhost/api/music/home?source=audius')
+    );
+    const searchResponse = await getMusicSearch(
+      new NextRequest('http://localhost/api/music/search?source=audius&q=test')
+    );
+    const collectionResponse = await getMusicCollection(
+      new NextRequest(
+        'http://localhost/api/music/collection?source=audius&id=audius-playlist-1'
+      )
+    );
+    const trackResponse = await getMusicTrack(
+      new NextRequest(
+        'http://localhost/api/music/track?source=audius&id=audius-track-1'
+      )
+    );
+    const lyricResponse = await getMusicLyric(
+      new NextRequest(
+        'http://localhost/api/music/lyric?source=audius&id=audius-track-1'
+      )
+    );
+
+    const homePayload = await homeResponse.json();
+    const searchPayload = await searchResponse.json();
+    const collectionPayload = await collectionResponse.json();
+    const trackPayload = await trackResponse.json();
+    const lyricPayload = await lyricResponse.json();
+
+    expect(homeResponse.status).toBe(200);
+    expect(homePayload.spotlight[0].title).toBe('Audius Spotlight');
+    expect(homePayload.sections[0].tab).toBe('hot');
+    expect(searchPayload.tracks[0].title).toBe('Audius Search Track');
+    expect(searchPayload.collections[0].id).toBe('audius-playlist-2');
+    expect(collectionPayload.title).toBe('Audius Trending Playlist');
+    expect(collectionPayload.tracks[0].title).toBe('Playlist Audius Track');
+    expect(trackPayload.track.title).toBe('Audius Track Detail');
+    expect(trackPayload.streamUrl).toBe(
+      'https://stream.audius.test/audius-track-1.mp3'
+    );
+    expect(lyricPayload.lines).toEqual([]);
+  });
+
+  it('hydrates jamendo music routes when client id is configured', async () => {
+    process.env.JAMENDO_CLIENT_ID = 'jamendo-test-client';
+
+    const homeResponse = await getMusicHome(
+      new NextRequest('http://localhost/api/music/home?source=jamendo')
+    );
+    const searchResponse = await getMusicSearch(
+      new NextRequest('http://localhost/api/music/search?source=jamendo&q=test')
+    );
+    const collectionResponse = await getMusicCollection(
+      new NextRequest(
+        'http://localhost/api/music/collection?source=jamendo&id=jamendo-playlist-1'
+      )
+    );
+    const trackResponse = await getMusicTrack(
+      new NextRequest(
+        'http://localhost/api/music/track?source=jamendo&id=jamendo-track-1'
+      )
+    );
+    const lyricResponse = await getMusicLyric(
+      new NextRequest(
+        'http://localhost/api/music/lyric?source=jamendo&id=jamendo-track-1'
+      )
+    );
+
+    const homePayload = await homeResponse.json();
+    const searchPayload = await searchResponse.json();
+    const collectionPayload = await collectionResponse.json();
+    const trackPayload = await trackResponse.json();
+    const lyricPayload = await lyricResponse.json();
+
+    expect(homeResponse.status).toBe(200);
+    expect(homePayload.spotlight[0].title).toBe('Jamendo Search Track');
+    expect(homePayload.sections[0].tab).toBe('hot');
+    expect(searchPayload.tracks[0].title).toBe('Jamendo Search Track');
+    expect(searchPayload.collections[0].id).toBe('jamendo-playlist-1');
+    expect(collectionPayload.title).toBe('Jamendo Featured Playlist');
+    expect(collectionPayload.tracks[0].title).toBe('Jamendo Playlist Track');
+    expect(trackPayload.track.title).toBe('Jamendo Track Detail');
+    expect(trackPayload.streamUrl).toBe(
+      'https://stream.jamendo.test/jamendo-track-1.mp3'
+    );
+    expect(lyricPayload.lines).toEqual([]);
   });
 });

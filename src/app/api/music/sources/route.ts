@@ -1,8 +1,8 @@
 import {
   createMusicErrorResponse,
   createMusicJsonResponse,
-  getMusicSourcesPayload,
 } from '@/lib/music/netease';
+import { getMusicSourcesPayload } from '@/lib/music/service';
 
 export const runtime = 'nodejs';
 

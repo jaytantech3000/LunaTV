@@ -193,16 +193,19 @@ describe('MusicPageClient', () => {
 
     expect(
       await screen.findByText(
-        /统一 music client 已接通平台切换、榜单、热门、歌单、搜索和全局播放器/,
+        /统一 music client 已接通平台切换、热门、歌单、搜索和全局播放器/,
         {
           selector: 'p',
         }
       )
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Web 与桌面本地模式都已接入网易云真实数据/, {
-        selector: 'p',
-      })
+      screen.getByText(
+        /当前 Web 已接入网易云与 Audius，Jamendo 在配置 client id 后可用/,
+        {
+          selector: 'p',
+        }
+      )
     ).toBeInTheDocument();
   });
 

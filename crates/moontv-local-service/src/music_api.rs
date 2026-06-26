@@ -1,17 +1,30 @@
+use std::io::Read;
+
 use axum::{
     Json,
     body::Body,
     extract::{Query, State},
     http::{
         HeaderMap, HeaderValue, Method, StatusCode,
-        header::{CACHE_CONTROL, LOCATION, RANGE, REFERER, USER_AGENT},
+        header::{
+            ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, LOCATION, RANGE, REFERER, USER_AGENT,
+        },
     },
     response::{IntoResponse, Response},
 };
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::Value;
 
 use crate::{AppError, AppResult, AppState, DEFAULT_PROXY_TIMEOUT_MS};
 
+const AUDIOUS_SOURCE_KEY: &str = "audius";
+const AUDIOUS_SOURCE_NAME: &str = "Audius";
+const AUDIOUS_APP_NAME: &str = "LunaTV";
+const AUDIOUS_SOURCE_TABS: &[&str] = &["home", "hot", "playlist", "search"];
+const JAMENDO_SOURCE_KEY: &str = "jamendo";
+const JAMENDO_SOURCE_NAME: &str = "Jamendo";
+const JAMENDO_SOURCE_TABS: &[&str] = &["home", "hot", "playlist", "search"];
 const NETEASE_SOURCE_KEY: &str = "netease";
 const NETEASE_SOURCE_NAME: &str = "网易云音乐";
 const NETEASE_REFERER: &str = "https://music.163.com/";
@@ -24,6 +37,13 @@ const SEARCH_PLAYLIST_LIMIT: usize = 6;
 const SUMMARY_ACCENT_COLORS: &[&str] = &[
     "#ff5f6d", "#7b61ff", "#0ea5e9", "#0f766e", "#22c55e", "#f97316",
 ];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MusicProviderKey {
+    Netease,
+    Audius,
+    Jamendo,
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct MusicSourceQuery {
@@ -198,11 +218,11 @@ struct NeteaseToplist {
     #[serde(default)]
     cover_img_url: String,
     #[serde(default)]
-    description: String,
+    description: Option<String>,
     #[serde(default)]
     track_count: usize,
     #[serde(default)]
-    update_frequency: String,
+    update_frequency: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,6 +291,8 @@ struct NeteasePlaylistDetailResponse {
     #[serde(default)]
     message: Option<String>,
     result: Option<NeteasePlaylistDetail>,
+    #[serde(default)]
+    playlist: Option<NeteasePlaylistDetail>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -285,7 +307,7 @@ struct NeteasePlaylistDetail {
     #[serde(default)]
     track_count: usize,
     #[serde(default)]
-    update_frequency: String,
+    update_frequency: Option<String>,
     #[serde(default)]
     creator: Option<NeteaseCreator>,
     #[serde(default)]
@@ -316,11 +338,11 @@ struct NeteaseSong {
     name: String,
     #[serde(default)]
     fee: i64,
-    #[serde(default)]
+    #[serde(default, alias = "dt")]
     duration: u64,
-    #[serde(default)]
+    #[serde(default, alias = "ar")]
     artists: Vec<NeteaseArtist>,
-    #[serde(default)]
+    #[serde(default, alias = "al")]
     album: Option<NeteaseAlbum>,
 }
 
@@ -359,42 +381,239 @@ struct NeteaseLyricBlock {
     lyric: String,
 }
 
-pub(crate) async fn get_music_sources() -> AppResult<Response> {
+#[derive(Debug, Deserialize)]
+struct AudiusResponse<T> {
+    #[serde(default)]
+    data: Option<T>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AudiusArtwork {
+    #[serde(default, rename = "150x150")]
+    size_150: Option<String>,
+    #[serde(default, rename = "480x480")]
+    size_480: Option<String>,
+    #[serde(default, rename = "1000x1000")]
+    size_1000: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AudiusUser {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    handle: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AudiusTrackAccess {
+    #[serde(default)]
+    stream: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AudiusTrackStream {
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AudiusTrack {
+    #[serde(default)]
+    access: Option<AudiusTrackAccess>,
+    #[serde(default)]
+    artwork: Option<AudiusArtwork>,
+    #[serde(default)]
+    duration: u64,
+    #[serde(default)]
+    genre: Option<String>,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    is_streamable: Option<bool>,
+    #[serde(default)]
+    stream: Option<AudiusTrackStream>,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    user: Option<AudiusUser>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AudiusPlaylist {
+    #[serde(default)]
+    artwork: Option<AudiusArtwork>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    playlist_name: String,
+    #[serde(default)]
+    track_count: usize,
+    #[serde(default)]
+    tracks: Vec<AudiusTrack>,
+    #[serde(default)]
+    user: Option<AudiusUser>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct JamendoHeaders {
+    #[serde(default)]
+    error_message: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JamendoResponse<T> {
+    #[serde(default)]
+    headers: Option<JamendoHeaders>,
+    #[serde(default)]
+    results: Vec<T>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct JamendoTrack {
+    #[serde(default)]
+    album_id: Option<Value>,
+    #[serde(default)]
+    album_name: Option<String>,
+    #[serde(default)]
+    audio: Option<String>,
+    #[serde(default)]
+    audiodownload: Option<String>,
+    #[serde(default)]
+    artist_id: Option<Value>,
+    #[serde(default)]
+    artist_name: Option<String>,
+    #[serde(default)]
+    duration: Option<u64>,
+    #[serde(default)]
+    id: Option<Value>,
+    #[serde(default)]
+    image: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct JamendoPlaylist {
+    #[serde(default)]
+    creationdate: Option<String>,
+    #[serde(default)]
+    id: Option<Value>,
+    #[serde(default)]
+    image: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    track_count: Option<usize>,
+    #[serde(default)]
+    tracks: Vec<JamendoTrack>,
+    #[serde(default)]
+    user_name: Option<String>,
+}
+
+fn build_music_source_payload(
+    key: &str,
+    name: &str,
+    enabled: bool,
+    tabs: &[&str],
+    description: &str,
+) -> MusicSourcePayload {
+    MusicSourcePayload {
+        key: key.to_string(),
+        name: name.to_string(),
+        provider: key.to_string(),
+        enabled,
+        tabs: tabs.iter().map(|tab| (*tab).to_string()).collect(),
+        description: Some(description.to_string()),
+    }
+}
+
+fn is_jamendo_enabled(state: &AppState) -> bool {
+    state
+        .jamendo_client_id
+        .as_ref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn resolve_music_source(source: Option<&str>) -> AppResult<MusicProviderKey> {
+    let normalized = source.unwrap_or(NETEASE_SOURCE_KEY).trim();
+
+    if normalized.is_empty() || normalized == NETEASE_SOURCE_KEY {
+        return Ok(MusicProviderKey::Netease);
+    }
+
+    match normalized {
+        AUDIOUS_SOURCE_KEY => Ok(MusicProviderKey::Audius),
+        JAMENDO_SOURCE_KEY => Ok(MusicProviderKey::Jamendo),
+        _ => Err(AppError::bad_request("Unsupported music source")),
+    }
+}
+
+fn require_music_provider(
+    state: &AppState,
+    source: Option<&str>,
+) -> AppResult<MusicProviderKey> {
+    let provider = resolve_music_source(source)?;
+
+    if provider == MusicProviderKey::Jamendo && !is_jamendo_enabled(state) {
+        return Err(AppError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Jamendo 暂未开放",
+        ));
+    }
+
+    Ok(provider)
+}
+
+pub(crate) async fn get_music_sources(State(state): State<AppState>) -> AppResult<Response> {
     Ok(no_store_json_response(MusicSourcesPayload {
         sources: vec![
-            MusicSourcePayload {
-                key: NETEASE_SOURCE_KEY.to_string(),
-                name: NETEASE_SOURCE_NAME.to_string(),
-                provider: NETEASE_SOURCE_KEY.to_string(),
-                enabled: true,
-                tabs: MUSIC_SOURCE_TABS
-                    .iter()
-                    .map(|tab| (*tab).to_string())
-                    .collect(),
-                description: Some("桌面本地模式已接入真实网易云公开数据。".to_string()),
-            },
-            MusicSourcePayload {
-                key: "qq".to_string(),
-                name: "QQ 音乐".to_string(),
-                provider: "qq".to_string(),
-                enabled: false,
-                tabs: DISABLED_MUSIC_SOURCE_TABS
-                    .iter()
-                    .map(|tab| (*tab).to_string())
-                    .collect(),
-                description: Some("接入中，暂未开放。".to_string()),
-            },
-            MusicSourcePayload {
-                key: "kugou".to_string(),
-                name: "酷狗音乐".to_string(),
-                provider: "kugou".to_string(),
-                enabled: false,
-                tabs: DISABLED_MUSIC_SOURCE_TABS
-                    .iter()
-                    .map(|tab| (*tab).to_string())
-                    .collect(),
-                description: Some("接入中，暂未开放。".to_string()),
-            },
+            build_music_source_payload(
+                NETEASE_SOURCE_KEY,
+                NETEASE_SOURCE_NAME,
+                true,
+                MUSIC_SOURCE_TABS,
+                "桌面本地模式已接入真实网易云公开数据。",
+            ),
+            build_music_source_payload(
+                AUDIOUS_SOURCE_KEY,
+                AUDIOUS_SOURCE_NAME,
+                true,
+                AUDIOUS_SOURCE_TABS,
+                "桌面本地模式已接入 Audius 官方公开 API。",
+            ),
+            build_music_source_payload(
+                JAMENDO_SOURCE_KEY,
+                JAMENDO_SOURCE_NAME,
+                is_jamendo_enabled(&state),
+                JAMENDO_SOURCE_TABS,
+                if is_jamendo_enabled(&state) {
+                    "桌面本地模式已接入 Jamendo 官方公开 API。"
+                } else {
+                    "需要配置 JAMENDO_CLIENT_ID 后开放。"
+                },
+            ),
+            build_music_source_payload(
+                "qq",
+                "QQ 音乐",
+                false,
+                DISABLED_MUSIC_SOURCE_TABS,
+                "接入中，暂未开放。",
+            ),
+            build_music_source_payload(
+                "kugou",
+                "酷狗音乐",
+                false,
+                DISABLED_MUSIC_SOURCE_TABS,
+                "接入中，暂未开放。",
+            ),
         ],
     }))
 }
@@ -403,10 +622,80 @@ pub(crate) async fn get_music_home(
     State(state): State<AppState>,
     Query(params): Query<MusicSourceQuery>,
 ) -> AppResult<Response> {
-    resolve_netease_source(params.source.as_deref())?;
+    match require_music_provider(&state, params.source.as_deref())? {
+        MusicProviderKey::Netease => get_netease_music_home(&state).await,
+        MusicProviderKey::Audius => get_audius_music_home(&state).await,
+        MusicProviderKey::Jamendo => get_jamendo_music_home(&state).await,
+    }
+}
+
+pub(crate) async fn get_music_search(
+    State(state): State<AppState>,
+    Query(params): Query<MusicSearchQuery>,
+) -> AppResult<Response> {
+    let query = params.q.unwrap_or_default().trim().to_string();
+    let page = params.page.unwrap_or(1).max(1);
+
+    match require_music_provider(&state, params.source.as_deref())? {
+        MusicProviderKey::Netease => get_netease_music_search(&state, query, page).await,
+        MusicProviderKey::Audius => get_audius_music_search(&state, query, page).await,
+        MusicProviderKey::Jamendo => get_jamendo_music_search(&state, query, page).await,
+    }
+}
+
+pub(crate) async fn get_music_collection(
+    State(state): State<AppState>,
+    Query(params): Query<MusicCollectionQuery>,
+) -> AppResult<Response> {
+    let collection_id = require_query_value(params.id.as_deref(), "Missing playlist id")?;
+
+    match require_music_provider(&state, params.source.as_deref())? {
+        MusicProviderKey::Netease => get_netease_music_collection(&state, &collection_id).await,
+        MusicProviderKey::Audius => get_audius_music_collection(&state, &collection_id).await,
+        MusicProviderKey::Jamendo => get_jamendo_music_collection(&state, &collection_id).await,
+    }
+}
+
+pub(crate) async fn get_music_track(
+    State(state): State<AppState>,
+    Query(params): Query<MusicTrackQuery>,
+) -> AppResult<Response> {
+    let track_id = require_query_value(params.id.as_deref(), "Missing track id")?;
+    let quality = normalize_optional_text(params.quality.clone()).unwrap_or_else(|| "standard".to_string());
+
+    match require_music_provider(&state, params.source.as_deref())? {
+        MusicProviderKey::Netease => get_netease_music_track(&state, &track_id, &quality).await,
+        MusicProviderKey::Audius => get_audius_music_track(&state, &track_id, &quality).await,
+        MusicProviderKey::Jamendo => get_jamendo_music_track(&state, &track_id, &quality).await,
+    }
+}
+
+pub(crate) async fn get_music_lyric(
+    State(state): State<AppState>,
+    Query(params): Query<MusicTrackQuery>,
+) -> AppResult<Response> {
+    let track_id = require_query_value(params.id.as_deref(), "Missing track id")?;
+
+    match require_music_provider(&state, params.source.as_deref())? {
+        MusicProviderKey::Netease => get_netease_music_lyric(&state, &track_id).await,
+        MusicProviderKey::Audius => get_empty_music_lyric_payload(AUDIOUS_SOURCE_KEY, track_id),
+        MusicProviderKey::Jamendo => get_empty_music_lyric_payload(JAMENDO_SOURCE_KEY, track_id),
+    }
+}
+
+fn get_empty_music_lyric_payload(source: &str, track_id: String) -> AppResult<Response> {
+    Ok(no_store_json_response(MusicLyricPayload {
+        track_id,
+        source: source.to_string(),
+        lines: Vec::new(),
+        offset_ms: None,
+    }))
+}
+
+async fn get_netease_music_home(state: &AppState) -> AppResult<Response> {
     let (toplists_result, playlists_result) = tokio::join!(
-        fetch_netease_toplists(&state),
-        fetch_netease_recommended_playlists(&state)
+        fetch_netease_toplists(state),
+        fetch_netease_recommended_playlists(state)
     );
     let toplists = match &toplists_result {
         Ok(value) => value.clone(),
@@ -428,7 +717,7 @@ pub(crate) async fn get_music_home(
     }
 
     let spotlight = if let Some(first_toplist) = toplists.first() {
-        match fetch_netease_playlist_detail(&state, &first_toplist.id).await {
+        match fetch_netease_playlist_detail(state, &first_toplist.id).await {
             Ok(playlist) => playlist
                 .tracks
                 .into_iter()
@@ -460,7 +749,7 @@ pub(crate) async fn get_music_home(
             format!(
                 "来自 {} · {}",
                 item.name,
-                fallback_label(&item.update_frequency, "实时更新")
+                fallback_label(item.update_frequency.as_deref(), "实时更新")
             )
         })
         .unwrap_or_else(|| "来自网易云公开榜单。".to_string());
@@ -509,14 +798,11 @@ pub(crate) async fn get_music_home(
     }))
 }
 
-pub(crate) async fn get_music_search(
-    State(state): State<AppState>,
-    Query(params): Query<MusicSearchQuery>,
+async fn get_netease_music_search(
+    state: &AppState,
+    query: String,
+    page: usize,
 ) -> AppResult<Response> {
-    resolve_netease_source(params.source.as_deref())?;
-    let query = params.q.unwrap_or_default().trim().to_string();
-    let page = params.page.unwrap_or(1).max(1);
-
     if query.is_empty() {
         return Ok(no_store_json_response(MusicSearchPayload {
             source: NETEASE_SOURCE_KEY.to_string(),
@@ -527,8 +813,8 @@ pub(crate) async fn get_music_search(
     }
 
     let (tracks, collections) = tokio::try_join!(
-        fetch_netease_search_tracks(&state, &query, page),
-        fetch_netease_search_playlists(&state, &query, page),
+        fetch_netease_search_tracks(state, &query, page),
+        fetch_netease_search_playlists(state, &query, page),
     )?;
 
     Ok(no_store_json_response(MusicSearchPayload {
@@ -548,14 +834,12 @@ pub(crate) async fn get_music_search(
     }))
 }
 
-pub(crate) async fn get_music_collection(
-    State(state): State<AppState>,
-    Query(params): Query<MusicCollectionQuery>,
+async fn get_netease_music_collection(
+    state: &AppState,
+    playlist_id: &str,
 ) -> AppResult<Response> {
-    resolve_netease_source(params.source.as_deref())?;
-    let playlist_id = require_query_value(params.id.as_deref(), "Missing playlist id")?;
     let playlist = fetch_netease_playlist_detail(
-        &state,
+        state,
         &playlist_id
             .parse()
             .map_err(|_| AppError::bad_request("Invalid playlist id"))?,
@@ -577,19 +861,17 @@ pub(crate) async fn get_music_collection(
             .map(to_music_track_payload)
             .collect(),
         curator: playlist.creator.map(|creator| creator.nickname),
-        updated_at_label: normalize_optional_text(Some(playlist.update_frequency)),
+        updated_at_label: normalize_optional_text(playlist.update_frequency),
     }))
 }
 
-pub(crate) async fn get_music_track(
-    State(state): State<AppState>,
-    Query(params): Query<MusicTrackQuery>,
+async fn get_netease_music_track(
+    state: &AppState,
+    track_id: &str,
+    quality: &str,
 ) -> AppResult<Response> {
-    resolve_netease_source(params.source.as_deref())?;
-    let track_id = require_query_value(params.id.as_deref(), "Missing track id")?;
-    let quality = normalize_optional_text(params.quality).unwrap_or_else(|| "standard".to_string());
     let song = fetch_netease_song_detail(
-        &state,
+        state,
         &track_id
             .parse()
             .map_err(|_| AppError::bad_request("Invalid track id"))?,
@@ -609,18 +891,13 @@ pub(crate) async fn get_music_track(
         stream_url: format!(
             "/media/audio/stream?source={NETEASE_SOURCE_KEY}&id={track_id}&quality={quality}"
         ),
-        quality,
+        quality: quality.to_string(),
     }))
 }
 
-pub(crate) async fn get_music_lyric(
-    State(state): State<AppState>,
-    Query(params): Query<MusicTrackQuery>,
-) -> AppResult<Response> {
-    resolve_netease_source(params.source.as_deref())?;
-    let track_id = require_query_value(params.id.as_deref(), "Missing track id")?;
+async fn get_netease_music_lyric(state: &AppState, track_id: &str) -> AppResult<Response> {
     let lyric = fetch_netease_lyric(
-        &state,
+        state,
         &track_id
             .parse()
             .map_err(|_| AppError::bad_request("Invalid track id"))?,
@@ -651,10 +928,793 @@ pub(crate) async fn get_music_lyric(
     .collect();
 
     Ok(no_store_json_response(MusicLyricPayload {
-        track_id,
+        track_id: track_id.to_string(),
         source: NETEASE_SOURCE_KEY.to_string(),
         lines,
         offset_ms: None,
+    }))
+}
+
+fn resolve_audius_artwork_url(artwork: Option<&AudiusArtwork>) -> Option<String> {
+    artwork
+        .and_then(|artwork| {
+            normalize_optional_text(artwork.size_1000.clone())
+                .or_else(|| normalize_optional_text(artwork.size_480.clone()))
+                .or_else(|| normalize_optional_text(artwork.size_150.clone()))
+        })
+        .and_then(|value| normalize_remote_url(&value))
+}
+
+fn resolve_audius_artist_name(track: &AudiusTrack) -> String {
+    track
+        .user
+        .as_ref()
+        .and_then(|user| normalize_optional_text(user.name.clone()))
+        .or_else(|| {
+            track
+                .user
+                .as_ref()
+                .and_then(|user| normalize_optional_text(user.handle.clone()))
+        })
+        .unwrap_or_else(|| "未知歌手".to_string())
+}
+
+fn resolve_audius_stream_url(state: &AppState, track: &AudiusTrack) -> Option<String> {
+    track
+        .stream
+        .as_ref()
+        .and_then(|stream| stream.url.clone())
+        .and_then(|value| normalize_remote_url(&value))
+        .or_else(|| {
+            let track_id = normalize_optional_text(Some(track.id.clone()))?;
+            Some(format!(
+                "{}/v1/tracks/{track_id}/stream?app_name={AUDIOUS_APP_NAME}",
+                state.audius_api_base_url.trim_end_matches('/')
+            ))
+        })
+}
+
+fn is_audius_track_playable(state: &AppState, track: &AudiusTrack) -> bool {
+    if track
+        .access
+        .as_ref()
+        .and_then(|access| access.stream)
+        == Some(false)
+    {
+        return false;
+    }
+
+    if track.is_streamable == Some(false) {
+        return false;
+    }
+
+    resolve_audius_stream_url(state, track).is_some()
+}
+
+fn to_audius_music_track_payload(state: &AppState, track: &AudiusTrack) -> MusicTrackPayload {
+    let artist_name = resolve_audius_artist_name(track);
+
+    MusicTrackPayload {
+        id: track.id.clone(),
+        source: AUDIOUS_SOURCE_KEY.to_string(),
+        title: fallback_label(Some(track.title.as_str()), "未知曲目"),
+        artists: vec![MusicArtistPayload {
+            id: track.user.as_ref().and_then(|user| user.id.clone()),
+            name: artist_name,
+        }],
+        album: None,
+        cover: resolve_audius_artwork_url(track.artwork.as_ref()),
+        duration_ms: (track.duration > 0).then_some(track.duration * 1_000),
+        playable: is_audius_track_playable(state, track),
+        subtitle: normalize_optional_text(track.genre.clone()),
+    }
+}
+
+fn to_audius_playlist_summary(
+    playlist: &AudiusPlaylist,
+    index: usize,
+) -> MusicCollectionSummaryPayload {
+    MusicCollectionSummaryPayload {
+        id: playlist.id.clone(),
+        source: AUDIOUS_SOURCE_KEY.to_string(),
+        kind: "playlist".to_string(),
+        title: fallback_label(Some(playlist.playlist_name.as_str()), "Audius 歌单"),
+        cover: resolve_audius_artwork_url(playlist.artwork.as_ref()),
+        description: normalize_optional_text(playlist.description.clone()).or_else(|| {
+            playlist
+                .user
+                .as_ref()
+                .and_then(|user| normalize_optional_text(user.name.clone()))
+        }),
+        track_count: Some(playlist.track_count),
+        accent_color: Some(pick_accent_color(index)),
+    }
+}
+
+async fn fetch_audius_json<T>(
+    state: &AppState,
+    path: &str,
+    query: &[(&str, String)],
+    fallback: &str,
+) -> AppResult<T>
+where
+    T: DeserializeOwned,
+{
+    let response = state
+        .client
+        .get(format!("{}{}", state.audius_api_base_url.trim_end_matches('/'), path))
+        .query(query)
+        .query(&[("app_name", AUDIOUS_APP_NAME)])
+        .header(reqwest::header::ACCEPT, "application/json")
+        .timeout(std::time::Duration::from_millis(DEFAULT_PROXY_TIMEOUT_MS))
+        .send()
+        .await
+        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, format!("{fallback}: {error}")))?;
+
+    if !response.status().is_success() {
+        return Err(AppError::new(StatusCode::BAD_GATEWAY, fallback));
+    }
+
+    response
+        .json::<T>()
+        .await
+        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, format!("{fallback}: {error}")))
+}
+
+async fn fetch_audius_trending_tracks(state: &AppState) -> AppResult<Vec<AudiusTrack>> {
+    let payload = fetch_audius_json::<AudiusResponse<Vec<AudiusTrack>>>(
+        state,
+        "/v1/tracks/trending",
+        &[("limit", HOME_PLAYLIST_LIMIT.max(HOME_TOPLIST_LIMIT).to_string())],
+        "获取 Audius 热门曲目失败",
+    )
+    .await?;
+
+    Ok(payload.data.unwrap_or_default())
+}
+
+async fn fetch_audius_trending_playlists(state: &AppState) -> AppResult<Vec<AudiusPlaylist>> {
+    let payload = fetch_audius_json::<AudiusResponse<Vec<AudiusPlaylist>>>(
+        state,
+        "/v1/playlists/trending",
+        &[("limit", HOME_PLAYLIST_LIMIT.to_string())],
+        "获取 Audius 热门歌单失败",
+    )
+    .await?;
+
+    Ok(payload.data.unwrap_or_default())
+}
+
+async fn fetch_audius_search_tracks(
+    state: &AppState,
+    query: &str,
+    page: usize,
+) -> AppResult<Vec<AudiusTrack>> {
+    let offset = page.saturating_sub(1) * SEARCH_TRACK_LIMIT;
+    let payload = fetch_audius_json::<AudiusResponse<Vec<AudiusTrack>>>(
+        state,
+        "/v1/tracks/search",
+        &[
+            ("query", query.to_string()),
+            ("limit", SEARCH_TRACK_LIMIT.to_string()),
+            ("offset", offset.to_string()),
+        ],
+        "搜索 Audius 曲目失败",
+    )
+    .await?;
+
+    Ok(payload.data.unwrap_or_default())
+}
+
+async fn fetch_audius_search_playlists(
+    state: &AppState,
+    query: &str,
+    page: usize,
+) -> AppResult<Vec<AudiusPlaylist>> {
+    let offset = page.saturating_sub(1) * SEARCH_PLAYLIST_LIMIT;
+    let payload = fetch_audius_json::<AudiusResponse<Vec<AudiusPlaylist>>>(
+        state,
+        "/v1/playlists/search",
+        &[
+            ("query", query.to_string()),
+            ("limit", SEARCH_PLAYLIST_LIMIT.to_string()),
+            ("offset", offset.to_string()),
+        ],
+        "搜索 Audius 歌单失败",
+    )
+    .await?;
+
+    Ok(payload.data.unwrap_or_default())
+}
+
+async fn fetch_audius_playlist_detail(
+    state: &AppState,
+    playlist_id: &str,
+) -> AppResult<AudiusPlaylist> {
+    let payload = fetch_audius_json::<AudiusResponse<Vec<AudiusPlaylist>>>(
+        state,
+        &format!("/v1/playlists/{playlist_id}"),
+        &[],
+        "获取 Audius 歌单详情失败",
+    )
+    .await?;
+
+    payload
+        .data
+        .unwrap_or_default()
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "合集不存在"))
+}
+
+async fn fetch_audius_track_detail(state: &AppState, track_id: &str) -> AppResult<AudiusTrack> {
+    let payload = fetch_audius_json::<AudiusResponse<AudiusTrack>>(
+        state,
+        &format!("/v1/tracks/{track_id}"),
+        &[],
+        "获取 Audius 曲目信息失败",
+    )
+    .await?;
+
+    payload
+        .data
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "曲目不存在"))
+}
+
+async fn get_audius_music_home(state: &AppState) -> AppResult<Response> {
+    let (tracks_result, playlists_result) = tokio::join!(
+        fetch_audius_trending_tracks(state),
+        fetch_audius_trending_playlists(state)
+    );
+    let tracks = match &tracks_result {
+        Ok(value) => value.clone(),
+        Err(_) => Vec::new(),
+    };
+    let playlists = match &playlists_result {
+        Ok(value) => value.clone(),
+        Err(_) => Vec::new(),
+    };
+
+    if tracks.is_empty() && playlists.is_empty() {
+        if let Err(error) = tracks_result {
+            return Err(error);
+        }
+
+        if let Err(error) = playlists_result {
+            return Err(error);
+        }
+    }
+
+    let spotlight = tracks
+        .iter()
+        .take(HOME_TOPLIST_LIMIT.max(HOME_PLAYLIST_LIMIT))
+        .map(|track| to_audius_music_track_payload(state, track))
+        .filter(|track| track.playable)
+        .collect::<Vec<_>>();
+
+    let mut sections = Vec::new();
+    if !tracks.is_empty() {
+        sections.push(MusicHomeSectionPayload {
+            id: "audius-hot".to_string(),
+            title: "热门单曲".to_string(),
+            tab: "hot".to_string(),
+            kind: "track-list".to_string(),
+            description: Some("来自 Audius Trending Tracks。".to_string()),
+            collections: None,
+            tracks: Some(spotlight.clone()),
+        });
+    }
+    if !playlists.is_empty() {
+        sections.push(MusicHomeSectionPayload {
+            id: "audius-playlist".to_string(),
+            title: "热门歌单".to_string(),
+            tab: "playlist".to_string(),
+            kind: "collection-list".to_string(),
+            description: Some("来自 Audius Trending Playlists。".to_string()),
+            collections: Some(
+                playlists
+                    .iter()
+                    .take(HOME_PLAYLIST_LIMIT)
+                    .enumerate()
+                    .map(|(index, item)| to_audius_playlist_summary(item, index))
+                    .collect(),
+            ),
+            tracks: None,
+        });
+    }
+
+    Ok(no_store_json_response(MusicHomePayload {
+        source: AUDIOUS_SOURCE_KEY.to_string(),
+        spotlight,
+        sections,
+    }))
+}
+
+async fn get_audius_music_search(
+    state: &AppState,
+    query: String,
+    page: usize,
+) -> AppResult<Response> {
+    if query.is_empty() {
+        return Ok(no_store_json_response(MusicSearchPayload {
+            source: AUDIOUS_SOURCE_KEY.to_string(),
+            query,
+            tracks: Vec::new(),
+            collections: Vec::new(),
+        }));
+    }
+
+    let (tracks, collections) = tokio::try_join!(
+        fetch_audius_search_tracks(state, &query, page),
+        fetch_audius_search_playlists(state, &query, page),
+    )?;
+
+    Ok(no_store_json_response(MusicSearchPayload {
+        source: AUDIOUS_SOURCE_KEY.to_string(),
+        query,
+        tracks: tracks
+            .iter()
+            .take(SEARCH_TRACK_LIMIT)
+            .map(|track| to_audius_music_track_payload(state, track))
+            .collect(),
+        collections: collections
+            .iter()
+            .take(SEARCH_PLAYLIST_LIMIT)
+            .enumerate()
+            .map(|(index, item)| to_audius_playlist_summary(item, index))
+            .collect(),
+    }))
+}
+
+async fn get_audius_music_collection(
+    state: &AppState,
+    playlist_id: &str,
+) -> AppResult<Response> {
+    let playlist = fetch_audius_playlist_detail(state, playlist_id).await?;
+
+    Ok(no_store_json_response(MusicCollectionPayload {
+        id: playlist.id.clone(),
+        source: AUDIOUS_SOURCE_KEY.to_string(),
+        kind: "playlist".to_string(),
+        title: fallback_label(Some(playlist.playlist_name.as_str()), "Audius 歌单"),
+        cover: resolve_audius_artwork_url(playlist.artwork.as_ref()),
+        description: normalize_optional_text(playlist.description.clone()),
+        track_count: Some(if playlist.track_count > 0 {
+            playlist.track_count
+        } else {
+            playlist.tracks.len()
+        }),
+        accent_color: Some(SUMMARY_ACCENT_COLORS[0].to_string()),
+        tracks: playlist
+            .tracks
+            .iter()
+            .map(|track| to_audius_music_track_payload(state, track))
+            .collect(),
+        curator: playlist
+            .user
+            .as_ref()
+            .and_then(|user| normalize_optional_text(user.name.clone())),
+        updated_at_label: None,
+    }))
+}
+
+async fn get_audius_music_track(
+    state: &AppState,
+    track_id: &str,
+    quality: &str,
+) -> AppResult<Response> {
+    let track = fetch_audius_track_detail(state, track_id).await?;
+    let payload = to_audius_music_track_payload(state, &track);
+    let stream_url = resolve_audius_stream_url(state, &track)
+        .ok_or_else(|| AppError::new(StatusCode::FORBIDDEN, "当前曲目暂不可播放"))?;
+
+    if !payload.playable {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "当前曲目暂不可播放",
+        ));
+    }
+
+    Ok(no_store_json_response(MusicTrackDetailPayload {
+        track: payload,
+        stream_url,
+        quality: quality.to_string(),
+    }))
+}
+
+fn jamendo_id_to_string(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(inner)) => normalize_optional_text(Some(inner.clone())),
+        Some(Value::Number(inner)) => Some(inner.to_string()),
+        _ => None,
+    }
+}
+
+fn resolve_jamendo_audio_url(track: &JamendoTrack) -> Option<String> {
+    track
+        .audio
+        .clone()
+        .and_then(|value| normalize_remote_url(&value))
+        .or_else(|| {
+            track.audiodownload
+                .clone()
+                .and_then(|value| normalize_remote_url(&value))
+        })
+}
+
+fn to_jamendo_music_track_payload(track: &JamendoTrack) -> MusicTrackPayload {
+    let cover = track
+        .image
+        .clone()
+        .and_then(|value| normalize_remote_url(&value));
+    let album_title = normalize_optional_text(track.album_name.clone());
+
+    MusicTrackPayload {
+        id: jamendo_id_to_string(track.id.as_ref()).unwrap_or_default(),
+        source: JAMENDO_SOURCE_KEY.to_string(),
+        title: fallback_label(track.name.as_deref(), "未知曲目"),
+        artists: vec![MusicArtistPayload {
+            id: jamendo_id_to_string(track.artist_id.as_ref()),
+            name: fallback_label(track.artist_name.as_deref(), "未知歌手"),
+        }],
+        album: album_title.clone().map(|title| MusicAlbumPayload {
+            id: jamendo_id_to_string(track.album_id.as_ref()),
+            title,
+            cover: cover.clone(),
+        }),
+        cover,
+        duration_ms: track.duration.map(|duration| duration * 1_000),
+        playable: resolve_jamendo_audio_url(track).is_some(),
+        subtitle: album_title,
+    }
+}
+
+fn to_jamendo_playlist_summary(
+    playlist: &JamendoPlaylist,
+    index: usize,
+) -> MusicCollectionSummaryPayload {
+    MusicCollectionSummaryPayload {
+        id: jamendo_id_to_string(playlist.id.as_ref()).unwrap_or_default(),
+        source: JAMENDO_SOURCE_KEY.to_string(),
+        kind: "playlist".to_string(),
+        title: fallback_label(playlist.name.as_deref(), "Jamendo 歌单"),
+        cover: playlist
+            .image
+            .clone()
+            .and_then(|value| normalize_remote_url(&value)),
+        description: normalize_optional_text(playlist.user_name.clone())
+            .or_else(|| normalize_optional_text(playlist.creationdate.clone())),
+        track_count: playlist.track_count,
+        accent_color: Some(pick_accent_color(index)),
+    }
+}
+
+fn ensure_jamendo_success(headers: Option<&JamendoHeaders>, fallback: &str) -> AppResult<()> {
+    if let Some(status) = headers.and_then(|headers| headers.status.as_deref()) {
+        if !status.eq_ignore_ascii_case("success") {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                headers
+                    .and_then(|headers| headers.error_message.clone())
+                    .unwrap_or_else(|| fallback.to_string()),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+async fn fetch_jamendo_json<T>(
+    state: &AppState,
+    path: &str,
+    query: &[(&str, String)],
+    fallback: &str,
+) -> AppResult<JamendoResponse<T>>
+where
+    T: DeserializeOwned + Default,
+{
+    let client_id = state
+        .jamendo_client_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| AppError::new(StatusCode::SERVICE_UNAVAILABLE, "Jamendo 暂未开放"))?;
+
+    let response = state
+        .client
+        .get(format!("{}{}", state.jamendo_api_base_url.trim_end_matches('/'), path))
+        .query(query)
+        .query(&[
+            ("client_id", client_id),
+            ("format", "json".to_string()),
+        ])
+        .header(reqwest::header::ACCEPT, "application/json")
+        .timeout(std::time::Duration::from_millis(DEFAULT_PROXY_TIMEOUT_MS))
+        .send()
+        .await
+        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, format!("{fallback}: {error}")))?;
+
+    if !response.status().is_success() {
+        return Err(AppError::new(StatusCode::BAD_GATEWAY, fallback));
+    }
+
+    let payload = response
+        .json::<JamendoResponse<T>>()
+        .await
+        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, format!("{fallback}: {error}")))?;
+    ensure_jamendo_success(payload.headers.as_ref(), fallback)?;
+    Ok(payload)
+}
+
+async fn fetch_jamendo_home_tracks(state: &AppState) -> AppResult<Vec<JamendoTrack>> {
+    Ok(
+        fetch_jamendo_json::<JamendoTrack>(
+            state,
+            "/tracks/",
+            &[
+                ("audioformat", "mp32".to_string()),
+                ("featured", "1".to_string()),
+                ("limit", HOME_TOPLIST_LIMIT.max(HOME_PLAYLIST_LIMIT).to_string()),
+                ("order", "popularity_total".to_string()),
+            ],
+            "获取 Jamendo 热门曲目失败",
+        )
+        .await?
+        .results,
+    )
+}
+
+async fn fetch_jamendo_playlists(state: &AppState) -> AppResult<Vec<JamendoPlaylist>> {
+    Ok(
+        fetch_jamendo_json::<JamendoPlaylist>(
+            state,
+            "/playlists/",
+            &[
+                ("limit", HOME_PLAYLIST_LIMIT.to_string()),
+                ("order", "popularity_total".to_string()),
+            ],
+            "获取 Jamendo 热门歌单失败",
+        )
+        .await?
+        .results,
+    )
+}
+
+async fn fetch_jamendo_search_tracks(
+    state: &AppState,
+    query: &str,
+    page: usize,
+) -> AppResult<Vec<JamendoTrack>> {
+    let offset = page.saturating_sub(1) * SEARCH_TRACK_LIMIT;
+    Ok(
+        fetch_jamendo_json::<JamendoTrack>(
+            state,
+            "/tracks/",
+            &[
+                ("audioformat", "mp32".to_string()),
+                ("limit", SEARCH_TRACK_LIMIT.to_string()),
+                ("offset", offset.to_string()),
+                ("order", "popularity_total".to_string()),
+                ("search", query.to_string()),
+            ],
+            "搜索 Jamendo 曲目失败",
+        )
+        .await?
+        .results,
+    )
+}
+
+async fn fetch_jamendo_search_playlists(
+    state: &AppState,
+    query: &str,
+    page: usize,
+) -> AppResult<Vec<JamendoPlaylist>> {
+    let offset = page.saturating_sub(1) * SEARCH_PLAYLIST_LIMIT;
+    Ok(
+        fetch_jamendo_json::<JamendoPlaylist>(
+            state,
+            "/playlists/",
+            &[
+                ("limit", SEARCH_PLAYLIST_LIMIT.to_string()),
+                ("namesearch", query.to_string()),
+                ("offset", offset.to_string()),
+                ("order", "popularity_total".to_string()),
+            ],
+            "搜索 Jamendo 歌单失败",
+        )
+        .await?
+        .results,
+    )
+}
+
+async fn fetch_jamendo_playlist_detail(
+    state: &AppState,
+    playlist_id: &str,
+) -> AppResult<JamendoPlaylist> {
+    fetch_jamendo_json::<JamendoPlaylist>(
+        state,
+        "/playlists/tracks/",
+        &[
+            ("audioformat", "mp32".to_string()),
+            ("id", playlist_id.to_string()),
+        ],
+        "获取 Jamendo 歌单详情失败",
+    )
+    .await?
+    .results
+    .into_iter()
+    .next()
+    .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "合集不存在"))
+}
+
+async fn fetch_jamendo_track_detail(state: &AppState, track_id: &str) -> AppResult<JamendoTrack> {
+    fetch_jamendo_json::<JamendoTrack>(
+        state,
+        "/tracks/",
+        &[
+            ("audioformat", "mp32".to_string()),
+            ("id", track_id.to_string()),
+        ],
+        "获取 Jamendo 曲目信息失败",
+    )
+    .await?
+    .results
+    .into_iter()
+    .next()
+    .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "曲目不存在"))
+}
+
+async fn get_jamendo_music_home(state: &AppState) -> AppResult<Response> {
+    let (tracks_result, playlists_result) =
+        tokio::join!(fetch_jamendo_home_tracks(state), fetch_jamendo_playlists(state));
+    let tracks = match &tracks_result {
+        Ok(value) => value.clone(),
+        Err(_) => Vec::new(),
+    };
+    let playlists = match &playlists_result {
+        Ok(value) => value.clone(),
+        Err(_) => Vec::new(),
+    };
+
+    if tracks.is_empty() && playlists.is_empty() {
+        if let Err(error) = tracks_result {
+            return Err(error);
+        }
+
+        if let Err(error) = playlists_result {
+            return Err(error);
+        }
+    }
+
+    let spotlight = tracks
+        .iter()
+        .take(HOME_TOPLIST_LIMIT.max(HOME_PLAYLIST_LIMIT))
+        .map(to_jamendo_music_track_payload)
+        .filter(|track| track.playable)
+        .collect::<Vec<_>>();
+
+    let mut sections = Vec::new();
+    if !tracks.is_empty() {
+        sections.push(MusicHomeSectionPayload {
+            id: "jamendo-hot".to_string(),
+            title: "精选单曲".to_string(),
+            tab: "hot".to_string(),
+            kind: "track-list".to_string(),
+            description: Some("来自 Jamendo 公开曲库。".to_string()),
+            collections: None,
+            tracks: Some(spotlight.clone()),
+        });
+    }
+    if !playlists.is_empty() {
+        sections.push(MusicHomeSectionPayload {
+            id: "jamendo-playlist".to_string(),
+            title: "精选歌单".to_string(),
+            tab: "playlist".to_string(),
+            kind: "collection-list".to_string(),
+            description: Some("来自 Jamendo 公开歌单。".to_string()),
+            collections: Some(
+                playlists
+                    .iter()
+                    .take(HOME_PLAYLIST_LIMIT)
+                    .enumerate()
+                    .map(|(index, item)| to_jamendo_playlist_summary(item, index))
+                    .collect(),
+            ),
+            tracks: None,
+        });
+    }
+
+    Ok(no_store_json_response(MusicHomePayload {
+        source: JAMENDO_SOURCE_KEY.to_string(),
+        spotlight,
+        sections,
+    }))
+}
+
+async fn get_jamendo_music_search(
+    state: &AppState,
+    query: String,
+    page: usize,
+) -> AppResult<Response> {
+    if query.is_empty() {
+        return Ok(no_store_json_response(MusicSearchPayload {
+            source: JAMENDO_SOURCE_KEY.to_string(),
+            query,
+            tracks: Vec::new(),
+            collections: Vec::new(),
+        }));
+    }
+
+    let (tracks, collections) = tokio::try_join!(
+        fetch_jamendo_search_tracks(state, &query, page),
+        fetch_jamendo_search_playlists(state, &query, page),
+    )?;
+
+    Ok(no_store_json_response(MusicSearchPayload {
+        source: JAMENDO_SOURCE_KEY.to_string(),
+        query,
+        tracks: tracks
+            .iter()
+            .take(SEARCH_TRACK_LIMIT)
+            .map(to_jamendo_music_track_payload)
+            .collect(),
+        collections: collections
+            .iter()
+            .take(SEARCH_PLAYLIST_LIMIT)
+            .enumerate()
+            .map(|(index, item)| to_jamendo_playlist_summary(item, index))
+            .collect(),
+    }))
+}
+
+async fn get_jamendo_music_collection(
+    state: &AppState,
+    playlist_id: &str,
+) -> AppResult<Response> {
+    let playlist = fetch_jamendo_playlist_detail(state, playlist_id).await?;
+
+    Ok(no_store_json_response(MusicCollectionPayload {
+        id: jamendo_id_to_string(playlist.id.as_ref()).unwrap_or_else(|| playlist_id.to_string()),
+        source: JAMENDO_SOURCE_KEY.to_string(),
+        kind: "playlist".to_string(),
+        title: fallback_label(playlist.name.as_deref(), "Jamendo 歌单"),
+        cover: playlist
+            .image
+            .clone()
+            .and_then(|value| normalize_remote_url(&value)),
+        description: normalize_optional_text(playlist.creationdate.clone()),
+        track_count: playlist.track_count.or_else(|| Some(playlist.tracks.len())),
+        accent_color: Some(SUMMARY_ACCENT_COLORS[0].to_string()),
+        tracks: playlist
+            .tracks
+            .iter()
+            .map(to_jamendo_music_track_payload)
+            .collect(),
+        curator: normalize_optional_text(playlist.user_name.clone()),
+        updated_at_label: None,
+    }))
+}
+
+async fn get_jamendo_music_track(
+    state: &AppState,
+    track_id: &str,
+    quality: &str,
+) -> AppResult<Response> {
+    let track = fetch_jamendo_track_detail(state, track_id).await?;
+    let payload = to_jamendo_music_track_payload(&track);
+    let stream_url = resolve_jamendo_audio_url(&track)
+        .ok_or_else(|| AppError::new(StatusCode::FORBIDDEN, "当前曲目暂不可播放"))?;
+
+    if !payload.playable {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "当前曲目暂不可播放",
+        ));
+    }
+
+    Ok(no_store_json_response(MusicTrackDetailPayload {
+        track: payload,
+        stream_url,
+        quality: quality.to_string(),
     }))
 }
 
@@ -782,7 +1842,7 @@ async fn fetch_netease_playlist_detail(
 ) -> AppResult<NeteasePlaylistDetail> {
     let payload = fetch_netease_json::<NeteasePlaylistDetailResponse>(
         state,
-        "/api/playlist/detail",
+        "/api/v3/playlist/detail",
         &[("id", playlist_id.to_string())],
     )
     .await?;
@@ -793,7 +1853,8 @@ async fn fetch_netease_playlist_detail(
         "获取歌单详情失败",
     )?;
     payload
-        .result
+        .playlist
+        .or(payload.result)
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "合集不存在"))
 }
 
@@ -849,7 +1910,7 @@ async fn fetch_netease_stream_upstream(
             "/song/media/outer/url",
         ))
         .query(&[("id", format!("{track_id}.mp3"))])
-        .headers(build_netease_request_headers(None, false))
+        .headers(build_netease_request_headers(None, false, None))
         .timeout(std::time::Duration::from_millis(DEFAULT_PROXY_TIMEOUT_MS))
         .send()
         .await
@@ -869,7 +1930,7 @@ async fn fetch_netease_stream_upstream(
     state
         .client
         .get(final_url)
-        .headers(build_netease_request_headers(Some(request_headers), true))
+        .headers(build_netease_request_headers(Some(request_headers), true, None))
         .timeout(std::time::Duration::from_millis(DEFAULT_PROXY_TIMEOUT_MS))
         .send()
         .await
@@ -884,27 +1945,80 @@ async fn fetch_netease_json<T>(
 where
     T: DeserializeOwned,
 {
-    state
-        .client
+    let response = state
+        .no_decode_client
         .get(build_netease_endpoint(&state.netease_api_base_url, path))
         .query(query)
-        .headers(build_netease_request_headers(None, false))
+        .headers(build_netease_request_headers(None, false, Some("gzip")))
         .timeout(std::time::Duration::from_millis(DEFAULT_PROXY_TIMEOUT_MS))
         .send()
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .json::<T>()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let content_encoding = response
+        .headers()
+        .get(CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body = response
+        .bytes()
         .await
-        .map_err(|error| AppError::internal(error.to_string()))
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let decoded_body = decode_netease_json_body(
+        path,
+        content_encoding.as_deref(),
+        body.as_ref(),
+    )?;
+
+    let payload = serde_json::from_slice::<serde_json::Value>(&decoded_body).map_err(|error| {
+        tracing::warn!(%path, ?error, "failed to parse netease json payload");
+        AppError::internal("音乐上游响应解析失败")
+    })?;
+
+    serde_json::from_value::<T>(payload).map_err(|error| {
+        tracing::warn!(%path, ?error, "failed to deserialize netease json payload");
+        AppError::internal("音乐上游响应解析失败")
+    })
+}
+
+fn decode_netease_json_body(
+    path: &str,
+    content_encoding: Option<&str>,
+    body: &[u8],
+) -> AppResult<Vec<u8>> {
+    match content_encoding
+        .map(str::trim)
+        .filter(|encoding| !encoding.is_empty())
+    {
+        None | Some("identity") => Ok(body.to_vec()),
+        Some("gzip") => {
+            let mut decoder = GzDecoder::new(body);
+            let mut decoded = Vec::new();
+            decoder.read_to_end(&mut decoded).map_err(|error| {
+                tracing::warn!(%path, encoding = "gzip", ?error, "failed to decode netease gzip body");
+                AppError::internal("音乐上游响应解析失败")
+            })?;
+            Ok(decoded)
+        }
+        Some(other) => {
+            tracing::warn!(%path, encoding = other, "unsupported netease content encoding");
+            Err(AppError::internal("音乐上游响应解析失败"))
+        }
+    }
 }
 
 fn build_netease_request_headers(
     request_headers: Option<&HeaderMap>,
     include_range: bool,
+    accept_encoding: Option<&'static str>,
 ) -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static(crate::DEFAULT_WEB_UA));
     headers.insert(REFERER, HeaderValue::from_static(NETEASE_REFERER));
+    if let Some(accept_encoding) = accept_encoding {
+        // Some Netease JSON endpoints return Brotli payloads that curl/undici can decode
+        // but reqwest fails on intermittently, so keep JSON fetches on gzip only.
+        headers.insert(ACCEPT_ENCODING, HeaderValue::from_static(accept_encoding));
+    }
 
     if include_range {
         if let Some(range_value) = request_headers.and_then(|headers| headers.get(RANGE)) {
@@ -940,7 +2054,7 @@ fn to_toplist_summary(item: &NeteaseToplist, index: usize) -> MusicCollectionSum
         kind: "rank".to_string(),
         title: item.name.clone(),
         cover: normalize_remote_url(&item.cover_img_url),
-        description: normalize_optional_text(Some(item.description.clone())),
+        description: normalize_optional_text(item.description.clone()),
         track_count: Some(item.track_count),
         accent_color: Some(pick_accent_color(index)),
     }
@@ -1131,8 +2245,8 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
     })
 }
 
-fn fallback_label(value: &str, fallback: &str) -> String {
-    normalize_optional_text(Some(value.to_string())).unwrap_or_else(|| fallback.to_string())
+fn fallback_label(value: Option<&str>, fallback: &str) -> String {
+    normalize_optional_text(value.map(str::to_string)).unwrap_or_else(|| fallback.to_string())
 }
 
 fn pick_accent_color(index: usize) -> String {
