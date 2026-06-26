@@ -68,6 +68,7 @@ mod content_search;
 mod download_runtime;
 mod image_proxy;
 mod live_proxy;
+mod music_api;
 mod playback_prefetch;
 mod profile_local;
 mod profile_sync;
@@ -93,6 +94,10 @@ use download_runtime::{
 };
 use image_proxy::get_image_proxy;
 use live_proxy::{get_live_key, get_live_logo, get_live_m3u8, get_live_precheck, get_live_segment};
+use music_api::{
+    get_music_audio_stream, get_music_collection, get_music_home, get_music_lyric,
+    get_music_search, get_music_sources, get_music_track,
+};
 use profile_sync::{
     build_profile_sync_status_payload, get_profile_bootstrap, get_profile_sync_server_config,
     get_profile_sync_status, proxy_profile_sync_change_password, proxy_profile_sync_favorites,
@@ -128,6 +133,7 @@ const DESKTOP_CONFIG_SUBSCRIPTION_REFRESH_MIN_INTERVAL: TimeDuration = TimeDurat
 const DESKTOP_LOCAL_DATA_MIGRATION_NOTE: &str = "桌面本地模式仅迁移管理员配置和本地账号密码；播放记录、收藏、搜索历史与跳过片头片尾等浏览器本地数据不会导入或导出。";
 const OPENSSL_SALTED_PREFIX: &[u8; 8] = b"Salted__";
 const DEFAULT_LIVE_PROXY_USER_AGENT: &str = "AptvPlayer/1.4.10";
+const DEFAULT_NETEASE_API_BASE_URL: &str = "https://music.163.com";
 const DEFAULT_BANGUMI_API_BASE_URL: &str = "https://api.bgm.tv";
 const DEFAULT_DOUBAN_API_BASE_URL: &str = "https://m.douban.com";
 const DEFAULT_DOUBAN_MOVIE_API_BASE_URL: &str = "https://movie.douban.com";
@@ -323,12 +329,14 @@ pub struct AppState {
     sqlite_path: PathBuf,
     sqlite: DesktopSqlite,
     client: reqwest::Client,
+    no_redirect_client: reqwest::Client,
     download_engine: Arc<RwLock<DesktopDownloadEngine>>,
     download_engine_snapshot_tx: watch::Sender<DesktopDownloadEngineSnapshot>,
     download_runtime_active_tasks: Arc<Mutex<BTreeSet<String>>>,
     download_runtime_schedule_lock: Arc<Mutex<()>>,
     profile_sync: ProfileSyncClient,
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
+    netease_api_base_url: String,
     bangumi_api_base_url: String,
     douban_api_base_url: String,
     douban_movie_api_base_url: String,
@@ -407,6 +415,10 @@ impl AppState {
             sqlite_path,
             sqlite,
             client: reqwest::Client::new(),
+            no_redirect_client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("failed to build no-redirect http client"),
             download_engine: Arc::new(RwLock::new(download_engine)),
             download_engine_snapshot_tx,
             download_runtime_active_tasks: Arc::new(Mutex::new(BTreeSet::new())),
@@ -418,6 +430,7 @@ impl AppState {
                     .expect("failed to build profile sync http client"),
             ),
             profile_sync_session: Arc::new(RwLock::new(None)),
+            netease_api_base_url: DEFAULT_NETEASE_API_BASE_URL.to_string(),
             bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
             douban_api_base_url: DEFAULT_DOUBAN_API_BASE_URL.to_string(),
             douban_movie_api_base_url: DEFAULT_DOUBAN_MOVIE_API_BASE_URL.to_string(),
@@ -1701,6 +1714,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/media/live/segment", get(get_live_segment))
         .route("/media/live/key", get(get_live_key))
         .route("/media/live/logo", get(get_live_logo))
+        .route("/media/audio/stream", get(get_music_audio_stream))
         .route("/media/vod/m3u8", get(get_vod_m3u8))
         .route("/media/vod/segment", get(get_vod_segment))
         .route("/media/vod/key", get(get_vod_key))
@@ -1819,6 +1833,12 @@ pub fn build_router(state: AppState) -> Router {
             "/api/music/profile/play-records",
             any(proxy_profile_sync_music_play_records),
         )
+        .route("/api/music/sources", get(get_music_sources))
+        .route("/api/music/home", get(get_music_home))
+        .route("/api/music/search", get(get_music_search))
+        .route("/api/music/collection", get(get_music_collection))
+        .route("/api/music/track", get(get_music_track))
+        .route("/api/music/lyric", get(get_music_lyric))
         .route("/api/admin/config", get(get_admin_config))
         .route("/api/admin/reset", get(reset_admin_config))
         .route("/api/admin/config_file", post(update_admin_config_file))
@@ -9542,6 +9562,500 @@ segment0.ts
                 .and_then(Value::as_i64),
             Some(42)
         );
+    }
+
+    #[tokio::test]
+    async fn music_routes_use_netease_provider_payloads() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/toplist",
+                    get(|| async move {
+                        Json(json!({
+                          "code": 200,
+                          "list": [
+                            {
+                              "id": 101,
+                              "name": "Top Rank",
+                              "coverImgUrl": "http://cdn.example.com/top-rank.jpg",
+                              "description": "Top rank description",
+                              "trackCount": 2,
+                              "updateFrequency": "刚刚更新"
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/personalized/playlist",
+                    get(|| async move {
+                        Json(json!({
+                          "code": 200,
+                          "result": [
+                            {
+                              "id": 301,
+                              "name": "Focus Playlist",
+                              "picUrl": "http://cdn.example.com/focus-playlist.jpg",
+                              "copywriter": "适合夜晚循环",
+                              "trackCount": 2
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/search/get/web",
+                    get(
+                        |Query(params): Query<BTreeMap<String, String>>| async move {
+                            match params.get("type").map(String::as_str) {
+                                Some("1000") => Json(json!({
+                                  "code": 200,
+                                  "result": {
+                                    "playlistCount": 1,
+                                    "playlists": [
+                                      {
+                                        "id": 301,
+                                        "name": "Focus Playlist",
+                                        "coverImgUrl": "http://cdn.example.com/focus-playlist.jpg",
+                                        "description": "适合夜晚循环",
+                                        "trackCount": 2
+                                      }
+                                    ]
+                                  }
+                                }))
+                                .into_response(),
+                                _ => Json(json!({
+                                  "code": 200,
+                                  "result": {
+                                    "songCount": 1,
+                                    "songs": [
+                                      {
+                                        "id": 9001,
+                                        "name": "Search Song",
+                                        "duration": 187000,
+                                        "artists": [{ "id": 1, "name": "Search Artist" }],
+                                        "album": {
+                                          "id": 11,
+                                          "name": "Search Album",
+                                          "picUrl": "http://cdn.example.com/search-album.jpg"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }))
+                                .into_response(),
+                            }
+                        },
+                    ),
+                )
+                .route(
+                    "/api/playlist/detail",
+                    get(
+                        |Query(params): Query<BTreeMap<String, String>>| async move {
+                            match params.get("id").map(String::as_str) {
+                                Some("301") => Json(json!({
+                                  "code": 200,
+                                  "result": {
+                                    "id": 301,
+                                    "name": "Focus Playlist",
+                                    "coverImgUrl": "http://cdn.example.com/focus-playlist.jpg",
+                                    "description": "适合夜晚循环",
+                                    "trackCount": 2,
+                                    "creator": { "nickname": "Playlist Curator" },
+                                    "updateFrequency": "每日更新",
+                                    "tracks": [
+                                      {
+                                        "id": 9001,
+                                        "name": "Playlist Song",
+                                        "duration": 187000,
+                                        "artists": [{ "id": 1, "name": "Search Artist" }],
+                                        "album": {
+                                          "id": 11,
+                                          "name": "Search Album",
+                                          "picUrl": "http://cdn.example.com/search-album.jpg"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }))
+                                .into_response(),
+                                _ => Json(json!({
+                                  "code": 200,
+                                  "result": {
+                                    "id": 101,
+                                    "name": "Top Rank",
+                                    "coverImgUrl": "http://cdn.example.com/top-rank.jpg",
+                                    "description": "Top rank description",
+                                    "trackCount": 2,
+                                    "updateFrequency": "刚刚更新",
+                                    "tracks": [
+                                      {
+                                        "id": 9001,
+                                        "name": "Top Song 1",
+                                        "duration": 187000,
+                                        "artists": [{ "id": 1, "name": "Search Artist" }],
+                                        "album": {
+                                          "id": 11,
+                                          "name": "Search Album",
+                                          "picUrl": "http://cdn.example.com/search-album.jpg"
+                                        }
+                                      },
+                                      {
+                                        "id": 9002,
+                                        "name": "Top Song 2",
+                                        "duration": 188000,
+                                        "artists": [{ "id": 2, "name": "Second Artist" }],
+                                        "album": {
+                                          "id": 12,
+                                          "name": "Second Album",
+                                          "picUrl": "http://cdn.example.com/second-album.jpg"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }))
+                                .into_response(),
+                            }
+                        },
+                    ),
+                )
+                .route(
+                    "/api/song/detail",
+                    get(|| async move {
+                        Json(json!({
+                          "code": 200,
+                          "songs": [
+                            {
+                              "id": 9001,
+                              "name": "Track Detail",
+                              "duration": 187000,
+                              "artists": [{ "id": 1, "name": "Track Artist" }],
+                              "album": {
+                                "id": 21,
+                                "name": "Track Album",
+                                "picUrl": "http://cdn.example.com/track-album.jpg"
+                              }
+                            }
+                          ]
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/song/lyric",
+                    get(|| async move {
+                        Json(json!({
+                          "code": 200,
+                          "lrc": {
+                            "lyric": "[00:01.00]第一句\n[00:02.50]第二句"
+                          },
+                          "tlyric": {
+                            "lyric": "[00:01.00]first\n[00:02.50]second"
+                          }
+                        }))
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.netease_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let sources_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/sources")
+                    .body(Body::empty())
+                    .expect("music sources request"),
+            )
+            .await
+            .expect("music sources response");
+        assert_eq!(sources_response.status(), StatusCode::OK);
+        let sources_payload = read_json_body(sources_response).await;
+        assert_eq!(
+            sources_payload
+                .get("sources")
+                .and_then(Value::as_array)
+                .and_then(|sources| sources.first())
+                .and_then(|source| source.get("key"))
+                .and_then(Value::as_str),
+            Some("netease")
+        );
+        assert_eq!(
+            sources_payload
+                .get("sources")
+                .and_then(Value::as_array)
+                .and_then(|sources| sources.get(1))
+                .and_then(|source| source.get("enabled"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let home_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/home?source=netease")
+                    .body(Body::empty())
+                    .expect("music home request"),
+            )
+            .await
+            .expect("music home response");
+        assert_eq!(home_response.status(), StatusCode::OK);
+        let home_payload = read_json_body(home_response).await;
+        assert_eq!(
+            home_payload
+                .get("spotlight")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Top Song 1")
+        );
+        assert_eq!(
+            home_payload
+                .get("sections")
+                .and_then(Value::as_array)
+                .and_then(|sections| sections.first())
+                .and_then(|section| section.get("tab"))
+                .and_then(Value::as_str),
+            Some("rank")
+        );
+
+        let search_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/search?source=netease&q=test")
+                    .body(Body::empty())
+                    .expect("music search request"),
+            )
+            .await
+            .expect("music search response");
+        assert_eq!(search_response.status(), StatusCode::OK);
+        let search_payload = read_json_body(search_response).await;
+        assert_eq!(
+            search_payload
+                .get("tracks")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Search Song")
+        );
+        assert_eq!(
+            search_payload
+                .get("collections")
+                .and_then(Value::as_array)
+                .and_then(|collections| collections.first())
+                .and_then(|collection| collection.get("id"))
+                .and_then(Value::as_str),
+            Some("301")
+        );
+
+        let collection_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/collection?source=netease&id=301")
+                    .body(Body::empty())
+                    .expect("music collection request"),
+            )
+            .await
+            .expect("music collection response");
+        assert_eq!(collection_response.status(), StatusCode::OK);
+        let collection_payload = read_json_body(collection_response).await;
+        assert_eq!(
+            collection_payload.get("title").and_then(Value::as_str),
+            Some("Focus Playlist")
+        );
+        assert_eq!(
+            collection_payload
+                .get("tracks")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Playlist Song")
+        );
+
+        let track_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/track?source=netease&id=9001")
+                    .body(Body::empty())
+                    .expect("music track request"),
+            )
+            .await
+            .expect("music track response");
+        assert_eq!(track_response.status(), StatusCode::OK);
+        let track_payload = read_json_body(track_response).await;
+        assert_eq!(
+            track_payload
+                .get("track")
+                .and_then(|track| track.get("title"))
+                .and_then(Value::as_str),
+            Some("Track Detail")
+        );
+        assert_eq!(
+            track_payload.get("streamUrl").and_then(Value::as_str),
+            Some("/media/audio/stream?source=netease&id=9001&quality=standard")
+        );
+
+        let lyric_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/lyric?source=netease&id=9001")
+                    .body(Body::empty())
+                    .expect("music lyric request"),
+            )
+            .await
+            .expect("music lyric response");
+        assert_eq!(lyric_response.status(), StatusCode::OK);
+        let lyric_payload = read_json_body(lyric_response).await;
+        assert_eq!(
+            lyric_payload
+                .get("lines")
+                .and_then(Value::as_array)
+                .and_then(|lines| lines.first())
+                .and_then(|line| line.get("text"))
+                .and_then(Value::as_str),
+            Some("第一句")
+        );
+        assert_eq!(
+            lyric_payload
+                .get("lines")
+                .and_then(Value::as_array)
+                .and_then(|lines| lines.first())
+                .and_then(|line| line.get("translation"))
+                .and_then(Value::as_str),
+            Some("first")
+        );
+
+        let unsupported_source_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/home?source=qq")
+                    .body(Body::empty())
+                    .expect("unsupported music source request"),
+            )
+            .await
+            .expect("unsupported music source response");
+        assert_eq!(
+            unsupported_source_response.status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn music_stream_route_preserves_range_requests() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/song/media/outer/url",
+                    get(|| async move {
+                        Response::builder()
+                            .status(StatusCode::FOUND)
+                            .header("location", "/upstream/audio.mp3")
+                            .body(Body::empty())
+                            .expect("netease redirect response")
+                    }),
+                )
+                .route(
+                    "/upstream/audio.mp3",
+                    get(|headers: HeaderMap| async move {
+                        if headers.get(RANGE).and_then(|value| value.to_str().ok())
+                            == Some("bytes=1-3")
+                        {
+                            Response::builder()
+                                .status(StatusCode::PARTIAL_CONTENT)
+                                .header(CONTENT_TYPE, "audio/mpeg")
+                                .header(ACCEPT_RANGES, "bytes")
+                                .header(CONTENT_RANGE, "bytes 1-3/6")
+                                .header(CONTENT_LENGTH, "3")
+                                .body(Body::from("BCD"))
+                                .expect("audio range response")
+                        } else {
+                            Response::builder()
+                                .status(StatusCode::OK)
+                                .header(CONTENT_TYPE, "audio/mpeg")
+                                .header(ACCEPT_RANGES, "bytes")
+                                .header(CONTENT_LENGTH, "6")
+                                .body(Body::from("ABCDEF"))
+                                .expect("audio full response")
+                        }
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.netease_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/media/audio/stream?source=netease&id=9001")
+                    .header(RANGE, "bytes=1-3")
+                    .body(Body::empty())
+                    .expect("music stream request"),
+            )
+            .await
+            .expect("music stream response");
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("audio/mpeg")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok()),
+            Some("bytes 1-3/6")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("music stream body");
+        assert_eq!(body.as_ref(), b"BCD");
+
+        upstream.abort();
     }
 
     #[tokio::test]
