@@ -73,6 +73,17 @@ function createTextFetchResponse(
 function createDesktopReleaseHistoryItems() {
   return [
     {
+      id: 'release-200',
+      version: '200.0.0',
+      tagName: 'desktop-v200.0.0',
+      name: 'Desktop 200',
+      notes: null,
+      prerelease: false,
+      publishedAt: '2026-06-24T10:25:11Z',
+      htmlUrl: 'https://example.com/desktop-200',
+      manifestUrl: 'https://example.com/desktop-200/latest.json',
+    },
+    {
       id: 'beta-16',
       version: '200.0.0-beta.16',
       tagName: 'desktop-v200.0.0-beta.16',
@@ -110,6 +121,21 @@ function createDesktopReleaseHistoryItems() {
 
 function createGithubReleasePayload() {
   return [
+    {
+      id: 'release-200',
+      tag_name: 'desktop-v200.0.0',
+      name: 'Desktop 200',
+      body: null,
+      prerelease: false,
+      published_at: '2026-06-24T10:25:11Z',
+      html_url: 'https://example.com/desktop-200',
+      assets: [
+        {
+          name: 'latest.json',
+          browser_download_url: 'https://example.com/desktop-200/latest.json',
+        },
+      ],
+    },
     {
       id: 'beta-16',
       tag_name: 'desktop-v200.0.0-beta.16',
@@ -391,6 +417,17 @@ describe('DesktopReleaseHistoryDialog', () => {
       'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.15...desktop-v200.0.0-beta.16';
     mockFetchDesktopReleaseHistory.mockResolvedValueOnce([
       {
+        id: 'release-200',
+        version: '200.0.0',
+        tagName: 'desktop-v200.0.0',
+        name: 'Desktop 200',
+        notes: null,
+        prerelease: false,
+        publishedAt: '2026-06-24T10:25:11Z',
+        htmlUrl: 'https://example.com/desktop-200',
+        manifestUrl: 'https://example.com/desktop-200/latest.json',
+      },
+      {
         id: 'beta-16',
         version: '200.0.0-beta.16',
         tagName: 'desktop-v200.0.0-beta.16',
@@ -491,6 +528,48 @@ describe('DesktopReleaseHistoryDialog', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  it('uses the unreleased stable changelog summary for a prerelease line before the stable release is published', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+    };
+    mockFetchDesktopReleaseHistory.mockResolvedValueOnce([
+      {
+        id: 'beta-5',
+        version: '200.0.1-beta.5',
+        tagName: 'desktop-v200.0.1-beta.5',
+        name: 'Beta 5',
+        notes:
+          '- fix(desktop): localize release history and restore login fallback',
+        prerelease: true,
+        publishedAt: '2026-06-26T04:14:33Z',
+        htmlUrl: 'https://example.com/beta-5',
+        manifestUrl: 'https://example.com/beta-5/latest.json',
+      },
+    ]);
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderDialog({
+      currentVersion: '200.0.1-beta.5',
+      changelogLocale: 'zh-CN',
+    });
+
+    const releaseCard = await screen.findByTestId(
+      'desktop-release-card-desktop-v200.0.1-beta.5'
+    );
+
+    await waitFor(() => {
+      expect(releaseCard).toHaveTextContent(
+        '版本列表现优先参考本地变更日志摘要'
+      );
+      expect(releaseCard).toHaveTextContent(
+        '桌面版退出后重新登录时，不再默认锁定为'
+      );
+    });
+
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   it('forwards changelog locale switch events', async () => {
     const onChangelogLocaleChange = jest.fn();
 
@@ -537,12 +616,13 @@ describe('DesktopReleaseHistoryDialog', () => {
     fireEvent.click(await screen.findByLabelText('收藏 v200.0.0-beta.13'));
 
     await waitFor(() => {
-      const versionHeadings = screen
-        .getAllByRole('heading', { level: 4 })
-        .map((heading) => heading.textContent || '')
-        .filter((text) => text.startsWith('v'));
+      const prereleaseCardOrder = screen
+        .getAllByTestId(/desktop-release-card-/)
+        .map((card) => card.getAttribute('data-testid') || '')
+        .filter((testId) => testId.includes('beta'))
+        .map((testId) => testId.replace('desktop-release-card-desktop-v', 'v'));
 
-      expect(versionHeadings.slice(0, 3)).toEqual([
+      expect(prereleaseCardOrder).toEqual([
         'v200.0.0-beta.13',
         'v200.0.0-beta.16',
         'v200.0.0-beta.15',

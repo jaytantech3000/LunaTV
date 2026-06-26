@@ -4,6 +4,8 @@ import {
   buildDesktopReleaseChangeSummaryFromComparePayload,
   buildDesktopReleaseChangeSummaryFromNotes,
   extractDesktopReleaseCompareUrl,
+  findDesktopReleaseChangelogEntry,
+  getDesktopReleaseBaseVersion,
   getDesktopReleaseCompareApiUrl,
 } from './desktop-release-notes';
 
@@ -58,6 +60,26 @@ describe('desktop release notes helpers', () => {
       ],
       other: [],
     });
+  });
+
+  it('extracts the stable base version from prerelease versions', () => {
+    expect(getDesktopReleaseBaseVersion('200.0.1-beta.5')).toBe('200.0.1');
+    expect(getDesktopReleaseBaseVersion('200.0.0')).toBe('200.0.0');
+  });
+
+  it('can match an unreleased prerelease line to its stable changelog entry', () => {
+    expect(
+      findDesktopReleaseChangelogEntry(changelog, {
+        releaseVersion: '200.0.1-beta.5',
+        allowPrereleaseBaseMatch: true,
+      })?.version
+    ).toBe('200.0.1');
+
+    expect(
+      findDesktopReleaseChangelogEntry(changelog, {
+        releaseVersion: '200.0.1-beta.5',
+      })
+    ).toBeNull();
   });
 
   it('classifies compare commits into added, changed, fixed, and other groups', () => {

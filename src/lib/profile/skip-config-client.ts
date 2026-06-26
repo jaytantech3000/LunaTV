@@ -7,8 +7,14 @@ import { readLocalSkipConfigs, writeLocalSkipConfigs } from './local-adapter';
 import {
   deleteRemoteProfileResource,
   fetchRemoteProfileJson as fetchFromApi,
+  isUnauthorizedRemoteProfileRequestError as isUnauthorizedRequestError,
   postRemoteProfilePayload,
+  wasRemoteProfileRequestRedirectedToLogin as wasRedirectedToLogin,
 } from './remote-adapter';
+import {
+  isProfileApiAuthPending,
+  PROFILE_API_NO_REDIRECT_OPTIONS,
+} from './request-state';
 import { shouldUseProfileApiStorage } from './runtime';
 import { generateStorageKey } from './storage-key';
 import { SkipConfig } from '../types';
@@ -42,11 +48,18 @@ export async function getSkipConfig(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    if (isProfileApiAuthPending()) {
+      return null;
+    }
+
     await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedSkipConfigs();
 
     if (cachedData) {
-      fetchFromApi<Record<string, SkipConfig>>(USER_DATA_API_PATHS.skipConfigs)
+      fetchFromApi<Record<string, SkipConfig>>(
+        USER_DATA_API_PATHS.skipConfigs,
+        PROFILE_API_NO_REDIRECT_OPTIONS
+      )
         .then((freshData) => {
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cacheSkipConfigs(freshData);
@@ -54,6 +67,10 @@ export async function getSkipConfig(
           }
         })
         .catch((err) => {
+          if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+            return;
+          }
+
           console.warn('后台同步跳过片头片尾配置失败:', err);
         });
 
@@ -62,11 +79,16 @@ export async function getSkipConfig(
 
     try {
       const freshData = await fetchFromApi<Record<string, SkipConfig>>(
-        USER_DATA_API_PATHS.skipConfigs
+        USER_DATA_API_PATHS.skipConfigs,
+        PROFILE_API_NO_REDIRECT_OPTIONS
       );
       cacheManager.cacheSkipConfigs(freshData);
       return freshData[key] || null;
     } catch (err) {
+      if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+        return null;
+      }
+
       console.error('获取跳过片头片尾配置失败:', err);
       triggerGlobalError('获取跳过片头片尾配置失败');
       return null;
@@ -132,11 +154,18 @@ export async function getAllSkipConfigs(): Promise<Record<string, SkipConfig>> {
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    if (isProfileApiAuthPending()) {
+      return {};
+    }
+
     await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedSkipConfigs();
 
     if (cachedData) {
-      fetchFromApi<Record<string, SkipConfig>>(USER_DATA_API_PATHS.skipConfigs)
+      fetchFromApi<Record<string, SkipConfig>>(
+        USER_DATA_API_PATHS.skipConfigs,
+        PROFILE_API_NO_REDIRECT_OPTIONS
+      )
         .then((freshData) => {
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cacheSkipConfigs(freshData);
@@ -144,6 +173,10 @@ export async function getAllSkipConfigs(): Promise<Record<string, SkipConfig>> {
           }
         })
         .catch((err) => {
+          if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+            return;
+          }
+
           console.warn('后台同步跳过片头片尾配置失败:', err);
           triggerGlobalError('后台同步跳过片头片尾配置失败');
         });
@@ -153,11 +186,16 @@ export async function getAllSkipConfigs(): Promise<Record<string, SkipConfig>> {
 
     try {
       const freshData = await fetchFromApi<Record<string, SkipConfig>>(
-        USER_DATA_API_PATHS.skipConfigs
+        USER_DATA_API_PATHS.skipConfigs,
+        PROFILE_API_NO_REDIRECT_OPTIONS
       );
       cacheManager.cacheSkipConfigs(freshData);
       return freshData;
     } catch (err) {
+      if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+        return {};
+      }
+
       console.error('获取跳过片头片尾配置失败:', err);
       triggerGlobalError('获取跳过片头片尾配置失败');
       return {};

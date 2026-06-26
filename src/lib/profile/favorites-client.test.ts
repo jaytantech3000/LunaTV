@@ -132,7 +132,9 @@ describe('favorites client', () => {
       }),
     });
     await expect(isFavorited('demo', '1')).resolves.toBe(true);
-    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/favorites');
+    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/favorites', {
+      redirectOnUnauthorized: false,
+    });
 
     await clearAllFavorites();
 
@@ -140,5 +142,15 @@ describe('favorites client', () => {
       '/favorites'
     );
     await expect(getAllFavorites()).resolves.toEqual({});
+  });
+
+  it('skips favorite api reads while desktop local auth is still pending', async () => {
+    mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+
+    await expect(getAllFavorites()).resolves.toEqual({});
+    await expect(isFavorited('demo', '1')).resolves.toBe(false);
+
+    expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
   });
 });

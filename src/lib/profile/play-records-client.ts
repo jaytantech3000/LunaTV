@@ -18,6 +18,10 @@ import {
   postRemoteProfilePayload,
   wasRemoteProfileRequestRedirectedToLogin as wasRedirectedToLogin,
 } from './remote-adapter';
+import {
+  isProfileApiAuthPending,
+  PROFILE_API_NO_REDIRECT_OPTIONS,
+} from './request-state';
 import { shouldUseProfileApiStorage } from './runtime';
 import { generateStorageKey } from './storage-key';
 
@@ -92,11 +96,18 @@ export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    if (isProfileApiAuthPending()) {
+      return {};
+    }
+
     await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedPlayRecords();
 
     if (cachedData) {
-      fetchFromApi<Record<string, PlayRecord>>(USER_DATA_API_PATHS.playRecords)
+      fetchFromApi<Record<string, PlayRecord>>(
+        USER_DATA_API_PATHS.playRecords,
+        PROFILE_API_NO_REDIRECT_OPTIONS
+      )
         .then((freshData) => {
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cachePlayRecords(freshData);
@@ -104,6 +115,10 @@ export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
           }
         })
         .catch((err) => {
+          if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+            return;
+          }
+
           console.warn('后台同步播放记录失败:', err);
           triggerGlobalError('后台同步播放记录失败');
         });
@@ -113,11 +128,16 @@ export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
 
     try {
       const freshData = await fetchFromApi<Record<string, PlayRecord>>(
-        USER_DATA_API_PATHS.playRecords
+        USER_DATA_API_PATHS.playRecords,
+        PROFILE_API_NO_REDIRECT_OPTIONS
       );
       cacheManager.cachePlayRecords(freshData);
       return freshData;
     } catch (err) {
+      if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+        return {};
+      }
+
       console.error('获取播放记录失败:', err);
       triggerGlobalError('获取播放记录失败');
       return {};

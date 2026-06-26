@@ -28,6 +28,10 @@ import {
 import { ensureDesktopLocalProfileStoreHydrated } from './desktop-local-migration';
 import { cacheManager, getCacheStatus } from './hybrid-cache';
 import { fetchRemoteProfileJson as fetchFromApi } from './remote-adapter';
+import {
+  isProfileApiAuthPending,
+  PROFILE_API_NO_REDIRECT_OPTIONS,
+} from './request-state';
 import { shouldUseProfileApiStorage } from './runtime';
 import { dispatchSearchHistoryUpdated } from './search-history-client';
 import { type FollowRecord, SkipConfig } from '../types';
@@ -114,6 +118,7 @@ export function clearUserCache(): void {
  */
 export async function refreshAllCache(): Promise<void> {
   if (!shouldUseRemoteUserDataStorage()) return;
+  if (isProfileApiAuthPending()) return;
 
   try {
     await ensureDesktopLocalProfileStoreHydrated();
@@ -121,13 +126,24 @@ export async function refreshAllCache(): Promise<void> {
     const [playRecords, favorites, followRecords, searchHistory, skipConfigs] =
       await Promise.allSettled([
         fetchFromApi<Record<string, PlayRecord>>(
-          USER_DATA_API_PATHS.playRecords
+          USER_DATA_API_PATHS.playRecords,
+          PROFILE_API_NO_REDIRECT_OPTIONS
         ),
-        fetchFromApi<Record<string, Favorite>>(USER_DATA_API_PATHS.favorites),
-        fetchFromApi<Record<string, FollowRecord>>(USER_DATA_API_PATHS.follows),
-        fetchFromApi<string[]>(USER_DATA_API_PATHS.searchHistory),
+        fetchFromApi<Record<string, Favorite>>(
+          USER_DATA_API_PATHS.favorites,
+          PROFILE_API_NO_REDIRECT_OPTIONS
+        ),
+        fetchFromApi<Record<string, FollowRecord>>(
+          USER_DATA_API_PATHS.follows,
+          PROFILE_API_NO_REDIRECT_OPTIONS
+        ),
+        fetchFromApi<string[]>(
+          USER_DATA_API_PATHS.searchHistory,
+          PROFILE_API_NO_REDIRECT_OPTIONS
+        ),
         fetchFromApi<Record<string, SkipConfig>>(
-          USER_DATA_API_PATHS.skipConfigs
+          USER_DATA_API_PATHS.skipConfigs,
+          PROFILE_API_NO_REDIRECT_OPTIONS
         ),
       ]);
 
@@ -193,6 +209,7 @@ export function subscribeToDataUpdates<T>(
  */
 export async function preloadUserData(): Promise<void> {
   if (!shouldUseRemoteUserDataStorage()) return;
+  if (isProfileApiAuthPending()) return;
 
   // 检查是否已有有效缓存，避免重复请求
   const status = getCacheStatus();

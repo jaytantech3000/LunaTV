@@ -3,6 +3,7 @@ import {
   type ChangelogLocale,
   getLocalizedChangelogItems,
 } from './changelog';
+import { compareSemver } from './semver';
 
 export interface DesktopReleaseChangeSummary {
   compareUrl: string | null;
@@ -174,6 +175,62 @@ function normalizeSummary(summary: DesktopReleaseChangeSummary) {
     fixed: [...summary.fixed],
     other: [...summary.other],
   };
+}
+
+export function getDesktopReleaseBaseVersion(
+  version: string | null | undefined
+): string | null {
+  const normalizedVersion = version?.trim();
+  if (!normalizedVersion) {
+    return null;
+  }
+
+  const prereleaseSeparatorIndex = normalizedVersion.indexOf('-');
+  const baseVersion =
+    prereleaseSeparatorIndex === -1
+      ? normalizedVersion
+      : normalizedVersion.slice(0, prereleaseSeparatorIndex).trim();
+
+  if (!baseVersion) {
+    return null;
+  }
+
+  try {
+    compareSemver(baseVersion, baseVersion);
+    return baseVersion;
+  } catch {
+    return null;
+  }
+}
+
+export function findDesktopReleaseChangelogEntry(
+  entries: readonly ChangelogEntry[],
+  options: {
+    releaseVersion: string | null | undefined;
+    allowPrereleaseBaseMatch?: boolean;
+  }
+): ChangelogEntry | null {
+  const normalizedReleaseVersion = options.releaseVersion?.trim();
+  if (!normalizedReleaseVersion) {
+    return null;
+  }
+
+  const exactEntry =
+    entries.find((entry) => entry.version === normalizedReleaseVersion) || null;
+  if (exactEntry) {
+    return exactEntry;
+  }
+
+  if (!options.allowPrereleaseBaseMatch) {
+    return null;
+  }
+
+  const baseVersion = getDesktopReleaseBaseVersion(normalizedReleaseVersion);
+  if (!baseVersion || baseVersion === normalizedReleaseVersion) {
+    return null;
+  }
+
+  return entries.find((entry) => entry.version === baseVersion) || null;
 }
 
 export function hasDesktopReleaseChangeItems(

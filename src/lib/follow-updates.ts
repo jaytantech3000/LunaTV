@@ -9,6 +9,7 @@ import {
   getCachedFollowRecordsSnapshot,
   saveFollowRecord,
 } from './profile/client';
+import { isProfileApiAuthPending } from './profile/request-state';
 import { resolveProfileRuntime } from './profile/runtime';
 import { FollowRecord, SearchResult } from './types';
 
@@ -379,6 +380,10 @@ export async function refreshFollowRecords(options?: {
   force?: boolean;
 }): Promise<void> {
   if (!isDesktopFollowUpdatesEnabled()) {
+    return;
+  }
+
+  if (isProfileApiAuthPending()) {
     return;
   }
 

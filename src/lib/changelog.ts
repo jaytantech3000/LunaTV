@@ -29,6 +29,38 @@ export function getLocalizedChangelogItems(
 
 export const changelog: ChangelogEntry[] = [
   {
+    version: '200.0.1',
+    date: '2026-06-26',
+    added: {
+      zhCN: [
+        // 无新增内容
+      ],
+      en: [
+        // No added entries
+      ],
+    },
+    changed: {
+      zhCN: [
+        '版本列表现优先参考本地变更日志摘要，并支持中英文切换。',
+        '版本列表中的语言切换按钮已移动到弹窗顶部，优化了桌面端布局。',
+      ],
+      en: [
+        'Version history now prefers local changelog summaries and supports Chinese/English switching.',
+        'Move the locale switcher to the top of the version-history dialog for a cleaner desktop layout.',
+      ],
+    },
+    fixed: {
+      zhCN: [
+        '桌面版退出后重新登录时，不再默认锁定为 `owner`，现在可以重新输入账号。',
+        '桌面资料登录态尚未恢复时，不再抢先请求播放记录，避免应用一打开就出现错误提示。',
+      ],
+      en: [
+        'After logging out on desktop, the next sign-in no longer locks to `owner` and now allows entering another account.',
+        'Stop requesting play records before the desktop profile session is ready so the app does not show an error immediately on launch.',
+      ],
+    },
+  },
+  {
     version: '200.0.0',
     date: '2026-06-16',
     added: {

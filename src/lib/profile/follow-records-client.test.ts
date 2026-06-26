@@ -141,7 +141,9 @@ describe('follow records client', () => {
         title: 'Remote Follow',
       })
     );
-    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/follows');
+    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/follows', {
+      redirectOnUnauthorized: false,
+    });
 
     await deleteFollowRecord('demo', '1');
 
@@ -152,5 +154,14 @@ describe('follow records client', () => {
       }
     );
     expect(getCachedFollowRecordsSnapshot()).toEqual({});
+  });
+
+  it('skips follow record api reads while desktop local auth is still pending', async () => {
+    mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+
+    await expect(getAllFollowRecords()).resolves.toEqual({});
+
+    expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
   });
 });

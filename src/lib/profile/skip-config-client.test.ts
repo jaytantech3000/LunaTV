@@ -6,7 +6,9 @@ jest.mock('@/lib/profile/runtime', () => ({
 jest.mock('@/lib/profile/remote-adapter', () => ({
   deleteRemoteProfileResource: jest.fn(),
   fetchRemoteProfileJson: jest.fn(),
+  isUnauthorizedRemoteProfileRequestError: jest.fn(() => false),
   postRemoteProfilePayload: jest.fn(),
+  wasRemoteProfileRequestRedirectedToLogin: jest.fn(() => false),
 }));
 
 import {
@@ -119,7 +121,9 @@ describe('skip config client', () => {
     await expect(getAllSkipConfigs()).resolves.toEqual({
       'demo+1': remoteConfig,
     });
-    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/skipconfigs');
+    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/skipconfigs', {
+      redirectOnUnauthorized: false,
+    });
 
     await deleteSkipConfig('demo', '1');
 
@@ -129,5 +133,15 @@ describe('skip config client', () => {
         key: 'demo+1',
       }
     );
+  });
+
+  it('skips skip-config api reads while desktop local auth is still pending', async () => {
+    mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+
+    await expect(getSkipConfig('demo', '1')).resolves.toBeNull();
+    await expect(getAllSkipConfigs()).resolves.toEqual({});
+
+    expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
   });
 });

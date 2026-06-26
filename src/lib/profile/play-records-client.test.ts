@@ -154,7 +154,9 @@ describe('play records client', () => {
         title: 'Remote Demo',
       }),
     });
-    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/playrecords');
+    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/playrecords', {
+      redirectOnUnauthorized: false,
+    });
 
     await clearAllPlayRecords();
 
@@ -162,6 +164,23 @@ describe('play records client', () => {
       '/playrecords'
     );
     expect(getCachedPlayRecordsSnapshot()).toEqual({});
+  });
+
+  it('skips play record api reads while desktop local auth is still pending', async () => {
+    mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+
+    await expect(getAllPlayRecords()).resolves.toEqual({});
+
+    expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
+  });
+
+  it('skips play record api reads while profile auth is still pending in remote mode', async () => {
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+
+    await expect(getAllPlayRecords()).resolves.toEqual({});
+
+    expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
   });
 
   it('migrates legacy desktop local play records before reading from the API', async () => {

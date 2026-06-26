@@ -6,8 +6,12 @@ const mockSubscribeToProfileCacheUpdates = jest.fn<
   [string, (data: unknown) => void]
 >(() => () => undefined);
 const mockEnsureDesktopLocalProfileStoreHydrated = jest.fn<Promise<void>, []>();
-const mockFetchRemoteProfileJson = jest.fn<Promise<unknown>, [string]>();
+const mockFetchRemoteProfileJson = jest.fn<
+  Promise<unknown>,
+  [string, unknown?]
+>();
 const mockShouldUseProfileApiStorage = jest.fn<boolean, []>(() => false);
+const mockIsDesktopLocalProfileRuntime = jest.fn<boolean, []>(() => false);
 const mockDispatchSearchHistoryUpdated = jest.fn<void, [string[]]>();
 const mockGetCacheStatus = jest.fn<
   {
@@ -80,7 +84,9 @@ jest.mock('@/lib/profile/remote-adapter', () => ({
 }));
 
 jest.mock('@/lib/profile/runtime', () => ({
-  isDesktopLocalProfileRuntime: jest.fn(() => false),
+  isDesktopLocalProfileRuntime: (
+    ...args: Parameters<typeof mockIsDesktopLocalProfileRuntime>
+  ) => mockIsDesktopLocalProfileRuntime(...args),
   shouldUseProfileApiStorage: (
     ...args: Parameters<typeof mockShouldUseProfileApiStorage>
   ) => mockShouldUseProfileApiStorage(...args),
@@ -102,6 +108,7 @@ describe('profile client cache refresh', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockShouldUseProfileApiStorage.mockReturnValue(false);
+    mockIsDesktopLocalProfileRuntime.mockReturnValue(false);
     mockEnsureDesktopLocalProfileStoreHydrated.mockResolvedValue(undefined);
     mockFetchRemoteProfileJson.mockReset();
   });
@@ -127,6 +134,12 @@ describe('profile client cache refresh', () => {
 
   it('hydrates the local store and refreshes all profile domains through the api path', async () => {
     mockShouldUseProfileApiStorage.mockReturnValue(true);
+    document.cookie = `auth=${encodeURIComponent(
+      JSON.stringify({
+        username: 'desktop-owner',
+        sessionMode: 'desktop-local',
+      })
+    )}; path=/`;
 
     const playRecords = {
       'demo+1': {
@@ -164,11 +177,11 @@ describe('profile client cache refresh', () => {
       mockEnsureDesktopLocalProfileStoreHydrated.mock.invocationCallOrder[0]
     ).toBeLessThan(mockFetchRemoteProfileJson.mock.invocationCallOrder[0]);
     expect(mockFetchRemoteProfileJson.mock.calls).toEqual([
-      ['/playrecords'],
-      ['/favorites'],
-      ['/follows'],
-      ['/searchhistory'],
-      ['/skipconfigs'],
+      ['/playrecords', { redirectOnUnauthorized: false }],
+      ['/favorites', { redirectOnUnauthorized: false }],
+      ['/follows', { redirectOnUnauthorized: false }],
+      ['/searchhistory', { redirectOnUnauthorized: false }],
+      ['/skipconfigs', { redirectOnUnauthorized: false }],
     ]);
 
     expect(mockCachePlayRecords).toHaveBeenCalledWith(playRecords);
@@ -196,5 +209,16 @@ describe('profile client cache refresh', () => {
     expect(mockDispatchSearchHistoryUpdated).toHaveBeenCalledWith(
       searchHistory
     );
+  });
+
+  it('skips the api refresh path while desktop local auth is still pending', async () => {
+    mockShouldUseProfileApiStorage.mockReturnValue(true);
+    mockIsDesktopLocalProfileRuntime.mockReturnValue(true);
+    document.cookie = 'auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+
+    await refreshAllCache();
+
+    expect(mockEnsureDesktopLocalProfileStoreHydrated).not.toHaveBeenCalled();
+    expect(mockFetchRemoteProfileJson).not.toHaveBeenCalled();
   });
 });

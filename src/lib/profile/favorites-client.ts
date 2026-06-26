@@ -18,6 +18,10 @@ import {
   postRemoteProfilePayload,
   wasRemoteProfileRequestRedirectedToLogin as wasRedirectedToLogin,
 } from './remote-adapter';
+import {
+  isProfileApiAuthPending,
+  PROFILE_API_NO_REDIRECT_OPTIONS,
+} from './request-state';
 import { shouldUseProfileApiStorage } from './runtime';
 import { generateStorageKey } from './storage-key';
 
@@ -72,11 +76,18 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    if (isProfileApiAuthPending()) {
+      return {};
+    }
+
     await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedFavorites();
 
     if (cachedData) {
-      fetchFromApi<Record<string, Favorite>>(USER_DATA_API_PATHS.favorites)
+      fetchFromApi<Record<string, Favorite>>(
+        USER_DATA_API_PATHS.favorites,
+        PROFILE_API_NO_REDIRECT_OPTIONS
+      )
         .then((freshData) => {
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cacheFavorites(freshData);
@@ -84,6 +95,10 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
           }
         })
         .catch((err) => {
+          if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+            return;
+          }
+
           console.warn('后台同步收藏失败:', err);
           triggerGlobalError('后台同步收藏失败');
         });
@@ -93,11 +108,16 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
 
     try {
       const freshData = await fetchFromApi<Record<string, Favorite>>(
-        USER_DATA_API_PATHS.favorites
+        USER_DATA_API_PATHS.favorites,
+        PROFILE_API_NO_REDIRECT_OPTIONS
       );
       cacheManager.cacheFavorites(freshData);
       return freshData;
     } catch (err) {
+      if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+        return {};
+      }
+
       console.error('获取收藏失败:', err);
       triggerGlobalError('获取收藏失败');
       return {};
@@ -206,11 +226,18 @@ export async function isFavorited(
   const key = generateStorageKey(source, id);
 
   if (shouldUseRemoteUserDataStorage()) {
+    if (isProfileApiAuthPending()) {
+      return false;
+    }
+
     await ensureDesktopLocalProfileStoreHydrated();
     const cachedFavorites = cacheManager.getCachedFavorites();
 
     if (cachedFavorites) {
-      fetchFromApi<Record<string, Favorite>>(USER_DATA_API_PATHS.favorites)
+      fetchFromApi<Record<string, Favorite>>(
+        USER_DATA_API_PATHS.favorites,
+        PROFILE_API_NO_REDIRECT_OPTIONS
+      )
         .then((freshData) => {
           if (JSON.stringify(cachedFavorites) !== JSON.stringify(freshData)) {
             cacheManager.cacheFavorites(freshData);
@@ -218,6 +245,10 @@ export async function isFavorited(
           }
         })
         .catch((err) => {
+          if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+            return;
+          }
+
           console.warn('后台同步收藏失败:', err);
           triggerGlobalError('后台同步收藏失败');
         });
@@ -227,11 +258,16 @@ export async function isFavorited(
 
     try {
       const freshData = await fetchFromApi<Record<string, Favorite>>(
-        USER_DATA_API_PATHS.favorites
+        USER_DATA_API_PATHS.favorites,
+        PROFILE_API_NO_REDIRECT_OPTIONS
       );
       cacheManager.cacheFavorites(freshData);
       return !!freshData[key];
     } catch (err) {
+      if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+        return false;
+      }
+
       console.error('检查收藏状态失败:', err);
       triggerGlobalError('检查收藏状态失败');
       return false;

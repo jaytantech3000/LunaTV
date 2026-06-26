@@ -14,6 +14,10 @@ import {
   postRemoteProfilePayload,
   wasRemoteProfileRequestRedirectedToLogin as wasRedirectedToLogin,
 } from './remote-adapter';
+import {
+  isProfileApiAuthPending,
+  PROFILE_API_NO_REDIRECT_OPTIONS,
+} from './request-state';
 import { shouldUseProfileApiStorage } from './runtime';
 import { generateStorageKey } from './storage-key';
 import { type FollowRecord } from '../types';
@@ -95,11 +99,18 @@ export async function getAllFollowRecords(): Promise<
   }
 
   if (shouldUseRemoteUserDataStorage()) {
+    if (isProfileApiAuthPending()) {
+      return {};
+    }
+
     await ensureDesktopLocalProfileStoreHydrated();
     const cachedData = cacheManager.getCachedFollowRecords();
 
     if (cachedData) {
-      fetchFromApi<Record<string, FollowRecord>>(USER_DATA_API_PATHS.follows)
+      fetchFromApi<Record<string, FollowRecord>>(
+        USER_DATA_API_PATHS.follows,
+        PROFILE_API_NO_REDIRECT_OPTIONS
+      )
         .then((freshData) => {
           if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
             cacheManager.cacheFollowRecords(freshData);
@@ -107,6 +118,10 @@ export async function getAllFollowRecords(): Promise<
           }
         })
         .catch((err) => {
+          if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+            return;
+          }
+
           console.warn('后台同步追更记录失败:', err);
         });
 
@@ -115,11 +130,16 @@ export async function getAllFollowRecords(): Promise<
 
     try {
       const freshData = await fetchFromApi<Record<string, FollowRecord>>(
-        USER_DATA_API_PATHS.follows
+        USER_DATA_API_PATHS.follows,
+        PROFILE_API_NO_REDIRECT_OPTIONS
       );
       cacheManager.cacheFollowRecords(freshData);
       return freshData;
     } catch (err) {
+      if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+        return {};
+      }
+
       console.error('获取追更记录失败:', err);
       triggerGlobalError('获取追更记录失败');
       return {};

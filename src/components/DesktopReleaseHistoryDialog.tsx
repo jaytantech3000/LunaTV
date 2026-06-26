@@ -35,6 +35,8 @@ import {
   buildDesktopReleaseChangeSummaryFromChangelogEntry,
   buildDesktopReleaseChangeSummaryFromNotes,
   fetchDesktopReleaseChangeSummaryFromCompareUrl,
+  findDesktopReleaseChangelogEntry,
+  getDesktopReleaseBaseVersion,
   hasDesktopReleaseChangeItems,
 } from '@/lib/desktop-release-notes';
 import { openExternalUrl } from '@/lib/open-external-url';
@@ -831,6 +833,11 @@ export function DesktopReleaseHistoryDialog({
     }
 
     const controller = new AbortController();
+    const stableReleaseVersions = new Set(
+      releases
+        .filter((release) => !release.prerelease)
+        .map((release) => release.version)
+    );
     const nextReleaseChangeSummaries: Record<
       string,
       DesktopReleaseChangeSummary | null
@@ -843,8 +850,16 @@ export function DesktopReleaseHistoryDialog({
     }> = [];
 
     releases.forEach((release) => {
-      const matchedChangelogEntry = changelog.find(
-        (entry) => entry.version === release.version
+      const releaseBaseVersion = getDesktopReleaseBaseVersion(release.version);
+      const matchedChangelogEntry = findDesktopReleaseChangelogEntry(
+        changelog,
+        {
+          releaseVersion: release.version,
+          allowPrereleaseBaseMatch:
+            release.prerelease &&
+            Boolean(releaseBaseVersion) &&
+            !stableReleaseVersions.has(releaseBaseVersion || ''),
+        }
       );
       const changelogSummary =
         buildDesktopReleaseChangeSummaryFromChangelogEntry(
@@ -1002,8 +1017,8 @@ export function DesktopReleaseHistoryDialog({
         aria-label={releaseHistoryCopy.dialogLabel}
         className='fixed left-1/2 top-1/2 z-[1011] flex max-h-[88vh] w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col'
       >
-        <AppDialogHeader>
-          <div className='flex items-center gap-3'>
+        <AppDialogHeader className='items-start gap-4'>
+          <div className='flex min-w-0 flex-1 items-center gap-3'>
             <AppIconBadge>
               <History className='h-5 w-5' />
             </AppIconBadge>
@@ -1013,24 +1028,24 @@ export function DesktopReleaseHistoryDialog({
             />
           </div>
 
-          <AppIconButton
-            onClick={handleClose}
-            aria-label={releaseHistoryCopy.closeDialogLabel}
-          >
-            <X className='h-5 w-5' />
-          </AppIconButton>
+          <div className='flex flex-col items-end gap-3 sm:flex-row sm:items-center'>
+            <CapsuleSwitch
+              options={[...CHANGELOG_LOCALE_OPTIONS]}
+              active={effectiveChangelogLocale}
+              onChange={handleChangelogLocaleChange}
+              className='shrink-0'
+            />
+            <AppIconButton
+              onClick={handleClose}
+              aria-label={releaseHistoryCopy.closeDialogLabel}
+            >
+              <X className='h-5 w-5' />
+            </AppIconButton>
+          </div>
         </AppDialogHeader>
 
         <div className='flex-1 overflow-y-auto px-5 py-5 sm:px-6'>
           <div className='space-y-6'>
-            <div className='flex justify-end'>
-              <CapsuleSwitch
-                options={[...CHANGELOG_LOCALE_OPTIONS]}
-                active={effectiveChangelogLocale}
-                onChange={handleChangelogLocaleChange}
-              />
-            </div>
-
             {errorMessage ? (
               <div className='flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-100'>
                 <AlertCircle className='mt-0.5 h-4 w-4 flex-shrink-0' />
