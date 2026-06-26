@@ -9,9 +9,7 @@ jest.mock('@/lib/db', () => ({
 import { AdminConfig } from './admin.types';
 import { configSelfCheck } from './config';
 
-function buildAdminConfig(
-  overrides: Partial<AdminConfig> = {}
-): AdminConfig {
+function buildAdminConfig(overrides: Partial<AdminConfig> = {}): AdminConfig {
   return {
     ConfigSubscribtion: {
       URL: '',
@@ -31,6 +29,7 @@ function buildAdminConfig(
       DisableYellowFilter: false,
       FluidSearch: true,
       EnableWebLive: false,
+      EnableWebMusic: false,
     },
     UserConfig: {
       Users: [],

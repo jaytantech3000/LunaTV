@@ -22,6 +22,7 @@ export interface AdminConfig {
     DisableYellowFilter: boolean;
     FluidSearch: boolean;
     EnableWebLive: boolean;
+    EnableWebMusic: boolean;
   };
   UserConfig: {
     Users: {

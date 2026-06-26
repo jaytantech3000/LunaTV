@@ -40,6 +40,7 @@ export async function POST(request: NextRequest) {
       DisableYellowFilter,
       FluidSearch,
       EnableWebLive,
+      EnableWebMusic,
     } = body as {
       SiteName: string;
       Announcement: string;
@@ -52,6 +53,7 @@ export async function POST(request: NextRequest) {
       DisableYellowFilter: boolean;
       FluidSearch: boolean;
       EnableWebLive: boolean;
+      EnableWebMusic: boolean;
     };
 
     // 参数校验
@@ -65,7 +67,9 @@ export async function POST(request: NextRequest) {
       typeof DoubanImageProxyType !== 'string' ||
       typeof DoubanImageProxy !== 'string' ||
       typeof DisableYellowFilter !== 'boolean' ||
-      typeof FluidSearch !== 'boolean'
+      typeof FluidSearch !== 'boolean' ||
+      (EnableWebLive !== undefined && typeof EnableWebLive !== 'boolean') ||
+      (EnableWebMusic !== undefined && typeof EnableWebMusic !== 'boolean')
     ) {
       return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
     }
@@ -96,6 +100,7 @@ export async function POST(request: NextRequest) {
       DisableYellowFilter,
       FluidSearch,
       EnableWebLive: EnableWebLive ?? false,
+      EnableWebMusic: EnableWebMusic ?? false,
     };
 
     // 写入数据库

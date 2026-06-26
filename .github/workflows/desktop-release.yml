@@ -109,10 +109,32 @@ jobs:
           tauriScript: pnpm exec tauri
           args: ${{ matrix.args }}
 
+  normalize_release_assets:
+    name: Normalize Release Assets
+    runs-on: ubuntu-latest
+    needs: publish_release
+    permissions:
+      contents: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Normalize desktop release assets
+        run: node scripts/normalize-desktop-release-assets.mjs --tag "${{ github.event.release.tag_name }}"
+
   publish_updater_manifest:
     name: Publish Updater Manifest
     runs-on: ubuntu-latest
-    needs: publish_release
+    needs: normalize_release_assets
     permissions:
       contents: write
     env:

@@ -176,6 +176,10 @@ export async function buildPublicRuntimeConfig(
     })),
     FLUID_SEARCH: nextConfig.SiteConfig.FluidSearch,
     ENABLE_WEB_LIVE: nextConfig.SiteConfig.EnableWebLive ?? false,
+    ENABLE_WEB_MUSIC:
+      nextConfig.SiteConfig.EnableWebMusic ??
+      baseRuntimeConfig.ENABLE_WEB_MUSIC ??
+      false,
     PLAYER_AUDIO_SPIKE_PROTECTION: audioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: audioSpikeProtectionLevel,
     PLAYER_AUDIO_DYNAMIC_PROTECTION: audioDynamicProtection,
