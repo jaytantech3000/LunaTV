@@ -850,25 +850,16 @@ export function DesktopReleaseHistoryDialog({
     }> = [];
 
     releases.forEach((release) => {
-      const releaseBaseVersion = getDesktopReleaseBaseVersion(release.version);
-      const matchedChangelogEntry = findDesktopReleaseChangelogEntry(
-        changelog,
-        {
-          releaseVersion: release.version,
-          allowPrereleaseBaseMatch:
-            release.prerelease &&
-            Boolean(releaseBaseVersion) &&
-            !stableReleaseVersions.has(releaseBaseVersion || ''),
-        }
-      );
-      const changelogSummary =
+      const exactChangelogSummary =
         buildDesktopReleaseChangeSummaryFromChangelogEntry(
-          matchedChangelogEntry,
+          findDesktopReleaseChangelogEntry(changelog, {
+            releaseVersion: release.version,
+          }),
           effectiveChangelogLocale
         );
 
-      if (changelogSummary) {
-        nextReleaseChangeSummaries[release.tagName] = changelogSummary;
+      if (exactChangelogSummary) {
+        nextReleaseChangeSummaries[release.tagName] = exactChangelogSummary;
         return;
       }
 
@@ -879,20 +870,40 @@ export function DesktopReleaseHistoryDialog({
           ? cachedSummary
           : buildDesktopReleaseChangeSummaryFromNotes(release.notes);
 
-      nextReleaseChangeSummaries[release.tagName] = initialSummary || null;
-
       if (cachedSummary === undefined) {
         releaseChangeSummaryCache.set(cacheKey, initialSummary || null);
       }
 
-      if (initialSummary && shouldLoadReleaseCompareSummary(initialSummary)) {
-        compareSummaryTargets.push({
-          cacheKey,
-          tagName: release.tagName,
-          compareUrl: initialSummary.compareUrl || '',
-          fallbackSummary: initialSummary,
-        });
+      if (initialSummary) {
+        nextReleaseChangeSummaries[release.tagName] = initialSummary;
+
+        if (shouldLoadReleaseCompareSummary(initialSummary)) {
+          compareSummaryTargets.push({
+            cacheKey,
+            tagName: release.tagName,
+            compareUrl: initialSummary.compareUrl || '',
+            fallbackSummary: initialSummary,
+          });
+        }
+        return;
       }
+
+      const releaseBaseVersion = getDesktopReleaseBaseVersion(release.version);
+      const prereleaseBaseChangelogSummary =
+        release.prerelease &&
+        Boolean(releaseBaseVersion) &&
+        !stableReleaseVersions.has(releaseBaseVersion || '')
+          ? buildDesktopReleaseChangeSummaryFromChangelogEntry(
+              findDesktopReleaseChangelogEntry(changelog, {
+                releaseVersion: release.version,
+                allowPrereleaseBaseMatch: true,
+              }),
+              effectiveChangelogLocale
+            )
+          : null;
+
+      nextReleaseChangeSummaries[release.tagName] =
+        prereleaseBaseChangelogSummary || null;
     });
 
     setReleaseChangeSummaries(nextReleaseChangeSummaries);

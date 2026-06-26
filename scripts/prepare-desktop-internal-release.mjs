@@ -9,6 +9,11 @@ const ARTIFACT_DISPLAY_NAMES = new Map([
   ['lunatv-desktop-macos-arm64', 'macOS-Apple-Silicon'],
   ['lunatv-desktop-windows-x64', 'Windows-x64'],
 ]);
+const ARTIFACT_ARCH_NAMES = new Map([
+  ['lunatv-desktop-macos-intel', 'x64'],
+  ['lunatv-desktop-macos-arm64', 'aarch64'],
+  ['lunatv-desktop-windows-x64', 'x64'],
+]);
 
 function parseArgs(argv) {
   const args = new Map();
@@ -41,16 +46,59 @@ function getArtifactDisplayName(artifactName) {
   return artifactName.replace(/^lunatv-desktop-/, '');
 }
 
+function getArtifactArchName(artifactName) {
+  return ARTIFACT_ARCH_NAMES.get(artifactName) || null;
+}
+
+function normalizePublishedAssetName(baseName) {
+  return baseName
+    .trim()
+    .replace(/^LunaTV Desktop/, 'LunaTV.Desktop')
+    .replace(/\s+/g, '.')
+    .replace(/\.{2,}/g, '.');
+}
+
+function insertQualifierBeforeExtension(fileName, qualifier) {
+  if (!qualifier || fileName.includes(`_${qualifier}`)) {
+    return fileName;
+  }
+
+  if (fileName.endsWith('.app.tar.gz')) {
+    return `${fileName.slice(0, -'.app.tar.gz'.length)}_${qualifier}.app.tar.gz`;
+  }
+
+  if (fileName.endsWith('.tar.gz')) {
+    return `${fileName.slice(0, -'.tar.gz'.length)}_${qualifier}.tar.gz`;
+  }
+
+  const extension = path.posix.extname(fileName);
+  if (!extension) {
+    return `${fileName}_${qualifier}`;
+  }
+
+  return `${fileName.slice(0, -extension.length)}_${qualifier}${extension}`;
+}
+
 function buildAssetName(artifactName, relativePath, assets) {
-  const baseName = path.posix.basename(relativePath);
-  const displayName = getArtifactDisplayName(artifactName);
-  const candidate = `${displayName}--${baseName}`;
+  const baseName = normalizePublishedAssetName(path.posix.basename(relativePath));
+  const architecture = getArtifactArchName(artifactName);
+  const candidate = relativePath.endsWith('.app.tar.gz')
+    ? insertQualifierBeforeExtension(baseName, architecture)
+    : baseName;
 
   if (!assets.some(asset => asset.assetName === candidate)) {
     return candidate;
   }
 
-  return `${displayName}--${relativePath.replaceAll('/', '--')}`;
+  const qualifiedCandidate = insertQualifierBeforeExtension(
+    candidate,
+    architecture || getArtifactDisplayName(artifactName)
+  );
+  if (!assets.some(asset => asset.assetName === qualifiedCandidate)) {
+    return qualifiedCandidate;
+  }
+
+  return `${getArtifactDisplayName(artifactName)}--${relativePath.replaceAll('/', '--')}`;
 }
 
 function isPublishedReleaseAsset(relativePath) {

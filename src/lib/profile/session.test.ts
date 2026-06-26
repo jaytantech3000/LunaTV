@@ -131,6 +131,64 @@ describe('profile session helpers', () => {
     setTimeoutSpy.mockRestore();
   });
 
+  it('retries transient desktop local http responses before succeeding', async () => {
+    (isDesktopLocalProfileRuntime as jest.Mock).mockReturnValue(true);
+    const setTimeoutSpy = jest.spyOn(window, 'setTimeout').mockImplementation(((
+      callback: TimerHandler
+    ) => {
+      if (typeof callback === 'function') {
+        callback();
+      }
+      return 0 as unknown as ReturnType<typeof window.setTimeout>;
+    }) as unknown as typeof window.setTimeout);
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({
+          enabled: true,
+        }),
+      });
+
+    const fetchPromise = fetchProfileJson<{ enabled: boolean }>(
+      '/profile-sync/status'
+    );
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await expect(fetchPromise).resolves.toEqual({
+      enabled: true,
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 300);
+
+    setTimeoutSpy.mockRestore();
+  });
+
+  it('does not retry non-idempotent desktop local requests on transient http responses', async () => {
+    (isDesktopLocalProfileRuntime as jest.Mock).mockReturnValue(true);
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 503,
+    });
+
+    const error = await fetchProfileResponse('/playrecords', {
+      method: 'POST',
+    }).catch((caughtError) => caughtError);
+
+    expect(isProfileRequestError(error)).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces unauthorized errors without redirect when explicitly requested', async () => {
     (global.fetch as jest.Mock).mockResolvedValue({
       ok: false,

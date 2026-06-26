@@ -7,6 +7,9 @@ import { isDesktopLocalProfileRuntime } from './runtime';
 
 const DESKTOP_LOCAL_PROFILE_FETCH_RETRY_COUNT = 10;
 const DESKTOP_LOCAL_PROFILE_FETCH_RETRY_DELAY_MS = 300;
+const RETRYABLE_DESKTOP_LOCAL_PROFILE_RESPONSE_STATUSES = new Set([
+  408, 425, 429, 500, 502, 503, 504,
+]);
 
 export interface ProfileRequestInit extends RequestInit {
   redirectOnUnauthorized?: boolean;
@@ -78,6 +81,26 @@ function isRecoverableDesktopLocalProfileRequestError(error: unknown): boolean {
   );
 }
 
+function isSafeProfileRequestMethod(method?: string | null): boolean {
+  const normalizedMethod = method?.trim().toUpperCase();
+  return (
+    !normalizedMethod ||
+    normalizedMethod === 'GET' ||
+    normalizedMethod === 'HEAD'
+  );
+}
+
+function shouldRetryDesktopLocalProfileResponse(
+  response: Response,
+  requestInit: RequestInit
+): boolean {
+  return (
+    isDesktopLocalProfileRuntime() &&
+    isSafeProfileRequestMethod(requestInit.method) &&
+    RETRYABLE_DESKTOP_LOCAL_PROFILE_RESPONSE_STATUSES.has(response.status)
+  );
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -116,7 +139,6 @@ export async function fetchProfileResponse(
   ) {
     try {
       response = await fetch(requestUrl, requestInit);
-      break;
     } catch (error) {
       if (
         !isRecoverableDesktopLocalProfileRequestError(error) ||
@@ -126,7 +148,20 @@ export async function fetchProfileResponse(
       }
 
       await delay(DESKTOP_LOCAL_PROFILE_FETCH_RETRY_DELAY_MS);
+      continue;
     }
+
+    if (
+      response &&
+      shouldRetryDesktopLocalProfileResponse(response, requestInit) &&
+      attempt + 1 < DESKTOP_LOCAL_PROFILE_FETCH_RETRY_COUNT
+    ) {
+      await delay(DESKTOP_LOCAL_PROFILE_FETCH_RETRY_DELAY_MS);
+      response = null;
+      continue;
+    }
+
+    break;
   }
 
   if (!response) {

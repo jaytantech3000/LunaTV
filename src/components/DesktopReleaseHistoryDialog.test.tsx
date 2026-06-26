@@ -528,29 +528,45 @@ describe('DesktopReleaseHistoryDialog', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it('uses the unreleased stable changelog summary for a prerelease line before the stable release is published', async () => {
+  it('prefers prerelease compare summaries over unreleased stable changelog entries', async () => {
     window.RUNTIME_CONFIG = {
       APP_TARGET: 'desktop',
     };
+    const compareUrl =
+      'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.4...desktop-v200.0.1-beta.5';
     mockFetchDesktopReleaseHistory.mockResolvedValueOnce([
       {
         id: 'beta-5',
         version: '200.0.1-beta.5',
         tagName: 'desktop-v200.0.1-beta.5',
         name: 'Beta 5',
-        notes:
-          '- fix(desktop): localize release history and restore login fallback',
+        notes: `**Full Changelog**: ${compareUrl}`,
         prerelease: true,
         publishedAt: '2026-06-26T04:14:33Z',
         htmlUrl: 'https://example.com/beta-5',
         manifestUrl: 'https://example.com/beta-5/latest.json',
       },
     ]);
-    const fetchMock = jest.fn();
+    const fetchMock = jest.fn(async () =>
+      createJsonFetchResponse({
+        commits: [
+          {
+            commit: {
+              message: 'feat: add bilingual beta release summaries',
+            },
+          },
+          {
+            commit: {
+              message: 'fix: avoid startup follow record toast',
+            },
+          },
+        ],
+      })
+    );
     global.fetch = fetchMock as unknown as typeof fetch;
 
     renderDialog({
-      currentVersion: '200.0.1-beta.5',
+      currentVersion: '200.0.1-beta.4',
       changelogLocale: 'zh-CN',
     });
 
@@ -560,14 +576,25 @@ describe('DesktopReleaseHistoryDialog', () => {
 
     await waitFor(() => {
       expect(releaseCard).toHaveTextContent(
-        '版本列表现优先参考本地变更日志摘要'
+        'add bilingual beta release summaries'
       );
       expect(releaseCard).toHaveTextContent(
-        '桌面版退出后重新登录时，不再默认锁定为'
+        'avoid startup follow record toast'
+      );
+      expect(releaseCard).not.toHaveTextContent(
+        '版本列表现优先参考本地变更日志摘要'
       );
     });
 
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://api.github.com/repos/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.4...desktop-v200.0.1-beta.5',
+      expect.objectContaining({
+        cache: 'no-store',
+        headers: expect.objectContaining({
+          Accept: 'application/vnd.github+json',
+        }),
+      })
+    );
   });
 
   it('forwards changelog locale switch events', async () => {
