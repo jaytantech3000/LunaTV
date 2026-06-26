@@ -1034,6 +1034,7 @@ struct RuntimePublicConfigResponse {
     disable_yellow_filter: bool,
     fluid_search: bool,
     enable_web_live: bool,
+    enable_web_music: bool,
     player_audio_spike_protection: bool,
     player_audio_spike_protection_level: PlayerEnhancementLevel,
     player_audio_dynamic_protection: bool,
@@ -5567,6 +5568,7 @@ fn build_runtime_public_config_response(config: &ServiceConfig) -> RuntimePublic
         enable_web_live: config
             .enable_web_live_override
             .unwrap_or_else(|| config.live_sources.iter().any(|source| !source.disabled)),
+        enable_web_music: true,
         player_audio_spike_protection: config.player_audio_spike_protection,
         player_audio_spike_protection_level: config.player_audio_spike_protection_level,
         player_audio_dynamic_protection: config.player_audio_dynamic_protection,
@@ -7818,6 +7820,10 @@ segment0.ts
             Some(true)
         );
         assert_eq!(
+            payload.get("enableWebMusic").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             payload.get("disableYellowFilter").and_then(Value::as_bool),
             Some(true)
         );
@@ -7969,6 +7975,13 @@ segment0.ts
                 .and_then(|value| value.get("siteName"))
                 .and_then(Value::as_str),
             Some("Bootstrap LunaTV")
+        );
+        assert_eq!(
+            payload
+                .get("runtime")
+                .and_then(|value| value.get("enableWebMusic"))
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             payload

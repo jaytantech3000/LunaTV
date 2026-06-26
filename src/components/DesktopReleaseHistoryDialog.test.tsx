@@ -398,6 +398,32 @@ describe('DesktopReleaseHistoryDialog', () => {
     );
   });
 
+  it('falls back to the local desktop changelog when all remote sources fail', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+    };
+    mockIsDesktopTauriRuntimeAvailable.mockReturnValue(false);
+    const fetchMock = jest.fn(async () =>
+      createJsonFetchResponse(
+        {
+          message: 'API rate limit exceeded',
+        },
+        403
+      )
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderDialog();
+
+    expect(
+      await screen.findByTestId('desktop-release-card-desktop-v200.0.0-beta.15')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('desktop-release-card-desktop-v200.0.1')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/GitHub API error 403/i)).not.toBeInTheDocument();
+  });
+
   it('shows a current tag for the running version', async () => {
     renderDialog();
 

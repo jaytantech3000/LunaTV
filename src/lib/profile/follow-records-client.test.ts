@@ -208,4 +208,26 @@ describe('follow records client', () => {
 
     expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
   });
+
+  it('suppresses the startup follow-record toast when the desktop local api read fails', async () => {
+    mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie();
+    setDesktopBootstrapPayload();
+    mockedFetchRemoteProfileJson.mockRejectedValueOnce(new Error('network'));
+    const dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+    const consoleWarnSpy = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
+
+    await expect(getAllFollowRecords()).resolves.toEqual({});
+
+    expect(dispatchEventSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'globalError',
+      })
+    );
+    consoleWarnSpy.mockRestore();
+    dispatchEventSpy.mockRestore();
+  });
 });

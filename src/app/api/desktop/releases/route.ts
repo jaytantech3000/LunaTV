@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import {
   type GithubReleasePayload,
+  buildLocalDesktopReleaseHistoryFallback,
   normalizeDesktopReleaseHistory,
 } from '@/lib/desktop-release-history';
 import {
@@ -39,6 +40,21 @@ export async function GET(request: Request) {
   const repository =
     normalizeRepositorySlug(requestUrl.searchParams.get('repo')) ||
     getReleaseRepository();
+  const buildLocalFallbackResponse = () => {
+    const fallbackReleases = buildLocalDesktopReleaseHistoryFallback({
+      repository,
+      manifestProxyBaseUrl: requestUrl.origin,
+    });
+
+    if (fallbackReleases.length === 0) {
+      return null;
+    }
+
+    return buildResponse({
+      releases: fallbackReleases,
+    });
+  };
+
   if (!isRepositorySlug(repository)) {
     return buildResponse(
       {
@@ -59,6 +75,11 @@ export async function GET(request: Request) {
 
     if (!response.ok) {
       const errorText = await response.text();
+      const fallbackResponse = buildLocalFallbackResponse();
+      if (fallbackResponse) {
+        return fallbackResponse;
+      }
+
       return buildResponse(
         {
           error: `GitHub API error ${response.status}: ${errorText.slice(
@@ -72,6 +93,11 @@ export async function GET(request: Request) {
 
     const payload = (await response.json()) as GithubReleasePayload[];
     if (!Array.isArray(payload)) {
+      const fallbackResponse = buildLocalFallbackResponse();
+      if (fallbackResponse) {
+        return fallbackResponse;
+      }
+
       return buildResponse(
         {
           error: 'Unexpected desktop release payload.',
@@ -92,6 +118,11 @@ export async function GET(request: Request) {
       })),
     });
   } catch (error) {
+    const fallbackResponse = buildLocalFallbackResponse();
+    if (fallbackResponse) {
+      return fallbackResponse;
+    }
+
     return buildResponse(
       {
         error:

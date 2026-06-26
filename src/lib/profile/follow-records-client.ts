@@ -234,6 +234,11 @@ export async function getAllFollowRecords(): Promise<
         return {};
       }
 
+      if (isDesktopLocalProfileRuntime()) {
+        console.warn('桌面追更记录暂时不可用，已跳过首次提示:', err);
+        return {};
+      }
+
       console.error('获取追更记录失败:', err);
       triggerGlobalError('获取追更记录失败');
       return {};

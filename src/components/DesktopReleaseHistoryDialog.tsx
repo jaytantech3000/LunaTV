@@ -28,6 +28,7 @@ import {
 } from '@/lib/desktop/tauri-client';
 import {
   type DesktopReleaseHistoryItem,
+  buildLocalDesktopReleaseHistoryFallback,
   fetchDesktopReleaseHistoryFromGithub,
 } from '@/lib/desktop-release-history';
 import {
@@ -368,48 +369,125 @@ async function fetchDesktopReleaseHistoryFromDesktopShell() {
   return fetchDesktopReleaseHistory(getReleaseRepository());
 }
 
-async function loadDesktopReleaseHistory(signal: AbortSignal) {
+function hasDesktopReleaseHistoryItems(
+  releases: DesktopReleaseHistoryItem[] | null | undefined
+) {
+  return Array.isArray(releases) && releases.length > 0;
+}
+
+async function loadDesktopReleaseHistory(
+  signal: AbortSignal,
+  currentVersion: string
+) {
   const desktopReleaseProxyUrl = getDesktopReleaseHistoryProxyUrl();
+  let lastError: unknown = null;
+
+  const resolveLocalFallback = () => {
+    const fallbackReleases = buildLocalDesktopReleaseHistoryFallback({
+      currentVersion,
+    });
+
+    if (fallbackReleases.length > 0) {
+      return fallbackReleases;
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    throw new Error('获取版本列表失败。');
+  };
 
   if (isDesktopAppTarget()) {
     if (isDesktopTauriRuntimeAvailable()) {
       try {
-        return await fetchDesktopReleaseHistoryFromDesktopShell();
+        const releases = await fetchDesktopReleaseHistoryFromDesktopShell();
+        if (hasDesktopReleaseHistoryItems(releases)) {
+          return releases;
+        }
+
+        lastError = new Error('Desktop shell returned no release history.');
       } catch (error) {
         if (signal.aborted) {
           throw error;
         }
+
+        lastError = error;
       }
     }
 
     if (desktopReleaseProxyUrl) {
       try {
-        return await fetchDesktopReleaseHistoryFromProxy(
+        const releases = await fetchDesktopReleaseHistoryFromProxy(
           desktopReleaseProxyUrl,
           signal
         );
+        if (hasDesktopReleaseHistoryItems(releases)) {
+          return releases;
+        }
+
+        lastError = new Error('Desktop release proxy returned no releases.');
       } catch (error) {
         if (signal.aborted) {
           throw error;
         }
+
+        lastError = error;
       }
     }
 
-    return fetchDesktopReleaseHistoryFromGithub({ signal });
+    try {
+      const releases = await fetchDesktopReleaseHistoryFromGithub({ signal });
+      if (hasDesktopReleaseHistoryItems(releases)) {
+        return releases;
+      }
+
+      lastError = new Error('GitHub returned no desktop releases.');
+    } catch (error) {
+      if (signal.aborted) {
+        throw error;
+      }
+
+      lastError = error;
+    }
+
+    return resolveLocalFallback();
   }
 
   try {
-    return await fetchDesktopReleaseHistoryFromProxy(
+    const releases = await fetchDesktopReleaseHistoryFromProxy(
       '/api/desktop/releases',
       signal
     );
+    if (hasDesktopReleaseHistoryItems(releases)) {
+      return releases;
+    }
+
+    lastError = new Error('Desktop release route returned no releases.');
   } catch (error) {
     if (signal.aborted) {
       throw error;
     }
 
-    return fetchDesktopReleaseHistoryFromGithub({ signal });
+    lastError = error;
   }
+
+  try {
+    const releases = await fetchDesktopReleaseHistoryFromGithub({ signal });
+    if (hasDesktopReleaseHistoryItems(releases)) {
+      return releases;
+    }
+
+    lastError = new Error('GitHub returned no desktop releases.');
+  } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
+
+    lastError = error;
+  }
+
+  return resolveLocalFallback();
 }
 
 function shouldLoadReleaseCompareSummary(
@@ -800,7 +878,10 @@ export function DesktopReleaseHistoryDialog({
 
     void (async () => {
       try {
-        const nextReleases = await loadDesktopReleaseHistory(controller.signal);
+        const nextReleases = await loadDesktopReleaseHistory(
+          controller.signal,
+          currentVersion
+        );
         if (controller.signal.aborted) {
           return;
         }
@@ -824,7 +905,7 @@ export function DesktopReleaseHistoryDialog({
     return () => {
       controller.abort();
     };
-  }, [isOpen]);
+  }, [currentVersion, isOpen]);
 
   useEffect(() => {
     if (!releases.length) {

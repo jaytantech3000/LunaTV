@@ -1,4 +1,12 @@
-import { getReleaseRepository } from '@/lib/release-urls';
+import { changelog } from '@/lib/changelog';
+import { DESKTOP_UPSTREAM_VERSION } from '@/lib/desktop-release';
+import { buildGithubReleaseDownloadUrl } from '@/lib/desktop-updater-proxy';
+import {
+  getDesktopReleaseTagName,
+  getDesktopUpdaterManifestProxyUrl,
+  getProjectPageUrl,
+  getReleaseRepository,
+} from '@/lib/release-urls';
 import { compareSemver } from '@/lib/semver';
 
 const DESKTOP_RELEASE_TAG_PREFIX = 'desktop-v';
@@ -38,6 +46,33 @@ export interface DesktopReleaseHistoryItem {
 
 function isRepositorySlug(value: string) {
   return /^[^/\s]+\/[^/\s]+$/.test(value.trim());
+}
+
+function isValidSemverVersion(value: string | null | undefined) {
+  const normalizedValue = value?.trim();
+  if (!normalizedValue) {
+    return false;
+  }
+
+  try {
+    compareSemver(normalizedValue, normalizedValue);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+export function isDesktopReleaseLineVersion(value: string | null | undefined) {
+  const normalizedValue = value?.trim();
+  if (!isValidSemverVersion(normalizedValue)) {
+    return false;
+  }
+
+  try {
+    return compareSemver(normalizedValue, DESKTOP_UPSTREAM_VERSION) > 0;
+  } catch (_) {
+    return false;
+  }
 }
 
 function readGithubApiErrorMessage(payload: unknown, fallback: string) {
@@ -135,6 +170,104 @@ export function getDesktopReleaseGithubApiUrl(
   return `${GITHUB_API_BASE}/repos/${repository}/releases?per_page=100`;
 }
 
+function compareDesktopReleaseHistoryItems(
+  left: DesktopReleaseHistoryItem,
+  right: DesktopReleaseHistoryItem
+) {
+  const versionOrder = compareSemver(right.version, left.version);
+  if (versionOrder !== 0) {
+    return versionOrder;
+  }
+
+  const leftPublishedAt = left.publishedAt
+    ? Date.parse(left.publishedAt)
+    : Number.NEGATIVE_INFINITY;
+  const rightPublishedAt = right.publishedAt
+    ? Date.parse(right.publishedAt)
+    : Number.NEGATIVE_INFINITY;
+
+  return rightPublishedAt - leftPublishedAt;
+}
+
+function normalizePublishedAtDate(value: string | null | undefined) {
+  const normalizedValue = value?.trim();
+  if (!normalizedValue) {
+    return null;
+  }
+
+  const timestamp = Date.parse(`${normalizedValue}T00:00:00Z`);
+  if (Number.isNaN(timestamp)) {
+    return null;
+  }
+
+  return new Date(timestamp).toISOString();
+}
+
+export function buildLocalDesktopReleaseHistoryFallback({
+  currentVersion,
+  repository = getReleaseRepository(),
+  manifestProxyBaseUrl,
+}: {
+  currentVersion?: string | null;
+  repository?: string;
+  manifestProxyBaseUrl?: string;
+} = {}): DesktopReleaseHistoryItem[] {
+  if (!isRepositorySlug(repository)) {
+    return [];
+  }
+
+  const releaseMetadata = new Map<string, string | null>();
+
+  changelog.forEach((entry) => {
+    if (!isDesktopReleaseLineVersion(entry.version)) {
+      return;
+    }
+
+    releaseMetadata.set(
+      entry.version,
+      normalizePublishedAtDate(entry.date) || null
+    );
+  });
+
+  const normalizedCurrentVersion = currentVersion?.trim();
+  if (
+    normalizedCurrentVersion &&
+    isDesktopReleaseLineVersion(normalizedCurrentVersion) &&
+    !releaseMetadata.has(normalizedCurrentVersion)
+  ) {
+    releaseMetadata.set(normalizedCurrentVersion, null);
+  }
+
+  return Array.from(releaseMetadata.entries())
+    .map(([version, publishedAt]) => {
+      const tagName = getDesktopReleaseTagName(version);
+      const manifestUrl =
+        getDesktopUpdaterManifestProxyUrl({
+          baseUrl: manifestProxyBaseUrl,
+          repository,
+          tagName,
+        }) ||
+        buildGithubReleaseDownloadUrl(
+          repository,
+          tagName,
+          DESKTOP_RELEASE_MANIFEST_NAME
+        );
+
+      return {
+        id: tagName,
+        version,
+        tagName,
+        name: `v${version}`,
+        notes: null,
+        prerelease: version.includes('-'),
+        publishedAt,
+        htmlUrl: `${getProjectPageUrl(repository)}/releases/tag/${tagName}`,
+        manifestUrl,
+      };
+    })
+    .sort(compareDesktopReleaseHistoryItems);
+}
+
 export async function fetchDesktopReleaseHistoryFromGithub({
   signal,
   repository = getReleaseRepository(),
@@ -210,19 +343,5 @@ export function normalizeDesktopReleaseHistory(
         },
       ];
     })
-    .sort((left, right) => {
-      const versionOrder = compareSemver(right.version, left.version);
-      if (versionOrder !== 0) {
-        return versionOrder;
-      }
-
-      const leftPublishedAt = left.publishedAt
-        ? Date.parse(left.publishedAt)
-        : Number.NEGATIVE_INFINITY;
-      const rightPublishedAt = right.publishedAt
-        ? Date.parse(right.publishedAt)
-        : Number.NEGATIVE_INFINITY;
-
-      return rightPublishedAt - leftPublishedAt;
-    });
+    .sort(compareDesktopReleaseHistoryItems);
 }

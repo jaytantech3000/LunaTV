@@ -1,6 +1,8 @@
 import {
+  buildLocalDesktopReleaseHistoryFallback,
   extractDesktopReleaseVersion,
   findDesktopReleaseManifestUrl,
+  isDesktopReleaseLineVersion,
   normalizeDesktopReleaseHistory,
 } from './desktop-release-history';
 
@@ -108,5 +110,37 @@ describe('desktop release history helpers', () => {
       '200.0.0-beta.16',
       '200.0.0-beta.15',
     ]);
+  });
+
+  it('detects versions that belong to the desktop-only release line', () => {
+    expect(isDesktopReleaseLineVersion('200.0.0')).toBe(true);
+    expect(isDesktopReleaseLineVersion('200.0.0-beta.16')).toBe(true);
+    expect(isDesktopReleaseLineVersion('100.1.3')).toBe(false);
+    expect(isDesktopReleaseLineVersion('not-a-version')).toBe(false);
+  });
+
+  it('builds a local fallback release list from desktop changelog entries', () => {
+    const releases = buildLocalDesktopReleaseHistoryFallback({
+      currentVersion: '200.0.1-beta.8',
+      repository: 'jaytantech3000/LunaTV',
+      manifestProxyBaseUrl: 'https://proxy.example.com',
+    });
+
+    expect(releases.map((item) => item.version)).toEqual([
+      '200.0.1',
+      '200.0.1-beta.8',
+      '200.0.0',
+    ]);
+    expect(
+      releases.find((item) => item.version === '200.0.1-beta.8')
+    ).toMatchObject({
+      tagName: 'desktop-v200.0.1-beta.8',
+      prerelease: true,
+      htmlUrl:
+        'https://github.com/jaytantech3000/LunaTV/releases/tag/desktop-v200.0.1-beta.8',
+      manifestUrl:
+        'https://proxy.example.com/api/desktop/updater/latest?repo=jaytantech3000%2FLunaTV&tag=desktop-v200.0.1-beta.8',
+    });
+    expect(releases.some((item) => item.version === '100.1.3')).toBe(false);
   });
 });
