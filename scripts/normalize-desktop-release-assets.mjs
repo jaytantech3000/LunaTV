@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable no-console */
 
 import { Buffer } from 'node:buffer';
 import { URL } from 'node:url';
@@ -12,7 +13,10 @@ import {
 } from './desktop-release-utils.mjs';
 
 const GITHUB_API_BASE = 'https://api.github.com';
-const { buildNormalizedReleaseAssetName } = assetNamingModule;
+const {
+  buildNormalizedReleaseAssetFileName,
+  buildNormalizedReleaseAssetLabel,
+} = assetNamingModule;
 
 function readEnvValue(name) {
   const value = process.env[name]?.trim();
@@ -110,7 +114,13 @@ async function downloadReleaseAssetText(asset, token) {
   return response.text();
 }
 
-async function renameReleaseAsset(repository, assetId, nextName, token) {
+async function renameReleaseAsset(
+  repository,
+  assetId,
+  nextName,
+  nextLabel,
+  token
+) {
   const response = await githubRequest(
     `${GITHUB_API_BASE}/repos/${repository}/releases/assets/${assetId}`,
     token,
@@ -118,6 +128,7 @@ async function renameReleaseAsset(repository, assetId, nextName, token) {
       method: 'PATCH',
       body: {
         name: nextName,
+        label: nextLabel,
       },
     }
   );
@@ -167,29 +178,42 @@ function buildRenamePlan(assets, releaseVersion) {
   const plannedNames = new Set();
 
   return assets.flatMap((asset) => {
-    const nextName = buildNormalizedReleaseAssetName({
+    const nextName = buildNormalizedReleaseAssetFileName({
       assetName: asset.name,
       releaseVersion,
     });
-    if (!nextName || nextName === asset.name) {
+    const nextLabel = buildNormalizedReleaseAssetLabel({
+      assetName: asset.name,
+      releaseVersion,
+    });
+    const currentLabel = asset.label || '';
+    const previousLabelName = nextLabel || '';
+    const nameChanged = Boolean(nextName && nextName !== asset.name);
+    const labelChanged = Boolean(nextLabel && nextLabel !== currentLabel);
+
+    if (!nextName || (!nameChanged && !labelChanged)) {
       return [];
     }
 
-    if (currentNames.has(nextName)) {
+    if (nameChanged && currentNames.has(nextName)) {
       throw new Error(
         `Release already contains a conflicting normalized asset name: ${nextName}`
       );
     }
 
-    if (plannedNames.has(nextName)) {
+    if (nameChanged && plannedNames.has(nextName)) {
       throw new Error(`Duplicate normalized asset name detected: ${nextName}`);
     }
 
-    plannedNames.add(nextName);
+    if (nameChanged) {
+      plannedNames.add(nextName);
+    }
     return [
       {
         asset,
         nextName,
+        nextLabel,
+        previousLabelName,
       },
     ];
   });
@@ -248,7 +272,9 @@ function logRenamePlan(renamePlan) {
 
   console.log('Desktop release asset normalization plan:');
   for (const entry of renamePlan) {
-    console.log(`- ${entry.asset.name} -> ${entry.nextName}`);
+    console.log(
+      `- ${entry.asset.name} -> ${entry.nextName} [label: ${entry.nextLabel}]`
+    );
   }
 }
 
@@ -288,9 +314,13 @@ async function main() {
   }
 
   const renamePlan = buildRenamePlan(release.assets, releaseVersion);
-  const renameMap = new Map(
-    renamePlan.map((entry) => [entry.asset.name, entry.nextName])
-  );
+  const renameMap = new Map();
+  for (const entry of renamePlan) {
+    renameMap.set(entry.asset.name, entry.nextName);
+    if (entry.previousLabelName) {
+      renameMap.set(entry.previousLabelName, entry.nextName);
+    }
+  }
   const latestJsonSource = await downloadReleaseAssetText(
     latestJsonAsset,
     token
@@ -316,7 +346,13 @@ async function main() {
   }
 
   for (const entry of renamePlan) {
-    await renameReleaseAsset(repository, entry.asset.id, entry.nextName, token);
+    await renameReleaseAsset(
+      repository,
+      entry.asset.id,
+      entry.nextName,
+      entry.nextLabel,
+      token
+    );
   }
 
   if (latestJsonChanged) {

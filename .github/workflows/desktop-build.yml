@@ -140,4 +140,7 @@ jobs:
         run: node scripts/prepare-desktop-internal-release.mjs --artifacts-root .desktop-release/artifacts --output-dir .desktop-release/dist --github-output "$GITHUB_OUTPUT"
 
       - name: Create GitHub prerelease
-        run: gh release create "${{ steps.prepare_release.outputs.tag }}" .desktop-release/dist/assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "${{ steps.prepare_release.outputs.title }}" --notes-file .desktop-release/dist/RELEASE_NOTES.md --prerelease
+        shell: bash
+        run: |
+          mapfile -t release_assets < "${{ steps.prepare_release.outputs.asset_manifest }}"
+          gh release create "${{ steps.prepare_release.outputs.tag }}" "${release_assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "${{ steps.prepare_release.outputs.title }}" --notes-file .desktop-release/dist/RELEASE_NOTES.md --prerelease

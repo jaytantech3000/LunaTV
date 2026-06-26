@@ -1,11 +1,14 @@
 #!/usr/bin/env node
+/* eslint-disable no-console */
 
 import { spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+
 import assetNamingModule from './desktop-release-asset-naming.js';
 
-const { buildInternalReleaseAssetName } = assetNamingModule;
+const { buildInternalReleaseAssetFileName, buildInternalReleaseAssetLabel } =
+  assetNamingModule;
 
 function parseArgs(argv) {
   const args = new Map();
@@ -30,18 +33,32 @@ function parseArgs(argv) {
   return args;
 }
 
-function buildAssetName(artifactName, relativePath, assets) {
-  const candidate = buildInternalReleaseAssetName({
+function buildAssetDescriptor(artifactName, relativePath, assets) {
+  const candidate = buildInternalReleaseAssetFileName({
     artifactName,
     relativePath,
   });
 
   if (!assets.some((asset) => asset.assetName === candidate)) {
-    return candidate;
+    return {
+      assetName: candidate,
+      assetLabel: buildInternalReleaseAssetLabel({
+        artifactName,
+        relativePath,
+      }),
+    };
   }
 
-  const [platformLabel] = candidate.split(' - ', 1);
-  return `${platformLabel} - ${relativePath.replaceAll('/', '--')}`;
+  const fallbackName = relativePath.replaceAll('/', '--').replaceAll(' ', '.');
+  const [platformLabel] = buildInternalReleaseAssetLabel({
+    artifactName,
+    relativePath,
+  }).split(' - ', 1);
+
+  return {
+    assetName: fallbackName,
+    assetLabel: `${platformLabel} - ${fallbackName}`,
+  };
 }
 
 function isPublishedReleaseAsset(relativePath) {
@@ -71,7 +88,11 @@ async function stageFile({
   assetsDir,
   assets,
 }) {
-  const assetName = buildAssetName(artifactName, relativePath, assets);
+  const { assetName, assetLabel } = buildAssetDescriptor(
+    artifactName,
+    relativePath,
+    assets
+  );
   const outputPath = path.join(assetsDir, assetName);
 
   await fs.copyFile(sourcePath, outputPath);
@@ -81,6 +102,7 @@ async function stageFile({
     artifactName,
     sourcePath: relativePath,
     assetName,
+    assetLabel,
     size: stat.size,
   });
 }
@@ -92,7 +114,7 @@ async function archiveAppBundle({
   assetsDir,
   assets,
 }) {
-  const assetName = buildAssetName(
+  const { assetName, assetLabel } = buildAssetDescriptor(
     artifactName,
     `${relativePath}.tar.gz`,
     assets
@@ -119,6 +141,7 @@ async function archiveAppBundle({
     artifactName,
     sourcePath: relativePath,
     assetName,
+    assetLabel,
     size: stat.size,
   });
 }
@@ -310,7 +333,10 @@ async function main() {
     '## Assets',
     '',
     '- This internal release includes end-user install packages, a Windows portable zip, and macOS app archives.',
-    ...assets.map((asset) => `- \`${asset.assetName}\` (${asset.size} bytes)`),
+    ...assets.map(
+      (asset) =>
+        `- \`${asset.assetLabel}\` -> \`${asset.assetName}\` (${asset.size} bytes)`
+    ),
     '',
   ];
 
@@ -320,11 +346,23 @@ async function main() {
     'utf8'
   );
 
+  await fs.writeFile(
+    path.join(outputDir, 'RELEASE_ASSETS.txt'),
+    `${assets
+      .map(
+        (asset) =>
+          `${path.join(assetsDir, asset.assetName)}#${asset.assetLabel}`
+      )
+      .join('\n')}\n`,
+    'utf8'
+  );
+
   await writeReleaseOutputs(githubOutputPath, {
     tag: metadata.tag,
     title: metadata.title,
     version: metadata.version,
     asset_dir: assetsDir,
+    asset_manifest: path.join(outputDir, 'RELEASE_ASSETS.txt'),
   });
 
   console.log(`Prepared ${assets.length} release assets in ${assetsDir}`);

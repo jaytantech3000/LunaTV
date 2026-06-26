@@ -77,14 +77,6 @@ function insertQualifierBeforeExtension(fileName, qualifier) {
   return `${fileName.slice(0, -extension.length)}_${qualifier}${extension}`;
 }
 
-function buildPrefixedAssetName(label, assetName) {
-  if (assetName.includes(' - LunaTV.Desktop_')) {
-    return assetName;
-  }
-
-  return `${label} - ${assetName}`;
-}
-
 function normalizeArchitecture(rawArchitecture) {
   switch (rawArchitecture) {
     case 'aarch64':
@@ -150,19 +142,33 @@ function buildPlatformLabel(platform, architecture) {
   return `${platform} ${architecture}`;
 }
 
-function splitPrefixedAssetName(assetName) {
-  const separator = ' - ';
-  const separatorIndex = assetName.indexOf(separator);
-  if (separatorIndex === -1) {
+function buildReleaseAssetLabel(label, assetName) {
+  return `${label} - ${assetName}`;
+}
+
+function splitLabeledAssetName(assetName) {
+  const displaySeparator = ' - ';
+  const displayMarker = `${displaySeparator}LunaTV.Desktop_`;
+  const displayIndex = assetName.indexOf(displayMarker);
+  if (displayIndex !== -1) {
     return {
-      label: null,
-      bareName: assetName,
+      label: assetName.slice(0, displayIndex),
+      bareName: assetName.slice(displayIndex + displaySeparator.length),
+    };
+  }
+
+  const dottedMarker = '.-.LunaTV.Desktop_';
+  const dottedIndex = assetName.indexOf(dottedMarker);
+  if (dottedIndex !== -1) {
+    return {
+      label: assetName.slice(0, dottedIndex).replaceAll('.', ' '),
+      bareName: assetName.slice(dottedIndex + '.-.'.length),
     };
   }
 
   return {
-    label: assetName.slice(0, separatorIndex),
-    bareName: assetName.slice(separatorIndex + separator.length),
+    label: null,
+    bareName: assetName,
   };
 }
 
@@ -200,25 +206,31 @@ function buildNormalizedBareReleaseAssetName(assetName, releaseVersion) {
   };
 }
 
-function buildInternalReleaseAssetName({ artifactName, relativePath }) {
+function buildInternalReleaseAssetFileName({ artifactName, relativePath }) {
   const baseName = normalizePublishedAssetName(
     path.posix.basename(relativePath)
   );
-  const candidate = relativePath.endsWith('.app.tar.gz')
+  return relativePath.endsWith('.app.tar.gz')
     ? insertQualifierBeforeExtension(
         baseName,
         getInternalReleaseArchitecture(artifactName)
       )
     : baseName;
+}
 
-  return buildPrefixedAssetName(
+function buildInternalReleaseAssetLabel({ artifactName, relativePath }) {
+  return buildReleaseAssetLabel(
     getInternalReleaseLabel(artifactName),
-    candidate
+    buildInternalReleaseAssetFileName({ artifactName, relativePath })
   );
 }
 
-function buildNormalizedReleaseAssetName({ assetName, releaseVersion }) {
-  const { bareName } = splitPrefixedAssetName(assetName);
+function buildInternalReleaseAssetName(input) {
+  return buildInternalReleaseAssetLabel(input);
+}
+
+function buildNormalizedReleaseAssetDescriptor({ assetName, releaseVersion }) {
+  const { bareName } = splitLabeledAssetName(assetName);
   if (!bareName.startsWith('LunaTV.Desktop_')) {
     return null;
   }
@@ -231,13 +243,45 @@ function buildNormalizedReleaseAssetName({ assetName, releaseVersion }) {
     return null;
   }
 
-  return buildPrefixedAssetName(
-    buildPlatformLabel(normalizedAsset.platform, normalizedAsset.architecture),
-    normalizedAsset.normalizedName
+  return {
+    label: buildPlatformLabel(
+      normalizedAsset.platform,
+      normalizedAsset.architecture
+    ),
+    fileName: normalizedAsset.normalizedName,
+  };
+}
+
+function buildNormalizedReleaseAssetFileName({ assetName, releaseVersion }) {
+  return (
+    buildNormalizedReleaseAssetDescriptor({
+      assetName,
+      releaseVersion,
+    })?.fileName || null
   );
 }
 
+function buildNormalizedReleaseAssetLabel({ assetName, releaseVersion }) {
+  const descriptor = buildNormalizedReleaseAssetDescriptor({
+    assetName,
+    releaseVersion,
+  });
+  if (!descriptor) {
+    return null;
+  }
+
+  return buildReleaseAssetLabel(descriptor.label, descriptor.fileName);
+}
+
+function buildNormalizedReleaseAssetName({ assetName, releaseVersion }) {
+  return buildNormalizedReleaseAssetLabel({ assetName, releaseVersion });
+}
+
 module.exports = {
+  buildInternalReleaseAssetFileName,
+  buildInternalReleaseAssetLabel,
   buildInternalReleaseAssetName,
+  buildNormalizedReleaseAssetFileName,
+  buildNormalizedReleaseAssetLabel,
   buildNormalizedReleaseAssetName,
 };
