@@ -1,18 +1,15 @@
-import { NextResponse } from 'next/server';
-
-import { getMockMusicSources } from '@/lib/music/mock-catalog';
+import {
+  createMusicErrorResponse,
+  createMusicJsonResponse,
+  getMusicSourcesPayload,
+} from '@/lib/music/netease';
 
 export const runtime = 'nodejs';
 
 export async function GET() {
-  return NextResponse.json(
-    {
-      sources: getMockMusicSources(),
-    },
-    {
-      headers: {
-        'Cache-Control': 'no-store',
-      },
-    }
-  );
+  try {
+    return createMusicJsonResponse(getMusicSourcesPayload());
+  } catch (error) {
+    return createMusicErrorResponse(error, '获取音乐源失败');
+  }
 }

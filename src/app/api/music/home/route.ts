@@ -1,18 +1,21 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 
-import { getMockMusicHome } from '@/lib/music/mock-catalog';
-import { type MusicPlatformKey } from '@/lib/music/types';
+import {
+  createMusicErrorResponse,
+  createMusicJsonResponse,
+  getMusicHomePayload,
+} from '@/lib/music/netease';
 
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
-  const source =
-    (request.nextUrl.searchParams.get('source') as MusicPlatformKey | null) ||
-    'netease';
-
-  return NextResponse.json(getMockMusicHome(source), {
-    headers: {
-      'Cache-Control': 'no-store',
-    },
-  });
+  try {
+    return createMusicJsonResponse(
+      await getMusicHomePayload({
+        source: request.nextUrl.searchParams.get('source'),
+      })
+    );
+  } catch (error) {
+    return createMusicErrorResponse(error, '获取音乐首页失败');
+  }
 }

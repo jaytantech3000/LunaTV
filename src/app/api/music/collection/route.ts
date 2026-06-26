@@ -1,29 +1,22 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 
-import { getMockMusicCollection } from '@/lib/music/mock-catalog';
-import { type MusicPlatformKey } from '@/lib/music/types';
+import {
+  createMusicErrorResponse,
+  createMusicJsonResponse,
+  getMusicCollectionPayload,
+} from '@/lib/music/netease';
 
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
-  const source =
-    (request.nextUrl.searchParams.get('source') as MusicPlatformKey | null) ||
-    'netease';
-  const id = request.nextUrl.searchParams.get('id') || '';
-
-  if (!id) {
-    return NextResponse.json({ error: '缺少合集 id' }, { status: 400 });
+  try {
+    return createMusicJsonResponse(
+      await getMusicCollectionPayload({
+        id: request.nextUrl.searchParams.get('id'),
+        source: request.nextUrl.searchParams.get('source'),
+      })
+    );
+  } catch (error) {
+    return createMusicErrorResponse(error, '获取音乐合集失败');
   }
-
-  const collection = getMockMusicCollection(source, id);
-
-  if (!collection) {
-    return NextResponse.json({ error: '合集不存在' }, { status: 404 });
-  }
-
-  return NextResponse.json(collection, {
-    headers: {
-      'Cache-Control': 'no-store',
-    },
-  });
 }
