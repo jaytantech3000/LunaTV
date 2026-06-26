@@ -102,6 +102,10 @@ let exitCode = 0;
 
 try {
   moveForDesktopBuild('src/app/api', 'src-app-api');
+  // Desktop uses the local service for media endpoints; exporting this route
+  // from Next would fail because static export cannot materialize its
+  // request-dependent query handling.
+  moveForDesktopBuild('src/app/media', 'src-app-media');
   moveForDesktopBuild('src/middleware.ts', 'src-middleware.ts');
   moveForDesktopBuild('.next-build', 'next-build');
 
