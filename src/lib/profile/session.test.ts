@@ -1,5 +1,8 @@
+import { act } from '@testing-library/react';
+
 import { clearAuthInfoInBrowser } from '@/lib/auth';
 import { purgeOfflineDownloads } from '@/lib/download/session';
+import { isDesktopLocalProfileRuntime } from '@/lib/profile/runtime';
 import {
   buildProfileLoginRedirectUrl,
   fetchProfileJson,
@@ -26,10 +29,15 @@ jest.mock('@/lib/download/session', () => ({
   purgeOfflineDownloads: jest.fn(),
 }));
 
+jest.mock('@/lib/profile/runtime', () => ({
+  isDesktopLocalProfileRuntime: jest.fn(() => false),
+}));
+
 describe('profile session helpers', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     global.fetch = jest.fn();
+    (isDesktopLocalProfileRuntime as jest.Mock).mockReturnValue(false);
     Object.defineProperty(window, 'location', {
       configurable: true,
       value: {
@@ -81,6 +89,46 @@ describe('profile session helpers', () => {
     expect(global.fetch).toHaveBeenCalledWith('/api/profile-sync/status', {
       credentials: 'same-origin',
     });
+  });
+
+  it('retries transient desktop local fetch failures before succeeding', async () => {
+    (isDesktopLocalProfileRuntime as jest.Mock).mockReturnValue(true);
+    const setTimeoutSpy = jest.spyOn(window, 'setTimeout').mockImplementation(((
+      callback: TimerHandler
+    ) => {
+      if (typeof callback === 'function') {
+        callback();
+      }
+      return 0 as unknown as ReturnType<typeof window.setTimeout>;
+    }) as unknown as typeof window.setTimeout);
+    (global.fetch as jest.Mock)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({
+          enabled: true,
+        }),
+      });
+
+    const fetchPromise = fetchProfileJson<{ enabled: boolean }>(
+      '/profile-sync/status'
+    );
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await expect(fetchPromise).resolves.toEqual({
+      enabled: true,
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 300);
+
+    setTimeoutSpy.mockRestore();
   });
 
   it('surfaces unauthorized errors without redirect when explicitly requested', async () => {

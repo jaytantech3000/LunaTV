@@ -34,6 +34,27 @@ function shouldAskUsernameForProfileSync(
   return Boolean(storageType && storageType !== 'localstorage');
 }
 
+function resolveLoginErrorMessage(
+  error: unknown,
+  fallbackMessage: string
+): string {
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+
+  if (error && typeof error === 'object') {
+    const maybeMessage =
+      'message' in error && typeof error.message === 'string'
+        ? error.message.trim()
+        : '';
+    if (maybeMessage) {
+      return maybeMessage;
+    }
+  }
+
+  return fallbackMessage;
+}
+
 function VersionDisplay() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [isChecking, setIsChecking] = useState(true);
@@ -363,8 +384,8 @@ export function LoginPageClient() {
         const data = await res.json().catch(() => ({}));
         setError(data.error ?? '服务器错误');
       }
-    } catch (_) {
-      setError('网络错误，请稍后重试');
+    } catch (error) {
+      setError(resolveLoginErrorMessage(error, '网络错误，请稍后重试'));
     } finally {
       setLoading(false);
     }

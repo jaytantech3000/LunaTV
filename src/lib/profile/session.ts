@@ -3,6 +3,10 @@ import { purgeOfflineDownloads } from '@/lib/download/session';
 import { buildApiUrl } from '@/lib/transport/endpoint';
 
 import { PROFILE_SESSION_API_PATHS } from './contracts';
+import { isDesktopLocalProfileRuntime } from './runtime';
+
+const DESKTOP_LOCAL_PROFILE_FETCH_RETRY_COUNT = 10;
+const DESKTOP_LOCAL_PROFILE_FETCH_RETRY_DELAY_MS = 300;
 
 export interface ProfileRequestInit extends RequestInit {
   redirectOnUnauthorized?: boolean;
@@ -56,6 +60,30 @@ export function buildProfileLoginRedirectUrl(
   return loginUrl.toString();
 }
 
+function isRecoverableDesktopLocalProfileRequestError(error: unknown): boolean {
+  if (!isDesktopLocalProfileRuntime()) {
+    return false;
+  }
+
+  if (error instanceof TypeError) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /failed to fetch|load failed|network|err_connection_refused/i.test(
+    error.message
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 async function logoutProfileSession(): Promise<void> {
   await purgeOfflineDownloads();
   await fetch(buildApiUrl(PROFILE_SESSION_API_PATHS.logout), {
@@ -74,10 +102,38 @@ export async function fetchProfileResponse(
     ...requestOptions
   } = options || {};
   const requestUrl = resolveProfileApiRequestUrl(url);
-  const response = await fetch(requestUrl, {
+  const requestInit: RequestInit = {
     ...requestOptions,
     credentials: credentials || 'same-origin',
-  });
+  };
+
+  let response: Response | null = null;
+
+  for (
+    let attempt = 0;
+    attempt < DESKTOP_LOCAL_PROFILE_FETCH_RETRY_COUNT;
+    attempt += 1
+  ) {
+    try {
+      response = await fetch(requestUrl, requestInit);
+      break;
+    } catch (error) {
+      if (
+        !isRecoverableDesktopLocalProfileRequestError(error) ||
+        attempt + 1 >= DESKTOP_LOCAL_PROFILE_FETCH_RETRY_COUNT
+      ) {
+        throw error;
+      }
+
+      await delay(DESKTOP_LOCAL_PROFILE_FETCH_RETRY_DELAY_MS);
+    }
+  }
+
+  if (!response) {
+    throw new ProfileRequestError(`Request ${requestUrl} failed to start.`, {
+      status: null,
+    });
+  }
 
   if (response.ok) {
     return response;

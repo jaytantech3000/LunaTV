@@ -6,6 +6,7 @@ import {
 } from '@/lib/desktop/profile-bootstrap';
 import { applyDesktopProfileSyncStatus } from '@/lib/desktop/profile-sync';
 import { applyDesktopRuntimePublicConfig } from '@/lib/desktop/runtime-config';
+import { startLocalService } from '@/lib/desktop/tauri-client';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 
@@ -27,6 +28,11 @@ jest.mock('@/lib/desktop/profile-sync', () => ({
 
 jest.mock('@/lib/desktop/runtime-config', () => ({
   applyDesktopRuntimePublicConfig: jest.fn(),
+}));
+
+jest.mock('@/lib/desktop/tauri-client', () => ({
+  isDesktopTauriRuntimeAvailable: jest.fn(() => true),
+  startLocalService: jest.fn(),
 }));
 
 describe('desktop profile bootstrap helpers', () => {
@@ -95,6 +101,50 @@ describe('desktop profile bootstrap helpers', () => {
       cache: 'no-store',
     });
     expect(mutableWindow.__DESKTOP_PROFILE_BOOTSTRAP__).toEqual(payload);
+  });
+
+  it('restarts the local service and retries bootstrap fetches after a transient network failure', async () => {
+    const payload = {
+      appTarget: 'desktop',
+      runtime: {
+        siteName: 'Recovered LunaTV',
+        profileSyncEnabled: false,
+      },
+      profileSync: {
+        enabled: false,
+        reachable: false,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'localstorage',
+        profileMode: 'single-user-local',
+        error: null,
+        errorKind: null,
+        syncDomains: [],
+      },
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: false,
+        ownerPasswordConfigured: true,
+      },
+    };
+
+    (apiFetch as jest.Mock)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue(payload),
+      });
+    (startLocalService as jest.Mock).mockResolvedValue({
+      running: true,
+    });
+
+    await expect(getDesktopProfileBootstrap()).resolves.toEqual(payload);
+
+    expect(startLocalService).toHaveBeenCalledTimes(1);
+    expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 
   it('reuses a cached desktop bootstrap payload when requested', async () => {

@@ -234,6 +234,41 @@ describe('LoginPage desktop profile sync branches', () => {
     });
   });
 
+  it('surfaces desktop local login errors instead of collapsing them into a network error', async () => {
+    mockHasExplicitDesktopLogout.mockReturnValue(true);
+    const payload = createDesktopBootstrapPayload({
+      profileSyncEnabled: false,
+      profileMode: 'single-user-local',
+      storageType: null,
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: false,
+        ownerPasswordConfigured: true,
+      },
+    });
+    mockLoadDesktopProfileBootstrapState.mockResolvedValue({
+      payload,
+      localAuth: payload.localAuth,
+    });
+    mockLoginDesktopSession.mockRejectedValue(new Error('用户名或密码错误'));
+
+    render(<LoginPageClient />);
+
+    const usernameInput = await screen.findByPlaceholderText('输入用户名');
+    const passwordInput = screen.getByPlaceholderText('输入访问密码');
+
+    fireEvent.change(usernameInput, {
+      target: { value: 'admin' },
+    });
+    fireEvent.change(passwordInput, {
+      target: { value: 'secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '登录' }));
+
+    expect(await screen.findByText('用户名或密码错误')).toBeInTheDocument();
+  });
+
   it('falls back to direct desktop auth when desktop bootstrap is unavailable', async () => {
     mockHasExplicitDesktopLogout.mockReturnValue(true);
     mockLoadDesktopProfileBootstrapState.mockRejectedValue(

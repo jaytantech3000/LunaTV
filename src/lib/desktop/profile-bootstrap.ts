@@ -10,7 +10,11 @@ import {
   applyDesktopRuntimePublicConfig,
   DesktopRuntimePublicConfigPayload,
 } from './runtime-config';
-import { DesktopAuthStatus } from './tauri-client';
+import {
+  DesktopAuthStatus,
+  isDesktopTauriRuntimeAvailable,
+  startLocalService,
+} from './tauri-client';
 
 export interface DesktopProfileBootstrapPayload {
   appTarget: 'desktop' | string;
@@ -33,6 +37,34 @@ export type DesktopProfileBootstrapLocalAuthMode =
 export interface LoadedDesktopProfileBootstrapState {
   payload: DesktopProfileBootstrapPayload;
   localAuth: DesktopAuthStatus;
+}
+
+function isRecoverableDesktopBootstrapError(error: unknown): boolean {
+  if (!isDesktopTauriRuntimeAvailable()) {
+    return false;
+  }
+
+  if (error instanceof TypeError) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /failed to fetch|load failed|network/i.test(error.message);
+}
+
+async function fetchDesktopProfileBootstrapPayload(): Promise<DesktopProfileBootstrapPayload> {
+  const response = await apiFetch('/profile/bootstrap', {
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to load profile bootstrap: ${response.status}`);
+  }
+
+  return (await response.json()) as DesktopProfileBootstrapPayload;
 }
 
 function readCachedDesktopProfileBootstrap(): DesktopProfileBootstrapPayload | null {
@@ -69,17 +101,20 @@ export async function getDesktopProfileBootstrap(
     }
   }
 
-  const response = await apiFetch('/profile/bootstrap', {
-    cache: 'no-store',
-  });
+  try {
+    return cacheDesktopProfileBootstrap(
+      await fetchDesktopProfileBootstrapPayload()
+    );
+  } catch (error) {
+    if (!isRecoverableDesktopBootstrapError(error)) {
+      throw error;
+    }
 
-  if (!response.ok) {
-    throw new Error(`Failed to load profile bootstrap: ${response.status}`);
+    await startLocalService();
+    return cacheDesktopProfileBootstrap(
+      await fetchDesktopProfileBootstrapPayload()
+    );
   }
-
-  return cacheDesktopProfileBootstrap(
-    (await response.json()) as DesktopProfileBootstrapPayload
-  );
 }
 
 export function applyDesktopProfileBootstrap(
