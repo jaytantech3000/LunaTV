@@ -36,6 +36,13 @@
         errorTitle: '版本数据加载失败',
         errorBody: '请稍后刷新，或直接前往 GitHub Releases 查看下载。',
         releaseNotesEmpty: '这个版本暂时没有发布说明。',
+        changeCompareLabel: '完整对比',
+        changeAddedLabel: '新增功能',
+        changeChangedLabel: '优化调整',
+        changeFixedLabel: '问题修复',
+        changeOtherLabel: '其他调整',
+        changeCompareOnlyHint:
+          '当前 release 只记录了 compare 链接，可通过“完整对比”查看本次提交详情。',
         footerLabel: '最后同步',
       },
       en: {
@@ -62,6 +69,13 @@
         errorTitle: 'Failed to load release data',
         errorBody: 'Refresh later or open GitHub Releases directly.',
         releaseNotesEmpty: 'This release does not include notes yet.',
+        changeCompareLabel: 'Full compare',
+        changeAddedLabel: 'Added',
+        changeChangedLabel: 'Changed',
+        changeFixedLabel: 'Fixed',
+        changeOtherLabel: 'Other',
+        changeCompareOnlyHint:
+          'This release only includes a compare link. Use “Full compare” to inspect the commit details.',
         footerLabel: 'Last synced',
       },
     };
@@ -156,6 +170,167 @@
         release: releases.filter((release) => !release.prerelease),
         prerelease: releases.filter((release) => release.prerelease),
       };
+    }
+
+    function selectReleaseChangeSummary(release, locale) {
+      const localizedSummary = release?.changeSummary;
+      if (!localizedSummary || typeof localizedSummary !== 'object') {
+        return null;
+      }
+
+      return (
+        localizedSummary[locale] ||
+        localizedSummary.en ||
+        localizedSummary['zh-CN'] ||
+        null
+      );
+    }
+
+    function createReleaseChangeSummary(documentRef, release, locale) {
+      const summary = selectReleaseChangeSummary(release, locale);
+      if (!summary) {
+        return null;
+      }
+
+      const hasSubstantiveChanges = Boolean(
+        summary.added?.length ||
+          summary.changed?.length ||
+          summary.fixed?.length
+      );
+      const changeGroups = [
+        {
+          key: 'added',
+          label: getCopy(locale, 'changeAddedLabel'),
+          items: Array.isArray(summary.added) ? summary.added : [],
+        },
+        {
+          key: 'changed',
+          label: getCopy(locale, 'changeChangedLabel'),
+          items: Array.isArray(summary.changed) ? summary.changed : [],
+        },
+        {
+          key: 'fixed',
+          label: getCopy(locale, 'changeFixedLabel'),
+          items: Array.isArray(summary.fixed) ? summary.fixed : [],
+        },
+        {
+          key: 'other',
+          label: getCopy(locale, 'changeOtherLabel'),
+          items:
+            hasSubstantiveChanges || !Array.isArray(summary.other)
+              ? []
+              : summary.other,
+        },
+      ].filter((group) => group.items.length > 0);
+
+      if (changeGroups.length === 0 && !summary.compareUrl) {
+        return null;
+      }
+
+      const container = createElement(
+        documentRef,
+        'div',
+        'release-card__change-summary'
+      );
+
+      if (summary.compareUrl) {
+        const header = createElement(
+          documentRef,
+          'div',
+          'release-card__change-summary-header'
+        );
+        const compareLink = createElement(
+          documentRef,
+          'a',
+          'release-card__change-compare',
+          getCopy(locale, 'changeCompareLabel')
+        );
+        compareLink.href = summary.compareUrl;
+        compareLink.target = '_blank';
+        compareLink.rel = 'noreferrer';
+        header.appendChild(compareLink);
+        container.appendChild(header);
+      }
+
+      if (changeGroups.length > 0) {
+        const groups = createElement(
+          documentRef,
+          'div',
+          'release-card__change-groups'
+        );
+
+        changeGroups.forEach((group) => {
+          const groupElement = createElement(
+            documentRef,
+            'section',
+            'release-card__change-group'
+          );
+          const label = createElement(
+            documentRef,
+            'span',
+            'release-card__change-group-label',
+            group.label
+          );
+          label.dataset.tone = group.key;
+
+          const list = createElement(
+            documentRef,
+            'ul',
+            'release-card__change-list'
+          );
+          group.items.forEach((item) => {
+            const listItem = createElement(
+              documentRef,
+              'li',
+              'release-card__change-item'
+            );
+            const dot = createElement(
+              documentRef,
+              'span',
+              'release-card__change-dot'
+            );
+            dot.dataset.tone = group.key;
+            dot.setAttribute('aria-hidden', 'true');
+            const text = createElement(
+              documentRef,
+              'span',
+              'release-card__change-text',
+              item
+            );
+            listItem.append(dot, text);
+            list.appendChild(listItem);
+          });
+
+          groupElement.append(label, list);
+          groups.appendChild(groupElement);
+        });
+
+        container.appendChild(groups);
+        return container;
+      }
+
+      const hint = createElement(
+        documentRef,
+        'p',
+        'release-card__change-hint',
+        getCopy(locale, 'changeCompareOnlyHint')
+      );
+      container.appendChild(hint);
+      return container;
+    }
+
+    function createReleaseNotesContent(documentRef, release, locale) {
+      const summary = createReleaseChangeSummary(documentRef, release, locale);
+      if (summary) {
+        return summary;
+      }
+
+      return createElement(
+        documentRef,
+        'pre',
+        'release-card__notes',
+        release.notes || getCopy(locale, 'releaseNotesEmpty')
+      );
     }
 
     function createAssetItem(documentRef, asset, locale) {
@@ -320,12 +495,7 @@
         'release-card__section-heading release-card__notes-heading',
         getCopy(locale, 'releaseNotesTab')
       );
-      const notes = createElement(
-        documentRef,
-        'pre',
-        'release-card__notes',
-        release.notes || getCopy(locale, 'releaseNotesEmpty')
-      );
+      const notes = createReleaseNotesContent(documentRef, release, locale);
       notesPanel.append(notesHeading, notes);
 
       const tabButtons = [downloadsTab, notesTab];
