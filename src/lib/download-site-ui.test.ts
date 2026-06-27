@@ -103,7 +103,7 @@ describe('download site app', () => {
     ).toBe('预发布');
   });
 
-  it('shows release notes directly inside the expanded card', () => {
+  it('keeps the tabs and shows release notes inside the release notes tab', () => {
     document.body.innerHTML = `
       <main id="app">
         <div data-copy="releaseSectionTitle"></div>
@@ -139,6 +139,10 @@ describe('download site app', () => {
 
     const releaseCard = document.querySelector('.release-card');
     releaseCard?.setAttribute('open', 'true');
+    const releaseNotesTabButton = document.querySelector(
+      '.release-card__tab[data-tab="notes"]'
+    ) as HTMLButtonElement | null;
+    releaseNotesTabButton?.click();
 
     expect(
       document.querySelector('.release-card__notes')?.textContent
@@ -146,6 +150,10 @@ describe('download site app', () => {
     expect(
       document.querySelector('.release-card__notes-heading')?.textContent
     ).toBe('Release Notes');
-    expect(document.querySelector('.release-card__tab')).toBeNull();
+    expect(document.querySelectorAll('.release-card__tab')).toHaveLength(2);
+    expect(releaseNotesTabButton?.dataset.active).toBe('true');
+    expect(
+      document.querySelector('.release-card__panel[data-tab-panel="notes"]')
+    ).not.toHaveAttribute('hidden');
   });
 });
