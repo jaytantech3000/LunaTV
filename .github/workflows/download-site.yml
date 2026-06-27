@@ -1,0 +1,52 @@
+name: Deploy Download Site
+
+on:
+  push:
+    branches:
+      - desktop
+      - main
+    paths:
+      - '.github/workflows/download-site.yml'
+      - 'download-site/**'
+      - 'scripts/build-download-site.mjs'
+      - 'scripts/export-download-site-data.mjs'
+      - 'scripts/download-site-data.js'
+      - 'scripts/publish-download-site-branch.sh'
+      - 'scripts/desktop-release-utils.mjs'
+      - 'package.json'
+      - 'docs/desktop-updater-release.md'
+
+concurrency:
+  group: download-site-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    name: Build and Publish Download Site
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DOWNLOAD_SITE_COMMIT_MESSAGE: "chore(download-site): publish site from ${{ github.ref_name }}@${{ github.sha }}"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Export download site data
+        run: node scripts/export-download-site-data.mjs --output .download-site-build/releases.json
+
+      - name: Build download site
+        run: node scripts/build-download-site.mjs --data .download-site-build/releases.json --output download-site-dist
+
+      - name: Publish download site branch
+        shell: bash
+        run: bash scripts/publish-download-site-branch.sh

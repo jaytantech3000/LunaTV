@@ -1,21 +1,44 @@
 name: Release Desktop App
 
 on:
-  release:
-    types:
-      - published
+  push:
+    tags:
+      - desktop-v*
 
 concurrency:
-  group: desktop-release-${{ github.event.release.id }}
+  group: desktop-release-${{ github.ref_name }}
   cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
+  ensure_release:
+    name: Ensure GitHub Release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.ensure_release.outputs.release_id }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Create or update release from tag
+        id: ensure_release
+        run: node scripts/ensure-desktop-release.mjs --tag "${{ github.ref_name }}" --target "${{ github.sha }}" --github-output "$GITHUB_OUTPUT"
+
   publish_release:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    needs: ensure_release
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -70,7 +93,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Sync desktop version
-        run: node scripts/sync-desktop-version.mjs --tag "${{ github.event.release.tag_name }}"
+        run: node scripts/sync-desktop-version.mjs --tag "${{ github.ref_name }}"
 
       - name: Validate updater signing secret
         shell: bash
@@ -101,8 +124,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: .
-          releaseId: ${{ github.event.release.id }}
-          tagName: ${{ github.event.release.tag_name }}
+          releaseId: ${{ needs.ensure_release.outputs.release_id }}
+          tagName: ${{ github.ref_name }}
           releaseDraft: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
@@ -129,7 +152,7 @@ jobs:
           package-manager-cache: false
 
       - name: Normalize desktop release assets
-        run: node scripts/normalize-desktop-release-assets.mjs --tag "${{ github.event.release.tag_name }}"
+        run: node scripts/normalize-desktop-release-assets.mjs --tag "${{ github.ref_name }}"
 
   publish_updater_manifest:
     name: Publish Updater Manifest
@@ -151,4 +174,34 @@ jobs:
           package-manager-cache: false
 
       - name: Publish desktop updater manifest
-        run: node scripts/publish-desktop-updater-manifest.mjs --tag "${{ github.event.release.tag_name }}"
+        run: node scripts/publish-desktop-updater-manifest.mjs --tag "${{ github.ref_name }}"
+
+  publish_download_site:
+    name: Publish Download Site
+    runs-on: ubuntu-latest
+    needs: publish_updater_manifest
+    permissions:
+      contents: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DOWNLOAD_SITE_COMMIT_MESSAGE: "chore(download-site): publish site for ${{ github.ref_name }}"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Export download site data
+        run: node scripts/export-download-site-data.mjs --output .download-site-build/releases.json
+
+      - name: Build download site
+        run: node scripts/build-download-site.mjs --data .download-site-build/releases.json --output download-site-dist
+
+      - name: Publish download site branch
+        shell: bash
+        run: bash scripts/publish-download-site-branch.sh

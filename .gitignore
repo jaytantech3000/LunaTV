@@ -19,6 +19,8 @@
 /.desktop-build-temp/
 /.desktop-release/
 /.tauri-updater/
+/.download-site-build/
+/download-site-dist/
 
 # production
 /build

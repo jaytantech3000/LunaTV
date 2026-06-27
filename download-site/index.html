@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>LunaTV Download Desk</title>
+    <meta
+      name="description"
+      content="Official LunaTV desktop release and prerelease downloads."
+    />
+    <link rel="stylesheet" href="./assets/app.css" />
+  </head>
+  <body>
+    <div class="site-shell" id="download-site-app">
+      <header class="hero">
+        <div class="hero__copy">
+          <p class="hero__eyebrow" data-copy="eyebrow"></p>
+          <h1 class="hero__title" data-copy="heroTitle"></h1>
+          <p class="hero__subtitle" data-copy="heroSubtitle"></p>
+        </div>
+        <div class="hero__tools">
+          <a
+            class="hero__repo-link"
+            data-role="repo-link"
+            href="https://github.com/jaytantech3000/LunaTV/releases"
+            target="_blank"
+            rel="noreferrer"
+          ></a>
+          <div class="locale-switch" aria-label="Language switch">
+            <button
+              class="locale-switch__button"
+              type="button"
+              data-locale-button="zh-CN"
+            >
+              中文
+            </button>
+            <button
+              class="locale-switch__button"
+              type="button"
+              data-locale-button="en"
+            >
+              EN
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main class="board">
+        <section class="release-section">
+          <div class="release-section__header">
+            <p class="release-section__eyebrow">01</p>
+            <div>
+              <h2 data-copy="releaseSectionTitle"></h2>
+              <p data-copy="releaseSectionDescription"></p>
+            </div>
+          </div>
+          <div class="release-section__list" data-slot="release-list"></div>
+        </section>
+
+        <section class="release-section release-section--secondary">
+          <div class="release-section__header">
+            <p class="release-section__eyebrow">02</p>
+            <div>
+              <h2 data-copy="prereleaseSectionTitle"></h2>
+              <p data-copy="prereleaseSectionDescription"></p>
+            </div>
+          </div>
+          <div
+            class="release-section__list"
+            data-slot="prerelease-list"
+          ></div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <span data-copy="footerLabel"></span>
+        <time data-role="generated-at"></time>
+      </footer>
+    </div>
+
+    <script src="./assets/app.js" defer></script>
+  </body>
+</html>
