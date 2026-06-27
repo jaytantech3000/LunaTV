@@ -649,8 +649,8 @@ export default function MusicPageClient() {
                 <p className='max-w-2xl text-sm leading-7 text-slate-600 dark:text-slate-300'>
                   统一 music client
                   已接通平台切换、热门、歌单、搜索和全局播放器；当前 Web
-                  已接入网易云与 Audius，Jamendo 在配置 client id
-                  后可用，桌面本地模式仍以网易云数据为主。
+                  与桌面本地模式都会按平台配置显示网易云、Audius， Jamendo
+                  在配置 client id 后也会一起显示。
                 </p>
                 {activeSourceModel?.description ? (
                   <div className='text-sm text-slate-500 dark:text-slate-400'>

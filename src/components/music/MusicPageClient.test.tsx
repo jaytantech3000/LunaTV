@@ -24,11 +24,18 @@ const mockSources: MusicSource[] = [
     tabs: ['home', 'rank', 'hot', 'playlist', 'search'],
   },
   {
-    key: 'qq',
-    name: 'QQ 音乐',
-    provider: 'qq',
+    key: 'audius',
+    name: 'Audius',
+    provider: 'audius',
     enabled: true,
-    tabs: ['home', 'rank', 'hot', 'playlist', 'search'],
+    tabs: ['home', 'hot', 'playlist', 'search'],
+  },
+  {
+    key: 'jamendo',
+    name: 'Jamendo',
+    provider: 'jamendo',
+    enabled: true,
+    tabs: ['home', 'hot', 'playlist', 'search'],
   },
 ];
 
@@ -201,7 +208,7 @@ describe('MusicPageClient', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        /当前 Web 已接入网易云与 Audius，Jamendo 在配置 client id 后可用/,
+        /当前 Web 与桌面本地模式都会按平台配置显示网易云、Audius，\s*Jamendo 在配置 client id 后也会一起显示/,
         {
           selector: 'p',
         }
@@ -209,15 +216,25 @@ describe('MusicPageClient', () => {
     ).toBeInTheDocument();
   });
 
+  it('renders audius and jamendo tabs when the music source api enables them', async () => {
+    render(<MusicPageClient />);
+
+    expect(await screen.findByText('Audius')).toBeInTheDocument();
+    expect(await screen.findByText('Jamendo')).toBeInTheDocument();
+  });
+
   it('clears the selected collection id when switching source from a detail view', async () => {
     render(<MusicPageClient />);
 
-    fireEvent.click(await screen.findByText('QQ 音乐'));
+    fireEvent.click(await screen.findByText('Audius'));
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith('/music?source=qq&tab=rank', {
-        scroll: false,
-      });
+      expect(mockReplace).toHaveBeenCalledWith(
+        '/music?source=audius&tab=home',
+        {
+          scroll: false,
+        }
+      );
     });
   });
 
