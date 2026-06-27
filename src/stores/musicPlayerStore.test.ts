@@ -1,6 +1,7 @@
 'use client';
 
-import { type MusicTrack,buildQueueItemFromTrack } from '@/lib/music/types';
+import type { MusicTrack } from '@/lib/music/types';
+import { buildQueueItemFromTrack } from '@/lib/music/types';
 
 import { getCurrentQueueTrack, useMusicPlayerStore } from './musicPlayerStore';
 
@@ -46,7 +47,7 @@ function resetPlayerStore() {
     currentTimeSec: 0,
     recentTracks: [],
     isPlaying: false,
-    expanded: false,
+    presentation: 'hidden',
     durationSec: 0,
     streamUrl: null,
     lyrics: null,
@@ -70,6 +71,7 @@ describe('musicPlayerStore', () => {
     expect(state.currentIndex).toBe(1);
     expect(state.isPlaying).toBe(true);
     expect(state.isTrackLoading).toBe(true);
+    expect(state.presentation).toBe('mini');
     expect(getCurrentQueueTrack(state)?.trackId).toBe(trackB.id);
   });
 
@@ -84,6 +86,7 @@ describe('musicPlayerStore', () => {
     expect(state.currentIndex).toBe(0);
     expect(state.isPlaying).toBe(true);
     expect(state.isTrackLoading).toBe(true);
+    expect(state.presentation).toBe('mini');
     expect(getCurrentQueueTrack(state)?.trackId).toBe(trackA.id);
   });
 
@@ -102,5 +105,39 @@ describe('musicPlayerStore', () => {
     expect(state.isPlaying).toBe(true);
     expect(state.streamUrl).toBeNull();
     expect(state.isTrackLoading).toBe(true);
+  });
+
+  it('stops playback without hiding the current player surface', () => {
+    useMusicPlayerStore.getState().playQueue(queue, 0);
+    useMusicPlayerStore.setState({
+      currentTimeSec: 84,
+      durationSec: 188,
+      isTrackLoading: false,
+      presentation: 'expanded',
+      streamUrl: '/media/audio/stream?source=netease&id=netease-track-1',
+    });
+
+    useMusicPlayerStore.getState().stopPlayback();
+
+    const state = useMusicPlayerStore.getState();
+
+    expect(state.isPlaying).toBe(false);
+    expect(state.currentTimeSec).toBe(0);
+    expect(state.presentation).toBe('expanded');
+    expect(getCurrentQueueTrack(state)?.trackId).toBe(trackA.id);
+  });
+
+  it('dismisses the player while preserving the queue', () => {
+    useMusicPlayerStore.getState().playQueue(queue, 0);
+    useMusicPlayerStore.getState().expandPlayer();
+
+    useMusicPlayerStore.getState().dismissPlayer();
+
+    const state = useMusicPlayerStore.getState();
+
+    expect(state.presentation).toBe('hidden');
+    expect(state.isPlaying).toBe(false);
+    expect(state.queue).toHaveLength(2);
+    expect(state.currentIndex).toBe(0);
   });
 });

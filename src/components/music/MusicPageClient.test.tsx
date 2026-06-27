@@ -179,7 +179,6 @@ function resetMusicPlayerStore() {
     currentTimeSec: 0,
     recentTracks: [],
     isPlaying: false,
-    expanded: false,
     durationSec: 0,
     streamUrl: null,
     lyrics: null,

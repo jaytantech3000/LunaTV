@@ -15,11 +15,12 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Square,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
 
 import { cn } from '@/lib/cn';
 import { formatDurationSeconds, getPlayModeLabel } from '@/lib/music/format';
@@ -28,7 +29,6 @@ import type {
   MusicPlayMode,
   PlayerQueueItem,
 } from '@/lib/music/types';
-import { acquireScrollLock } from '@/lib/scroll-lock';
 
 import MusicLyricsPanel from './MusicLyricsPanel';
 import MusicQueuePanel from './MusicQueuePanel';
@@ -51,7 +51,9 @@ interface MusicFullscreenPlayerProps {
   lyrics: MusicLyricPayload | null;
   isFavorited: boolean;
   isFavoriteLoading: boolean;
-  onClose: () => void;
+  onMinimize: () => void;
+  onDismiss: () => void;
+  onStop: () => void;
   onTogglePlay: () => void;
   onPlayPrevious: () => void;
   onPlayNext: () => void;
@@ -91,7 +93,9 @@ export default function MusicFullscreenPlayer({
   lyrics,
   isFavorited,
   isFavoriteLoading,
-  onClose,
+  onMinimize,
+  onDismiss,
+  onStop,
   onTogglePlay,
   onPlayPrevious,
   onPlayNext,
@@ -102,22 +106,7 @@ export default function MusicFullscreenPlayer({
   onToggleFavorite,
   onSelectQueueIndex,
 }: MusicFullscreenPlayerProps) {
-  const [mounted, setMounted] = useState(false);
   const [panel, setPanel] = useState<MusicFullscreenPanel>('lyrics');
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    return acquireScrollLock({
-      freezeBody: true,
-    });
-  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -126,7 +115,7 @@ export default function MusicFullscreenPlayer({
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        onClose();
+        onMinimize();
       }
     };
 
@@ -135,51 +124,72 @@ export default function MusicFullscreenPlayer({
     return () => {
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [onClose, open]);
+  }, [onMinimize, open]);
 
-  if (!mounted || !open) {
+  if (!open) {
     return null;
   }
 
   const sliderMax = durationSec > 0 ? durationSec : 1;
   const currentTrackKey = `${track.source}:${track.trackId}`;
 
-  return createPortal(
-    <div className='fixed inset-0 z-[950] overflow-y-auto bg-slate-950/96 text-white'>
+  return (
+    <div className='pointer-events-auto absolute inset-0 overflow-y-auto rounded-[36px] border border-slate-800/70 bg-slate-950/96 text-white shadow-[0_32px_90px_rgba(2,6,23,0.45)]'>
       {track.cover ? (
         <div
           aria-hidden='true'
-          className='absolute inset-0 opacity-30'
+          className='absolute inset-0 opacity-35'
           style={{
             backgroundImage: `url(${track.cover})`,
             backgroundPosition: 'center',
             backgroundSize: 'cover',
-            filter: 'blur(48px)',
+            filter: 'blur(52px)',
             transform: 'scale(1.08)',
           }}
         />
       ) : null}
-      <div className='absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.18),transparent_34%),linear-gradient(180deg,rgba(15,23,42,0.55),rgba(2,6,23,0.96))]' />
+      <div className='absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.22),transparent_32%),linear-gradient(180deg,rgba(15,23,42,0.68),rgba(2,6,23,0.97))]' />
 
-      <div className='relative mx-auto min-h-screen max-w-7xl px-4 py-6 sm:px-6 lg:px-8'>
-        <div className='flex items-center justify-between gap-3'>
+      <div className='relative flex min-h-full flex-col p-4 sm:p-6'>
+        <div className='flex flex-wrap items-start justify-between gap-3'>
           <div>
             <div className='text-xs uppercase tracking-[0.28em] text-white/45'>
               LunaTV Music
             </div>
-            <div className='mt-1 text-sm text-white/70'>全局播放器</div>
+            <div className='mt-1 text-sm text-white/72'>音乐模块播放器</div>
           </div>
-          <button
-            type='button'
-            onClick={onClose}
-            className='flex h-11 w-11 items-center justify-center rounded-full border border-white/12 bg-white/8 text-white transition-colors hover:border-white/25 hover:bg-white/12'
-            aria-label='关闭播放器'
-          >
-            <ChevronDown className='h-5 w-5' />
-          </button>
+          <div className='flex flex-wrap items-center gap-2'>
+            <button
+              type='button'
+              onClick={onStop}
+              className='inline-flex h-11 items-center gap-2 rounded-full border border-white/12 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-amber-300/60 hover:text-white'
+              aria-label='停止播放'
+            >
+              <Square className='h-3.5 w-3.5 fill-current' />
+              停止
+            </button>
+            <button
+              type='button'
+              onClick={onMinimize}
+              className='inline-flex h-11 items-center gap-2 rounded-full border border-white/12 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-emerald-300/60 hover:text-white'
+              aria-label='收起到迷你播放器'
+            >
+              <ChevronDown className='h-4 w-4' />
+              收起
+            </button>
+            <button
+              type='button'
+              onClick={onDismiss}
+              className='inline-flex h-11 items-center gap-2 rounded-full border border-white/12 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-rose-300/60 hover:text-white'
+              aria-label='关闭播放器'
+            >
+              <X className='h-4 w-4' />
+              关闭
+            </button>
+          </div>
         </div>
 
-        <div className='mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)] lg:items-center'>
+        <div className='mt-6 grid flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)] lg:items-center'>
           <div className='overflow-hidden rounded-[36px] border border-white/12 bg-white/8 p-5 shadow-2xl shadow-black/25 backdrop-blur-xl sm:p-6'>
             <div className='grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-center'>
               <div className='mx-auto w-full max-w-[320px] overflow-hidden rounded-[32px] bg-white/10'>
@@ -324,6 +334,9 @@ export default function MusicFullscreenPlayer({
                     className='h-1.5 w-full max-w-[220px] cursor-pointer appearance-none rounded-full bg-white/15 accent-emerald-400'
                     aria-label='音量'
                   />
+                  <div className='text-sm text-white/50'>
+                    {Math.round((muted ? 0 : volume) * 100)}%
+                  </div>
                 </div>
 
                 {trackError ? (
@@ -389,7 +402,6 @@ export default function MusicFullscreenPlayer({
           </div>
         </div>
       </div>
-    </div>,
-    document.body
+    </div>
   );
 }

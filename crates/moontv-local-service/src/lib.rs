@@ -11075,7 +11075,9 @@ segment0.ts
             Some("Focus Playlist")
         );
         assert_eq!(
-            collection_payload.get("updatedAtLabel").and_then(Value::as_str),
+            collection_payload
+                .get("updatedAtLabel")
+                .and_then(Value::as_str),
             None
         );
 
@@ -11083,7 +11085,7 @@ segment0.ts
     }
 
     #[tokio::test]
-    async fn music_track_route_rejects_paid_tracks() {
+    async fn music_track_route_allows_fee_based_tracks_for_stream_validation() {
         let upstream = spawn_mock_server(Router::new().route(
             "/api/song/detail",
             get(|| async move {
@@ -11134,11 +11136,94 @@ segment0.ts
             )
             .await
             .expect("music track response");
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::OK);
         let payload = read_json_body(response).await;
         assert_eq!(
-            payload.get("error").and_then(Value::as_str),
-            Some("当前曲目受版权或会员限制，暂不可播放")
+            payload
+                .get("track")
+                .and_then(|track| track.get("playable"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload.get("streamUrl").and_then(Value::as_str),
+            Some("/media/audio/stream?source=netease&id=9901&quality=standard")
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn music_collection_marks_fee_based_tracks_playable() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/v3/playlist/detail",
+            get(|| async move {
+                Json(json!({
+                  "code": 200,
+                  "result": {
+                    "id": 301,
+                    "name": "Fee Playlist",
+                    "coverImgUrl": "http://cdn.example.com/focus-playlist.jpg",
+                    "description": "适合夜晚循环",
+                    "trackCount": 1,
+                    "creator": { "nickname": "Playlist Curator" },
+                    "updateFrequency": null,
+                    "tracks": [
+                      {
+                        "id": 9001,
+                        "name": "Fee Based Song",
+                        "fee": 1,
+                        "duration": 187000,
+                        "artists": [{ "id": 1, "name": "Search Artist" }],
+                        "album": {
+                          "id": 11,
+                          "name": "Search Album",
+                          "picUrl": "http://cdn.example.com/search-album.jpg"
+                        }
+                      }
+                    ]
+                  }
+                }))
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let mut state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        state.netease_api_base_url = upstream.base_url();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/collection?source=netease&id=301")
+                    .body(Body::empty())
+                    .expect("music collection request"),
+            )
+            .await
+            .expect("music collection response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload
+                .get("tracks")
+                .and_then(Value::as_array)
+                .and_then(|tracks| tracks.first())
+                .and_then(|track| track.get("playable"))
+                .and_then(Value::as_bool),
+            Some(true)
         );
 
         upstream.abort();

@@ -336,8 +336,6 @@ struct NeteaseSongDetailResponse {
 struct NeteaseSong {
     id: i64,
     name: String,
-    #[serde(default)]
-    fee: i64,
     #[serde(default, alias = "dt")]
     duration: u64,
     #[serde(default, alias = "ar")]
@@ -2235,7 +2233,9 @@ fn ensure_netease_success(
 }
 
 fn is_netease_track_playable(song: &NeteaseSong) -> bool {
-    song.fee == 0
+    // The public Netease song payload only exposes monetization flags here.
+    // Real stream availability must be validated when we resolve the audio URL.
+    song.id > 0
 }
 
 fn normalize_optional_text(value: Option<String>) -> Option<String> {

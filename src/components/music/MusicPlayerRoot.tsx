@@ -1,6 +1,8 @@
 'use client';
 
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 import {
@@ -29,6 +31,7 @@ import {
   useMusicPlayerStore,
 } from '@/stores/musicPlayerStore';
 
+import { MUSIC_PLAYER_EXPANDED_SLOT_ID } from './constants';
 import MusicFullscreenPlayer from './MusicFullscreenPlayer';
 import MusicMiniPlayer from './MusicMiniPlayer';
 
@@ -55,8 +58,12 @@ function logMusicProfileFailure(message: string, error: unknown): void {
 
 export default function MusicPlayerRoot() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const pendingExpandOnMusicPageRef = useRef(false);
   const resolvedTrackKeyRef = useRef('');
+  const pathname = usePathname();
+  const router = useRouter();
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [expandedSlot, setExpandedSlot] = useState<HTMLElement | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isFavorited, setIsFavorited] = useState(false);
   const [favoriteLoading, setFavoriteLoading] = useState(false);
@@ -67,7 +74,7 @@ export default function MusicPlayerRoot() {
   const currentIndex = useMusicPlayerStore((state) => state.currentIndex);
   const playMode = useMusicPlayerStore((state) => state.playMode);
   const isPlaying = useMusicPlayerStore((state) => state.isPlaying);
-  const expanded = useMusicPlayerStore((state) => state.expanded);
+  const presentation = useMusicPlayerStore((state) => state.presentation);
   const durationSec = useMusicPlayerStore((state) => state.durationSec);
   const currentTimeSec = useMusicPlayerStore((state) => state.currentTimeSec);
   const volume = useMusicPlayerStore((state) => state.volume);
@@ -82,7 +89,10 @@ export default function MusicPlayerRoot() {
   const playNext = useMusicPlayerStore((state) => state.playNext);
   const playPrevious = useMusicPlayerStore((state) => state.playPrevious);
   const cyclePlayMode = useMusicPlayerStore((state) => state.cyclePlayMode);
-  const setExpanded = useMusicPlayerStore((state) => state.setExpanded);
+  const expandPlayer = useMusicPlayerStore((state) => state.expandPlayer);
+  const collapsePlayer = useMusicPlayerStore((state) => state.collapsePlayer);
+  const dismissPlayer = useMusicPlayerStore((state) => state.dismissPlayer);
+  const stopPlayback = useMusicPlayerStore((state) => state.stopPlayback);
   const setVolume = useMusicPlayerStore((state) => state.setVolume);
   const setMuted = useMusicPlayerStore((state) => state.setMuted);
   const setCurrentTimeSec = useMusicPlayerStore(
@@ -102,6 +112,7 @@ export default function MusicPlayerRoot() {
   );
 
   const currentTrackKey = getCurrentTrackKey(currentTrack);
+  const isMusicPage = pathname?.startsWith('/music') ?? false;
 
   useEffect(() => {
     const syncEnabledState = () => {
@@ -142,7 +153,9 @@ export default function MusicPlayerRoot() {
 
     document.documentElement.style.setProperty(
       '--music-player-safe-offset',
-      enabled && hasHydrated && currentTrack ? '104px' : '0px'
+      enabled && hasHydrated && currentTrack && presentation !== 'hidden'
+        ? '104px'
+        : '0px'
     );
 
     return () => {
@@ -151,7 +164,7 @@ export default function MusicPlayerRoot() {
         '0px'
       );
     };
-  }, [currentTrack, enabled, hasHydrated]);
+  }, [currentTrack, enabled, hasHydrated, presentation]);
 
   useEffect(() => {
     if (enabled !== false) {
@@ -159,8 +172,43 @@ export default function MusicPlayerRoot() {
     }
 
     audioRef.current?.pause();
-    setExpanded(false);
-  }, [enabled, setExpanded]);
+    pendingExpandOnMusicPageRef.current = false;
+    dismissPlayer();
+  }, [dismissPlayer, enabled]);
+
+  useEffect(() => {
+    if (!isMusicPage && presentation === 'expanded') {
+      collapsePlayer();
+    }
+  }, [collapsePlayer, isMusicPage, presentation]);
+
+  useEffect(() => {
+    if (!isMusicPage || !currentTrack || !pendingExpandOnMusicPageRef.current) {
+      return;
+    }
+
+    pendingExpandOnMusicPageRef.current = false;
+    expandPlayer();
+  }, [currentTrack, expandPlayer, isMusicPage]);
+
+  useEffect(() => {
+    if (!isMusicPage) {
+      setExpandedSlot(null);
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setExpandedSlot(
+        document.getElementById(
+          MUSIC_PLAYER_EXPANDED_SLOT_ID
+        ) as HTMLElement | null
+      );
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [currentTrackKey, isMusicPage, presentation]);
 
   useEffect(() => {
     if (!enabled || !hasHydrated) {
@@ -172,6 +220,9 @@ export default function MusicPlayerRoot() {
       resetTransientPlaybackState();
       if (isPlaying) {
         setIsPlaying(false);
+      }
+      if (presentation !== 'hidden') {
+        dismissPlayer();
       }
       return;
     }
@@ -246,6 +297,8 @@ export default function MusicPlayerRoot() {
     enabled,
     hasHydrated,
     isPlaying,
+    presentation,
+    dismissPlayer,
     resetTransientPlaybackState,
     setDurationSec,
     setIsPlaying,
@@ -341,6 +394,15 @@ export default function MusicPlayerRoot() {
   }, [isPlaying, setIsPlaying, setTrackError, streamUrl]);
 
   useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || isPlaying || currentTimeSec !== 0) {
+      return;
+    }
+
+    audio.currentTime = 0;
+  }, [currentTimeSec, isPlaying]);
+
+  useEffect(() => {
     if (!currentTrack) {
       setMusicMediaSessionMetadata(null);
       return;
@@ -406,6 +468,36 @@ export default function MusicPlayerRoot() {
     setMuted(nextVolume <= 0);
   };
 
+  const handleStopPlayback = () => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+
+    stopPlayback();
+  };
+
+  const handleDismissPlayer = () => {
+    audioRef.current?.pause();
+    pendingExpandOnMusicPageRef.current = false;
+    dismissPlayer();
+  };
+
+  const handleExpandPlayer = () => {
+    if (!currentTrack) {
+      return;
+    }
+
+    if (!isMusicPage) {
+      pendingExpandOnMusicPageRef.current = true;
+      router.push('/music');
+      return;
+    }
+
+    expandPlayer();
+  };
+
   const persistPlaybackSnapshot = (completed = false) => {
     if (!currentTrack) {
       return;
@@ -451,6 +543,17 @@ export default function MusicPlayerRoot() {
       setFavoriteLoading(false);
     }
   };
+
+  const shouldRenderPlayer = Boolean(enabled && hasHydrated && currentTrack);
+  const shouldShowMiniPlayer =
+    shouldRenderPlayer &&
+    presentation !== 'hidden' &&
+    (!isMusicPage || presentation === 'mini' || !expandedSlot);
+  const shouldShowExpandedPlayer =
+    shouldRenderPlayer &&
+    isMusicPage &&
+    presentation === 'expanded' &&
+    Boolean(expandedSlot);
 
   return (
     <>
@@ -506,55 +609,65 @@ export default function MusicPlayerRoot() {
         }}
       />
 
-      {enabled && hasHydrated && currentTrack ? (
-        <>
-          <MusicMiniPlayer
-            track={currentTrack}
-            sidebarCollapsed={sidebarCollapsed}
-            isPlaying={isPlaying}
-            isTrackLoading={isTrackLoading}
-            trackError={trackError}
-            currentTimeSec={currentTimeSec}
-            durationSec={durationSec}
-            muted={muted}
-            onTogglePlay={togglePlay}
-            onPlayPrevious={playPrevious}
-            onPlayNext={playNext}
-            onSeek={handleSeek}
-            onToggleMute={() => setMuted(!muted)}
-            onExpand={() => setExpanded(true)}
-          />
-          <MusicFullscreenPlayer
-            open={expanded}
-            track={currentTrack}
-            queue={queue}
-            currentIndex={currentIndex}
-            playMode={playMode}
-            isPlaying={isPlaying}
-            isTrackLoading={isTrackLoading}
-            trackError={trackError}
-            currentTimeSec={currentTimeSec}
-            durationSec={durationSec}
-            volume={volume}
-            muted={muted}
-            lyrics={lyrics}
-            isFavorited={isFavorited}
-            isFavoriteLoading={favoriteLoading}
-            onClose={() => setExpanded(false)}
-            onTogglePlay={togglePlay}
-            onPlayPrevious={playPrevious}
-            onPlayNext={playNext}
-            onCyclePlayMode={cyclePlayMode}
-            onSeek={handleSeek}
-            onVolumeChange={handleVolumeChange}
-            onToggleMute={() => setMuted(!muted)}
-            onToggleFavorite={() => {
-              void handleToggleFavorite();
-            }}
-            onSelectQueueIndex={(index) => selectQueueIndex(index, true)}
-          />
-        </>
+      {shouldShowMiniPlayer && currentTrack ? (
+        <MusicMiniPlayer
+          track={currentTrack}
+          sidebarCollapsed={sidebarCollapsed}
+          isPlaying={isPlaying}
+          isTrackLoading={isTrackLoading}
+          trackError={trackError}
+          currentTimeSec={currentTimeSec}
+          durationSec={durationSec}
+          volume={volume}
+          muted={muted}
+          onTogglePlay={togglePlay}
+          onPlayPrevious={playPrevious}
+          onPlayNext={playNext}
+          onSeek={handleSeek}
+          onVolumeChange={handleVolumeChange}
+          onToggleMute={() => setMuted(!muted)}
+          onStop={handleStopPlayback}
+          onDismiss={handleDismissPlayer}
+          onExpand={handleExpandPlayer}
+        />
       ) : null}
+
+      {shouldShowExpandedPlayer && currentTrack && expandedSlot
+        ? createPortal(
+            <MusicFullscreenPlayer
+              open={true}
+              track={currentTrack}
+              queue={queue}
+              currentIndex={currentIndex}
+              playMode={playMode}
+              isPlaying={isPlaying}
+              isTrackLoading={isTrackLoading}
+              trackError={trackError}
+              currentTimeSec={currentTimeSec}
+              durationSec={durationSec}
+              volume={volume}
+              muted={muted}
+              lyrics={lyrics}
+              isFavorited={isFavorited}
+              isFavoriteLoading={favoriteLoading}
+              onMinimize={collapsePlayer}
+              onDismiss={handleDismissPlayer}
+              onStop={handleStopPlayback}
+              onTogglePlay={togglePlay}
+              onPlayPrevious={playPrevious}
+              onPlayNext={playNext}
+              onCyclePlayMode={cyclePlayMode}
+              onSeek={handleSeek}
+              onVolumeChange={handleVolumeChange}
+              onToggleMute={() => setMuted(!muted)}
+              onToggleFavorite={() => {
+                void handleToggleFavorite();
+              }}
+              onSelectQueueIndex={(index) => selectQueueIndex(index, true)}
+            />,
+            expandedSlot
+          )
+        : null}
     </>
   );
 }

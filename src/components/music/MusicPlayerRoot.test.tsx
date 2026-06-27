@@ -13,10 +13,19 @@ const mockSaveMusicPlayRecord = jest.fn();
 const mockIsMusicFavorited = jest.fn();
 const mockSaveMusicFavorite = jest.fn();
 const mockDeleteMusicFavorite = jest.fn();
+const mockPush = jest.fn();
+let mockPathname = '/music';
 
 jest.mock('@/lib/runtime-config', () => ({
   getRuntimeConfig: jest.fn(() => ({
     ENABLE_WEB_MUSIC: true,
+  })),
+}));
+
+jest.mock('next/navigation', () => ({
+  usePathname: jest.fn(() => mockPathname),
+  useRouter: jest.fn(() => ({
+    push: mockPush,
   })),
 }));
 
@@ -52,21 +61,60 @@ jest.mock('@/lib/music/profile', () => ({
     mockDeleteMusicFavorite(...args),
 }));
 
-jest.mock('./MusicMiniPlayer', () => () => null);
+jest.mock(
+  './MusicMiniPlayer',
+  () =>
+    (props: {
+      onDismiss?: () => void;
+      onExpand: () => void;
+      onStop?: () => void;
+    }) =>
+      (
+        <div>
+          <button type='button' onClick={props.onExpand}>
+            mini-expand
+          </button>
+          <button type='button' onClick={props.onStop}>
+            mini-stop
+          </button>
+          <button type='button' onClick={props.onDismiss}>
+            mini-dismiss
+          </button>
+        </div>
+      )
+);
 jest.mock(
   './MusicFullscreenPlayer',
-  () => (props: { open: boolean; onToggleFavorite?: () => void }) =>
-    props.open ? (
-      <button type='button' onClick={props.onToggleFavorite}>
-        toggle-favorite
-      </button>
-    ) : null
+  () =>
+    (props: {
+      open: boolean;
+      onDismiss?: () => void;
+      onMinimize?: () => void;
+      onStop?: () => void;
+      onToggleFavorite?: () => void;
+    }) =>
+      props.open ? (
+        <div data-testid='expanded-player'>
+          <button type='button' onClick={props.onToggleFavorite}>
+            toggle-favorite
+          </button>
+          <button type='button' onClick={props.onMinimize}>
+            minimize-player
+          </button>
+          <button type='button' onClick={props.onStop}>
+            stop-player
+          </button>
+          <button type='button' onClick={props.onDismiss}>
+            dismiss-player
+          </button>
+        </div>
+      ) : null
 );
 
 function primeMusicPlayerStore(options?: {
-  expanded?: boolean;
   currentTimeSec?: number;
   durationSec?: number;
+  presentation?: 'hidden' | 'mini' | 'expanded';
 }) {
   useMusicPlayerStore.setState({
     hasHydrated: true,
@@ -89,13 +137,20 @@ function primeMusicPlayerStore(options?: {
     currentTimeSec: options?.currentTimeSec ?? 0,
     recentTracks: [],
     isPlaying: true,
-    expanded: options?.expanded ?? false,
+    presentation: options?.presentation ?? 'mini',
     durationSec: options?.durationSec ?? 0,
     streamUrl: null,
     lyrics: null,
     isTrackLoading: false,
     trackError: null,
   });
+}
+
+function mountExpandedSlot() {
+  const slot = document.createElement('div');
+  slot.id = 'music-player-expanded-slot';
+  document.body.appendChild(slot);
+  return slot;
 }
 
 describe('MusicPlayerRoot', () => {
@@ -117,6 +172,8 @@ describe('MusicPlayerRoot', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     localStorage.clear();
+    mockPathname = '/music';
+    document.body.innerHTML = '';
     primeMusicPlayerStore();
     mockFetchMusicTrack.mockResolvedValue({
       track: {
@@ -196,8 +253,9 @@ describe('MusicPlayerRoot', () => {
 
   it('favorites the current track from the fullscreen player action', async () => {
     primeMusicPlayerStore({
-      expanded: true,
+      presentation: 'expanded',
     });
+    mountExpandedSlot();
 
     render(<MusicPlayerRoot />);
 
@@ -219,6 +277,49 @@ describe('MusicPlayerRoot', () => {
           source: 'netease',
         })
       );
+    });
+  });
+
+  it('routes expand requests outside the music page back into /music', async () => {
+    mockPathname = '/search';
+
+    render(<MusicPlayerRoot />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'mini-expand' }));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/music');
+    });
+  });
+
+  it('downgrades the expanded player to mini when leaving the music page', async () => {
+    primeMusicPlayerStore({
+      presentation: 'expanded',
+    });
+    mountExpandedSlot();
+
+    const { rerender } = render(<MusicPlayerRoot />);
+
+    expect(await screen.findByTestId('expanded-player')).toBeInTheDocument();
+
+    mockPathname = '/search';
+    rerender(<MusicPlayerRoot />);
+
+    await waitFor(() => {
+      expect(useMusicPlayerStore.getState().presentation).toBe('mini');
+    });
+  });
+
+  it('dismisses playback from the mini player controls', async () => {
+    render(<MusicPlayerRoot />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'mini-dismiss' })
+    );
+
+    await waitFor(() => {
+      expect(useMusicPlayerStore.getState().presentation).toBe('hidden');
+      expect(useMusicPlayerStore.getState().isPlaying).toBe(false);
     });
   });
 });
