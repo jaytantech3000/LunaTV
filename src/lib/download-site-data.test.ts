@@ -25,6 +25,23 @@ interface DownloadSiteDataModule {
     tagName: string;
     version: string;
     prerelease: boolean;
+    notes: string | null;
+    changeSummary: {
+      en: {
+        compareUrl: string | null;
+        added: string[];
+        changed: string[];
+        fixed: string[];
+        other: string[];
+      } | null;
+      'zh-CN': {
+        compareUrl: string | null;
+        added: string[];
+        changed: string[];
+        fixed: string[];
+        other: string[];
+      } | null;
+    } | null;
     assets: Array<{
       fileName: string;
       platformLabel: string;
@@ -32,6 +49,75 @@ interface DownloadSiteDataModule {
       size: number | null;
     }>;
   }>;
+  hydrateDownloadSiteReleaseChangeSummaries(
+    input: Array<{
+      tagName: string;
+      version: string;
+      prerelease: boolean;
+      notes: string | null;
+      changeSummary: {
+        en: {
+          compareUrl: string | null;
+          added: string[];
+          changed: string[];
+          fixed: string[];
+          other: string[];
+        } | null;
+        'zh-CN': {
+          compareUrl: string | null;
+          added: string[];
+          changed: string[];
+          fixed: string[];
+          other: string[];
+        } | null;
+      } | null;
+      assets: Array<{
+        fileName: string;
+        platformLabel: string;
+        downloadUrl: string;
+        size: number | null;
+      }>;
+    }>,
+    options?: {
+      fetchImpl?: (
+        input: string,
+        init?: Record<string, unknown>
+      ) => Promise<{
+        ok: boolean;
+        status: number;
+        json: () => Promise<unknown>;
+      }>;
+    }
+  ): Promise<
+    Array<{
+      tagName: string;
+      version: string;
+      prerelease: boolean;
+      notes: string | null;
+      changeSummary: {
+        en: {
+          compareUrl: string | null;
+          added: string[];
+          changed: string[];
+          fixed: string[];
+          other: string[];
+        } | null;
+        'zh-CN': {
+          compareUrl: string | null;
+          added: string[];
+          changed: string[];
+          fixed: string[];
+          other: string[];
+        } | null;
+      } | null;
+      assets: Array<{
+        fileName: string;
+        platformLabel: string;
+        downloadUrl: string;
+        size: number | null;
+      }>;
+    }>
+  >;
 }
 
 const downloadSiteDataModule =
@@ -44,7 +130,13 @@ describe('download site release data', () => {
         id: 1,
         tag_name: 'desktop-v200.0.1-beta.15',
         name: 'LunaTV Desktop 200.0.1 Beta 15',
-        body: 'beta',
+        body: `## Added
+- replace web mocks with netease routes
+
+## Fixed
+- restore beta release summaries
+
+**Full Changelog**: https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.14...desktop-v200.0.1-beta.15`,
         prerelease: true,
         published_at: '2026-06-26T17:28:37Z',
         html_url:
@@ -145,6 +237,24 @@ describe('download site release data', () => {
     expect(releases[1]).toMatchObject({
       version: '200.0.1-beta.15',
       prerelease: true,
+      changeSummary: {
+        en: {
+          compareUrl:
+            'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.14...desktop-v200.0.1-beta.15',
+          added: ['replace web mocks with netease routes'],
+          changed: [],
+          fixed: ['restore beta release summaries'],
+          other: [],
+        },
+        'zh-CN': {
+          compareUrl:
+            'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.14...desktop-v200.0.1-beta.15',
+          added: ['用网易云路由替换 Web Mock'],
+          changed: [],
+          fixed: ['恢复 Beta 版本摘要'],
+          other: [],
+        },
+      },
       assets: [
         {
           fileName: 'LunaTV.Desktop_200.0.1-beta.15_windows-x64-setup.exe',
@@ -159,6 +269,85 @@ describe('download site release data', () => {
           size: 202,
         },
       ],
+    });
+  });
+
+  it('hydrates compare-only release notes into grouped bilingual summaries', async () => {
+    const compareUrl =
+      'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.15...desktop-v200.0.1-beta.16';
+
+    const normalizedReleases =
+      downloadSiteDataModule.normalizeDownloadSiteReleases([
+        {
+          id: 1,
+          tag_name: 'desktop-v200.0.1-beta.16',
+          name: 'LunaTV Desktop 200.0.1 Beta 16',
+          body: `**Full Changelog**: ${compareUrl}`,
+          prerelease: true,
+          published_at: '2026-06-27T01:00:00Z',
+          html_url:
+            'https://github.com/jaytantech3000/LunaTV/releases/tag/desktop-v200.0.1-beta.16',
+          assets: [
+            {
+              name: 'LunaTV.Desktop_200.0.1-beta.16_windows-x64-setup.exe',
+              label:
+                'Windows x64 - LunaTV.Desktop_200.0.1-beta.16_windows-x64-setup.exe',
+              browser_download_url: 'https://example.com/win.exe',
+              size: 101,
+            },
+          ],
+        },
+      ]);
+
+    const fetchImpl = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        commits: [
+          {
+            commit: {
+              message: 'feat(music): power desktop music api with netease',
+            },
+          },
+          {
+            commit: {
+              message: 'fix(desktop): restore beta release summaries',
+            },
+          },
+        ],
+      }),
+    }));
+
+    const hydratedReleases =
+      await downloadSiteDataModule.hydrateDownloadSiteReleaseChangeSummaries(
+        normalizedReleases,
+        {
+          fetchImpl,
+        }
+      );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.github.com/repos/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.15...desktop-v200.0.1-beta.16',
+      expect.objectContaining({
+        cache: 'no-store',
+      })
+    );
+    expect(hydratedReleases[0]?.changeSummary).toEqual({
+      en: {
+        compareUrl,
+        added: ['music: power desktop music api with netease'],
+        changed: [],
+        fixed: ['desktop: restore beta release summaries'],
+        other: [],
+      },
+      'zh-CN': {
+        compareUrl,
+        added: ['音乐：用网易云驱动桌面音乐 API'],
+        changed: [],
+        fixed: ['桌面端：恢复 Beta 版本摘要'],
+        other: [],
+      },
     });
   });
 });

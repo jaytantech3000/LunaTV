@@ -11,6 +11,22 @@ interface DownloadSiteAppModule {
         publishedAt: string | null;
         htmlUrl: string | null;
         notes: string | null;
+        changeSummary: {
+          en: {
+            compareUrl: string | null;
+            added: string[];
+            changed: string[];
+            fixed: string[];
+            other: string[];
+          } | null;
+          'zh-CN': {
+            compareUrl: string | null;
+            added: string[];
+            changed: string[];
+            fixed: string[];
+            other: string[];
+          } | null;
+        } | null;
         assets: Array<{
           fileName: string;
           platformLabel: string;
@@ -53,6 +69,7 @@ describe('download site app', () => {
           publishedAt: '2026-06-27T01:00:00Z',
           htmlUrl: 'https://example.com/release',
           notes: 'stable notes',
+          changeSummary: null,
           assets: [
             {
               fileName: 'LunaTV.Desktop_200.0.1_windows-x64-setup.exe',
@@ -70,6 +87,7 @@ describe('download site app', () => {
           publishedAt: '2026-06-26T17:28:37Z',
           htmlUrl: 'https://example.com/prerelease',
           notes: 'beta notes',
+          changeSummary: null,
           assets: [
             {
               fileName: 'LunaTV.Desktop_200.0.1-beta.15_macos-arm64.dmg',
@@ -103,7 +121,7 @@ describe('download site app', () => {
     ).toBe('预发布');
   });
 
-  it('keeps the tabs and shows release notes inside the release notes tab', () => {
+  it('keeps the tabs and renders desktop-style release summaries inside the release notes tab', () => {
     document.body.innerHTML = `
       <main id="app">
         <div data-copy="releaseSectionTitle"></div>
@@ -125,6 +143,24 @@ describe('download site app', () => {
           publishedAt: '2026-06-26T17:28:37Z',
           htmlUrl: 'https://example.com/prerelease',
           notes: 'beta notes body',
+          changeSummary: {
+            en: {
+              compareUrl:
+                'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.14...desktop-v200.0.1-beta.15',
+              added: ['Compact desktop release cards'],
+              changed: ['Reuse compare parser'],
+              fixed: ['Avoid stale release compare cache'],
+              other: [],
+            },
+            'zh-CN': {
+              compareUrl:
+                'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.14...desktop-v200.0.1-beta.15',
+              added: ['精简桌面版本卡片'],
+              changed: ['复用版本对比解析器'],
+              fixed: ['避免旧的版本对比缓存'],
+              other: [],
+            },
+          },
           assets: [
             {
               fileName: 'LunaTV.Desktop_200.0.1-beta.15_macos-arm64.dmg',
@@ -145,15 +181,46 @@ describe('download site app', () => {
     releaseNotesTabButton?.click();
 
     expect(
-      document.querySelector('.release-card__notes')?.textContent
-    ).toContain('beta notes body');
+      document.querySelector('.release-card__change-group-label')?.textContent
+    ).toBe('Added');
+    expect(
+      document.querySelector('.release-card__change-summary')?.textContent
+    ).toContain('Compact desktop release cards');
+    expect(
+      document.querySelector('.release-card__change-summary')?.textContent
+    ).not.toContain('beta notes body');
     expect(
       document.querySelector('.release-card__notes-heading')?.textContent
     ).toBe('Release Notes');
+    expect(
+      document.querySelector('.release-card__change-compare')?.textContent
+    ).toBe('Full compare');
     expect(document.querySelectorAll('.release-card__tab')).toHaveLength(2);
     expect(releaseNotesTabButton?.dataset.active).toBe('true');
     expect(
       document.querySelector('.release-card__panel[data-tab-panel="notes"]')
     ).not.toHaveAttribute('hidden');
+
+    app.setLocale('zh-CN');
+
+    const zhReleaseCard = document.querySelector('.release-card');
+    zhReleaseCard?.setAttribute('open', 'true');
+    const zhReleaseNotesTabButton = document.querySelector(
+      '.release-card__tab[data-tab="notes"]'
+    ) as HTMLButtonElement | null;
+    zhReleaseNotesTabButton?.click();
+
+    expect(
+      document.querySelector('.release-card__notes-heading')?.textContent
+    ).toBe('发布说明');
+    expect(
+      document.querySelector('.release-card__change-group-label')?.textContent
+    ).toBe('新增功能');
+    expect(
+      document.querySelector('.release-card__change-summary')?.textContent
+    ).toContain('精简桌面版本卡片');
+    expect(
+      document.querySelector('.release-card__change-compare')?.textContent
+    ).toBe('完整对比');
   });
 });

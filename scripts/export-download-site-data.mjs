@@ -10,7 +10,8 @@ import {
 } from './desktop-release-utils.mjs';
 
 const GITHUB_API_BASE = 'https://api.github.com';
-const { buildDownloadSitePayload } = downloadSiteDataModule;
+const { buildDownloadSitePayload, hydrateDownloadSiteReleaseChangeSummaries } =
+  downloadSiteDataModule;
 
 function readEnvValue(name) {
   const value = process.env[name]?.trim();
@@ -92,6 +93,12 @@ async function main() {
     repository,
     releases,
   });
+  payload.releases = await hydrateDownloadSiteReleaseChangeSummaries(
+    payload.releases,
+    {
+      fetchImpl: fetch,
+    }
+  );
 
   await mkdir(path.dirname(outputPath), {
     recursive: true,
