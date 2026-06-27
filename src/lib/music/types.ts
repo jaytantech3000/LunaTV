@@ -114,6 +114,7 @@ export interface MusicTrackPayload {
 }
 
 export type MusicPlayMode = 'list-loop' | 'single-loop' | 'shuffle';
+export type MusicRepeatMode = 'off' | 'all' | 'one';
 
 export interface PlayerQueueItem {
   trackId: string;

@@ -65,17 +65,17 @@ jest.mock(
   './MusicMiniPlayer',
   () =>
     (props: {
+      onOpenLyrics: () => void;
+      onOpenQueue: () => void;
       onDismiss?: () => void;
-      onExpand: () => void;
-      onStop?: () => void;
     }) =>
       (
         <div>
-          <button type='button' onClick={props.onExpand}>
-            mini-expand
+          <button type='button' onClick={props.onOpenLyrics}>
+            mini-open-lyrics
           </button>
-          <button type='button' onClick={props.onStop}>
-            mini-stop
+          <button type='button' onClick={props.onOpenQueue}>
+            mini-open-queue
           </button>
           <button type='button' onClick={props.onDismiss}>
             mini-dismiss
@@ -88,21 +88,19 @@ jest.mock(
   () =>
     (props: {
       open: boolean;
+      activePanel: 'lyrics' | 'queue';
       onDismiss?: () => void;
       onMinimize?: () => void;
-      onStop?: () => void;
       onToggleFavorite?: () => void;
     }) =>
       props.open ? (
         <div data-testid='expanded-player'>
+          <div>{`panel:${props.activePanel}`}</div>
           <button type='button' onClick={props.onToggleFavorite}>
             toggle-favorite
           </button>
           <button type='button' onClick={props.onMinimize}>
             minimize-player
-          </button>
-          <button type='button' onClick={props.onStop}>
-            stop-player
           </button>
           <button type='button' onClick={props.onDismiss}>
             dismiss-player
@@ -131,7 +129,8 @@ function primeMusicPlayerStore(options?: {
       },
     ],
     currentIndex: 0,
-    playMode: 'list-loop',
+    repeatMode: 'all',
+    shuffleEnabled: false,
     volume: 0.85,
     muted: false,
     currentTimeSec: options?.currentTimeSec ?? 0,
@@ -285,11 +284,28 @@ describe('MusicPlayerRoot', () => {
 
     render(<MusicPlayerRoot />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'mini-expand' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'mini-open-lyrics' })
+    );
 
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith('/music');
     });
+  });
+
+  it('opens the expanded player on the queue panel when requested from the mini player', async () => {
+    primeMusicPlayerStore({
+      presentation: 'mini',
+    });
+    mountExpandedSlot();
+
+    render(<MusicPlayerRoot />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'mini-open-queue' })
+    );
+
+    expect(await screen.findByText('panel:queue')).toBeInTheDocument();
   });
 
   it('downgrades the expanded player to mini when leaving the music page', async () => {

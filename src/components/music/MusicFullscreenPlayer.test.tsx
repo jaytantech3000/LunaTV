@@ -31,14 +31,19 @@ const lyrics: MusicLyricPayload = {
 };
 
 describe('MusicFullscreenPlayer', () => {
-  it('renders the expanded player as a dialog and switches to the queue tab', () => {
+  it('renders the expanded player as a dialog and exposes queue, lyrics, repeat, and shuffle controls', () => {
+    const handlePanelChange = jest.fn();
+    const handleRepeat = jest.fn();
+    const handleShuffle = jest.fn();
+
     render(
       <MusicFullscreenPlayer
         open={true}
         track={queue[0]}
         queue={queue}
         currentIndex={0}
-        playMode='list-loop'
+        repeatMode='all'
+        shuffleEnabled={false}
         isPlaying={true}
         isTrackLoading={false}
         trackError={null}
@@ -49,18 +54,20 @@ describe('MusicFullscreenPlayer', () => {
         lyrics={lyrics}
         isFavorited={false}
         isFavoriteLoading={false}
+        activePanel='lyrics'
         onMinimize={() => undefined}
         onDismiss={() => undefined}
-        onStop={() => undefined}
         onTogglePlay={() => undefined}
         onPlayPrevious={() => undefined}
         onPlayNext={() => undefined}
-        onCyclePlayMode={() => undefined}
+        onCycleRepeatMode={handleRepeat}
+        onToggleShuffle={handleShuffle}
         onSeek={() => undefined}
         onVolumeChange={() => undefined}
         onToggleMute={() => undefined}
         onToggleFavorite={() => undefined}
         onSelectQueueIndex={() => undefined}
+        onPanelChange={handlePanelChange}
       />
     );
 
@@ -68,8 +75,12 @@ describe('MusicFullscreenPlayer', () => {
       screen.getByRole('dialog', { name: '展开播放器' })
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '队列' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换到队列视图' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换重复模式' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换随机播放' }));
 
-    expect(screen.getAllByText('霓虹夜航').length).toBeGreaterThan(1);
+    expect(handlePanelChange).toHaveBeenCalledWith('queue');
+    expect(handleRepeat).toHaveBeenCalledTimes(1);
+    expect(handleShuffle).toHaveBeenCalledTimes(1);
   });
 });

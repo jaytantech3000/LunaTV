@@ -194,7 +194,8 @@ function resetMusicPlayerStore() {
     hasHydrated: true,
     queue: [],
     currentIndex: -1,
-    playMode: 'list-loop',
+    repeatMode: 'all',
+    shuffleEnabled: false,
     volume: 0.85,
     muted: false,
     currentTimeSec: 0,
@@ -227,20 +228,15 @@ describe('MusicPageClient', () => {
     resetMusicPlayerStore();
   });
 
-  it('describes the current music rollout accurately', async () => {
+  it('renders the player-first product header', async () => {
     render(<MusicPageClient />);
 
     expect(
-      await screen.findByText(
-        /统一 music client 已接通平台切换、热门、歌单、搜索和全局播放器/,
-        {
-          selector: 'p',
-        }
-      )
+      await screen.findByRole('heading', { name: 'LunaTV Music' })
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        /当前 Web 与桌面本地模式都会按平台配置显示网易云、Audius，\s*Jamendo 在配置 client id 后也会一起显示/,
+        /底栏控制、歌词、队列、合集与搜索都共享同一套播放器状态/,
         {
           selector: 'p',
         }

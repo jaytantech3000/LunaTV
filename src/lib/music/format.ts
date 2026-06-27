@@ -1,4 +1,4 @@
-import type { MusicSectionTab, MusicPlayMode } from './types';
+import type { MusicRepeatMode, MusicSectionTab } from './types';
 
 export function formatDurationMs(durationMs?: number | null) {
   if (!durationMs || !Number.isFinite(durationMs) || durationMs <= 0) {
@@ -40,13 +40,13 @@ export function getMusicTabLabel(tab: MusicSectionTab) {
   }
 }
 
-export function getPlayModeLabel(playMode: MusicPlayMode) {
-  switch (playMode) {
-    case 'single-loop':
+export function getRepeatModeLabel(repeatMode: MusicRepeatMode) {
+  switch (repeatMode) {
+    case 'off':
+      return '关闭循环';
+    case 'one':
       return '单曲循环';
-    case 'shuffle':
-      return '随机播放';
-    case 'list-loop':
+    case 'all':
     default:
       return '列表循环';
   }

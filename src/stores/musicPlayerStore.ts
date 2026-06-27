@@ -6,15 +6,21 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import {
   type MusicLyricPayload,
   type MusicPlayMode,
+  type MusicRepeatMode,
   type PlayerQueueItem,
 } from '@/lib/music/types';
 
 export type MusicPlayerPresentation = 'hidden' | 'mini' | 'expanded';
+type MusicPlaybackAdvanceTrigger = 'manual' | 'ended';
+type PersistedMusicPlayerSnapshot = Partial<MusicPlayerPersistedState> & {
+  playMode?: MusicPlayMode;
+};
 
 interface MusicPlayerPersistedState {
   queue: PlayerQueueItem[];
   currentIndex: number;
-  playMode: MusicPlayMode;
+  repeatMode: MusicRepeatMode;
+  shuffleEnabled: boolean;
   volume: number;
   muted: boolean;
   currentTimeSec: number;
@@ -30,15 +36,17 @@ interface MusicPlayerState extends MusicPlayerPersistedState {
   lyrics: MusicLyricPayload | null;
   isTrackLoading: boolean;
   trackError: string | null;
+  shuffleHistory: number[];
   setHasHydrated: (hasHydrated: boolean) => void;
   playQueue: (queue: PlayerQueueItem[], startIndex?: number) => void;
   selectQueueIndex: (index: number, shouldAutoplay?: boolean) => void;
   enqueueTracks: (tracks: PlayerQueueItem[]) => void;
   togglePlay: () => void;
   setIsPlaying: (isPlaying: boolean) => void;
-  playNext: () => void;
+  playNext: (trigger?: MusicPlaybackAdvanceTrigger) => void;
   playPrevious: () => void;
-  cyclePlayMode: () => void;
+  cycleRepeatMode: () => void;
+  toggleShuffle: () => void;
   expandPlayer: () => void;
   collapsePlayer: () => void;
   dismissPlayer: () => void;
@@ -57,6 +65,7 @@ interface MusicPlayerState extends MusicPlayerPersistedState {
 
 const MUSIC_PLAYER_STORE_KEY = 'lunatv-music-player-v1';
 const MAX_RECENT_TRACKS = 16;
+const MAX_SHUFFLE_HISTORY = 64;
 
 function normalizeQueue(queue?: PlayerQueueItem[]): PlayerQueueItem[] {
   if (!Array.isArray(queue)) {
@@ -104,6 +113,32 @@ function normalizeVolume(volume: number) {
   return Math.min(Math.max(volume, 0), 1);
 }
 
+function normalizeRepeatMode(
+  repeatMode: MusicRepeatMode | undefined,
+  legacyPlayMode: MusicPlayMode | undefined
+): MusicRepeatMode {
+  if (repeatMode === 'off' || repeatMode === 'all' || repeatMode === 'one') {
+    return repeatMode;
+  }
+
+  if (legacyPlayMode === 'single-loop') {
+    return 'one';
+  }
+
+  return 'all';
+}
+
+function normalizeShuffleEnabled(
+  shuffleEnabled: boolean | undefined,
+  legacyPlayMode: MusicPlayMode | undefined
+) {
+  if (typeof shuffleEnabled === 'boolean') {
+    return shuffleEnabled;
+  }
+
+  return legacyPlayMode === 'shuffle';
+}
+
 function hasQueueTrack(queue: PlayerQueueItem[], currentIndex: number) {
   return clampIndex(currentIndex, queue) >= 0;
 }
@@ -116,17 +151,18 @@ function resolveCollapsedPresentation(
 }
 
 function buildPersistedState(
-  state: Partial<MusicPlayerPersistedState>
+  state: PersistedMusicPlayerSnapshot
 ): MusicPlayerPersistedState {
   const queue = normalizeQueue(state.queue);
 
   return {
     queue,
     currentIndex: clampIndex(state.currentIndex ?? 0, queue),
-    playMode:
-      state.playMode === 'single-loop' || state.playMode === 'shuffle'
-        ? state.playMode
-        : 'list-loop',
+    repeatMode: normalizeRepeatMode(state.repeatMode, state.playMode),
+    shuffleEnabled: normalizeShuffleEnabled(
+      state.shuffleEnabled,
+      state.playMode
+    ),
     volume: normalizeVolume(state.volume ?? 0.85),
     muted: Boolean(state.muted),
     currentTimeSec:
@@ -156,7 +192,8 @@ export const useMusicPlayerStore = create<MusicPlayerState>()(
       hasHydrated: false,
       queue: [],
       currentIndex: -1,
-      playMode: 'list-loop',
+      repeatMode: 'all',
+      shuffleEnabled: false,
       volume: 0.85,
       muted: false,
       currentTimeSec: 0,
@@ -168,6 +205,7 @@ export const useMusicPlayerStore = create<MusicPlayerState>()(
       lyrics: null,
       isTrackLoading: false,
       trackError: null,
+      shuffleHistory: [],
       setHasHydrated: (hasHydrated) => set({ hasHydrated }),
       playQueue: (queue, startIndex = 0) =>
         set(() => {
@@ -185,6 +223,7 @@ export const useMusicPlayerStore = create<MusicPlayerState>()(
             trackError: null,
             isTrackLoading: hasTrack,
             isPlaying: hasTrack,
+            shuffleHistory: [],
             presentation: resolveCollapsedPresentation(
               normalizedQueue,
               currentIndex
@@ -201,6 +240,7 @@ export const useMusicPlayerStore = create<MusicPlayerState>()(
           trackError: null,
           isTrackLoading: state.queue.length > 0,
           isPlaying: state.queue.length > 0 ? shouldAutoplay : false,
+          shuffleHistory: [],
           presentation:
             state.queue.length === 0
               ? 'hidden'
@@ -235,6 +275,7 @@ export const useMusicPlayerStore = create<MusicPlayerState>()(
             currentIndex: clampIndex(nextIndex, nextQueue),
             isPlaying: state.currentIndex < 0 ? true : state.isPlaying,
             isTrackLoading: state.currentIndex < 0,
+            shuffleHistory: state.currentIndex < 0 ? [] : state.shuffleHistory,
             presentation:
               state.currentIndex < 0
                 ? resolveCollapsedPresentation(nextQueue, nextIndex)
@@ -243,28 +284,77 @@ export const useMusicPlayerStore = create<MusicPlayerState>()(
         }),
       togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
       setIsPlaying: (isPlaying) => set({ isPlaying }),
-      playNext: () =>
+      playNext: (trigger = 'manual') =>
         set((state) => {
           if (state.queue.length === 0) {
             return state;
           }
 
-          let nextIndex = state.currentIndex;
+          const currentIndex = clampIndex(state.currentIndex, state.queue);
+          const atQueueEnd = currentIndex >= state.queue.length - 1;
 
-          if (state.playMode === 'single-loop') {
-            nextIndex = clampIndex(state.currentIndex, state.queue);
-          } else if (state.playMode === 'shuffle') {
-            if (state.queue.length > 1) {
-              do {
-                nextIndex = Math.floor(Math.random() * state.queue.length);
-              } while (nextIndex === state.currentIndex);
-            }
-          } else {
-            nextIndex = state.currentIndex + 1;
-            if (nextIndex >= state.queue.length) {
-              nextIndex = 0;
-            }
+          if (trigger === 'ended' && state.repeatMode === 'one') {
+            return {
+              currentIndex,
+              currentTimeSec: 0,
+              durationSec: 0,
+              streamUrl: null,
+              lyrics: null,
+              trackError: null,
+              isTrackLoading: true,
+              isPlaying: true,
+            };
           }
+
+          if (state.shuffleEnabled && state.queue.length > 1) {
+            let nextIndex = currentIndex;
+            while (nextIndex === currentIndex) {
+              nextIndex = Math.floor(Math.random() * state.queue.length);
+            }
+
+            return {
+              currentIndex: clampIndex(nextIndex, state.queue),
+              currentTimeSec: 0,
+              durationSec: 0,
+              streamUrl: null,
+              lyrics: null,
+              trackError: null,
+              isTrackLoading: true,
+              isPlaying: true,
+              shuffleHistory: [...state.shuffleHistory, currentIndex].slice(
+                -MAX_SHUFFLE_HISTORY
+              ),
+            };
+          }
+
+          if (atQueueEnd) {
+            if (state.repeatMode === 'all') {
+              return {
+                currentIndex: 0,
+                currentTimeSec: 0,
+                durationSec: 0,
+                streamUrl: null,
+                lyrics: null,
+                trackError: null,
+                isTrackLoading: true,
+                isPlaying: true,
+                shuffleHistory: [],
+              };
+            }
+
+            if (trigger === 'ended') {
+              return {
+                currentTimeSec: 0,
+                isPlaying: false,
+                isTrackLoading: false,
+                shuffleHistory: [],
+              };
+            }
+
+            return state;
+          }
+
+          const nextIndex = currentIndex + 1;
 
           return {
             currentIndex: clampIndex(nextIndex, state.queue),
@@ -275,6 +365,7 @@ export const useMusicPlayerStore = create<MusicPlayerState>()(
             trackError: null,
             isTrackLoading: true,
             isPlaying: true,
+            shuffleHistory: [],
           };
         }),
       playPrevious: () =>
@@ -283,9 +374,30 @@ export const useMusicPlayerStore = create<MusicPlayerState>()(
             return state;
           }
 
+          if (state.shuffleEnabled && state.shuffleHistory.length > 0) {
+            const nextIndex =
+              state.shuffleHistory[state.shuffleHistory.length - 1];
+
+            return {
+              currentIndex: clampIndex(nextIndex, state.queue),
+              currentTimeSec: 0,
+              durationSec: 0,
+              streamUrl: null,
+              lyrics: null,
+              trackError: null,
+              isTrackLoading: true,
+              isPlaying: true,
+              shuffleHistory: state.shuffleHistory.slice(0, -1),
+            };
+          }
+
           let nextIndex = state.currentIndex - 1;
           if (nextIndex < 0) {
-            nextIndex = state.queue.length - 1;
+            if (state.repeatMode === 'all') {
+              nextIndex = state.queue.length - 1;
+            } else {
+              return state;
+            }
           }
 
           return {
@@ -297,16 +409,22 @@ export const useMusicPlayerStore = create<MusicPlayerState>()(
             trackError: null,
             isTrackLoading: true,
             isPlaying: true,
+            shuffleHistory: [],
           };
         }),
-      cyclePlayMode: () =>
+      cycleRepeatMode: () =>
         set((state) => ({
-          playMode:
-            state.playMode === 'list-loop'
-              ? 'single-loop'
-              : state.playMode === 'single-loop'
-              ? 'shuffle'
-              : 'list-loop',
+          repeatMode:
+            state.repeatMode === 'all'
+              ? 'one'
+              : state.repeatMode === 'one'
+              ? 'off'
+              : 'all',
+        })),
+      toggleShuffle: () =>
+        set((state) => ({
+          shuffleEnabled: !state.shuffleEnabled,
+          shuffleHistory: [],
         })),
       expandPlayer: () =>
         set((state) => ({
@@ -385,7 +503,8 @@ export const useMusicPlayerStore = create<MusicPlayerState>()(
         buildPersistedState({
           queue: state.queue,
           currentIndex: state.currentIndex,
-          playMode: state.playMode,
+          repeatMode: state.repeatMode,
+          shuffleEnabled: state.shuffleEnabled,
           volume: state.volume,
           muted: state.muted,
           currentTimeSec: state.currentTimeSec,

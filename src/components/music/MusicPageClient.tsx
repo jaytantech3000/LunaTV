@@ -14,7 +14,6 @@ import {
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type FormEvent, startTransition, useEffect, useState } from 'react';
 
-import { cn } from '@/lib/cn';
 import { formatDurationSeconds } from '@/lib/music/format';
 import {
   type MusicPlayRecord,
@@ -677,53 +676,35 @@ export default function MusicPageClient() {
             id={MUSIC_PLAYER_EXPANDED_SLOT_ID}
             className='pointer-events-none absolute inset-0 z-40'
           />
-          <section className='overflow-hidden rounded-[36px] border border-white/70 bg-white/80 shadow-xl shadow-slate-950/5 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/75 dark:shadow-black/20'>
-            <div className='grid gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:p-6'>
-              <div className='space-y-5'>
-                <div className='inline-flex items-center gap-2 rounded-full bg-emerald-500/12 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-700 dark:text-emerald-300'>
-                  <Sparkles className='h-3.5 w-3.5' />
-                  Music MVP
-                </div>
-
+          <section className='overflow-hidden rounded-[32px] border border-slate-200 bg-white/90 shadow-lg shadow-slate-950/5 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/82 dark:shadow-black/20'>
+            <div className='space-y-5 p-5 lg:p-6'>
+              <div className='flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between'>
                 <div className='space-y-3'>
-                  <h1 className='text-3xl font-semibold tracking-tight text-slate-950 dark:text-white sm:text-4xl'>
-                    音乐
-                  </h1>
-                  <p className='max-w-2xl text-sm leading-7 text-slate-600 dark:text-slate-300'>
-                    统一 music client
-                    已接通平台切换、热门、歌单、搜索和全局播放器；当前 Web
-                    与桌面本地模式都会按平台配置显示网易云、Audius， Jamendo
-                    在配置 client id 后也会一起显示。
-                  </p>
-                  {activeSourceModel?.description ? (
-                    <div className='text-sm text-slate-500 dark:text-slate-400'>
-                      当前平台：{activeSourceModel.name} ·{' '}
-                      {activeSourceModel.description}
-                    </div>
-                  ) : null}
+                  <div className='inline-flex items-center gap-2 rounded-full bg-emerald-500/12 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-700 dark:text-emerald-300'>
+                    <Sparkles className='h-3.5 w-3.5' />
+                    Player-first
+                  </div>
+                  <div className='space-y-2'>
+                    <h1 className='text-3xl font-semibold tracking-tight text-slate-950 dark:text-white sm:text-4xl'>
+                      LunaTV Music
+                    </h1>
+                    <p className='max-w-3xl text-sm leading-7 text-slate-600 dark:text-slate-300'>
+                      底栏控制、歌词、队列、合集与搜索都共享同一套播放器状态；
+                      当前来源继续通过统一 provider
+                      适配层输出，页面只负责浏览与调度。
+                    </p>
+                    {activeSourceModel?.description ? (
+                      <div className='text-sm text-slate-500 dark:text-slate-400'>
+                        当前平台：{activeSourceModel.name} ·{' '}
+                        {activeSourceModel.description}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-
-                {sourcesLoading && sources.length === 0 ? (
-                  <div className='h-14 rounded-[24px] bg-slate-100 dark:bg-slate-800' />
-                ) : (
-                  <MusicSourceTabs
-                    sources={sources}
-                    activeSource={activeSource}
-                    onChange={handleSourceChange}
-                  />
-                )}
-
-                {activeSourceModel ? (
-                  <MusicSectionTabs
-                    tabs={activeSourceModel.tabs}
-                    activeTab={activeTab}
-                    onChange={handleTabChange}
-                  />
-                ) : null}
 
                 <form
                   onSubmit={handleSearchSubmit}
-                  className='flex flex-col gap-3 rounded-[28px] border border-slate-200 bg-slate-50/85 p-4 dark:border-slate-800 dark:bg-slate-900/80 sm:flex-row'
+                  className='flex w-full max-w-xl flex-col gap-3 rounded-[24px] border border-slate-200 bg-slate-50/90 p-3 dark:border-slate-800 dark:bg-slate-900/80 sm:flex-row'
                 >
                   <label className='relative flex-1'>
                     <Search className='pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400' />
@@ -744,79 +725,23 @@ export default function MusicPageClient() {
                 </form>
               </div>
 
-              <div className='grid gap-3'>
-                {homeLoading && !homePayload ? (
-                  Array.from({ length: 3 }).map((_, index) => (
-                    <div
-                      key={index}
-                      className='h-[108px] rounded-[28px] border border-white/70 bg-slate-100/80 dark:border-slate-800 dark:bg-slate-900/80'
-                    />
-                  ))
-                ) : homePayload?.spotlight?.length ? (
-                  homePayload.spotlight.slice(0, 3).map((track, index) => (
-                    <button
-                      key={`${track.source}:${track.id}`}
-                      type='button'
-                      disabled={!track.playable}
-                      onClick={() =>
-                        handlePlayTracks(homePayload.spotlight, index)
-                      }
-                      className={cn(
-                        'group flex items-center gap-4 rounded-[28px] border border-white/75 bg-gradient-to-r from-slate-950 via-slate-900 to-emerald-900/90 p-4 text-left text-white shadow-lg shadow-slate-950/10 transition-transform dark:border-slate-700',
-                        track.playable
-                          ? 'hover:-translate-y-0.5'
-                          : 'cursor-not-allowed opacity-60'
-                      )}
-                    >
-                      <div className='relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-white/10'>
-                        {track.cover ? (
-                          <img
-                            src={track.cover}
-                            alt={track.title}
-                            className='h-full w-full object-cover'
-                          />
-                        ) : null}
-                      </div>
-                      <div className='min-w-0 flex-1'>
-                        <div className='text-[11px] uppercase tracking-[0.24em] text-emerald-200/70'>
-                          Spotlight
-                        </div>
-                        <div className='mt-2 truncate text-base font-semibold'>
-                          {track.title}
-                        </div>
-                        <div className='mt-1 truncate text-sm text-white/65'>
-                          {track.artists
-                            .map((artist) => artist.name)
-                            .join(' / ')}
-                        </div>
-                        {track.subtitle ? (
-                          <div className='mt-1 truncate text-[11px] uppercase tracking-[0.16em] text-white/45'>
-                            {track.subtitle}
-                          </div>
-                        ) : null}
-                        {!track.playable ? (
-                          <div className='mt-2 inline-flex rounded-full bg-white/14 px-2.5 py-1 text-[11px] uppercase tracking-[0.18em] text-white/80'>
-                            暂不可播
-                          </div>
-                        ) : null}
-                      </div>
-                      <div
-                        className={cn(
-                          'flex h-11 w-11 items-center justify-center rounded-full bg-white text-slate-950 transition-transform',
-                          track.playable ? 'group-hover:scale-105' : ''
-                        )}
-                      >
-                        <Play className='h-4 w-4 fill-current' />
-                      </div>
-                    </button>
-                  ))
-                ) : (
-                  <MusicEmptyState
-                    title='等待音乐数据'
-                    description='平台内容加载后，这里会展示当前来源最值得直接开听的曲目。'
-                  />
-                )}
-              </div>
+              {sourcesLoading && sources.length === 0 ? (
+                <div className='h-14 rounded-[24px] bg-slate-100 dark:bg-slate-800' />
+              ) : (
+                <MusicSourceTabs
+                  sources={sources}
+                  activeSource={activeSource}
+                  onChange={handleSourceChange}
+                />
+              )}
+
+              {activeSourceModel ? (
+                <MusicSectionTabs
+                  tabs={activeSourceModel.tabs}
+                  activeTab={activeTab}
+                  onChange={handleTabChange}
+                />
+              ) : null}
             </div>
           </section>
 
@@ -831,6 +756,17 @@ export default function MusicPageClient() {
             <div className='rounded-[28px] border border-rose-200 bg-rose-50/85 px-5 py-4 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-100'>
               {contentError}
             </div>
+          ) : null}
+
+          {activeTab === 'home' && homePayload?.spotlight?.length ? (
+            <MusicTrackList
+              title='立即播放'
+              description='当前来源最适合直接开听的曲目，沿用同一套队列与歌词播放器。'
+              tracks={homePayload.spotlight}
+              activeTrackKey={activeQueueTrackKey}
+              onPlayTrack={handlePlayTracks}
+              onQueueTrack={handleQueueTrack}
+            />
           ) : null}
 
           {!sourceError && (homeLoading || sourcesLoading) && !homePayload ? (

@@ -18,9 +18,13 @@ const track: PlayerQueueItem = {
 };
 
 describe('MusicMiniPlayer', () => {
-  it('renders volume, stop, and dismiss controls', () => {
+  it('renders yesplaymusic-style queue, lyrics, repeat, shuffle, and favorite controls', () => {
     const handleVolumeChange = jest.fn();
-    const handleStop = jest.fn();
+    const handleFavorite = jest.fn();
+    const handleQueue = jest.fn();
+    const handleLyrics = jest.fn();
+    const handleRepeat = jest.fn();
+    const handleShuffle = jest.fn();
     const handleDismiss = jest.fn();
 
     render(
@@ -34,15 +38,22 @@ describe('MusicMiniPlayer', () => {
         durationSec={188}
         volume={0.45}
         muted={false}
+        repeatMode='all'
+        shuffleEnabled={false}
+        isFavorited={false}
+        isFavoriteLoading={false}
         onTogglePlay={() => undefined}
         onPlayPrevious={() => undefined}
         onPlayNext={() => undefined}
         onSeek={() => undefined}
         onVolumeChange={handleVolumeChange}
         onToggleMute={() => undefined}
-        onStop={handleStop}
+        onToggleFavorite={handleFavorite}
+        onCycleRepeatMode={handleRepeat}
+        onToggleShuffle={handleShuffle}
         onDismiss={handleDismiss}
-        onExpand={() => undefined}
+        onOpenQueue={handleQueue}
+        onOpenLyrics={handleLyrics}
       />
     );
 
@@ -54,11 +65,19 @@ describe('MusicMiniPlayer', () => {
     fireEvent.change(screen.getByRole('slider', { name: '音量' }), {
       target: { value: '0.2' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '停止播放' }));
+    fireEvent.click(screen.getByRole('button', { name: '收藏当前歌曲' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换重复模式' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换随机播放' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开播放队列' }));
+    fireEvent.click(screen.getAllByRole('button', { name: '打开歌词视图' })[0]);
     fireEvent.click(screen.getByRole('button', { name: '关闭播放器' }));
 
     expect(handleVolumeChange).toHaveBeenCalledWith(0.2);
-    expect(handleStop).toHaveBeenCalledTimes(1);
+    expect(handleFavorite).toHaveBeenCalledTimes(1);
+    expect(handleRepeat).toHaveBeenCalledTimes(1);
+    expect(handleShuffle).toHaveBeenCalledTimes(1);
+    expect(handleQueue).toHaveBeenCalledTimes(1);
+    expect(handleLyrics).toHaveBeenCalledTimes(1);
     expect(handleDismiss).toHaveBeenCalledTimes(1);
   });
 });

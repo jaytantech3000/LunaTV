@@ -1,7 +1,7 @@
 'use client';
 
-import { MusicSource } from '@/lib/music/types';
 import { cn } from '@/lib/cn';
+import { MusicSource } from '@/lib/music/types';
 
 interface MusicSourceTabsProps {
   sources: MusicSource[];
@@ -15,7 +15,7 @@ export default function MusicSourceTabs({
   onChange,
 }: MusicSourceTabsProps) {
   return (
-    <div className='flex gap-2 overflow-x-auto pb-1 scrollbar-hide'>
+    <div className='flex gap-1 overflow-x-auto border-b border-slate-200 pb-1 scrollbar-hide dark:border-slate-800'>
       {sources.map((source) => {
         const active = source.key === activeSource;
         return (
@@ -24,16 +24,21 @@ export default function MusicSourceTabs({
             type='button'
             onClick={() => onChange(source.key)}
             className={cn(
-              'group relative shrink-0 overflow-hidden rounded-2xl border px-4 py-3 text-left transition-all duration-200',
+              'group relative shrink-0 rounded-2xl px-4 py-3 text-left transition-colors',
               active
-                ? 'border-emerald-400/70 bg-emerald-500 text-white shadow-lg shadow-emerald-500/20'
-                : 'border-white/70 bg-white/70 text-slate-700 shadow-sm hover:border-slate-300 hover:bg-white dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:border-slate-500'
+                ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950'
+                : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white'
             )}
           >
-            <div className='text-[11px] uppercase tracking-[0.28em] opacity-70'>
+            <div className='text-[10px] uppercase tracking-[0.26em] opacity-55'>
               {source.provider}
             </div>
             <div className='mt-1 text-sm font-semibold'>{source.name}</div>
+            {active ? (
+              <div className='mt-2 h-0.5 w-8 rounded-full bg-emerald-400 dark:bg-emerald-300' />
+            ) : (
+              <div className='mt-2 h-0.5 w-8 rounded-full bg-transparent' />
+            )}
           </button>
         );
       })}

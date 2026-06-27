@@ -32,7 +32,9 @@ import {
 } from '@/stores/musicPlayerStore';
 
 import { MUSIC_PLAYER_EXPANDED_SLOT_ID } from './constants';
-import MusicFullscreenPlayer from './MusicFullscreenPlayer';
+import MusicFullscreenPlayer, {
+  type MusicFullscreenPanel,
+} from './MusicFullscreenPlayer';
 import MusicMiniPlayer from './MusicMiniPlayer';
 
 function resolveMusicEnabled() {
@@ -67,12 +69,15 @@ export default function MusicPlayerRoot() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isFavorited, setIsFavorited] = useState(false);
   const [favoriteLoading, setFavoriteLoading] = useState(false);
+  const [expandedPanel, setExpandedPanel] =
+    useState<MusicFullscreenPanel>('lyrics');
 
   const hasHydrated = useMusicPlayerStore((state) => state.hasHydrated);
   const currentTrack = useMusicPlayerStore(getCurrentQueueTrack);
   const queue = useMusicPlayerStore((state) => state.queue);
   const currentIndex = useMusicPlayerStore((state) => state.currentIndex);
-  const playMode = useMusicPlayerStore((state) => state.playMode);
+  const repeatMode = useMusicPlayerStore((state) => state.repeatMode);
+  const shuffleEnabled = useMusicPlayerStore((state) => state.shuffleEnabled);
   const isPlaying = useMusicPlayerStore((state) => state.isPlaying);
   const presentation = useMusicPlayerStore((state) => state.presentation);
   const durationSec = useMusicPlayerStore((state) => state.durationSec);
@@ -88,11 +93,11 @@ export default function MusicPlayerRoot() {
   const setIsPlaying = useMusicPlayerStore((state) => state.setIsPlaying);
   const playNext = useMusicPlayerStore((state) => state.playNext);
   const playPrevious = useMusicPlayerStore((state) => state.playPrevious);
-  const cyclePlayMode = useMusicPlayerStore((state) => state.cyclePlayMode);
+  const cycleRepeatMode = useMusicPlayerStore((state) => state.cycleRepeatMode);
+  const toggleShuffle = useMusicPlayerStore((state) => state.toggleShuffle);
   const expandPlayer = useMusicPlayerStore((state) => state.expandPlayer);
   const collapsePlayer = useMusicPlayerStore((state) => state.collapsePlayer);
   const dismissPlayer = useMusicPlayerStore((state) => state.dismissPlayer);
-  const stopPlayback = useMusicPlayerStore((state) => state.stopPlayback);
   const setVolume = useMusicPlayerStore((state) => state.setVolume);
   const setMuted = useMusicPlayerStore((state) => state.setMuted);
   const setCurrentTimeSec = useMusicPlayerStore(
@@ -441,7 +446,7 @@ export default function MusicPlayerRoot() {
     bindMusicMediaSessionAction('play', () => setIsPlaying(true));
     bindMusicMediaSessionAction('pause', () => setIsPlaying(false));
     bindMusicMediaSessionAction('previoustrack', () => playPrevious());
-    bindMusicMediaSessionAction('nexttrack', () => playNext());
+    bindMusicMediaSessionAction('nexttrack', () => playNext('manual'));
     bindMusicMediaSessionAction('seekto', handleSeekTo);
 
     return () => {
@@ -468,23 +473,15 @@ export default function MusicPlayerRoot() {
     setMuted(nextVolume <= 0);
   };
 
-  const handleStopPlayback = () => {
-    const audio = audioRef.current;
-    if (audio) {
-      audio.pause();
-      audio.currentTime = 0;
-    }
-
-    stopPlayback();
-  };
-
   const handleDismissPlayer = () => {
     audioRef.current?.pause();
     pendingExpandOnMusicPageRef.current = false;
     dismissPlayer();
   };
 
-  const handleExpandPlayer = () => {
+  const handleOpenExpandedPlayer = (panel: MusicFullscreenPanel) => {
+    setExpandedPanel(panel);
+
     if (!currentTrack) {
       return;
     }
@@ -600,7 +597,7 @@ export default function MusicPlayerRoot() {
         }}
         onEnded={() => {
           persistPlaybackSnapshot(true);
-          playNext();
+          playNext('ended');
         }}
         onError={() => {
           setTrackLoading(false);
@@ -620,15 +617,24 @@ export default function MusicPlayerRoot() {
           durationSec={durationSec}
           volume={volume}
           muted={muted}
+          repeatMode={repeatMode}
+          shuffleEnabled={shuffleEnabled}
+          isFavorited={isFavorited}
+          isFavoriteLoading={favoriteLoading}
           onTogglePlay={togglePlay}
           onPlayPrevious={playPrevious}
-          onPlayNext={playNext}
+          onPlayNext={() => playNext('manual')}
           onSeek={handleSeek}
           onVolumeChange={handleVolumeChange}
           onToggleMute={() => setMuted(!muted)}
-          onStop={handleStopPlayback}
+          onToggleFavorite={() => {
+            void handleToggleFavorite();
+          }}
+          onCycleRepeatMode={cycleRepeatMode}
+          onToggleShuffle={toggleShuffle}
           onDismiss={handleDismissPlayer}
-          onExpand={handleExpandPlayer}
+          onOpenQueue={() => handleOpenExpandedPlayer('queue')}
+          onOpenLyrics={() => handleOpenExpandedPlayer('lyrics')}
         />
       ) : null}
 
@@ -639,7 +645,9 @@ export default function MusicPlayerRoot() {
               track={currentTrack}
               queue={queue}
               currentIndex={currentIndex}
-              playMode={playMode}
+              repeatMode={repeatMode}
+              shuffleEnabled={shuffleEnabled}
+              activePanel={expandedPanel}
               isPlaying={isPlaying}
               isTrackLoading={isTrackLoading}
               trackError={trackError}
@@ -652,11 +660,11 @@ export default function MusicPlayerRoot() {
               isFavoriteLoading={favoriteLoading}
               onMinimize={collapsePlayer}
               onDismiss={handleDismissPlayer}
-              onStop={handleStopPlayback}
               onTogglePlay={togglePlay}
               onPlayPrevious={playPrevious}
-              onPlayNext={playNext}
-              onCyclePlayMode={cyclePlayMode}
+              onPlayNext={() => playNext('manual')}
+              onCycleRepeatMode={cycleRepeatMode}
+              onToggleShuffle={toggleShuffle}
               onSeek={handleSeek}
               onVolumeChange={handleVolumeChange}
               onToggleMute={() => setMuted(!muted)}
@@ -664,6 +672,7 @@ export default function MusicPlayerRoot() {
                 void handleToggleFavorite();
               }}
               onSelectQueueIndex={(index) => selectQueueIndex(index, true)}
+              onPanelChange={setExpandedPanel}
             />,
             expandedSlot
           )

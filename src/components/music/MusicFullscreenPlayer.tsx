@@ -15,32 +15,33 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
-  Square,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 
 import { cn } from '@/lib/cn';
-import { formatDurationSeconds, getPlayModeLabel } from '@/lib/music/format';
+import { formatDurationSeconds, getRepeatModeLabel } from '@/lib/music/format';
 import type {
   MusicLyricPayload,
-  MusicPlayMode,
+  MusicRepeatMode,
   PlayerQueueItem,
 } from '@/lib/music/types';
 
 import MusicLyricsPanel from './MusicLyricsPanel';
 import MusicQueuePanel from './MusicQueuePanel';
 
-type MusicFullscreenPanel = 'lyrics' | 'queue';
+export type MusicFullscreenPanel = 'lyrics' | 'queue';
 
 interface MusicFullscreenPlayerProps {
   open: boolean;
   track: PlayerQueueItem;
   queue: PlayerQueueItem[];
   currentIndex: number;
-  playMode: MusicPlayMode;
+  repeatMode: MusicRepeatMode;
+  shuffleEnabled: boolean;
+  activePanel: MusicFullscreenPanel;
   isPlaying: boolean;
   isTrackLoading: boolean;
   trackError: string | null;
@@ -53,28 +54,25 @@ interface MusicFullscreenPlayerProps {
   isFavoriteLoading: boolean;
   onMinimize: () => void;
   onDismiss: () => void;
-  onStop: () => void;
   onTogglePlay: () => void;
   onPlayPrevious: () => void;
   onPlayNext: () => void;
-  onCyclePlayMode: () => void;
+  onCycleRepeatMode: () => void;
+  onToggleShuffle: () => void;
   onSeek: (nextTimeSec: number) => void;
   onVolumeChange: (nextVolume: number) => void;
   onToggleMute: () => void;
   onToggleFavorite: () => void;
   onSelectQueueIndex: (index: number) => void;
+  onPanelChange: (panel: MusicFullscreenPanel) => void;
 }
 
-function renderPlayModeIcon(playMode: MusicPlayMode) {
-  switch (playMode) {
-    case 'single-loop':
-      return <Repeat1 className='h-4 w-4' />;
-    case 'shuffle':
-      return <Shuffle className='h-4 w-4' />;
-    case 'list-loop':
-    default:
-      return <Repeat className='h-4 w-4' />;
-  }
+function renderRepeatIcon(repeatMode: MusicRepeatMode) {
+  return repeatMode === 'one' ? (
+    <Repeat1 className='h-4 w-4' />
+  ) : (
+    <Repeat className='h-4 w-4' />
+  );
 }
 
 export default function MusicFullscreenPlayer({
@@ -82,7 +80,9 @@ export default function MusicFullscreenPlayer({
   track,
   queue,
   currentIndex,
-  playMode,
+  repeatMode,
+  shuffleEnabled,
+  activePanel,
   isPlaying,
   isTrackLoading,
   trackError,
@@ -95,19 +95,18 @@ export default function MusicFullscreenPlayer({
   isFavoriteLoading,
   onMinimize,
   onDismiss,
-  onStop,
   onTogglePlay,
   onPlayPrevious,
   onPlayNext,
-  onCyclePlayMode,
+  onCycleRepeatMode,
+  onToggleShuffle,
   onSeek,
   onVolumeChange,
   onToggleMute,
   onToggleFavorite,
   onSelectQueueIndex,
+  onPanelChange,
 }: MusicFullscreenPlayerProps) {
-  const [panel, setPanel] = useState<MusicFullscreenPanel>('lyrics');
-
   useEffect(() => {
     if (!open) {
       return;
@@ -132,280 +131,273 @@ export default function MusicFullscreenPlayer({
 
   const sliderMax = durationSec > 0 ? durationSec : 1;
   const currentTrackKey = `${track.source}:${track.trackId}`;
+  const secondaryText = [track.artistsText, track.albumTitle]
+    .filter(Boolean)
+    .join(' · ');
+  const volumeValue = muted ? 0 : volume;
 
   return (
     <div
       role='dialog'
       aria-modal='true'
       aria-label='展开播放器'
-      className='pointer-events-auto absolute inset-0 overflow-y-auto rounded-[36px] border border-emerald-400/15 bg-[linear-gradient(180deg,rgba(5,10,20,0.98),rgba(10,24,38,0.98)_45%,rgba(9,70,58,0.96))] text-white shadow-[0_32px_90px_rgba(2,6,23,0.45)]'
+      className='pointer-events-auto absolute inset-0 overflow-y-auto rounded-[32px] border border-white/10 bg-[rgba(10,10,12,0.92)] text-white shadow-[0_32px_90px_rgba(2,6,23,0.45)]'
     >
       {track.cover ? (
         <div
           aria-hidden='true'
-          className='absolute inset-0 opacity-30'
+          className='absolute inset-0 opacity-35'
           style={{
             backgroundImage: `url(${track.cover})`,
             backgroundPosition: 'center',
             backgroundSize: 'cover',
-            filter: 'blur(52px)',
+            filter: 'blur(60px)',
             transform: 'scale(1.08)',
           }}
         />
       ) : null}
-      <div className='absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.12),transparent_24%),linear-gradient(180deg,rgba(11,18,33,0.3),rgba(2,6,23,0.68))]' />
+      <div className='absolute inset-0 bg-[linear-gradient(120deg,rgba(8,8,10,0.86),rgba(17,24,39,0.9)_48%,rgba(5,46,22,0.78))]' />
 
-      <div className='relative flex min-h-full flex-col p-4 sm:p-6'>
-        <div className='flex flex-wrap items-start justify-between gap-3'>
-          <div>
-            <div className='text-xs uppercase tracking-[0.28em] text-white/45'>
-              LunaTV Music
-            </div>
-            <div className='mt-1 text-sm text-white/72'>网易云风格控制台</div>
-          </div>
-          <div className='flex flex-wrap items-center gap-2'>
-            <button
-              type='button'
-              onClick={onStop}
-              className='inline-flex h-12 items-center gap-2 rounded-full border border-white/20 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-white hover:text-white'
-              aria-label='停止播放'
-            >
-              <Square className='h-3.5 w-3.5 fill-current' />
-              停止
-            </button>
+      <div className='relative flex min-h-full flex-col gap-6 p-4 sm:p-6 xl:flex-row'>
+        <section className='w-full rounded-[30px] border border-white/10 bg-black/20 p-5 backdrop-blur-xl xl:max-w-[420px]'>
+          <div className='flex items-center justify-end gap-2'>
             <button
               type='button'
               onClick={onMinimize}
-              className='inline-flex h-12 items-center gap-2 rounded-full border border-white/20 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-white hover:text-white'
+              className='flex h-10 w-10 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white'
               aria-label='收起到迷你播放器'
             >
               <ChevronDown className='h-4 w-4' />
-              收起
             </button>
             <button
               type='button'
               onClick={onDismiss}
-              className='inline-flex h-12 items-center gap-2 rounded-full border border-white/20 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-white hover:text-white'
+              className='flex h-10 w-10 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white'
               aria-label='关闭播放器'
             >
               <X className='h-4 w-4' />
-              关闭
             </button>
           </div>
-        </div>
 
-        <div className='mt-6 grid flex-1 gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,420px)] xl:items-start'>
-          <div className='overflow-hidden rounded-[36px] border border-white/12 bg-black/10 p-5 shadow-2xl shadow-black/25 backdrop-blur-xl sm:p-6'>
-            <div className='grid gap-8 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:items-center'>
-              <div className='mx-auto w-full max-w-[320px] overflow-hidden rounded-[32px] border border-white/10 bg-white/10 shadow-[0_20px_60px_rgba(2,6,23,0.45)]'>
-                {track.cover ? (
-                  <img
-                    src={track.cover}
-                    alt={track.title}
-                    className='aspect-square w-full object-cover'
-                  />
-                ) : (
-                  <div className='flex aspect-square items-center justify-center'>
-                    <Disc3 className='h-10 w-10 text-white/45' />
-                  </div>
-                )}
+          <div className='mt-4 overflow-hidden rounded-[28px] bg-white/8 shadow-[0_20px_60px_rgba(2,6,23,0.35)]'>
+            {track.cover ? (
+              <img
+                src={track.cover}
+                alt={track.title}
+                className='aspect-square w-full object-cover'
+              />
+            ) : (
+              <div className='flex aspect-square items-center justify-center'>
+                <Disc3 className='h-10 w-10 text-white/45' />
               </div>
-
-              <div className='space-y-5'>
-                <div>
-                  <div className='text-xs uppercase tracking-[0.28em] text-white/40'>
-                    {track.source}
-                  </div>
-                  <h1 className='mt-3 text-3xl font-semibold tracking-tight text-white sm:text-5xl'>
-                    {track.title}
-                  </h1>
-                  <p className='mt-3 text-lg text-white/72'>
-                    {track.artistsText}
-                    {track.albumTitle ? ` · ${track.albumTitle}` : ''}
-                  </p>
-                  {track.subtitle ? (
-                    <div className='mt-4 rounded-full bg-white/8 px-4 py-2 text-sm text-emerald-200/85'>
-                      {track.subtitle}
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className='space-y-3'>
-                  <input
-                    type='range'
-                    min={0}
-                    max={sliderMax}
-                    step={1}
-                    value={Math.min(currentTimeSec, sliderMax)}
-                    onChange={(event) => onSeek(Number(event.target.value))}
-                    className='h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/15 accent-white'
-                    aria-label='播放进度'
-                  />
-                  <div className='flex items-center justify-between text-sm text-white/50'>
-                    <span>{formatDurationSeconds(currentTimeSec)}</span>
-                    <span>{formatDurationSeconds(durationSec)}</span>
-                  </div>
-                </div>
-
-                <div className='flex flex-wrap items-center gap-4'>
-                  <button
-                    type='button'
-                    onClick={onPlayPrevious}
-                    className='flex h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-white/5 transition-colors hover:border-white hover:bg-white/10'
-                    aria-label='上一首'
-                  >
-                    <SkipBack className='h-5 w-5' />
-                  </button>
-                  <button
-                    type='button'
-                    onClick={onTogglePlay}
-                    className='flex h-16 w-16 items-center justify-center rounded-full bg-white text-slate-950 shadow-[0_16px_40px_rgba(255,255,255,0.24)] transition-transform hover:scale-[1.02]'
-                    aria-label={isPlaying ? '暂停' : '播放'}
-                  >
-                    {isTrackLoading ? (
-                      <Loader2 className='h-5 w-5 animate-spin' />
-                    ) : isPlaying ? (
-                      <Pause className='h-5 w-5 fill-current' />
-                    ) : (
-                      <Play className='h-5 w-5 fill-current' />
-                    )}
-                  </button>
-                  <button
-                    type='button'
-                    onClick={onPlayNext}
-                    className='flex h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-white/5 transition-colors hover:border-white hover:bg-white/10'
-                    aria-label='下一首'
-                  >
-                    <SkipForward className='h-5 w-5' />
-                  </button>
-                  <button
-                    type='button'
-                    onClick={onToggleFavorite}
-                    disabled={isFavoriteLoading}
-                    className='inline-flex h-12 items-center gap-2 rounded-full border border-white/20 bg-white/5 px-4 text-sm text-white/75 transition-colors hover:border-white hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60'
-                    aria-label={
-                      isFavorited ? '取消收藏当前歌曲' : '收藏当前歌曲'
-                    }
-                  >
-                    {isFavoriteLoading ? (
-                      <Loader2 className='h-4 w-4 animate-spin' />
-                    ) : (
-                      <Heart
-                        className={cn(
-                          'h-4 w-4',
-                          isFavorited
-                            ? 'fill-rose-500 text-rose-500'
-                            : 'text-white/75'
-                        )}
-                      />
-                    )}
-                    <span>{isFavorited ? '已收藏' : '收藏'}</span>
-                  </button>
-                  <button
-                    type='button'
-                    onClick={onCyclePlayMode}
-                    className='inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-4 py-3 text-sm text-white/75 transition-colors hover:border-white hover:bg-white/10'
-                    aria-label={`切换播放模式，当前为 ${getPlayModeLabel(
-                      playMode
-                    )}`}
-                  >
-                    {renderPlayModeIcon(playMode)}
-                    <span>{getPlayModeLabel(playMode)}</span>
-                  </button>
-                </div>
-
-                <div className='flex flex-wrap items-center gap-3'>
-                  <button
-                    type='button'
-                    onClick={onToggleMute}
-                    className='flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/5 transition-colors hover:border-white hover:bg-white/10'
-                    aria-label={muted ? '取消静音' : '静音'}
-                  >
-                    {muted ? (
-                      <VolumeX className='h-4 w-4' />
-                    ) : (
-                      <Volume2 className='h-4 w-4' />
-                    )}
-                  </button>
-                  <input
-                    type='range'
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={muted ? 0 : volume}
-                    onChange={(event) =>
-                      onVolumeChange(Number(event.target.value))
-                    }
-                    className='h-1.5 w-full max-w-[240px] cursor-pointer appearance-none rounded-full bg-white/15 accent-white'
-                    aria-label='音量'
-                  />
-                  <div className='text-sm text-white/50'>
-                    {Math.round((muted ? 0 : volume) * 100)}%
-                  </div>
-                </div>
-
-                {trackError ? (
-                  <div className='rounded-[24px] border border-rose-400/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100'>
-                    {trackError}
-                  </div>
-                ) : null}
-              </div>
-            </div>
+            )}
           </div>
 
-          <div className='overflow-hidden rounded-[36px] border border-white/12 bg-black/10 p-5 shadow-2xl shadow-black/25 backdrop-blur-xl sm:p-6'>
-            <div className='flex items-center justify-between gap-3'>
-              <div>
-                <div className='text-lg font-semibold text-white'>播放视图</div>
-                <div className='mt-1 text-sm text-white/55'>
-                  当前第 {currentIndex + 1} 首，共 {queue.length} 首
-                </div>
-              </div>
-              <div className='inline-flex rounded-full border border-white/15 bg-white/6 p-1'>
-                <button
-                  type='button'
-                  onClick={() => setPanel('lyrics')}
-                  className={cn(
-                    'rounded-full px-4 py-2 text-sm transition-colors',
-                    panel === 'lyrics'
-                      ? 'bg-white text-slate-950'
-                      : 'text-white/65 hover:text-white'
-                  )}
-                >
-                  歌词
-                </button>
-                <button
-                  type='button'
-                  onClick={() => setPanel('queue')}
-                  className={cn(
-                    'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition-colors',
-                    panel === 'queue'
-                      ? 'bg-white text-slate-950'
-                      : 'text-white/65 hover:text-white'
-                  )}
-                >
-                  <ListMusic className='h-4 w-4' />
-                  队列
-                </button>
-              </div>
+          <div className='mt-6 space-y-2'>
+            <div className='text-xs uppercase tracking-[0.24em] text-white/40'>
+              {track.source}
             </div>
+            <h1 className='text-3xl font-semibold tracking-tight text-white'>
+              {track.title}
+            </h1>
+            <p className='text-sm text-white/68'>
+              {secondaryText || '未知歌手'}
+            </p>
+            {track.subtitle ? (
+              <div className='text-sm text-emerald-300/82'>
+                {track.subtitle}
+              </div>
+            ) : null}
+          </div>
 
-            <div className='mt-6'>
-              {panel === 'lyrics' ? (
-                <MusicLyricsPanel
-                  lyrics={lyrics}
-                  currentTimeSec={currentTimeSec}
-                />
+          <div className='mt-6 flex items-center gap-3'>
+            <button
+              type='button'
+              onClick={onToggleMute}
+              className='flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/6 text-white/75 transition-colors hover:bg-white/10 hover:text-white'
+              aria-label={muted ? '取消静音' : '静音'}
+            >
+              {muted ? (
+                <VolumeX className='h-4 w-4' />
               ) : (
-                <MusicQueuePanel
-                  queue={queue}
-                  currentTrackKey={currentTrackKey}
-                  onSelectTrack={onSelectQueueIndex}
+                <Volume2 className='h-4 w-4' />
+              )}
+            </button>
+            <input
+              type='range'
+              min={0}
+              max={1}
+              step={0.01}
+              value={volumeValue}
+              onChange={(event) => onVolumeChange(Number(event.target.value))}
+              className='h-1 w-full cursor-pointer appearance-none rounded-full bg-white/14 accent-white'
+              aria-label='音量'
+            />
+            <span className='w-10 text-right text-sm tabular-nums text-white/58'>
+              {Math.round(volumeValue * 100)}%
+            </span>
+            <button
+              type='button'
+              onClick={onToggleFavorite}
+              disabled={isFavoriteLoading}
+              className='flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/6 text-white/75 transition-colors hover:bg-white/10 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-60'
+              aria-label={isFavorited ? '取消收藏当前歌曲' : '收藏当前歌曲'}
+            >
+              {isFavoriteLoading ? (
+                <Loader2 className='h-4 w-4 animate-spin' />
+              ) : (
+                <Heart
+                  className={cn(
+                    'h-4 w-4',
+                    isFavorited ? 'fill-rose-500 text-rose-500' : ''
+                  )}
                 />
               )}
+            </button>
+          </div>
+
+          <div className='mt-6 space-y-2'>
+            <input
+              type='range'
+              min={0}
+              max={sliderMax}
+              step={1}
+              value={Math.min(currentTimeSec, sliderMax)}
+              onChange={(event) => onSeek(Number(event.target.value))}
+              className='h-1 w-full cursor-pointer appearance-none rounded-full bg-white/14 accent-white'
+              aria-label='播放进度'
+            />
+            <div className='flex items-center justify-between text-sm text-white/55'>
+              <span>{formatDurationSeconds(currentTimeSec)}</span>
+              <span>{formatDurationSeconds(durationSec)}</span>
             </div>
           </div>
-        </div>
+
+          <div className='mt-6 flex items-center justify-between gap-3'>
+            <button
+              type='button'
+              onClick={onCycleRepeatMode}
+              className={cn(
+                'flex h-11 w-11 items-center justify-center rounded-full border transition-colors',
+                repeatMode === 'off'
+                  ? 'border-white/10 bg-white/6 text-white/55 hover:bg-white/10 hover:text-white'
+                  : 'border-white/15 bg-white/12 text-white'
+              )}
+              aria-label='切换重复模式'
+              title={getRepeatModeLabel(repeatMode)}
+            >
+              {renderRepeatIcon(repeatMode)}
+            </button>
+
+            <div className='flex items-center gap-3'>
+              <button
+                type='button'
+                onClick={onPlayPrevious}
+                className='flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/6 text-white/75 transition-colors hover:bg-white/10 hover:text-white'
+                aria-label='上一首'
+              >
+                <SkipBack className='h-5 w-5' />
+              </button>
+              <button
+                type='button'
+                onClick={onTogglePlay}
+                className='flex h-14 w-14 items-center justify-center rounded-full bg-white text-slate-950 shadow-[0_16px_40px_rgba(255,255,255,0.2)] transition-transform hover:scale-[1.02]'
+                aria-label={isPlaying ? '暂停' : '播放'}
+              >
+                {isTrackLoading ? (
+                  <Loader2 className='h-5 w-5 animate-spin' />
+                ) : isPlaying ? (
+                  <Pause className='h-5 w-5 fill-current' />
+                ) : (
+                  <Play className='h-5 w-5 fill-current' />
+                )}
+              </button>
+              <button
+                type='button'
+                onClick={onPlayNext}
+                className='flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/6 text-white/75 transition-colors hover:bg-white/10 hover:text-white'
+                aria-label='下一首'
+              >
+                <SkipForward className='h-5 w-5' />
+              </button>
+            </div>
+
+            <button
+              type='button'
+              onClick={onToggleShuffle}
+              className={cn(
+                'flex h-11 w-11 items-center justify-center rounded-full border transition-colors',
+                shuffleEnabled
+                  ? 'border-white/15 bg-white/12 text-white'
+                  : 'border-white/10 bg-white/6 text-white/55 hover:bg-white/10 hover:text-white'
+              )}
+              aria-label='切换随机播放'
+            >
+              <Shuffle className='h-4 w-4' />
+            </button>
+          </div>
+
+          {trackError ? (
+            <div className='mt-6 rounded-2xl border border-rose-400/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100'>
+              {trackError}
+            </div>
+          ) : null}
+        </section>
+
+        <section className='flex-1 rounded-[30px] border border-white/10 bg-black/20 p-5 backdrop-blur-xl'>
+          <div className='flex flex-wrap items-center justify-between gap-3'>
+            <div>
+              <div className='text-lg font-semibold text-white'>播放视图</div>
+              <div className='mt-1 text-sm text-white/55'>
+                当前第 {currentIndex + 1} 首，共 {queue.length} 首
+              </div>
+            </div>
+            <div className='inline-flex rounded-full border border-white/10 bg-white/6 p-1'>
+              <button
+                type='button'
+                onClick={() => onPanelChange('lyrics')}
+                className={cn(
+                  'rounded-full px-4 py-2 text-sm transition-colors',
+                  activePanel === 'lyrics'
+                    ? 'bg-white text-slate-950'
+                    : 'text-white/65 hover:text-white'
+                )}
+                aria-label='切换到歌词视图'
+              >
+                歌词
+              </button>
+              <button
+                type='button'
+                onClick={() => onPanelChange('queue')}
+                className={cn(
+                  'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition-colors',
+                  activePanel === 'queue'
+                    ? 'bg-white text-slate-950'
+                    : 'text-white/65 hover:text-white'
+                )}
+                aria-label='切换到队列视图'
+              >
+                <ListMusic className='h-4 w-4' />
+                队列
+              </button>
+            </div>
+          </div>
+
+          <div className='mt-6'>
+            {activePanel === 'lyrics' ? (
+              <MusicLyricsPanel
+                lyrics={lyrics}
+                currentTimeSec={currentTimeSec}
+              />
+            ) : (
+              <MusicQueuePanel
+                queue={queue}
+                currentTrackKey={currentTrackKey}
+                onSelectTrack={onSelectQueueIndex}
+              />
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );

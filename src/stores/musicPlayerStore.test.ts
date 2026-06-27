@@ -41,7 +41,8 @@ function resetPlayerStore() {
     hasHydrated: true,
     queue: [],
     currentIndex: -1,
-    playMode: 'list-loop',
+    repeatMode: 'all',
+    shuffleEnabled: false,
     volume: 0.85,
     muted: false,
     currentTimeSec: 0,
@@ -53,6 +54,7 @@ function resetPlayerStore() {
     lyrics: null,
     isTrackLoading: false,
     trackError: null,
+    shuffleHistory: [],
   });
   localStorage.clear();
 }
@@ -94,10 +96,11 @@ describe('musicPlayerStore', () => {
     useMusicPlayerStore.getState().playQueue(queue, 1);
     useMusicPlayerStore.setState({
       isTrackLoading: false,
+      repeatMode: 'all',
       streamUrl: '/media/audio/stream?source=netease&id=netease-track-2',
     });
 
-    useMusicPlayerStore.getState().playNext();
+    useMusicPlayerStore.getState().playNext('manual');
 
     const state = useMusicPlayerStore.getState();
 
@@ -105,6 +108,78 @@ describe('musicPlayerStore', () => {
     expect(state.isPlaying).toBe(true);
     expect(state.streamUrl).toBeNull();
     expect(state.isTrackLoading).toBe(true);
+  });
+
+  it('cycles repeat mode through off, all, one, and back to off', () => {
+    useMusicPlayerStore.getState().cycleRepeatMode();
+    expect(useMusicPlayerStore.getState().repeatMode).toBe('one');
+
+    useMusicPlayerStore.getState().cycleRepeatMode();
+    expect(useMusicPlayerStore.getState().repeatMode).toBe('off');
+
+    useMusicPlayerStore.getState().cycleRepeatMode();
+    expect(useMusicPlayerStore.getState().repeatMode).toBe('all');
+
+    useMusicPlayerStore.getState().cycleRepeatMode();
+    expect(useMusicPlayerStore.getState().repeatMode).toBe('one');
+  });
+
+  it('stops at the end of the queue when a track finishes and repeat is off', () => {
+    useMusicPlayerStore.getState().playQueue(queue, 1);
+    useMusicPlayerStore.setState({
+      currentTimeSec: 214,
+      isTrackLoading: false,
+      repeatMode: 'off',
+      streamUrl: '/media/audio/stream?source=netease&id=netease-track-2',
+    });
+
+    useMusicPlayerStore.getState().playNext('ended');
+
+    const state = useMusicPlayerStore.getState();
+
+    expect(state.currentIndex).toBe(1);
+    expect(state.currentTimeSec).toBe(0);
+    expect(state.isPlaying).toBe(false);
+    expect(state.isTrackLoading).toBe(false);
+    expect(state.streamUrl).toBe(
+      '/media/audio/stream?source=netease&id=netease-track-2'
+    );
+  });
+
+  it('replays the same track when a song ends in repeat-one mode', () => {
+    useMusicPlayerStore.getState().playQueue(queue, 0);
+    useMusicPlayerStore.setState({
+      isTrackLoading: false,
+      repeatMode: 'one',
+      streamUrl: '/media/audio/stream?source=netease&id=netease-track-1',
+    });
+
+    useMusicPlayerStore.getState().playNext('ended');
+
+    const state = useMusicPlayerStore.getState();
+
+    expect(state.currentIndex).toBe(0);
+    expect(state.isPlaying).toBe(true);
+    expect(state.isTrackLoading).toBe(true);
+    expect(state.streamUrl).toBeNull();
+  });
+
+  it('returns to the previous shuffled track when navigating backward', () => {
+    const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.99);
+    useMusicPlayerStore.getState().playQueue(queue, 0);
+    useMusicPlayerStore.getState().toggleShuffle();
+
+    useMusicPlayerStore.getState().playNext('manual');
+    expect(useMusicPlayerStore.getState().currentIndex).toBe(1);
+
+    useMusicPlayerStore.getState().playPrevious();
+
+    const state = useMusicPlayerStore.getState();
+
+    expect(state.currentIndex).toBe(0);
+    expect(state.isPlaying).toBe(true);
+
+    randomSpy.mockRestore();
   });
 
   it('stops playback without hiding the current player surface', () => {
