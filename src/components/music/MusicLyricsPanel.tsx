@@ -46,6 +46,10 @@ export default function MusicLyricsPanel({
     }
 
     const currentLine = lineRefs.current[activeIndex];
+    if (typeof currentLine?.scrollIntoView !== 'function') {
+      return;
+    }
+
     currentLine?.scrollIntoView({
       block: 'center',
       behavior: activeIndex <= 1 ? 'auto' : 'smooth',
@@ -54,7 +58,7 @@ export default function MusicLyricsPanel({
 
   if (!lyrics?.lines.length) {
     return (
-      <div className='flex h-[360px] flex-col items-center justify-center rounded-[28px] border border-white/10 bg-white/5 px-6 text-center'>
+      <div className='flex h-[420px] flex-col items-center justify-center rounded-[30px] border border-white/10 bg-black/10 px-6 text-center backdrop-blur-sm'>
         <FileText className='h-12 w-12 text-white/25' />
         <div className='mt-4 text-lg font-semibold text-white'>暂无歌词</div>
         <p className='mt-2 max-w-sm text-sm leading-6 text-white/60'>
@@ -65,8 +69,8 @@ export default function MusicLyricsPanel({
   }
 
   return (
-    <div className='h-[360px] overflow-y-auto pr-1'>
-      <div className='space-y-5 py-10'>
+    <div className='h-[420px] overflow-y-auto pr-1'>
+      <div className='space-y-6 py-10'>
         {lyrics.lines.map((line, index) => {
           const active = index === activeIndex;
 
@@ -78,13 +82,13 @@ export default function MusicLyricsPanel({
               }}
               className={cn(
                 'text-center transition-all duration-300',
-                active ? 'scale-[1.01]' : 'opacity-55'
+                active ? 'scale-[1.01]' : 'opacity-50'
               )}
             >
               <div
                 className={cn(
                   'text-base leading-8 sm:text-lg',
-                  active ? 'font-semibold text-white' : 'text-white/60'
+                  active ? 'font-semibold text-white' : 'text-white/58'
                 )}
               >
                 {line.text}

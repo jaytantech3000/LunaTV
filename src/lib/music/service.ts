@@ -155,7 +155,10 @@ function requireProvider(source: string | null | undefined): {
   const sourceDefinition = provider.getSource();
 
   if (!sourceDefinition.enabled) {
-    throw new MusicApiError(`${sourceDefinition.name} 暂未开放`, 503);
+    throw new MusicApiError(
+      sourceDefinition.description || `${sourceDefinition.name} 暂未开放`,
+      503
+    );
   }
 
   return {

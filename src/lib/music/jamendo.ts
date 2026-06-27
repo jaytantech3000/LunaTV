@@ -24,6 +24,8 @@ import type {
 } from './types';
 
 const DEFAULT_JAMENDO_API_BASE_URL = 'https://api.jamendo.com/v3.0';
+const JAMENDO_UNAVAILABLE_MESSAGE = 'Jamendo 官方接口当前不可用';
+const JAMENDO_SUSPENDED_TTL_MS = 5 * 60 * 1000;
 const JAMENDO_SOURCE_KEY: MusicPlatformKey = 'jamendo';
 const JAMENDO_SOURCE_TABS: MusicSectionTab[] = [
   'home',
@@ -35,6 +37,7 @@ const HOME_TRACK_LIMIT = 8;
 const HOME_PLAYLIST_LIMIT = 6;
 const SEARCH_TRACK_LIMIT = 12;
 const SEARCH_PLAYLIST_LIMIT = 6;
+let jamendoSuspendedUntil = 0;
 
 interface JamendoHeaders {
   error_message?: string;
@@ -76,6 +79,20 @@ function getJamendoApiBaseUrl(): string {
   ).replace(/\/+$/, '');
 }
 
+function markJamendoTemporarilyUnavailable() {
+  jamendoSuspendedUntil = Date.now() + JAMENDO_SUSPENDED_TTL_MS;
+}
+
+function isJamendoTemporarilyUnavailable(): boolean {
+  return jamendoSuspendedUntil > Date.now();
+}
+
+function isJamendoSuspendedMessage(message: string | undefined): boolean {
+  return /suspended application|application has been suspended/i.test(
+    message || ''
+  );
+}
+
 export function isJamendoConfigured(): boolean {
   return Boolean(normalizeOptionalText(process.env.JAMENDO_CLIENT_ID));
 }
@@ -108,10 +125,15 @@ function assertJamendoSuccess<T>(
     payload.headers?.status &&
     payload.headers.status.toLowerCase() !== 'success'
   ) {
-    throw new MusicApiError(
-      normalizeOptionalText(payload.headers.error_message) || fallbackMessage,
-      502
-    );
+    const errorMessage =
+      normalizeOptionalText(payload.headers.error_message) || fallbackMessage;
+
+    if (isJamendoSuspendedMessage(errorMessage)) {
+      markJamendoTemporarilyUnavailable();
+      throw new MusicApiError(JAMENDO_UNAVAILABLE_MESSAGE, 503);
+    }
+
+    throw new MusicApiError(errorMessage, 502);
   }
 
   return payload.results || [];
@@ -297,11 +319,14 @@ async function fetchJamendoTrackDetail(trackId: string): Promise<JamendoTrack> {
 }
 
 export function getJamendoSource(): MusicSource {
-  const enabled = isJamendoConfigured();
+  const temporarilyUnavailable = isJamendoTemporarilyUnavailable();
+  const enabled = isJamendoConfigured() && !temporarilyUnavailable;
 
   return {
     description: enabled
       ? '官方公开 API，当前已接入公开曲库、歌单搜索与播放。'
+      : temporarilyUnavailable
+      ? `${JAMENDO_UNAVAILABLE_MESSAGE}，入口已临时关闭。`
       : '需要配置 JAMENDO_CLIENT_ID 后开放。',
     enabled,
     key: JAMENDO_SOURCE_KEY,

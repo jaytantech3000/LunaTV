@@ -70,15 +70,19 @@ export default function MusicMiniPlayer({
         sidebarCollapsed ? 'md:left-20' : 'md:left-72'
       )}
     >
-      <div className='overflow-hidden rounded-[30px] border border-emerald-400/20 bg-[linear-gradient(135deg,rgba(2,6,23,0.96),rgba(15,23,42,0.95)_45%,rgba(6,78,59,0.9))] text-white shadow-2xl shadow-slate-950/40 backdrop-blur-2xl'>
-        <div className='absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/70 to-transparent' />
-        <div className='grid gap-4 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-5'>
-          <div className='min-w-0 space-y-3'>
-            <div className='flex min-w-0 items-center gap-3'>
+      <div
+        role='group'
+        aria-label='播放器控制条'
+        className='overflow-hidden rounded-[36px] border border-emerald-400/25 bg-[linear-gradient(90deg,#08101f_0%,#0d1f33_48%,#0a5647_100%)] text-white shadow-[0_24px_70px_rgba(2,6,23,0.48)] backdrop-blur-2xl'
+      >
+        <div className='absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/65 to-transparent' />
+        <div className='grid gap-5 px-5 py-5 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)_auto] lg:items-center'>
+          <div className='min-w-0 space-y-4'>
+            <div className='flex min-w-0 items-center gap-4'>
               <button
                 type='button'
                 onClick={onExpand}
-                className='relative h-14 w-14 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/10 transition-transform hover:scale-[1.02]'
+                className='relative h-16 w-16 shrink-0 overflow-hidden rounded-[22px] border border-white/12 bg-white/10 transition-transform hover:scale-[1.02]'
                 aria-label='展开播放器'
               >
                 {track.cover ? (
@@ -104,30 +108,27 @@ export default function MusicMiniPlayer({
                 onClick={onExpand}
                 className='min-w-0 flex-1 text-left'
               >
-                <div className='truncate text-sm font-semibold text-white'>
+                <div className='truncate text-lg font-semibold text-white'>
                   {track.title}
                 </div>
-                <div className='mt-1 truncate text-xs text-white/68'>
+                <div className='mt-1 truncate text-sm text-white/68'>
                   {track.artistsText}
                   {track.albumTitle ? ` · ${track.albumTitle}` : ''}
                 </div>
-                {track.subtitle ? (
-                  <div className='mt-1 truncate text-[11px] uppercase tracking-[0.2em] text-emerald-200/75'>
-                    {track.subtitle}
-                  </div>
-                ) : null}
-              </button>
-
-              <button
-                type='button'
-                onClick={onExpand}
-                className='hidden h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/12 bg-white/6 text-white/80 transition-colors hover:border-emerald-300/60 hover:text-white sm:inline-flex'
-                aria-label='展开播放器'
-              >
-                <ChevronUp className='h-4 w-4' />
+                <div className='mt-3 truncate text-sm text-emerald-200/80'>
+                  {track.subtitle || '等待歌词滚动'}
+                </div>
               </button>
             </div>
 
+            {trackError ? (
+              <div className='rounded-[22px] border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-xs text-rose-100'>
+                {trackError}
+              </div>
+            ) : null}
+          </div>
+
+          <div className='space-y-5'>
             <div className='space-y-2'>
               <input
                 type='range'
@@ -136,10 +137,10 @@ export default function MusicMiniPlayer({
                 step={1}
                 value={Math.min(currentTimeSec, progressSliderMax)}
                 onChange={(event) => onSeek(Number(event.target.value))}
-                className='h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/14 accent-emerald-400'
+                className='h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/14 accent-white'
                 aria-label='播放进度'
               />
-              <div className='flex items-center justify-between text-[11px] text-white/45'>
+              <div className='flex items-center justify-between text-sm font-medium text-white/50'>
                 <span>{formatDurationSeconds(currentTimeSec)}</span>
                 <span>{formatDurationSeconds(durationSec)}</span>
               </div>
@@ -149,7 +150,7 @@ export default function MusicMiniPlayer({
               <button
                 type='button'
                 onClick={onToggleMute}
-                className='flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/12 bg-white/6 text-white/75 transition-colors hover:border-emerald-300/60 hover:text-white'
+                className='flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/35 bg-white/6 text-white/82 transition-colors hover:border-white hover:text-white'
                 aria-label={muted ? '取消静音' : '静音'}
               >
                 {muted ? (
@@ -165,78 +166,81 @@ export default function MusicMiniPlayer({
                 step={0.01}
                 value={muted ? 0 : volume}
                 onChange={(event) => onVolumeChange(Number(event.target.value))}
-                className='h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/14 accent-emerald-400'
+                className='h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/14 accent-white'
                 aria-label='音量'
               />
-              <div className='w-9 text-right text-[11px] tabular-nums text-white/55'>
+              <div className='w-10 text-right text-sm font-medium tabular-nums text-white/58'>
                 {Math.round((muted ? 0 : volume) * 100)}
               </div>
             </div>
-
-            {trackError ? (
-              <div className='rounded-2xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-200'>
-                {trackError}
-              </div>
-            ) : null}
           </div>
 
-          <div className='grid grid-cols-3 gap-2 sm:flex sm:items-center sm:justify-end'>
-            <button
-              type='button'
-              onClick={onPlayPrevious}
-              className='flex h-11 w-11 items-center justify-center rounded-full border border-white/12 bg-white/6 text-white/85 transition-colors hover:border-emerald-300/60 hover:text-white'
-              aria-label='上一首'
-            >
-              <SkipBack className='h-4 w-4' />
-            </button>
-            <button
-              type='button'
-              onClick={onTogglePlay}
-              className='flex h-12 w-12 items-center justify-center rounded-full bg-white text-slate-950 transition-colors hover:bg-emerald-300'
-              aria-label={isPlaying ? '暂停' : '播放'}
-            >
-              {isTrackLoading ? (
-                <Loader2 className='h-4 w-4 animate-spin' />
-              ) : isPlaying ? (
-                <Pause className='h-4 w-4 fill-current' />
-              ) : (
-                <Play className='h-4 w-4 fill-current' />
-              )}
-            </button>
-            <button
-              type='button'
-              onClick={onPlayNext}
-              className='flex h-11 w-11 items-center justify-center rounded-full border border-white/12 bg-white/6 text-white/85 transition-colors hover:border-emerald-300/60 hover:text-white'
-              aria-label='下一首'
-            >
-              <SkipForward className='h-4 w-4' />
-            </button>
-            <button
-              type='button'
-              onClick={onStop}
-              className='flex h-11 items-center justify-center gap-2 rounded-full border border-white/12 bg-white/6 px-4 text-sm text-white/82 transition-colors hover:border-amber-300/60 hover:text-white'
-              aria-label='停止播放'
-            >
-              <Square className='h-3.5 w-3.5 fill-current' />
-              <span className='sm:hidden'>停止</span>
-            </button>
-            <button
-              type='button'
-              onClick={onDismiss}
-              className='flex h-11 items-center justify-center gap-2 rounded-full border border-white/12 bg-white/6 px-4 text-sm text-white/82 transition-colors hover:border-rose-300/60 hover:text-white'
-              aria-label='关闭播放器'
-            >
-              <X className='h-4 w-4' />
-              <span className='sm:hidden'>关闭</span>
-            </button>
+          <div className='flex flex-col items-end gap-4'>
             <button
               type='button'
               onClick={onExpand}
-              className='flex h-11 w-11 items-center justify-center rounded-full border border-white/12 bg-white/6 text-white/85 transition-colors hover:border-emerald-300/60 hover:text-white sm:hidden'
+              className='hidden h-14 w-14 items-center justify-center rounded-full border border-white/55 bg-white/6 text-white/85 transition-colors hover:border-white hover:text-white lg:inline-flex'
               aria-label='展开播放器'
             >
-              <ChevronUp className='h-4 w-4' />
+              <ChevronUp className='h-5 w-5' />
             </button>
+
+            <div className='grid grid-cols-3 gap-3 sm:flex sm:items-center sm:justify-end'>
+              <button
+                type='button'
+                onClick={onPlayPrevious}
+                className='flex h-14 w-14 items-center justify-center rounded-full border border-white/35 bg-white/6 text-white/85 transition-colors hover:border-white hover:text-white'
+                aria-label='上一首'
+              >
+                <SkipBack className='h-5 w-5' />
+              </button>
+              <button
+                type='button'
+                onClick={onTogglePlay}
+                className='flex h-16 w-16 items-center justify-center rounded-full bg-white text-slate-950 transition-colors hover:bg-emerald-200'
+                aria-label={isPlaying ? '暂停' : '播放'}
+              >
+                {isTrackLoading ? (
+                  <Loader2 className='h-5 w-5 animate-spin' />
+                ) : isPlaying ? (
+                  <Pause className='h-5 w-5 fill-current' />
+                ) : (
+                  <Play className='h-5 w-5 fill-current' />
+                )}
+              </button>
+              <button
+                type='button'
+                onClick={onPlayNext}
+                className='flex h-14 w-14 items-center justify-center rounded-full border border-white/35 bg-white/6 text-white/85 transition-colors hover:border-white hover:text-white'
+                aria-label='下一首'
+              >
+                <SkipForward className='h-5 w-5' />
+              </button>
+              <button
+                type='button'
+                onClick={onStop}
+                className='flex h-14 w-14 items-center justify-center rounded-full border border-white/35 bg-white/6 text-white/85 transition-colors hover:border-white hover:text-white'
+                aria-label='停止播放'
+              >
+                <Square className='h-4 w-4 fill-current' />
+              </button>
+              <button
+                type='button'
+                onClick={onDismiss}
+                className='flex h-14 w-14 items-center justify-center rounded-full border border-white/35 bg-white/6 text-white/85 transition-colors hover:border-white hover:text-white'
+                aria-label='关闭播放器'
+              >
+                <X className='h-5 w-5' />
+              </button>
+              <button
+                type='button'
+                onClick={onExpand}
+                className='flex h-14 w-14 items-center justify-center rounded-full border border-white/35 bg-white/6 text-white/85 transition-colors hover:border-white hover:text-white lg:hidden'
+                aria-label='展开播放器'
+              >
+                <ChevronUp className='h-5 w-5' />
+              </button>
+            </div>
           </div>
         </div>
       </div>

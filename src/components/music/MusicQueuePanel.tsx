@@ -21,7 +21,7 @@ export default function MusicQueuePanel({
 }: MusicQueuePanelProps) {
   if (queue.length === 0) {
     return (
-      <div className='flex h-[360px] flex-col items-center justify-center rounded-[28px] border border-white/10 bg-white/5 px-6 text-center'>
+      <div className='flex h-[420px] flex-col items-center justify-center rounded-[30px] border border-white/10 bg-black/10 px-6 text-center backdrop-blur-sm'>
         <Disc3 className='h-12 w-12 text-white/25' />
         <div className='mt-4 text-lg font-semibold text-white'>
           暂无播放队列
@@ -34,7 +34,7 @@ export default function MusicQueuePanel({
   }
 
   return (
-    <div className='h-[360px] space-y-2 overflow-y-auto pr-1'>
+    <div className='h-[420px] space-y-2 overflow-y-auto pr-1'>
       {queue.map((track, index) => {
         const trackKey = `${track.source}:${track.trackId}`;
         const active = trackKey === currentTrackKey;
@@ -45,10 +45,10 @@ export default function MusicQueuePanel({
             type='button'
             onClick={() => onSelectTrack(index)}
             className={cn(
-              'flex w-full items-center gap-3 rounded-[24px] border px-3 py-3 text-left transition-colors',
+              'flex w-full items-center gap-3 rounded-[26px] border px-3 py-3 text-left transition-colors',
               active
-                ? 'border-emerald-400/60 bg-emerald-400/15 text-white'
-                : 'border-white/10 bg-white/5 text-white/80 hover:border-white/20 hover:bg-white/10'
+                ? 'border-white/25 bg-white/14 text-white shadow-[0_8px_24px_rgba(15,23,42,0.28)]'
+                : 'border-white/10 bg-black/10 text-white/80 hover:border-white/20 hover:bg-white/10'
             )}
           >
             {track.cover ? (

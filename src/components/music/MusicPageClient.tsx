@@ -196,6 +196,7 @@ export default function MusicPageClient() {
     sources[0] ||
     null;
   const activeSource = activeSourceModel?.key || null;
+  const requestedSource = queryParams.get('source');
   const requestedTab = queryParams.get('tab') as MusicSectionTab | null;
   const activeTab = activeSourceModel?.tabs.includes(
     requestedTab as MusicSectionTab
@@ -498,6 +499,19 @@ export default function MusicPageClient() {
     };
   }, [activeCollectionId, activeSource, activeTab]);
 
+  useEffect(() => {
+    if (
+      requestedSource !== 'jamendo' ||
+      sourcesLoading ||
+      sourceError ||
+      sources.some((source) => source.key === 'jamendo')
+    ) {
+      return;
+    }
+
+    setContentError('Jamendo 官方接口当前不可用，已自动切换到其他平台');
+  }, [requestedSource, sourceError, sources, sourcesLoading]);
+
   const updateUrl = (mutate: (params: URLSearchParams) => void) => {
     const params = new URLSearchParams(searchString);
     mutate(params);
@@ -555,6 +569,28 @@ export default function MusicPageClient() {
       params.set('id', collection.id);
       params.delete('q');
     });
+  };
+
+  const handlePlayCollection = async (collection: MusicCollectionSummary) => {
+    try {
+      setContentError(null);
+      const detail = await fetchMusicCollection({
+        source: collection.source,
+        id: collection.id,
+      });
+      const playableTracks = detail.tracks.filter((track) => track.playable);
+
+      if (!playableTracks.length) {
+        setContentError('当前歌单暂无可播放曲目');
+        return;
+      }
+
+      playQueue(playableTracks.map(buildQueueItemFromTrack), 0);
+    } catch (error) {
+      setContentError(
+        error instanceof Error ? error.message : '获取歌单详情失败'
+      );
+    }
   };
 
   const handleSearchSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -615,6 +651,7 @@ export default function MusicPageClient() {
           collections={section.collections || []}
           activeCollectionId={activeCollectionId || undefined}
           onSelect={handleSelectCollection}
+          onPlayCollection={handlePlayCollection}
         />
       );
     }
@@ -863,6 +900,7 @@ export default function MusicPageClient() {
                     collections={searchResult.collections}
                     activeCollectionId={activeCollectionId || undefined}
                     onSelect={handleSelectCollection}
+                    onPlayCollection={handlePlayCollection}
                   />
                 ) : null}
                 {searchResult?.tracks?.length ? (

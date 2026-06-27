@@ -134,11 +134,16 @@ export default function MusicFullscreenPlayer({
   const currentTrackKey = `${track.source}:${track.trackId}`;
 
   return (
-    <div className='pointer-events-auto absolute inset-0 overflow-y-auto rounded-[36px] border border-slate-800/70 bg-slate-950/96 text-white shadow-[0_32px_90px_rgba(2,6,23,0.45)]'>
+    <div
+      role='dialog'
+      aria-modal='true'
+      aria-label='展开播放器'
+      className='pointer-events-auto absolute inset-0 overflow-y-auto rounded-[36px] border border-emerald-400/15 bg-[linear-gradient(180deg,rgba(5,10,20,0.98),rgba(10,24,38,0.98)_45%,rgba(9,70,58,0.96))] text-white shadow-[0_32px_90px_rgba(2,6,23,0.45)]'
+    >
       {track.cover ? (
         <div
           aria-hidden='true'
-          className='absolute inset-0 opacity-35'
+          className='absolute inset-0 opacity-30'
           style={{
             backgroundImage: `url(${track.cover})`,
             backgroundPosition: 'center',
@@ -148,7 +153,7 @@ export default function MusicFullscreenPlayer({
           }}
         />
       ) : null}
-      <div className='absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.22),transparent_32%),linear-gradient(180deg,rgba(15,23,42,0.68),rgba(2,6,23,0.97))]' />
+      <div className='absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.12),transparent_24%),linear-gradient(180deg,rgba(11,18,33,0.3),rgba(2,6,23,0.68))]' />
 
       <div className='relative flex min-h-full flex-col p-4 sm:p-6'>
         <div className='flex flex-wrap items-start justify-between gap-3'>
@@ -156,13 +161,13 @@ export default function MusicFullscreenPlayer({
             <div className='text-xs uppercase tracking-[0.28em] text-white/45'>
               LunaTV Music
             </div>
-            <div className='mt-1 text-sm text-white/72'>音乐模块播放器</div>
+            <div className='mt-1 text-sm text-white/72'>网易云风格控制台</div>
           </div>
           <div className='flex flex-wrap items-center gap-2'>
             <button
               type='button'
               onClick={onStop}
-              className='inline-flex h-11 items-center gap-2 rounded-full border border-white/12 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-amber-300/60 hover:text-white'
+              className='inline-flex h-12 items-center gap-2 rounded-full border border-white/20 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-white hover:text-white'
               aria-label='停止播放'
             >
               <Square className='h-3.5 w-3.5 fill-current' />
@@ -171,7 +176,7 @@ export default function MusicFullscreenPlayer({
             <button
               type='button'
               onClick={onMinimize}
-              className='inline-flex h-11 items-center gap-2 rounded-full border border-white/12 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-emerald-300/60 hover:text-white'
+              className='inline-flex h-12 items-center gap-2 rounded-full border border-white/20 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-white hover:text-white'
               aria-label='收起到迷你播放器'
             >
               <ChevronDown className='h-4 w-4' />
@@ -180,7 +185,7 @@ export default function MusicFullscreenPlayer({
             <button
               type='button'
               onClick={onDismiss}
-              className='inline-flex h-11 items-center gap-2 rounded-full border border-white/12 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-rose-300/60 hover:text-white'
+              className='inline-flex h-12 items-center gap-2 rounded-full border border-white/20 bg-white/8 px-4 text-sm text-white/80 transition-colors hover:border-white hover:text-white'
               aria-label='关闭播放器'
             >
               <X className='h-4 w-4' />
@@ -189,10 +194,10 @@ export default function MusicFullscreenPlayer({
           </div>
         </div>
 
-        <div className='mt-6 grid flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)] lg:items-center'>
-          <div className='overflow-hidden rounded-[36px] border border-white/12 bg-white/8 p-5 shadow-2xl shadow-black/25 backdrop-blur-xl sm:p-6'>
-            <div className='grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-center'>
-              <div className='mx-auto w-full max-w-[320px] overflow-hidden rounded-[32px] bg-white/10'>
+        <div className='mt-6 grid flex-1 gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,420px)] xl:items-start'>
+          <div className='overflow-hidden rounded-[36px] border border-white/12 bg-black/10 p-5 shadow-2xl shadow-black/25 backdrop-blur-xl sm:p-6'>
+            <div className='grid gap-8 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:items-center'>
+              <div className='mx-auto w-full max-w-[320px] overflow-hidden rounded-[32px] border border-white/10 bg-white/10 shadow-[0_20px_60px_rgba(2,6,23,0.45)]'>
                 {track.cover ? (
                   <img
                     src={track.cover}
@@ -211,15 +216,15 @@ export default function MusicFullscreenPlayer({
                   <div className='text-xs uppercase tracking-[0.28em] text-white/40'>
                     {track.source}
                   </div>
-                  <h1 className='mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl'>
+                  <h1 className='mt-3 text-3xl font-semibold tracking-tight text-white sm:text-5xl'>
                     {track.title}
                   </h1>
-                  <p className='mt-3 text-base text-white/70'>
+                  <p className='mt-3 text-lg text-white/72'>
                     {track.artistsText}
                     {track.albumTitle ? ` · ${track.albumTitle}` : ''}
                   </p>
                   {track.subtitle ? (
-                    <div className='mt-3 text-xs uppercase tracking-[0.22em] text-emerald-300/80'>
+                    <div className='mt-4 rounded-full bg-white/8 px-4 py-2 text-sm text-emerald-200/85'>
                       {track.subtitle}
                     </div>
                   ) : null}
@@ -233,20 +238,20 @@ export default function MusicFullscreenPlayer({
                     step={1}
                     value={Math.min(currentTimeSec, sliderMax)}
                     onChange={(event) => onSeek(Number(event.target.value))}
-                    className='h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/15 accent-emerald-400'
+                    className='h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/15 accent-white'
                     aria-label='播放进度'
                   />
-                  <div className='flex items-center justify-between text-xs text-white/45'>
+                  <div className='flex items-center justify-between text-sm text-white/50'>
                     <span>{formatDurationSeconds(currentTimeSec)}</span>
                     <span>{formatDurationSeconds(durationSec)}</span>
                   </div>
                 </div>
 
-                <div className='flex flex-wrap items-center gap-3'>
+                <div className='flex flex-wrap items-center gap-4'>
                   <button
                     type='button'
                     onClick={onPlayPrevious}
-                    className='flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/5 transition-colors hover:border-white/25 hover:bg-white/10'
+                    className='flex h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-white/5 transition-colors hover:border-white hover:bg-white/10'
                     aria-label='上一首'
                   >
                     <SkipBack className='h-5 w-5' />
@@ -254,7 +259,7 @@ export default function MusicFullscreenPlayer({
                   <button
                     type='button'
                     onClick={onTogglePlay}
-                    className='flex h-14 w-14 items-center justify-center rounded-full bg-white text-slate-950 transition-transform hover:scale-[1.02]'
+                    className='flex h-16 w-16 items-center justify-center rounded-full bg-white text-slate-950 shadow-[0_16px_40px_rgba(255,255,255,0.24)] transition-transform hover:scale-[1.02]'
                     aria-label={isPlaying ? '暂停' : '播放'}
                   >
                     {isTrackLoading ? (
@@ -268,7 +273,7 @@ export default function MusicFullscreenPlayer({
                   <button
                     type='button'
                     onClick={onPlayNext}
-                    className='flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/5 transition-colors hover:border-white/25 hover:bg-white/10'
+                    className='flex h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-white/5 transition-colors hover:border-white hover:bg-white/10'
                     aria-label='下一首'
                   >
                     <SkipForward className='h-5 w-5' />
@@ -277,7 +282,7 @@ export default function MusicFullscreenPlayer({
                     type='button'
                     onClick={onToggleFavorite}
                     disabled={isFavoriteLoading}
-                    className='inline-flex h-12 items-center gap-2 rounded-full border border-white/12 bg-white/5 px-4 text-sm text-white/75 transition-colors hover:border-white/25 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60'
+                    className='inline-flex h-12 items-center gap-2 rounded-full border border-white/20 bg-white/5 px-4 text-sm text-white/75 transition-colors hover:border-white hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60'
                     aria-label={
                       isFavorited ? '取消收藏当前歌曲' : '收藏当前歌曲'
                     }
@@ -299,7 +304,7 @@ export default function MusicFullscreenPlayer({
                   <button
                     type='button'
                     onClick={onCyclePlayMode}
-                    className='inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/5 px-4 py-3 text-sm text-white/75 transition-colors hover:border-white/25 hover:bg-white/10'
+                    className='inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-4 py-3 text-sm text-white/75 transition-colors hover:border-white hover:bg-white/10'
                     aria-label={`切换播放模式，当前为 ${getPlayModeLabel(
                       playMode
                     )}`}
@@ -313,7 +318,7 @@ export default function MusicFullscreenPlayer({
                   <button
                     type='button'
                     onClick={onToggleMute}
-                    className='flex h-11 w-11 items-center justify-center rounded-full border border-white/12 bg-white/5 transition-colors hover:border-white/25 hover:bg-white/10'
+                    className='flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/5 transition-colors hover:border-white hover:bg-white/10'
                     aria-label={muted ? '取消静音' : '静音'}
                   >
                     {muted ? (
@@ -331,7 +336,7 @@ export default function MusicFullscreenPlayer({
                     onChange={(event) =>
                       onVolumeChange(Number(event.target.value))
                     }
-                    className='h-1.5 w-full max-w-[220px] cursor-pointer appearance-none rounded-full bg-white/15 accent-emerald-400'
+                    className='h-1.5 w-full max-w-[240px] cursor-pointer appearance-none rounded-full bg-white/15 accent-white'
                     aria-label='音量'
                   />
                   <div className='text-sm text-white/50'>
@@ -340,7 +345,7 @@ export default function MusicFullscreenPlayer({
                 </div>
 
                 {trackError ? (
-                  <div className='rounded-2xl border border-rose-400/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100'>
+                  <div className='rounded-[24px] border border-rose-400/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100'>
                     {trackError}
                   </div>
                 ) : null}
@@ -348,7 +353,7 @@ export default function MusicFullscreenPlayer({
             </div>
           </div>
 
-          <div className='overflow-hidden rounded-[36px] border border-white/12 bg-white/8 p-5 shadow-2xl shadow-black/25 backdrop-blur-xl sm:p-6'>
+          <div className='overflow-hidden rounded-[36px] border border-white/12 bg-black/10 p-5 shadow-2xl shadow-black/25 backdrop-blur-xl sm:p-6'>
             <div className='flex items-center justify-between gap-3'>
               <div>
                 <div className='text-lg font-semibold text-white'>播放视图</div>
@@ -356,7 +361,7 @@ export default function MusicFullscreenPlayer({
                   当前第 {currentIndex + 1} 首，共 {queue.length} 首
                 </div>
               </div>
-              <div className='inline-flex rounded-full border border-white/12 bg-white/6 p-1'>
+              <div className='inline-flex rounded-full border border-white/15 bg-white/6 p-1'>
                 <button
                   type='button'
                   onClick={() => setPanel('lyrics')}

@@ -6,6 +6,7 @@ import type {
   MusicCollection,
   MusicHomePayload,
   MusicSource,
+  MusicTrack,
 } from '@/lib/music/types';
 
 import { useMusicPlayerStore } from '@/stores/musicPlayerStore';
@@ -14,6 +15,7 @@ import MusicPageClient from './MusicPageClient';
 
 const mockReplace = jest.fn();
 let mockSearchParams = 'source=netease&tab=rank&id=netease-rank-city';
+const mockFetchMusicCollection = jest.fn<Promise<MusicCollection>, []>();
 
 const mockSources: MusicSource[] = [
   {
@@ -74,12 +76,31 @@ const mockHomePayload: MusicHomePayload = {
   ],
 };
 
-const mockCollection: MusicCollection = {
+const playableCollectionTracks: MusicTrack[] = [
+  {
+    id: 'playlist-track-1',
+    source: 'netease',
+    title: '夜航第一首',
+    artists: [{ name: '歌手甲' }],
+    playable: true,
+    durationMs: 185000,
+  },
+  {
+    id: 'playlist-track-2',
+    source: 'netease',
+    title: '夜航第二首',
+    artists: [{ name: '歌手乙' }],
+    playable: true,
+    durationMs: 196000,
+  },
+];
+
+let mockCollection: MusicCollection = {
   id: 'netease-rank-city',
   source: 'netease',
   kind: 'rank',
   title: '城市夜航榜',
-  tracks: [],
+  tracks: playableCollectionTracks,
 };
 
 jest.mock('next/navigation', () => ({
@@ -93,7 +114,7 @@ jest.mock('next/navigation', () => ({
 jest.mock('@/lib/transport/music-client', () => ({
   fetchMusicSources: jest.fn(async () => mockSources),
   fetchMusicHome: jest.fn(async () => mockHomePayload),
-  fetchMusicCollection: jest.fn(async () => mockCollection),
+  fetchMusicCollection: (...args: []) => mockFetchMusicCollection(...args),
   fetchMusicTrack: jest.fn(),
   fetchMusicLyric: jest.fn(),
   searchMusic: jest.fn(async () => ({
@@ -191,6 +212,18 @@ describe('MusicPageClient', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockSearchParams = 'source=netease&tab=rank&id=netease-rank-city';
+    mockSources[2] = {
+      ...mockSources[2],
+      enabled: true,
+    };
+    mockCollection = {
+      id: 'netease-rank-city',
+      source: 'netease',
+      kind: 'rank',
+      title: '城市夜航榜',
+      tracks: playableCollectionTracks,
+    };
+    mockFetchMusicCollection.mockResolvedValue(mockCollection);
     resetMusicPlayerStore();
   });
 
@@ -250,6 +283,70 @@ describe('MusicPageClient', () => {
         }
       );
     });
+  });
+
+  it('plays a collection immediately when the play icon is clicked', async () => {
+    render(<MusicPageClient />);
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: '直接播放 城市夜航榜',
+      })
+    );
+
+    await waitFor(() => {
+      expect(mockFetchMusicCollection).toHaveBeenCalledWith({
+        source: 'netease',
+        id: 'netease-rank-city',
+      });
+    });
+
+    await waitFor(() => {
+      expect(useMusicPlayerStore.getState().queue).toEqual([
+        expect.objectContaining({
+          trackId: 'playlist-track-1',
+          source: 'netease',
+          title: '夜航第一首',
+        }),
+        expect.objectContaining({
+          trackId: 'playlist-track-2',
+          source: 'netease',
+          title: '夜航第二首',
+        }),
+      ]);
+    });
+
+    expect(mockReplace).not.toHaveBeenCalledWith(
+      '/music?source=netease&tab=rank&id=netease-rank-city',
+      {
+        scroll: false,
+      }
+    );
+  });
+
+  it('falls back from jamendo and shows a graceful message when the source is disabled', async () => {
+    mockSearchParams = 'source=jamendo&tab=home';
+    mockSources[2] = {
+      ...mockSources[2],
+      enabled: false,
+    };
+
+    render(<MusicPageClient />);
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith(
+        '/music?source=netease&tab=home',
+        {
+          scroll: false,
+        }
+      );
+    });
+
+    expect(
+      await screen.findByText(
+        'Jamendo 官方接口当前不可用，已自动切换到其他平台'
+      )
+    ).toBeInTheDocument();
   });
 
   it('appends the local library tab and renders favorite and recent tracks', async () => {

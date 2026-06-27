@@ -9,6 +9,7 @@ import { GET as getMusicTrack } from './track/route';
 
 interface MusicFetchMockOptions {
   failToplistDetail?: boolean;
+  jamendoSuspended?: boolean;
   paidTrackId?: number;
 }
 
@@ -178,6 +179,17 @@ function createMusicFetchMock(
     }
 
     if (host === 'api.jamendo.com' && pathname === '/v3.0/tracks/') {
+      if (options.jamendoSuspended) {
+        return createJsonResponse({
+          headers: {
+            status: 'failed',
+            error_message:
+              'Your application has been suspended, please contact Jamendo',
+          },
+          results: [],
+        });
+      }
+
       if (id === 'jamendo-track-1') {
         return createJsonResponse({
           headers: {
@@ -218,6 +230,17 @@ function createMusicFetchMock(
     }
 
     if (host === 'api.jamendo.com' && pathname === '/v3.0/playlists/') {
+      if (options.jamendoSuspended) {
+        return createJsonResponse({
+          headers: {
+            status: 'failed',
+            error_message:
+              'Your application has been suspended, please contact Jamendo',
+          },
+          results: [],
+        });
+      }
+
       return createJsonResponse({
         headers: {
           status: 'success',
@@ -235,6 +258,17 @@ function createMusicFetchMock(
     }
 
     if (host === 'api.jamendo.com' && pathname === '/v3.0/playlists/tracks/') {
+      if (options.jamendoSuspended) {
+        return createJsonResponse({
+          headers: {
+            status: 'failed',
+            error_message:
+              'Your application has been suspended, please contact Jamendo',
+          },
+          results: [],
+        });
+      }
+
       return createJsonResponse({
         headers: {
           status: 'success',
@@ -736,5 +770,32 @@ describe('/api/music route handlers', () => {
       'https://stream.jamendo.test/jamendo-track-1.mp3'
     );
     expect(lyricPayload.lines).toEqual([]);
+  });
+
+  it('disables jamendo after a suspended application response', async () => {
+    process.env.JAMENDO_CLIENT_ID = 'jamendo-test-client';
+    global.fetch = createMusicFetchMock({
+      jamendoSuspended: true,
+    });
+
+    const homeResponse = await getMusicHome(
+      new NextRequest('http://localhost/api/music/home?source=jamendo')
+    );
+    const homePayload = await homeResponse.json();
+
+    expect(homeResponse.status).toBe(503);
+    expect(homePayload).toEqual({
+      error: 'Jamendo 官方接口当前不可用',
+    });
+
+    const sourcesResponse = await getMusicSources();
+    const sourcesPayload = await sourcesResponse.json();
+
+    expect(sourcesPayload.sources[2]).toEqual(
+      expect.objectContaining({
+        key: 'jamendo',
+        enabled: false,
+      })
+    );
   });
 });

@@ -46,6 +46,11 @@ describe('MusicMiniPlayer', () => {
       />
     );
 
+    expect(
+      screen.getByRole('group', { name: '播放器控制条' })
+    ).toBeInTheDocument();
+    expect(screen.getByText('夜色电子')).toBeInTheDocument();
+
     fireEvent.change(screen.getByRole('slider', { name: '音量' }), {
       target: { value: '0.2' },
     });
