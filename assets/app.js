@@ -197,18 +197,6 @@
       return item;
     }
 
-    function activateTab(tabButtons, tabPanels, nextTab) {
-      tabButtons.forEach((button) => {
-        const active = button.dataset.tab === nextTab;
-        button.dataset.active = active ? 'true' : 'false';
-        button.setAttribute('aria-selected', active ? 'true' : 'false');
-      });
-
-      tabPanels.forEach((panel) => {
-        panel.hidden = panel.dataset.tabPanel !== nextTab;
-      });
-    }
-
     function createReleaseCard(documentRef, release, locale) {
       const details = createElement(documentRef, 'details', 'release-card');
       const summary = createElement(
@@ -270,64 +258,43 @@
       link.rel = 'noreferrer';
       actions.appendChild(link);
 
-      const tabs = createElement(documentRef, 'div', 'release-card__tabs');
-      const downloadsTab = createElement(
-        documentRef,
-        'button',
-        'release-card__tab',
-        getCopy(locale, 'downloadsTab')
-      );
-      downloadsTab.type = 'button';
-      downloadsTab.dataset.tab = 'downloads';
-
-      const notesTab = createElement(
-        documentRef,
-        'button',
-        'release-card__tab',
-        getCopy(locale, 'releaseNotesTab')
-      );
-      notesTab.type = 'button';
-      notesTab.dataset.tab = 'notes';
-
-      tabs.append(downloadsTab, notesTab);
-
       const downloadsPanel = createElement(
         documentRef,
         'div',
         'release-card__panel'
       );
-      downloadsPanel.dataset.tabPanel = 'downloads';
+      const downloadsHeading = createElement(
+        documentRef,
+        'h4',
+        'release-card__section-heading',
+        getCopy(locale, 'downloadsTab')
+      );
       const downloadsList = createElement(documentRef, 'ul', 'asset-list');
       release.assets.forEach((asset) => {
         downloadsList.appendChild(createAssetItem(documentRef, asset, locale));
       });
-      downloadsPanel.appendChild(downloadsList);
+      downloadsPanel.append(downloadsHeading, downloadsList);
 
       const notesPanel = createElement(
         documentRef,
         'div',
         'release-card__panel'
       );
-      notesPanel.dataset.tabPanel = 'notes';
+      const notesHeading = createElement(
+        documentRef,
+        'h4',
+        'release-card__section-heading release-card__notes-heading',
+        getCopy(locale, 'releaseNotesTab')
+      );
       const notes = createElement(
         documentRef,
         'pre',
         'release-card__notes',
         release.notes || getCopy(locale, 'releaseNotesEmpty')
       );
-      notesPanel.appendChild(notes);
+      notesPanel.append(notesHeading, notes);
 
-      const tabButtons = [downloadsTab, notesTab];
-      const tabPanels = [downloadsPanel, notesPanel];
-
-      tabButtons.forEach((button) => {
-        button.addEventListener('click', () => {
-          activateTab(tabButtons, tabPanels, button.dataset.tab || 'downloads');
-        });
-      });
-      activateTab(tabButtons, tabPanels, 'downloads');
-
-      body.append(actions, tabs, downloadsPanel, notesPanel);
+      body.append(actions, downloadsPanel, notesPanel);
       details.append(summary, body);
       return details;
     }
