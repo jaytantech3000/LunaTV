@@ -914,72 +914,101 @@ async fn start_local_service_impl_inner(
         tokio::time::sleep(LOCAL_SERVICE_STARTUP_RETRY_INTERVAL).await;
     }
 
-    let sidecar_path = resolve_sidecar_binary_path(app)?;
+    let sidecar_paths = resolve_sidecar_binary_paths(app, &current_version)?;
+    let mut startup_errors = Vec::new();
 
-    let mut command = Command::new(&sidecar_path);
-    command
-        .arg("--port")
-        .arg(LOCAL_SERVICE_PORT.to_string())
-        .arg("--config-path")
-        .arg(&paths.config_path)
-        .arg("--data-dir")
-        .arg(&paths.data_dir)
-        .arg("--sqlite-path")
-        .arg(&paths.sqlite_path)
-        .current_dir(&paths.data_dir)
-        .stdin(Stdio::null())
-        .stdout(if cfg!(debug_assertions) {
-            Stdio::inherit()
-        } else {
-            Stdio::null()
-        })
-        .stderr(if cfg!(debug_assertions) {
-            Stdio::inherit()
-        } else {
-            Stdio::null()
-        });
-
-    #[cfg(target_os = "windows")]
-    if !cfg!(debug_assertions) {
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    let child = command.spawn().with_context(|| {
-        format!(
-            "failed to spawn local service at {}",
-            sidecar_path.display()
-        )
-    })?;
-
-    let mut child = child;
-    if let Err(error) = wait_for_local_service(&base_url, &mut child).await {
-        if let Err(termination_error) = terminate_child_process(&mut child) {
-            tracing::warn!(
-                "failed to terminate local service after startup error: {termination_error}"
-            );
+    for sidecar_path in sidecar_paths {
+        let mut command = Command::new(&sidecar_path);
+        command
+            .arg("--port")
+            .arg(LOCAL_SERVICE_PORT.to_string())
+            .arg("--config-path")
+            .arg(&paths.config_path)
+            .arg("--data-dir")
+            .arg(&paths.data_dir)
+            .arg("--sqlite-path")
+            .arg(&paths.sqlite_path)
+            .current_dir(&paths.data_dir)
+            .stdin(Stdio::null())
+            .stdout(if cfg!(debug_assertions) {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
+            .stderr(if cfg!(debug_assertions) {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            });
+        if !cfg!(debug_assertions) {
+            configure_background_command(&mut command);
         }
 
-        return Err(error);
+        let child = command.spawn().with_context(|| {
+            format!(
+                "failed to spawn local service at {}",
+                sidecar_path.display()
+            )
+        });
+
+        let mut child = match child {
+            Ok(child) => child,
+            Err(error) => {
+                startup_errors.push(error.to_string());
+                continue;
+            }
+        };
+
+        if let Err(error) = wait_for_local_service(&base_url, &mut child).await {
+            if let Err(termination_error) = terminate_child_process(&mut child) {
+                tracing::warn!(
+                    "failed to terminate local service after startup error: {termination_error}"
+                );
+            }
+            startup_errors.push(format!("{}: {error}", sidecar_path.display()));
+            continue;
+        }
+
+        let started_health = local_service_health_check(&base_url).await;
+        if !should_reuse_untracked_local_service(&started_health, &current_version) {
+            let detected_version = started_health.version.as_deref().unwrap_or("unknown");
+            if let Err(termination_error) = terminate_child_process(&mut child) {
+                tracing::warn!(
+                    "failed to terminate mismatched local service after startup: {termination_error}"
+                );
+            }
+            startup_errors.push(format!(
+                "{}: started local service version {detected_version}, expected {current_version}",
+                sidecar_path.display()
+            ));
+            tokio::time::sleep(LOCAL_SERVICE_STARTUP_RETRY_INTERVAL).await;
+            continue;
+        }
+
+        let mut guard = state
+            .service_process
+            .lock()
+            .map_err(|_| anyhow::anyhow!("failed to lock desktop runtime state"))?;
+        *guard = Some(ServiceProcess {
+            base_url: base_url.clone(),
+            child,
+            config_path: paths.config_path.clone(),
+            data_dir: paths.data_dir.clone(),
+            sqlite_path: paths.sqlite_path.clone(),
+        });
+
+        return Ok(build_status(
+            true,
+            &base_url,
+            &paths.config_path,
+            &paths.data_dir,
+            &paths.sqlite_path,
+        ));
     }
 
-    let mut guard = state
-        .service_process
-        .lock()
-        .map_err(|_| anyhow::anyhow!("failed to lock desktop runtime state"))?;
-    *guard = Some(ServiceProcess {
-        base_url: base_url.clone(),
-        child,
-        config_path: paths.config_path.clone(),
-        data_dir: paths.data_dir.clone(),
-        sqlite_path: paths.sqlite_path.clone(),
-    });
-
-    Ok(build_status(
-        true,
-        &base_url,
-        &paths.config_path,
-        &paths.data_dir,
-        &paths.sqlite_path,
+    Err(anyhow::anyhow!(
+        "failed to start a local service sidecar matching desktop version {current_version}; attempts: {}",
+        startup_errors.join(" | ")
     ))
 }
 
@@ -5095,24 +5124,6 @@ fn ensure_file_extension(mut path: PathBuf, extension: &str) -> PathBuf {
     path
 }
 
-fn resolve_sidecar_binary_path(app: &AppHandle) -> Result<PathBuf> {
-    local_service_sidecar_candidates(app)?
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "failed to locate bundled local service sidecar; checked: {}",
-                local_service_sidecar_candidates(app)
-                    .ok()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })
-}
-
 fn sidecar_binary_file_name() -> String {
     let extension = if cfg!(target_os = "windows") {
         ".exe"
@@ -5193,20 +5204,169 @@ impl RuntimePaths {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SidecarBinaryVersionProbe {
+    path: PathBuf,
+    version: Option<String>,
+    error: Option<String>,
+}
+
+fn parse_sidecar_binary_version_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    let stdout_text = String::from_utf8_lossy(stdout);
+    let stderr_text = String::from_utf8_lossy(stderr);
+
+    [stdout_text.as_ref(), stderr_text.as_ref()]
+        .into_iter()
+        .flat_map(|text| text.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .find_map(|line| {
+            line.split_whitespace()
+                .rev()
+                .find(|token| Version::parse(token).is_ok())
+                .map(str::to_string)
+        })
+}
+
+fn probe_sidecar_binary_version(path: &Path) -> SidecarBinaryVersionProbe {
+    let mut command = Command::new(path);
+    command
+        .arg("--version")
+        .current_dir(
+            path.parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new(".")),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_background_command(&mut command);
+
+    match command.output() {
+        Ok(output) => {
+            let version = parse_sidecar_binary_version_output(&output.stdout, &output.stderr);
+            let error = if output.status.success() {
+                if version.is_none() {
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    Some(format!(
+                        "sidecar version probe returned no semver output (stdout: {:?}, stderr: {:?})",
+                        stdout, stderr
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                Some(format!(
+                    "sidecar version probe exited with status {}",
+                    output
+                        .status
+                        .code()
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "unknown".to_string())
+                ))
+            };
+
+            SidecarBinaryVersionProbe {
+                path: path.to_path_buf(),
+                version,
+                error,
+            }
+        }
+        Err(error) => SidecarBinaryVersionProbe {
+            path: path.to_path_buf(),
+            version: None,
+            error: Some(format!("failed to execute sidecar version probe: {error}")),
+        },
+    }
+}
+
+fn select_preferred_sidecar_candidates(
+    probes: Vec<SidecarBinaryVersionProbe>,
+    current_version: &str,
+) -> Result<Vec<PathBuf>> {
+    let mut matching_paths = Vec::new();
+    let mut unknown_paths = Vec::new();
+    let mut mismatched_details = Vec::new();
+
+    for probe in probes {
+        match probe.version.as_deref() {
+            Some(version) if version == current_version => {
+                matching_paths.push(probe.path);
+            }
+            Some(version) => {
+                mismatched_details.push(format!("{} => {}", probe.path.display(), version));
+            }
+            None => {
+                unknown_paths.push(probe.path);
+            }
+        }
+    }
+
+    if !matching_paths.is_empty() {
+        matching_paths.extend(unknown_paths);
+        return Ok(matching_paths);
+    }
+
+    if !unknown_paths.is_empty() {
+        return Ok(unknown_paths);
+    }
+
+    let checked = if mismatched_details.is_empty() {
+        "no readable sidecar candidates".to_string()
+    } else {
+        mismatched_details.join(", ")
+    };
+
+    Err(anyhow::anyhow!(
+        "failed to locate a bundled local service sidecar matching desktop version {current_version}; checked: {checked}"
+    ))
+}
+
+fn resolve_sidecar_binary_paths(app: &AppHandle, current_version: &str) -> Result<Vec<PathBuf>> {
+    let candidates = local_service_sidecar_candidates(app)?;
+    let available_candidates = candidates
+        .into_iter()
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+
+    if available_candidates.is_empty() {
+        return Err(anyhow::anyhow!(
+            "failed to locate bundled local service sidecar; checked: {}",
+            local_service_sidecar_candidates(app)
+                .ok()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    let probes = available_candidates
+        .iter()
+        .map(|path| probe_sidecar_binary_version(path))
+        .collect::<Vec<_>>();
+
+    select_preferred_sidecar_candidates(probes, current_version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         DEFAULT_DESKTOP_OWNER_USERNAME, GithubReleaseAssetPayload, GithubReleasePayload,
         LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus, LocalServiceHealthCheck,
-        LocalServiceStartupFailure, PortOccupant, SidecarTrialResult, append_cache_busting_query,
-        build_profile_sync_status_diagnostic_detail, collect_diagnostics_error_text,
-        describe_primary_port_issue, ensure_default_desktop_owner_auth_value,
-        extract_desktop_release_version, extract_profile_sync_api_base_url,
-        find_desktop_release_manifest_url, local_service_health_check,
-        normalize_desktop_release_history, normalize_release_repository_slug,
+        LocalServiceStartupFailure, PortOccupant, SidecarBinaryVersionProbe, SidecarTrialResult,
+        append_cache_busting_query, build_profile_sync_status_diagnostic_detail,
+        collect_diagnostics_error_text, describe_primary_port_issue,
+        ensure_default_desktop_owner_auth_value, extract_desktop_release_version,
+        extract_profile_sync_api_base_url, find_desktop_release_manifest_url,
+        local_service_health_check, normalize_desktop_release_history,
+        normalize_release_repository_slug, select_preferred_sidecar_candidates,
         set_desktop_local_user_password_value, set_desktop_owner_password_value,
         should_reuse_untracked_local_service, summarize_trial_output,
     };
+    use std::path::PathBuf;
     use std::time::Duration;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -5591,6 +5751,65 @@ mod tests {
             },
             current_version,
         ));
+    }
+
+    #[test]
+    fn prefers_matching_sidecar_candidate_before_unknown_and_stale_ones() {
+        let preferred = select_preferred_sidecar_candidates(
+            vec![
+                SidecarBinaryVersionProbe {
+                    path: PathBuf::from("/tmp/stale-sidecar.exe"),
+                    version: Some("200.0.1-beta.14".to_string()),
+                    error: None,
+                },
+                SidecarBinaryVersionProbe {
+                    path: PathBuf::from("/tmp/current-sidecar.exe"),
+                    version: Some("200.0.1-beta.17".to_string()),
+                    error: None,
+                },
+                SidecarBinaryVersionProbe {
+                    path: PathBuf::from("/tmp/unknown-sidecar.exe"),
+                    version: None,
+                    error: Some("version probe timed out".to_string()),
+                },
+            ],
+            "200.0.1-beta.17",
+        )
+        .expect("preferred candidates");
+
+        assert_eq!(
+            preferred,
+            vec![
+                PathBuf::from("/tmp/current-sidecar.exe"),
+                PathBuf::from("/tmp/unknown-sidecar.exe"),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_sidecar_candidates_when_all_detected_versions_are_stale() {
+        let error = select_preferred_sidecar_candidates(
+            vec![
+                SidecarBinaryVersionProbe {
+                    path: PathBuf::from("/tmp/stale-a.exe"),
+                    version: Some("200.0.1-beta.14".to_string()),
+                    error: None,
+                },
+                SidecarBinaryVersionProbe {
+                    path: PathBuf::from("/tmp/stale-b.exe"),
+                    version: Some("200.0.1-beta.15".to_string()),
+                    error: None,
+                },
+            ],
+            "200.0.1-beta.17",
+        )
+        .expect_err("all stale sidecars should be rejected");
+
+        assert!(error.to_string().contains("200.0.1-beta.17"));
+        assert!(error.to_string().contains("stale-a.exe"));
+        assert!(error.to_string().contains("200.0.1-beta.14"));
+        assert!(error.to_string().contains("stale-b.exe"));
+        assert!(error.to_string().contains("200.0.1-beta.15"));
     }
 
     #[test]
