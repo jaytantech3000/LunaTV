@@ -21,7 +21,9 @@ use reqwest::{
     header::{ACCEPT, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap, HeaderValue, RANGE},
 };
 use semver::Version;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+#[cfg(target_os = "windows")]
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, RunEvent, State, ipc::Channel};
 use tauri_plugin_updater::{Update as DesktopUpdateHandle, UpdaterExt};
 use tokio::{
@@ -312,6 +314,7 @@ struct LocalServiceHealthCheck {
     healthy: bool,
     status_code: Option<u16>,
     error: Option<String>,
+    version: Option<String>,
 }
 
 impl LocalServiceHealthCheck {
@@ -326,6 +329,11 @@ impl LocalServiceHealthCheck {
 
         self.error.clone()
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Default, PartialEq, Eq)]
+struct LocalServiceHealthPayload {
+    version: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -836,6 +844,7 @@ async fn start_local_service_impl_inner(
 ) -> Result<LocalServiceStatus> {
     let _start_guard = state.service_start_lock.lock().await;
     let paths = resolve_runtime_paths(app)?;
+    let current_version = app.package_info().version.to_string();
     ensure_desktop_config_file(&paths.config_path)?;
     fs::create_dir_all(&paths.data_dir)
         .with_context(|| format!("failed to create {}", paths.data_dir.display()))?;
@@ -873,18 +882,36 @@ async fn start_local_service_impl_inner(
         }
     }
 
-    if local_service_is_healthy(&base_url).await {
+    let untracked_health = local_service_health_check(&base_url).await;
+    if untracked_health.healthy {
+        if should_reuse_untracked_local_service(&untracked_health, &current_version) {
+            tracing::warn!(
+                "detected a healthy local service on {base_url} without a tracked child process; reusing matching version {current_version}"
+            );
+
+            return Ok(build_status(
+                true,
+                &base_url,
+                &paths.config_path,
+                &paths.data_dir,
+                &paths.sqlite_path,
+            ));
+        }
+
         tracing::warn!(
-            "detected a healthy local service on {base_url} without a tracked child process"
+            "detected a healthy local service on {base_url} without a tracked child process, but its version {:?} does not match current app {}; attempting restart",
+            untracked_health.version,
+            current_version
         );
 
-        return Ok(build_status(
-            true,
-            &base_url,
-            &paths.config_path,
-            &paths.data_dir,
-            &paths.sqlite_path,
-        ));
+        if !terminate_untracked_local_service(LOCAL_SERVICE_PORT)? {
+            let detected_version = untracked_health.version.as_deref().unwrap_or("unknown");
+            return Err(anyhow::anyhow!(
+                "detected an untracked local service on {base_url} with version {detected_version}; current app expects {current_version}. Please fully quit LunaTV and retry."
+            ));
+        }
+
+        tokio::time::sleep(LOCAL_SERVICE_STARTUP_RETRY_INTERVAL).await;
     }
 
     let sidecar_path = resolve_sidecar_binary_path(app)?;
@@ -1093,6 +1120,13 @@ async fn local_service_is_healthy(base_url: &str) -> bool {
     local_service_health_check(base_url).await.healthy
 }
 
+fn should_reuse_untracked_local_service(
+    health_check: &LocalServiceHealthCheck,
+    current_version: &str,
+) -> bool {
+    health_check.healthy && health_check.version.as_deref() == Some(current_version)
+}
+
 async fn local_service_health_check(base_url: &str) -> LocalServiceHealthCheck {
     let authority = base_url
         .trim()
@@ -1107,6 +1141,7 @@ async fn local_service_health_check(base_url: &str) -> LocalServiceHealthCheck {
                 healthy: false,
                 status_code: None,
                 error: Some(format!("unsupported local service base URL: {base_url}")),
+                version: None,
             };
         }
     };
@@ -1140,23 +1175,37 @@ async fn local_service_health_check(base_url: &str) -> LocalServiceHealthCheck {
         })?
         .map_err(|error| format!("failed to write health request: {error}"))?;
 
-        let mut buffer = [0_u8; 1024];
-        let bytes_read =
-            tokio::time::timeout(LOCAL_SERVICE_HEALTH_READ_TIMEOUT, stream.read(&mut buffer))
-                .await
-                .map_err(|_| {
-                    format!(
-                        "health response read timed out after {}ms",
-                        LOCAL_SERVICE_HEALTH_READ_TIMEOUT.as_millis()
-                    )
-                })?
-                .map_err(|error| format!("failed to read health response: {error}"))?;
+        let mut response_bytes = Vec::with_capacity(1024);
 
-        if bytes_read == 0 {
+        loop {
+            let mut buffer = [0_u8; 1024];
+            let bytes_read =
+                tokio::time::timeout(LOCAL_SERVICE_HEALTH_READ_TIMEOUT, stream.read(&mut buffer))
+                    .await
+                    .map_err(|_| {
+                        format!(
+                            "health response read timed out after {}ms",
+                            LOCAL_SERVICE_HEALTH_READ_TIMEOUT.as_millis()
+                        )
+                    })?
+                    .map_err(|error| format!("failed to read health response: {error}"))?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            response_bytes.extend_from_slice(&buffer[..bytes_read]);
+
+            if response_bytes.len() > 16 * 1024 {
+                return Err("health response exceeded 16384 bytes".to_string());
+            }
+        }
+
+        if response_bytes.is_empty() {
             return Err("health response closed before sending data".to_string());
         }
 
-        let response_head = String::from_utf8_lossy(&buffer[..bytes_read]);
+        let response_head = String::from_utf8_lossy(&response_bytes);
         let status_line = response_head
             .lines()
             .next()
@@ -1172,22 +1221,44 @@ async fn local_service_health_check(base_url: &str) -> LocalServiceHealthCheck {
                 format!("invalid health response status line: {status_line}; {error}")
             })?;
 
-        Ok(status_code)
+        let version = parse_local_service_health_payload_version(&response_bytes);
+
+        Ok((status_code, version))
     }
     .await;
 
     match result {
-        Ok(status_code) => LocalServiceHealthCheck {
+        Ok((status_code, version)) => LocalServiceHealthCheck {
             healthy: status_code >= 200 && status_code < 300,
             status_code: Some(status_code),
             error: None,
+            version,
         },
         Err(error) => LocalServiceHealthCheck {
             healthy: false,
             status_code: None,
             error: Some(error),
+            version: None,
         },
     }
+}
+
+fn parse_local_service_health_payload_version(response_bytes: &[u8]) -> Option<String> {
+    let body_start = response_bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+        .or_else(|| {
+            response_bytes
+                .windows(2)
+                .position(|window| window == b"\n\n")
+                .map(|index| index + 2)
+        })?;
+    let body = response_bytes.get(body_start..)?;
+    let payload = serde_json::from_slice::<LocalServiceHealthPayload>(body).ok()?;
+    payload
+        .version
+        .and_then(|value| normalize_optional_string(Some(value)))
 }
 
 fn extract_profile_sync_api_base_url(config_value: &serde_json::Value) -> Option<String> {
@@ -2796,10 +2867,7 @@ fn inspect_local_service_port(port: u16) -> PortInspection {
     #[cfg(target_os = "windows")]
     let (occupants, debug_lines) = inspect_windows_port_occupants(port);
     #[cfg(not(target_os = "windows"))]
-    let (occupants, debug_lines) = (
-        Vec::new(),
-        vec!["Process-level port inspection is only implemented on Windows.".to_string()],
-    );
+    let (occupants, debug_lines) = inspect_unix_port_occupants(port);
 
     PortInspection {
         bind_available,
@@ -2883,6 +2951,112 @@ if ($listeners.Count -gt 0) {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+fn inspect_unix_port_occupants(port: u16) -> (Vec<PortOccupant>, Vec<String>) {
+    let mut debug_lines = vec![
+        "Command: lsof -nP -iTCP:<port> -sTCP:LISTEN -Fpctn".to_string(),
+        format!("TargetPort: {port}"),
+    ];
+
+    let output = match Command::new("lsof")
+        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fpctn"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            debug_lines.push(format!("CommandError: {error}"));
+            return (Vec::new(), debug_lines);
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if !stderr.is_empty() {
+            debug_lines.push(format!("CommandError: {stderr}"));
+        }
+        return (Vec::new(), debug_lines);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let occupants = parse_unix_port_occupants(&stdout);
+    debug_lines.push(format!("MatchedListeners: {}", occupants.len()));
+
+    if occupants.is_empty() {
+        debug_lines.push("No LISTEN sockets matched the target port.".to_string());
+    } else {
+        for occupant in &occupants {
+            debug_lines.push(format!(
+                "- LocalAddress: {} | State: {} | PID: {} | ProcessName: {}",
+                occupant.local_address,
+                occupant.state,
+                occupant.pid,
+                occupant.process_name.as_deref().unwrap_or("unknown")
+            ));
+        }
+    }
+
+    (occupants, debug_lines)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_unix_port_occupants(output: &str) -> Vec<PortOccupant> {
+    let mut occupants = Vec::new();
+    let mut current_pid: Option<u32> = None;
+    let mut current_process_name: Option<String> = None;
+    let mut current_local_address: Option<String> = None;
+
+    for line in output.lines() {
+        if line.is_empty() {
+            continue;
+        }
+
+        let (prefix, value) = line.split_at(1);
+        match prefix {
+            "p" => {
+                if let Some(pid) = current_pid.take() {
+                    occupants.push(PortOccupant {
+                        pid,
+                        local_address: current_local_address
+                            .take()
+                            .unwrap_or_else(|| "127.0.0.1:unknown".to_string()),
+                        state: "LISTEN".to_string(),
+                        process_name: current_process_name.take(),
+                    });
+                }
+
+                current_process_name = None;
+                current_local_address = None;
+                current_pid = value.parse::<u32>().ok();
+            }
+            "c" => {
+                current_process_name = normalize_optional_string(Some(value.to_string()));
+            }
+            "n" => {
+                current_local_address = normalize_optional_string(Some(value.to_string()));
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(pid) = current_pid {
+        occupants.push(PortOccupant {
+            pid,
+            local_address: current_local_address.unwrap_or_else(|| "127.0.0.1:unknown".to_string()),
+            state: "LISTEN".to_string(),
+            process_name: current_process_name,
+        });
+    }
+
+    occupants.sort_by(|left, right| {
+        left.local_address
+            .cmp(&right.local_address)
+            .then(left.pid.cmp(&right.pid))
+            .then(left.process_name.cmp(&right.process_name))
+    });
+
+    occupants
+}
+
 fn describe_port_occupants(port: u16, occupants: &[PortOccupant]) -> String {
     if occupants.is_empty() {
         return format!("127.0.0.1:{port} 当前无法绑定，但没有拿到明确的监听进程信息。");
@@ -2916,6 +3090,87 @@ fn describe_primary_port_issue(port: u16, occupants: &[PortOccupant]) -> String 
     }
 
     format!("127.0.0.1:{port} 当前无法绑定，本地服务无法监听固定端口。")
+}
+
+fn terminate_untracked_local_service(port: u16) -> Result<bool> {
+    let inspection = inspect_local_service_port(port);
+    let candidate_pids = inspection
+        .occupants
+        .iter()
+        .filter_map(|occupant| {
+            if occupant
+                .process_name
+                .as_deref()
+                .is_some_and(is_local_service_process_name)
+            {
+                Some(occupant.pid)
+            } else {
+                None
+            }
+        })
+        .collect::<BTreeSet<_>>();
+
+    if candidate_pids.is_empty() {
+        tracing::warn!(
+            "failed to resolve an untracked local service process on port {port}; inspection details: {}",
+            inspection.debug_lines.join(" | ")
+        );
+        return Ok(false);
+    }
+
+    for pid in candidate_pids {
+        terminate_process_by_pid(pid)?;
+    }
+
+    Ok(true)
+}
+
+fn is_local_service_process_name(process_name: &str) -> bool {
+    matches!(
+        process_name,
+        "moontv-local-service" | "moontv-local-service.exe"
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn terminate_process_by_pid(pid: u32) -> Result<()> {
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()
+        .with_context(|| format!("failed to invoke taskkill for PID {pid}"))?;
+
+    if !status.success() {
+        return Err(anyhow::anyhow!(
+            "taskkill returned {status} while terminating PID {pid}"
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn terminate_process_by_pid(pid: u32) -> Result<()> {
+    let term_status = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .with_context(|| format!("failed to invoke kill -TERM for PID {pid}"))?;
+
+    if term_status.success() {
+        return Ok(());
+    }
+
+    let kill_status = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status()
+        .with_context(|| format!("failed to invoke kill -KILL for PID {pid}"))?;
+
+    if !kill_status.success() {
+        return Err(anyhow::anyhow!(
+            "kill returned non-zero status while terminating PID {pid}"
+        ));
+    }
+
+    Ok(())
 }
 
 async fn run_local_service_trial(sidecar_path: &Path, paths: &RuntimePaths) -> SidecarTrialResult {
@@ -4942,15 +5197,15 @@ impl RuntimePaths {
 mod tests {
     use super::{
         DEFAULT_DESKTOP_OWNER_USERNAME, GithubReleaseAssetPayload, GithubReleasePayload,
-        LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus, LocalServiceStartupFailure,
-        PortOccupant, SidecarTrialResult, append_cache_busting_query,
+        LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus, LocalServiceHealthCheck,
+        LocalServiceStartupFailure, PortOccupant, SidecarTrialResult, append_cache_busting_query,
         build_profile_sync_status_diagnostic_detail, collect_diagnostics_error_text,
         describe_primary_port_issue, ensure_default_desktop_owner_auth_value,
         extract_desktop_release_version, extract_profile_sync_api_base_url,
         find_desktop_release_manifest_url, local_service_health_check,
         normalize_desktop_release_history, normalize_release_repository_slug,
         set_desktop_local_user_password_value, set_desktop_owner_password_value,
-        summarize_trial_output,
+        should_reuse_untracked_local_service, summarize_trial_output,
     };
     use std::time::Duration;
     use tokio::{
@@ -5306,6 +5561,39 @@ mod tests {
     }
 
     #[test]
+    fn untracked_local_service_requires_matching_version_to_be_reused() {
+        let current_version = "200.0.1-beta.16";
+
+        assert!(should_reuse_untracked_local_service(
+            &LocalServiceHealthCheck {
+                healthy: true,
+                status_code: Some(200),
+                error: None,
+                version: Some(current_version.to_string()),
+            },
+            current_version,
+        ));
+        assert!(!should_reuse_untracked_local_service(
+            &LocalServiceHealthCheck {
+                healthy: true,
+                status_code: Some(200),
+                error: None,
+                version: Some("200.0.1-beta.15".to_string()),
+            },
+            current_version,
+        ));
+        assert!(!should_reuse_untracked_local_service(
+            &LocalServiceHealthCheck {
+                healthy: true,
+                status_code: Some(200),
+                error: None,
+                version: None,
+            },
+            current_version,
+        ));
+    }
+
+    #[test]
     fn profile_sync_diagnostic_detail_mentions_domains_and_error_kind() {
         let status = LocalProfileSyncStatus {
             enabled: true,
@@ -5340,7 +5628,7 @@ mod tests {
             .expect("bind test health listener");
         let address = listener.local_addr().expect("test listener address");
         let base_url = format!("http://{address}");
-        let response_body = r#"{"status":"ok"}"#;
+        let response_body = r#"{"status":"ok","version":"200.0.1-beta.16"}"#;
         let expected_content_length = response_body.len();
 
         tokio::spawn(async move {
@@ -5360,6 +5648,7 @@ mod tests {
         assert!(result.healthy);
         assert_eq!(result.status_code, Some(200));
         assert!(result.error.is_none());
+        assert_eq!(result.version.as_deref(), Some("200.0.1-beta.16"));
     }
 
     #[tokio::test(flavor = "current_thread")]

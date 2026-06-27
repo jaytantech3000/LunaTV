@@ -138,6 +138,7 @@ const DEFAULT_BANGUMI_API_BASE_URL: &str = "https://api.bgm.tv";
 const DEFAULT_DOUBAN_API_BASE_URL: &str = "https://m.douban.com";
 const DEFAULT_DOUBAN_MOVIE_API_BASE_URL: &str = "https://movie.douban.com";
 const DEFAULT_DOUBAN_SEARCH_API_BASE_URL: &str = "https://search.douban.com";
+const BUILD_TIME_JAMENDO_CLIENT_ID: Option<&str> = option_env!("JAMENDO_CLIENT_ID");
 const DEFAULT_SITE_NAME: &str = "MoonTV";
 const DEFAULT_SITE_ANNOUNCEMENT: &str = "本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。";
 const DEFAULT_DOUBAN_PROXY_TYPE: &str = "cmliussss-cdn-tencent";
@@ -449,9 +450,10 @@ impl AppState {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| "https://api.jamendo.com/v3.0".to_string()),
-            jamendo_client_id: env::var("JAMENDO_CLIENT_ID")
-                .ok()
-                .filter(|value| !value.trim().is_empty()),
+            jamendo_client_id: resolve_optional_env_value(
+                "JAMENDO_CLIENT_ID",
+                BUILD_TIME_JAMENDO_CLIENT_ID,
+            ),
             bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
             douban_api_base_url: DEFAULT_DOUBAN_API_BASE_URL.to_string(),
             douban_movie_api_base_url: DEFAULT_DOUBAN_MOVIE_API_BASE_URL.to_string(),
@@ -721,6 +723,21 @@ impl AppState {
         fs::write(&self.config_path, contents)
             .with_context(|| format!("failed to write {}", self.config_path.display()))
     }
+}
+
+fn resolve_optional_env_value(
+    env_name: &str,
+    build_time_default: Option<&'static str>,
+) -> Option<String> {
+    env::var(env_name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            build_time_default.and_then(|value| {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            })
+        })
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1381,6 +1398,7 @@ struct LiveChannelsCache {
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: &'static str,
+    version: String,
     port: u16,
     base_url: String,
     config_path: String,
@@ -1973,6 +1991,7 @@ async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
     let sqlite_info = state.sqlite_info();
     Json(HealthResponse {
         status: "ok",
+        version: env!("CARGO_PKG_VERSION").to_string(),
         port: state.port,
         base_url: state.public_base_url.clone(),
         config_path: state.config_path.display().to_string(),
@@ -7069,6 +7088,7 @@ mod tests {
         filter_playback_search_results,
     };
 
+    use std::env;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use axum::{body::to_bytes, http::Request, response::IntoResponse};
@@ -7112,13 +7132,14 @@ mod tests {
               "api_site": {}
             }),
         );
-        let app = build_router(AppState::new(
+        let state = AppState::new(
             DEFAULT_HOST.to_string(),
             DEFAULT_PORT,
             config_path,
             temp_dir.path.join("data"),
             temp_dir.path.join("data/moontv.sqlite3"),
-        ));
+        );
+        let app = build_router(state);
 
         let response = app
             .oneshot(
@@ -7148,6 +7169,69 @@ mod tests {
         assert_eq!(
             payload.get("sqlite_migration_count"),
             Some(&Value::Number(1.into()))
+        );
+        assert_eq!(
+            payload.get("version"),
+            Some(&Value::String(env!("CARGO_PKG_VERSION").to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn music_sources_enable_jamendo_with_build_time_client_id_when_runtime_env_is_missing() {
+        let Some(expected_client_id) =
+            option_env!("JAMENDO_CLIENT_ID").filter(|value| !value.trim().is_empty())
+        else {
+            return;
+        };
+
+        let original_runtime_client_id = env::var("JAMENDO_CLIENT_ID").ok();
+        unsafe {
+            env::remove_var("JAMENDO_CLIENT_ID");
+        }
+
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        assert_eq!(state.jamendo_client_id.as_deref(), Some(expected_client_id));
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/music/sources")
+                    .body(Body::empty())
+                    .expect("music sources request"),
+            )
+            .await
+            .expect("music sources response");
+        let payload = read_json_body(response).await;
+
+        if let Some(value) = original_runtime_client_id {
+            unsafe {
+                env::set_var("JAMENDO_CLIENT_ID", value);
+            }
+        }
+
+        assert_eq!(
+            payload
+                .get("sources")
+                .and_then(Value::as_array)
+                .and_then(|sources| sources.get(2))
+                .and_then(|source| source.get("enabled"))
+                .and_then(Value::as_bool),
+            Some(true),
         );
     }
 

@@ -59,6 +59,7 @@ jobs:
       HUSKY: 0
       CARGO_TERM_COLOR: always
       NEXT_TELEMETRY_DISABLED: 1
+      JAMENDO_CLIENT_ID: ${{ vars.JAMENDO_CLIENT_ID }}
       SITE_BASE: ${{ vars.SITE_BASE || 'https://hkcu.qzz.io' }}
       LUNATV_RELEASE_REPOSITORY: ${{ github.repository }}
       NEXT_PUBLIC_RELEASE_REPOSITORY: ${{ github.repository }}
@@ -102,6 +103,14 @@ jobs:
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "Missing TAURI_SIGNING_PRIVATE_KEY secret"
+            exit 1
+          fi
+
+      - name: Validate Jamendo client id
+        shell: bash
+        run: |
+          if [ -z "$JAMENDO_CLIENT_ID" ]; then
+            echo "Missing JAMENDO_CLIENT_ID repository variable"
             exit 1
           fi
 
