@@ -8,6 +8,10 @@ import {
   sortMusicCollectionsBySavedAt,
 } from '@/features/music/services/music-collection-profile-records';
 import {
+  type MusicPlaybackSession,
+  sanitizeMusicPlaybackSession,
+} from '@/features/music/services/music-playback-session-records';
+import {
   type MusicPreferences,
   sanitizeMusicPreferences,
 } from '@/features/music/services/music-preferences-records';
@@ -289,5 +293,23 @@ export async function saveMusicPreferences(
   await db.saveMusicPreferences(
     getProfileUsername(profileContext),
     sanitizeMusicPreferences(preferences)
+  );
+}
+
+export async function getMusicPlaybackSession(
+  profileContext: ProfileContext
+): Promise<MusicPlaybackSession> {
+  return sanitizeMusicPlaybackSession(
+    await db.getMusicPlaybackSession(getProfileUsername(profileContext))
+  );
+}
+
+export async function saveMusicPlaybackSession(
+  profileContext: ProfileContext,
+  session: MusicPlaybackSession
+): Promise<void> {
+  await db.saveMusicPlaybackSession(
+    getProfileUsername(profileContext),
+    sanitizeMusicPlaybackSession(session)
   );
 }

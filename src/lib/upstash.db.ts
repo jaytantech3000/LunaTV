@@ -3,6 +3,7 @@
 import { Redis } from '@upstash/redis';
 
 import type { SavedMusicCollectionRecord } from '@/features/music/services/music-collection-profile-records';
+import type { MusicPlaybackSession } from '@/features/music/services/music-playback-session-records';
 import type { MusicPreferences } from '@/features/music/services/music-preferences-records';
 import type {
   MusicFavoriteRecord,
@@ -277,6 +278,32 @@ export class UpstashRedisStorage implements IStorage {
   ): Promise<void> {
     await withRetry(() =>
       this.client.set(this.musicPreferencesKey(userName), preferences)
+    );
+  }
+
+  // ---------- 音乐播放现场快照 ----------
+  private musicPlaybackSessionKey(user: string) {
+    return `u:${user}:music:playback-session`;
+  }
+
+  async getMusicPlaybackSession(
+    userName: string
+  ): Promise<MusicPlaybackSession | null> {
+    const value = await withRetry(() =>
+      this.client.get(this.musicPlaybackSessionKey(userName))
+    );
+
+    return value && typeof value === 'object'
+      ? (value as MusicPlaybackSession)
+      : null;
+  }
+
+  async setMusicPlaybackSession(
+    userName: string,
+    session: MusicPlaybackSession
+  ): Promise<void> {
+    await withRetry(() =>
+      this.client.set(this.musicPlaybackSessionKey(userName), session)
     );
   }
 

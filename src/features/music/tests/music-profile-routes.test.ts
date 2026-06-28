@@ -32,6 +32,8 @@ const mockAddMusicSearchHistory = jest.fn();
 const mockDeleteMusicSearchHistory = jest.fn();
 const mockGetMusicPreferences = jest.fn();
 const mockSaveMusicPreferences = jest.fn();
+const mockGetMusicPlaybackSession = jest.fn();
+const mockSaveMusicPlaybackSession = jest.fn();
 
 jest.mock('@/lib/server/profile-context', () => ({
   requireProfileContextFromRequest: (...args: unknown[]) =>
@@ -75,6 +77,10 @@ jest.mock('@/lib/core/profile/music-user-data-service', () => ({
   getMusicPreferences: (...args: unknown[]) => mockGetMusicPreferences(...args),
   saveMusicPreferences: (...args: unknown[]) =>
     mockSaveMusicPreferences(...args),
+  getMusicPlaybackSession: (...args: unknown[]) =>
+    mockGetMusicPlaybackSession(...args),
+  saveMusicPlaybackSession: (...args: unknown[]) =>
+    mockSaveMusicPlaybackSession(...args),
 }));
 
 describe('music profile api routes', () => {
@@ -557,6 +563,63 @@ describe('music profile api routes', () => {
         volume: 0.9,
         muted: false,
       }
+    );
+  });
+
+  it('reads and overwrites music playback sessions through the playback-session route', async () => {
+    const { GET, POST } = await importMusicProfileRoute(
+      '@/app/api/music/profile/playback-session/route'
+    );
+
+    const payload = {
+      queue: [
+        {
+          queueId: 'q1',
+          addedAt: 1,
+          fromContext: 'featured',
+          track: {
+            id: '9001',
+            source: 'netease',
+            title: 'Playable Track',
+            artists: ['Artist A'],
+            album: 'Album A',
+            coverUrl: 'https://cdn.music.test/a.jpg',
+            durationMs: 215000,
+            stream: '',
+            playable: true,
+          },
+        },
+      ],
+      currentTrackId: '9001',
+      positionMs: 42000,
+      durationMs: 215000,
+      savedAt: 123,
+    };
+
+    mockGetMusicPlaybackSession.mockResolvedValue(payload);
+
+    const getResponse = await GET(
+      new NextRequest('http://localhost/api/music/profile/playback-session')
+    );
+
+    expect(getResponse.status).toBe(200);
+    expect(await getResponse.json()).toEqual(payload);
+
+    const postResponse = await POST(
+      new NextRequest('http://localhost/api/music/profile/playback-session', {
+        method: 'POST',
+        body: JSON.stringify({
+          session: payload,
+        }),
+      })
+    );
+
+    expect(postResponse.status).toBe(200);
+    expect(mockSaveMusicPlaybackSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        username: 'desktop-owner',
+      }),
+      payload
     );
   });
 });

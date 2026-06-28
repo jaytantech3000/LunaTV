@@ -18,6 +18,11 @@ import {
   fetchMusicTrackPlayback,
 } from '../services/music-api-client';
 import {
+  buildMusicPlaybackSessionSnapshot,
+  getMusicPlaybackSession,
+  saveMusicPlaybackSession,
+} from '../services/music-playback-session';
+import {
   saveMusicPlayRecord,
   saveMusicRecentTrack,
 } from '../services/music-profile';
@@ -27,6 +32,7 @@ import {
   selectCurrentQueueItem,
   usePlaybackStore,
 } from '../state/playback-store';
+import { usePlayerSurfaceStore } from '../state/player-surface-store';
 
 function resolveRootErrorMessage(
   error: unknown,
@@ -130,6 +136,37 @@ function persistActiveTrackPlayback(
   });
 }
 
+function persistPlaybackSessionSnapshot(
+  audio: HTMLAudioElement | null | undefined
+): void {
+  const playbackState = usePlaybackStore.getState();
+  const currentQueueItem = selectCurrentQueueItem(playbackState);
+  const fallbackDurationMs = currentQueueItem
+    ? Math.max(playbackState.durationMs, currentQueueItem.track.durationMs)
+    : 0;
+  const canReadPositionFromAudio = Boolean(
+    audio && currentQueueItem?.track.stream
+  );
+  const snapshot = buildMusicPlaybackSessionSnapshot({
+    queue: playbackState.queue,
+    currentTrackId: playbackState.currentTrackId,
+    positionMs: currentQueueItem
+      ? canReadPositionFromAudio && audio
+        ? resolveMediaPositionMs(audio, playbackState.positionMs)
+        : Math.max(playbackState.positionMs, 0)
+      : 0,
+    durationMs:
+      canReadPositionFromAudio && audio
+        ? resolveMediaDurationMs(audio, fallbackDurationMs)
+        : fallbackDurationMs,
+    savedAt: Date.now(),
+  });
+
+  void saveMusicPlaybackSession(snapshot).catch((error) => {
+    console.error('记录播放现场快照失败', error);
+  });
+}
+
 function openMusicRouteFromTray(): void {
   if (typeof window === 'undefined') {
     return;
@@ -151,7 +188,15 @@ function openMusicRouteFromTray(): void {
 export default function MusicPlayerRoot() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const recentTrackKeyRef = useRef<string | null>(null);
+  const playbackSessionRestoreAttemptedRef = useRef(false);
+  const playbackSessionReadyRef = useRef(false);
+  const pendingRestoreSeekRef = useRef<{
+    trackId: string;
+    positionMs: number;
+  } | null>(null);
   const currentTrack = usePlaybackStore(selectCurrentQueueItem);
+  const queue = usePlaybackStore((state) => state.queue);
+  const currentTrackId = usePlaybackStore((state) => state.currentTrackId);
   const queueLength = usePlaybackStore((state) => state.queue.length);
   const advancePlayback = useMusicDataStore((state) => state.advancePlayback);
   const preferredPlaybackQuality = useMusicDataStore(
@@ -161,10 +206,92 @@ export default function MusicPlayerRoot() {
   const volume = usePlaybackStore((state) => state.volume);
   const muted = usePlaybackStore((state) => state.muted);
   const requestedSeekMs = usePlaybackStore((state) => state.requestedSeekMs);
-  const currentTrackId = currentTrack?.track.id ?? null;
   const currentTrackSource = currentTrack?.track.source ?? null;
   const currentTrackStream = currentTrack?.track.stream ?? '';
   const currentTrackDurationMs = currentTrack?.track.durationMs ?? 0;
+  const queueSessionSignature = queue
+    .map((item) => `${item.queueId}:${item.track.id}`)
+    .join('|');
+
+  useEffect(() => {
+    if (playbackSessionRestoreAttemptedRef.current) {
+      return;
+    }
+
+    playbackSessionRestoreAttemptedRef.current = true;
+    let cancelled = false;
+
+    const restorePlaybackSession = async () => {
+      const activePlaybackState = usePlaybackStore.getState();
+
+      if (
+        activePlaybackState.queue.length > 0 ||
+        activePlaybackState.currentTrackId
+      ) {
+        playbackSessionReadyRef.current = true;
+        persistPlaybackSessionSnapshot(audioRef.current);
+        return;
+      }
+
+      try {
+        const session = await getMusicPlaybackSession();
+
+        if (cancelled) {
+          return;
+        }
+
+        const latestPlaybackState = usePlaybackStore.getState();
+        if (
+          latestPlaybackState.queue.length > 0 ||
+          latestPlaybackState.currentTrackId
+        ) {
+          playbackSessionReadyRef.current = true;
+          persistPlaybackSessionSnapshot(audioRef.current);
+          return;
+        }
+
+        if (!session.currentTrackId || session.queue.length === 0) {
+          return;
+        }
+
+        const restoredTrack =
+          session.queue.find(
+            (item) => item.track.id === session.currentTrackId
+          ) ?? null;
+
+        usePlaybackStore.setState({
+          queue: session.queue,
+          currentTrackId: session.currentTrackId,
+          playState: 'paused',
+          positionMs: session.positionMs,
+          durationMs: restoredTrack?.track.durationMs ?? session.durationMs,
+          bufferedMs: 0,
+          requestedSeekMs: null,
+          error: null,
+        });
+        usePlayerSurfaceStore.getState().showMiniPlayer();
+
+        if (session.positionMs > 0) {
+          pendingRestoreSeekRef.current = {
+            trackId: session.currentTrackId,
+            positionMs: session.positionMs,
+          };
+        }
+      } catch (error) {
+        console.error('恢复播放现场快照失败', error);
+      } finally {
+        if (!cancelled) {
+          playbackSessionReadyRef.current = true;
+        }
+      }
+    };
+
+    void restorePlaybackSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!audioRef.current) {
@@ -175,6 +302,23 @@ export default function MusicPlayerRoot() {
     engine.syncDuration(currentTrackDurationMs);
     engine.syncPosition(0);
   }, [currentTrackDurationMs, currentTrackId]);
+
+  useEffect(() => {
+    const pendingRestoreSeek = pendingRestoreSeekRef.current;
+
+    if (
+      !pendingRestoreSeek ||
+      !audioRef.current ||
+      !currentTrackId ||
+      !currentTrackStream ||
+      pendingRestoreSeek.trackId !== currentTrackId
+    ) {
+      return;
+    }
+
+    usePlaybackStore.getState().requestSeek(pendingRestoreSeek.positionMs);
+    pendingRestoreSeekRef.current = null;
+  }, [currentTrackId, currentTrackStream]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -322,6 +466,14 @@ export default function MusicPlayerRoot() {
   }, [currentTrack]);
 
   useEffect(() => {
+    if (!playbackSessionReadyRef.current) {
+      return;
+    }
+
+    persistPlaybackSessionSnapshot(audioRef.current);
+  }, [queueSessionSignature, currentTrackId]);
+
+  useEffect(() => {
     const audio = audioRef.current;
 
     if (!audio || !currentTrackId || !currentTrackStream) {
@@ -368,6 +520,7 @@ export default function MusicPlayerRoot() {
     };
     const handlePause = () => {
       persistActiveTrackPlayback(audio, false);
+      persistPlaybackSessionSnapshot(audio);
     };
     const handleEnded = () => {
       persistActiveTrackPlayback(audio, true);
@@ -378,6 +531,7 @@ export default function MusicPlayerRoot() {
         audio.currentTime = 0;
         playbackState.setPositionMs(0);
         useLyricsStore.getState().setActiveLineIndex(resolveActiveLineIndex(0));
+        persistPlaybackSessionSnapshot(audio);
         void createAudioEngine(audio).play();
         return;
       }
@@ -418,6 +572,22 @@ export default function MusicPlayerRoot() {
       useLyricsStore.getState().setActiveLineIndex(nextActiveLineIndex);
     }
   }, [requestedSeekMs]);
+
+  useEffect(() => {
+    const handlePageHide = () => {
+      if (!playbackSessionReadyRef.current) {
+        return;
+      }
+
+      persistPlaybackSessionSnapshot(audioRef.current);
+    };
+
+    window.addEventListener('pagehide', handlePageHide);
+
+    return () => {
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, []);
 
   useEffect(() => {
     bindMusicMediaSession(currentTrack);

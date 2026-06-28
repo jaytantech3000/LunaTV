@@ -12,6 +12,7 @@ import {
 } from '../services/music-profile';
 import { useLyricsStore } from '../state/lyrics-store';
 import { usePlaybackStore } from '../state/playback-store';
+import { usePlayerSurfaceStore } from '../state/player-surface-store';
 
 const mockDesktopTraySync = jest.fn();
 let desktopTrayHandlers: {
@@ -496,6 +497,149 @@ describe('MusicPlayerRoot', () => {
         })
       );
     });
+  });
+
+  it('restores a persisted playback session on first mount without auto-playing', async () => {
+    localStorage.setItem(
+      'moontv_music_playback_session',
+      JSON.stringify({
+        queue: [
+          {
+            queueId: 'q1',
+            addedAt: 1,
+            fromContext: 'featured',
+            track: {
+              id: '9001',
+              source: 'netease',
+              title: 'Playable Track',
+              artists: ['Artist A'],
+              album: 'Album A',
+              coverUrl: 'https://cdn.music.test/album-a.jpg',
+              durationMs: 215000,
+              stream: '',
+              playable: true,
+            },
+          },
+        ],
+        currentTrackId: '9001',
+        positionMs: 42000,
+        durationMs: 215000,
+        savedAt: 123,
+      })
+    );
+
+    const { container } = render(<MusicPlayerRoot />);
+    const audio = container.querySelector('audio');
+
+    await waitFor(() => {
+      expect(usePlaybackStore.getState().currentTrackId).toBe('9001');
+    });
+
+    await waitFor(() => {
+      expect(audio?.currentTime).toBe(42);
+    });
+
+    expect(usePlaybackStore.getState().playState).toBe('paused');
+    expect(usePlaybackStore.getState().positionMs).toBe(42000);
+    expect(usePlayerSurfaceStore.getState().miniVisible).toBe(true);
+    expect(mediaPlaybackMocks.playSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite an existing queue with late playback-session restore', async () => {
+    localStorage.setItem(
+      'moontv_music_playback_session',
+      JSON.stringify({
+        queue: [
+          {
+            queueId: 'q1',
+            addedAt: 1,
+            fromContext: 'featured',
+            track: {
+              id: '9001',
+              source: 'netease',
+              title: 'Playable Track',
+              artists: ['Artist A'],
+              album: 'Album A',
+              coverUrl: 'https://cdn.music.test/album-a.jpg',
+              durationMs: 215000,
+              stream: '',
+              playable: true,
+            },
+          },
+        ],
+        currentTrackId: '9001',
+        positionMs: 42000,
+        durationMs: 215000,
+        savedAt: 123,
+      })
+    );
+    usePlaybackStore.getState().seedQueue([
+      {
+        queueId: 'q-local',
+        addedAt: 1,
+        fromContext: 'featured',
+        track: {
+          id: '9101',
+          source: 'netease',
+          title: 'Local Queue Track',
+          artists: ['Artist B'],
+          album: 'Album B',
+          coverUrl: 'https://cdn.music.test/album-b.jpg',
+          durationMs: 223000,
+          stream: '/api/music/stream?source=netease&id=9101&quality=standard',
+          playable: true,
+        },
+      },
+    ]);
+
+    render(<MusicPlayerRoot />);
+
+    await waitFor(() => {
+      expect(usePlaybackStore.getState().currentTrackId).toBe('9101');
+    });
+
+    expect(usePlaybackStore.getState().queue[0]?.track.id).toBe('9101');
+  });
+
+  it('flushes the latest playback session on pagehide', async () => {
+    usePlaybackStore.getState().seedQueue([
+      {
+        queueId: 'q1',
+        addedAt: 1,
+        fromContext: 'featured',
+        track: {
+          id: '9001',
+          source: 'netease',
+          title: 'Playable Track',
+          artists: ['Artist A'],
+          album: 'Album A',
+          coverUrl: 'https://cdn.music.test/album-a.jpg',
+          durationMs: 215000,
+          stream: '/api/music/stream?source=netease&id=9001&quality=standard',
+          playable: true,
+        },
+      },
+    ]);
+
+    const { container } = render(<MusicPlayerRoot />);
+    const audio = container.querySelector('audio');
+
+    act(() => {
+      if (audio) {
+        audio.currentTime = 24;
+      }
+
+      window.dispatchEvent(new Event('pagehide'));
+    });
+
+    await waitFor(() => {
+      const rawSession = localStorage.getItem('moontv_music_playback_session');
+      expect(rawSession).toContain('9001');
+    });
+
+    expect(localStorage.getItem('moontv_music_playback_session')).toContain(
+      '"positionMs":24000'
+    );
   });
 
   it('binds desktop shortcuts and media session metadata to active playback', () => {

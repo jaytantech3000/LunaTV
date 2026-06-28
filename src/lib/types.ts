@@ -1,4 +1,5 @@
 import type { SavedMusicCollectionRecord } from '@/features/music/services/music-collection-profile-records';
+import type { MusicPlaybackSession } from '@/features/music/services/music-playback-session-records';
 import type { MusicPreferences } from '@/features/music/services/music-preferences-records';
 import type {
   MusicFavoriteRecord,
@@ -106,6 +107,15 @@ export interface IStorage {
   setMusicPreferences(
     userName: string,
     preferences: MusicPreferences
+  ): Promise<void>;
+
+  // 音乐播放现场快照相关
+  getMusicPlaybackSession(
+    userName: string
+  ): Promise<MusicPlaybackSession | null>;
+  setMusicPlaybackSession(
+    userName: string,
+    session: MusicPlaybackSession
   ): Promise<void>;
 
   // 音乐已保存合集相关

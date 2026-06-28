@@ -3,6 +3,7 @@
 import { createClient, RedisClientType } from 'redis';
 
 import type { SavedMusicCollectionRecord } from '@/features/music/services/music-collection-profile-records';
+import type { MusicPlaybackSession } from '@/features/music/services/music-playback-session-records';
 import type { MusicPreferences } from '@/features/music/services/music-preferences-records';
 import type {
   MusicFavoriteRecord,
@@ -389,6 +390,33 @@ export abstract class BaseRedisStorage implements IStorage {
       this.client.set(
         this.musicPreferencesKey(userName),
         JSON.stringify(preferences)
+      )
+    );
+  }
+
+  // ---------- 音乐播放现场快照 ----------
+  private musicPlaybackSessionKey(user: string) {
+    return `u:${user}:music:playback-session`;
+  }
+
+  async getMusicPlaybackSession(
+    userName: string
+  ): Promise<MusicPlaybackSession | null> {
+    const value = await this.withRetry(() =>
+      this.client.get(this.musicPlaybackSessionKey(userName))
+    );
+
+    return value ? (JSON.parse(value) as MusicPlaybackSession) : null;
+  }
+
+  async setMusicPlaybackSession(
+    userName: string,
+    session: MusicPlaybackSession
+  ): Promise<void> {
+    await this.withRetry(() =>
+      this.client.set(
+        this.musicPlaybackSessionKey(userName),
+        JSON.stringify(session)
       )
     );
   }
