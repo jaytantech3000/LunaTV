@@ -464,8 +464,18 @@ export function toMusicAccountProfileEntity(
 
 export function toUserPlaylistSummaryEntity(
   item: NeteaseUserPlaylistPayload,
-  index: number
+  index: number,
+  options?: {
+    accountUserId?: string | null;
+  }
 ): MusicCollectionSummaryEntity {
+  const creatorUserId =
+    typeof item.creator?.userId === 'number' &&
+    Number.isFinite(item.creator.userId)
+      ? String(item.creator.userId)
+      : undefined;
+  const accountUserId = normalizeOptionalText(options?.accountUserId);
+
   return {
     id: String(item.id || ''),
     source: 'netease',
@@ -480,6 +490,12 @@ export function toUserPlaylistSummaryEntity(
         ? item.trackCount
         : undefined,
     accentColor: pickAccentColor(index + 1),
+    accountPlaylistRole:
+      accountUserId && creatorUserId
+        ? creatorUserId === accountUserId
+          ? 'owned'
+          : 'subscribed'
+        : undefined,
   };
 }
 

@@ -6,6 +6,7 @@ import type {
   MusicAccountQrSessionEntity,
   MusicCollectionEntity,
   MusicCollectionKind,
+  MusicCollectionSummaryEntity,
   MusicHomeView,
   MusicPlaybackQuality,
   MusicSearchResultEntity,
@@ -82,6 +83,41 @@ export interface MusicAccountRepository {
     source: LiveMusicSourceKey,
     sessionCookie?: string | null
   ): Promise<MusicAccountEntity>;
+  getLikedTracks(
+    source: LiveMusicSourceKey,
+    options?: {
+      sessionCookie?: string | null;
+    }
+  ): Promise<MusicTrackEntity[]>;
+  setTrackLiked(
+    source: LiveMusicSourceKey,
+    trackId: string,
+    liked: boolean,
+    options?: {
+      sessionCookie?: string | null;
+    }
+  ): Promise<MusicTrackEntity[]>;
+  setPlaylistSubscribed(
+    source: LiveMusicSourceKey,
+    playlistId: string,
+    subscribed: boolean,
+    options?: {
+      sessionCookie?: string | null;
+    }
+  ): Promise<MusicCollectionSummaryEntity[]>;
+  getRecentTracks(
+    source: LiveMusicSourceKey,
+    options?: {
+      sessionCookie?: string | null;
+    }
+  ): Promise<MusicTrackEntity[]>;
+  reportTrackPlayed(
+    source: LiveMusicSourceKey,
+    trackId: string,
+    options?: {
+      sessionCookie?: string | null;
+    }
+  ): Promise<MusicTrackEntity[]>;
   createQrSession(
     source: LiveMusicSourceKey
   ): Promise<MusicAccountQrSessionEntity>;

@@ -16,6 +16,10 @@ import {
   fetchMusicAccountState,
   pollMusicAccountQrSession,
 } from '../services/music-account-api-client';
+import {
+  subscribeMusicAccountPlaylist,
+  unsubscribeMusicAccountPlaylist,
+} from '../services/music-account-playlists';
 
 const QR_POLL_INTERVAL_MS = 1000;
 
@@ -81,6 +85,10 @@ interface MusicAccountState {
   startQrLogin: () => Promise<void>;
   retryQrLogin: () => Promise<void>;
   stopQrLoginPolling: () => void;
+  togglePlaylistSubscription: (
+    playlistId: string,
+    subscribed: boolean
+  ) => Promise<void>;
 }
 
 export const useMusicAccountStore = create<MusicAccountState>((set, get) => ({
@@ -284,5 +292,53 @@ export const useMusicAccountStore = create<MusicAccountState>((set, get) => ({
     set({
       qrState: createIdleQrState(),
     });
+  },
+  togglePlaylistSubscription: async (playlistId, subscribed) => {
+    const previousAccount = get().account;
+
+    if (!previousAccount?.authenticated) {
+      const errorMessage = subscribed
+        ? '未连接网易云账号，无法收藏歌单'
+        : '未连接网易云账号，无法取消收藏歌单';
+
+      set({
+        error: errorMessage,
+      });
+
+      throw new Error(errorMessage);
+    }
+
+    set({
+      submitting: true,
+      error: null,
+    });
+
+    try {
+      const playlists = subscribed
+        ? await subscribeMusicAccountPlaylist(playlistId)
+        : await unsubscribeMusicAccountPlaylist(playlistId);
+
+      set({
+        account: {
+          ...previousAccount,
+          playlists,
+        },
+        submitting: false,
+      });
+    } catch (error) {
+      console.error(
+        subscribed ? '收藏网易云歌单失败' : '取消收藏网易云歌单失败',
+        error
+      );
+      set({
+        account: previousAccount,
+        error: resolveAccountErrorMessage(
+          error,
+          subscribed ? '收藏网易云歌单失败' : '取消收藏网易云歌单失败'
+        ),
+        submitting: false,
+      });
+      throw error;
+    }
   },
 }));

@@ -11,16 +11,27 @@ import {
   getMusicRecentTracks,
 } from '../services/music-profile';
 import { useLyricsStore } from '../state/lyrics-store';
+import { useMusicAccountStore } from '../state/music-account-store';
+import { useMusicDownloadStore } from '../state/music-download-store';
+import { useMusicLibraryStore } from '../state/music-library-store';
 import { usePlaybackStore } from '../state/playback-store';
 import { usePlayerSurfaceStore } from '../state/player-surface-store';
+import { isMusicDownloadBridgeAvailable } from '../services/music-downloads';
 
 const mockDesktopTraySync = jest.fn();
+const mockListMusicDownloads = jest.fn();
+const mockResolveDownloadedMusicTrackPlaybackUrl = jest.fn();
 let desktopTrayHandlers: {
   onOpenMusic: () => void;
   onTogglePlay: () => void;
   onPlayNext: () => void;
   onPlayPrevious: () => void;
 } | null = null;
+
+const mockedIsMusicDownloadBridgeAvailable =
+  isMusicDownloadBridgeAvailable as jest.MockedFunction<
+    typeof isMusicDownloadBridgeAvailable
+  >;
 
 jest.mock('../services/desktop-music-tray', () => ({
   bindDesktopMusicTrayControls: (handlers: {
@@ -37,6 +48,16 @@ jest.mock('../services/desktop-music-tray', () => ({
   },
   syncDesktopMusicTrayState: (...args: unknown[]) =>
     mockDesktopTraySync(...args),
+}));
+
+jest.mock('../services/music-downloads', () => ({
+  deleteMusicDownload: jest.fn(),
+  downloadMusicTrack: jest.fn(),
+  isMusicDownloadBridgeAvailable: jest.fn(() => false),
+  isMusicDownloadFeatureEnabled: jest.fn(() => false),
+  listMusicDownloads: (...args: unknown[]) => mockListMusicDownloads(...args),
+  resolveDownloadedMusicTrackPlaybackUrl: (...args: unknown[]) =>
+    mockResolveDownloadedMusicTrackPlaybackUrl(...args),
 }));
 
 class TestMediaMetadata {
@@ -61,6 +82,11 @@ describe('MusicPlayerRoot', () => {
     mediaPlaybackMocks = mockMediaElementPlayback();
     mockDesktopTraySync.mockReset();
     mockDesktopTraySync.mockResolvedValue(undefined);
+    mockListMusicDownloads.mockReset();
+    mockListMusicDownloads.mockResolvedValue([]);
+    mockResolveDownloadedMusicTrackPlaybackUrl.mockReset();
+    mockResolveDownloadedMusicTrackPlaybackUrl.mockResolvedValue(null);
+    mockedIsMusicDownloadBridgeAvailable.mockReturnValue(false);
     desktopTrayHandlers = null;
     window.history.replaceState({}, '', '/');
     Object.defineProperty(globalThis, 'MediaMetadata', {
@@ -70,6 +96,13 @@ describe('MusicPlayerRoot', () => {
     Object.defineProperty(window.navigator, 'mediaSession', {
       value: { metadata: null },
       configurable: true,
+    });
+    useMusicDownloadStore.setState({
+      hydrated: false,
+      hydrating: false,
+      batchDownloading: false,
+      error: null,
+      records: {},
     });
   });
 
@@ -113,6 +146,184 @@ describe('MusicPlayerRoot', () => {
 
     expect(audio?.getAttribute('src')).toContain('/api/music/stream');
     expect(mediaPlaybackMocks.playSpy).toHaveBeenCalled();
+  });
+
+  it('prefers a downloaded local asset url before hydrating a remote stream', async () => {
+    usePlaybackStore.getState().seedQueue([
+      {
+        queueId: 'q1',
+        addedAt: 1,
+        fromContext: 'featured',
+        track: {
+          id: '9001',
+          source: 'netease',
+          title: 'Playable Track',
+          artists: ['Artist A'],
+          album: 'Album A',
+          coverUrl: 'https://cdn.music.test/album-a.jpg',
+          durationMs: 215000,
+          stream: '',
+          playable: true,
+        },
+      },
+    ]);
+    mockResolveDownloadedMusicTrackPlaybackUrl.mockResolvedValue(
+      'asset:///tmp/music/9001.mp3'
+    );
+
+    const { container } = render(<MusicPlayerRoot />);
+    const audio = container.querySelector('audio');
+
+    await waitFor(() => {
+      expect(audio?.getAttribute('src')).toBe('asset:///tmp/music/9001.mp3');
+    });
+    expect(usePlaybackStore.getState().queue[0]?.track.stream).toBe(
+      'asset:///tmp/music/9001.mp3'
+    );
+    expect(
+      (global.fetch as jest.Mock).mock.calls
+        .map(([input]) =>
+          input instanceof Request
+            ? new URL(input.url)
+            : new URL(String(input), 'http://localhost')
+        )
+        .filter((url) => url.pathname === '/api/music/track')
+    ).toHaveLength(0);
+  });
+
+  it('falls back to remote track hydration when local playback resolution fails', async () => {
+    const consoleErrorSpy = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    usePlaybackStore.getState().seedQueue([
+      {
+        queueId: 'q1',
+        addedAt: 1,
+        fromContext: 'featured',
+        track: {
+          id: '9001',
+          source: 'netease',
+          title: 'Playable Track',
+          artists: ['Artist A'],
+          album: 'Album A',
+          coverUrl: 'https://cdn.music.test/album-a.jpg',
+          durationMs: 215000,
+          stream: '',
+          playable: true,
+        },
+      },
+    ]);
+    mockResolveDownloadedMusicTrackPlaybackUrl.mockRejectedValue(
+      new Error('missing local file')
+    );
+
+    const { container } = render(<MusicPlayerRoot />);
+    const audio = container.querySelector('audio');
+
+    await waitFor(() => {
+      expect(audio?.getAttribute('src')).toContain('/api/music/stream');
+    });
+    expect(
+      (global.fetch as jest.Mock).mock.calls
+        .map(([input]) =>
+          input instanceof Request
+            ? new URL(input.url)
+            : new URL(String(input), 'http://localhost')
+        )
+        .filter((url) => url.pathname === '/api/music/track')
+    ).toHaveLength(1);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('refreshes the download store when local playback resolution returns no file', async () => {
+    mockedIsMusicDownloadBridgeAvailable.mockReturnValue(true);
+    mockListMusicDownloads
+      .mockResolvedValueOnce([
+        {
+          downloadId: 'netease+9001',
+          track: {
+            id: '9001',
+            source: 'netease',
+            title: 'Playable Track',
+            artists: ['Artist A'],
+            album: 'Album A',
+            coverUrl: 'https://cdn.music.test/album-a.jpg',
+            durationMs: 215000,
+            stream: '',
+            playable: true,
+          },
+          quality: 'high',
+          status: 'downloaded',
+          progressPercent: 100,
+          downloadedBytes: 1024,
+          totalBytes: 1024,
+          localFilePath: '/tmp/music/9001.mp3',
+          errorMessage: null,
+          downloadedAt: 1000,
+          updatedAt: 1000,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          downloadId: 'netease+9001',
+          track: {
+            id: '9001',
+            source: 'netease',
+            title: 'Playable Track',
+            artists: ['Artist A'],
+            album: 'Album A',
+            coverUrl: 'https://cdn.music.test/album-a.jpg',
+            durationMs: 215000,
+            stream: '',
+            playable: true,
+          },
+          quality: 'high',
+          status: 'failed',
+          progressPercent: 0,
+          downloadedBytes: 1024,
+          totalBytes: 1024,
+          localFilePath: null,
+          errorMessage: 'Downloaded file is unavailable.',
+          downloadedAt: null,
+          updatedAt: 1001,
+        },
+      ]);
+    usePlaybackStore.getState().seedQueue([
+      {
+        queueId: 'q1',
+        addedAt: 1,
+        fromContext: 'featured',
+        track: {
+          id: '9001',
+          source: 'netease',
+          title: 'Playable Track',
+          artists: ['Artist A'],
+          album: 'Album A',
+          coverUrl: 'https://cdn.music.test/album-a.jpg',
+          durationMs: 215000,
+          stream: '',
+          playable: true,
+        },
+      },
+    ]);
+
+    const { container } = render(<MusicPlayerRoot />);
+    const audio = container.querySelector('audio');
+
+    await waitFor(() => {
+      expect(audio?.getAttribute('src')).toContain('/api/music/stream');
+    });
+    await waitFor(() => {
+      expect(useMusicDownloadStore.getState().records['netease+9001']).toEqual(
+        expect.objectContaining({
+          status: 'failed',
+          localFilePath: null,
+          errorMessage: 'Downloaded file is unavailable.',
+        })
+      );
+    });
+    expect(mockListMusicDownloads).toHaveBeenCalledTimes(2);
   });
 
   it('hydrates queued tracks and lyrics before continuing playback', async () => {
@@ -446,6 +657,38 @@ describe('MusicPlayerRoot', () => {
       const recentTracks = await getMusicRecentTracks();
 
       expect(recentTracks[0]?.track.id).toBe('9001');
+    });
+  });
+
+  it('reports the active track into the remote recent library when a music account is connected', async () => {
+    await act(async () => {
+      await useMusicAccountStore.getState().connectSession('MUSIC_U=mock-session');
+    });
+    usePlaybackStore.getState().seedQueue([
+      {
+        queueId: 'q1',
+        addedAt: 1,
+        fromContext: 'featured',
+        track: {
+          id: '9001',
+          source: 'netease',
+          title: 'Playable Track',
+          artists: ['Artist A'],
+          album: 'Album A',
+          coverUrl: 'https://cdn.music.test/album-a.jpg',
+          durationMs: 215000,
+          stream: '/api/music/stream?source=netease&id=9001&quality=standard',
+          playable: true,
+        },
+      },
+    ]);
+
+    render(<MusicPlayerRoot />);
+
+    await waitFor(() => {
+      expect(useMusicLibraryStore.getState().recentTracks[0]?.track.id).toBe(
+        '9001'
+      );
     });
   });
 

@@ -14,6 +14,7 @@ import {
   selectCurrentQueueItem,
   usePlaybackStore,
 } from '../state/playback-store';
+import { useMusicAccountStore } from '../state/music-account-store';
 
 export function MusicTopBar() {
   const homeView = useMusicDataStore((state) => state.homeView);
@@ -33,6 +34,9 @@ export function MusicTopBar() {
   const favoriteCount = useMusicLibraryStore(
     (state) => state.favoriteTracks.length
   );
+  const musicAccount = useMusicAccountStore((state) => state.account);
+  const accountConnected = Boolean(musicAccount?.authenticated);
+  const playlistCount = musicAccount?.playlists.length || 0;
   const recentCount = useMusicLibraryStore(
     (state) => state.recentTracks.length
   );
@@ -125,7 +129,9 @@ export function MusicTopBar() {
     activeSection === 'settings'
       ? 'Music settings'
       : activeSection === 'library'
-      ? 'Your local music library'
+      ? accountConnected
+        ? 'Your music library'
+        : 'Your local music library'
       : activeSection === 'search'
       ? searchResult?.query || 'Search live catalog'
       : selectedCollectionMatchesSection
@@ -137,7 +143,9 @@ export function MusicTopBar() {
     activeSection === 'settings'
       ? 'Playback, theme, and lyric defaults'
       : activeSection === 'library'
-      ? `${favoriteCount} saved tracks`
+      ? accountConnected
+        ? `${playlistCount} playlists · ${favoriteCount} liked songs`
+        : `${favoriteCount} saved tracks`
       : activeSection === 'search'
       ? `${searchResult?.tracks.length || 0} track hits`
       : selectedCollectionMatchesSection
@@ -149,7 +157,7 @@ export function MusicTopBar() {
       : 'Live queue ready';
   const secondaryMeta =
     activeSection === 'settings'
-      ? `${favoriteCount} saved · ${resumeCount} continue · ${recentCount} recent`
+      ? `${favoriteCount} ${accountConnected ? 'liked' : 'saved'} · ${resumeCount} continue · ${recentCount} recent`
       : activeSection === 'library'
       ? `${resumeCount} continue · ${recentCount} recent`
       : activeSection === 'search'

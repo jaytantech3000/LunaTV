@@ -191,6 +191,25 @@ export interface NeteasePersonalFmResponse {
   data?: NeteaseSongPayload[];
 }
 
+export interface NeteaseRecentTrackItemPayload {
+  resourceId?: number | string;
+  playTime?: number;
+  playtime?: number;
+  data?: NeteaseSongPayload | null;
+  song?: NeteaseSongPayload | null;
+}
+
+export interface NeteaseRecentTrackResponse {
+  code?: number;
+  msg?: string;
+  message?: string;
+  data?:
+    | {
+        list?: NeteaseRecentTrackItemPayload[];
+      }
+    | NeteaseRecentTrackItemPayload[];
+}
+
 export interface NeteaseAccountProfilePayload {
   userId?: number;
   nickname?: string;
@@ -211,6 +230,7 @@ export interface NeteaseAccountResponse {
 export interface NeteaseUserPlaylistPayload {
   id?: number;
   name?: string;
+  specialType?: number;
   coverImgUrl?: string;
   description?: string;
   trackCount?: number;
@@ -456,12 +476,18 @@ export async function fetchNewestAlbums(): Promise<
 }
 
 export async function fetchPlaylistDetail(
-  playlistId: string
+  playlistId: string,
+  options?: {
+    cookieHeader?: string | null;
+  }
 ): Promise<NeteasePlaylistDetailPayload> {
   const payload = await fetchNeteaseJson<NeteasePlaylistDetailResponse>(
     '/api/playlist/detail',
     {
       id: String(requireNumericId(playlistId, '合集')),
+    },
+    {
+      cookieHeader: options?.cookieHeader,
     }
   );
 
@@ -682,6 +708,99 @@ export async function sendPersonalFmTrashFeedback(
   );
 
   assertNeteaseSuccess(payload, '标记私人 FM 不喜欢失败');
+}
+
+export async function sendTrackLikeMutation(
+  trackId: string,
+  liked: boolean,
+  sessionCookie: string
+): Promise<void> {
+  const payload = await fetchNeteaseJson<{
+    code?: number;
+    msg?: string;
+    message?: string;
+  }>(
+    '/api/like',
+    {
+      id: String(requireNumericId(trackId, '曲目')),
+      like: liked ? 'true' : 'false',
+      time: '25',
+    },
+    {
+      cookieHeader: sessionCookie,
+      method: 'POST',
+    }
+  );
+
+  assertNeteaseSuccess(payload, liked ? '收藏歌曲失败' : '取消收藏歌曲失败');
+}
+
+export async function sendPlaylistSubscriptionMutation(
+  playlistId: string,
+  subscribed: boolean,
+  sessionCookie: string
+): Promise<void> {
+  const payload = await fetchNeteaseJson<{
+    code?: number;
+    msg?: string;
+    message?: string;
+  }>(
+    subscribed ? '/api/playlist/subscribe' : '/api/playlist/unsubscribe',
+    {
+      id: String(requireNumericId(playlistId, '歌单')),
+    },
+    {
+      cookieHeader: sessionCookie,
+      method: 'POST',
+    }
+  );
+
+  assertNeteaseSuccess(payload, subscribed ? '收藏歌单失败' : '取消收藏歌单失败');
+}
+
+export async function fetchRecentTracks(
+  sessionCookie: string
+): Promise<NeteaseRecentTrackItemPayload[]> {
+  const payload = await fetchNeteaseJson<NeteaseRecentTrackResponse>(
+    '/api/record/recent/song',
+    undefined,
+    {
+      cookieHeader: sessionCookie,
+    }
+  );
+
+  assertNeteaseSuccess(payload, '获取最近播放失败');
+
+  if (Array.isArray(payload.data)) {
+    return payload.data;
+  }
+
+  return payload.data?.list || [];
+}
+
+export async function sendTrackScrobble(
+  trackId: string,
+  sessionCookie: string
+): Promise<void> {
+  const normalizedTrackId = String(requireNumericId(trackId, '曲目'));
+  const payload = await fetchNeteaseJson<{
+    code?: number;
+    msg?: string;
+    message?: string;
+  }>(
+    '/api/scrobble',
+    {
+      id: normalizedTrackId,
+      sourceid: normalizedTrackId,
+      time: '0',
+    },
+    {
+      cookieHeader: sessionCookie,
+      method: 'POST',
+    }
+  );
+
+  assertNeteaseSuccess(payload, '上报最近播放失败');
 }
 
 export async function fetchSearchTracks(

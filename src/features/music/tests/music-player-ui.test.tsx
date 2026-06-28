@@ -384,4 +384,35 @@ describe('rebuilt music player surfaces', () => {
       );
     });
   });
+
+  it('switches the full-player favorite action to like/liked copy after the netease session connects', async () => {
+    render(
+      <>
+        <MusicPageShell />
+        <MusicPlayerRoot />
+      </>
+    );
+
+    await screen.findByRole('button', { name: 'Open collection 官方榜单' });
+    await connectNeteaseSessionFromCookieFallback();
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Play featured queue' })
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open full player' }));
+    const fullPlayer = await screen.findByTestId('music-full-player');
+
+    fireEvent.click(
+      within(fullPlayer).getByRole('button', { name: 'Like track' })
+    );
+
+    await waitFor(() => {
+      expect(
+        within(fullPlayer).getByRole('button', { name: 'Liked track' })
+      ).toBeInTheDocument();
+    });
+  });
 });

@@ -1,10 +1,16 @@
 'use client';
 
+import { MusicDownloadDesktopHint } from './MusicDownloadDesktopHint';
 import { MusicLyricsPanel } from './MusicLyricsPanel';
 import { MusicPlaybackTimeline } from './MusicPlaybackTimeline';
 import { MusicQueueDrawer } from './MusicQueueDrawer';
 import { MusicTransportControls } from './MusicTransportControls';
+import { buildMusicDownloadId } from '../services/music-download-records';
+import { isMusicDownloadFeatureEnabled } from '../services/music-downloads';
 import { buildMusicProfileKey } from '../services/music-profile';
+import { useMusicDataStore } from '../state/music-data-store';
+import { useMusicAccountStore } from '../state/music-account-store';
+import { useMusicDownloadStore } from '../state/music-download-store';
 import { useMusicLibraryStore } from '../state/music-library-store';
 import {
   selectCurrentQueueItem,
@@ -28,6 +34,9 @@ export function MusicFullPlayer() {
   );
   const queuePanelOpen = usePlayerSurfaceStore((state) => state.queuePanelOpen);
   const currentTrack = usePlaybackStore(selectCurrentQueueItem);
+  const accountConnected = useMusicAccountStore((state) =>
+    Boolean(state.account?.authenticated)
+  );
   const queueLength = usePlaybackStore((state) => state.queue.length);
   const playMode = usePlaybackStore((state) => state.playMode);
   const volume = usePlaybackStore((state) => state.volume);
@@ -42,6 +51,14 @@ export function MusicFullPlayer() {
   const setVolume = usePlaybackStore((state) => state.setVolume);
   const setMuted = usePlaybackStore((state) => state.setMuted);
   const toggleMuted = usePlaybackStore((state) => state.toggleMuted);
+  const preferredPlaybackQuality = useMusicDataStore(
+    (state) => state.preferredPlaybackQuality
+  );
+  const downloadTrack = useMusicDownloadStore((state) => state.downloadTrack);
+  const removeTrackDownload = useMusicDownloadStore(
+    (state) => state.removeTrackDownload
+  );
+  const downloadRecords = useMusicDownloadStore((state) => state.records);
   const volumePercent = Math.round(volume * 100);
   const canAdjustPlayback = Boolean(currentTrack);
   const currentTrackKey = currentTrack
@@ -50,6 +67,12 @@ export function MusicFullPlayer() {
   const trackFavorited = currentTrackKey
     ? favoriteTrackKeys.includes(currentTrackKey)
     : false;
+  const showDownloadActions = isMusicDownloadFeatureEnabled();
+  const downloadRecord = currentTrack
+    ? downloadRecords[
+        buildMusicDownloadId(currentTrack.track.source, currentTrack.track.id)
+      ] ?? null
+    : null;
 
   if (!fullPlayerOpen) {
     return null;
@@ -71,10 +94,55 @@ export function MusicFullPlayer() {
             </h2>
           </div>
           <div className='flex flex-wrap gap-3'>
+            {showDownloadActions ? (
+              <button
+                type='button'
+                aria-label={
+                  downloadRecord?.status === 'downloaded'
+                    ? 'Delete downloaded track'
+                    : 'Download current track'
+                }
+                onClick={() => {
+                  if (!currentTrack) {
+                    return;
+                  }
+
+                  if (downloadRecord?.status === 'downloaded') {
+                    void removeTrackDownload(currentTrack.track);
+                    return;
+                  }
+
+                  if (downloadRecord?.status === 'downloading') {
+                    return;
+                  }
+
+                  void downloadTrack(
+                    currentTrack.track,
+                    preferredPlaybackQuality
+                  );
+                }}
+                disabled={!currentTrack || downloadRecord?.status === 'downloading'}
+                className='rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-[11px] uppercase tracking-[0.22em] text-white/78 transition hover:border-white/26 hover:bg-white hover:text-black disabled:cursor-not-allowed disabled:border-white/8 disabled:text-white/24'
+              >
+                {downloadRecord?.status === 'downloaded'
+                  ? 'Delete download'
+                  : downloadRecord?.status === 'downloading'
+                  ? 'Downloading'
+                  : downloadRecord?.status === 'failed'
+                  ? 'Retry download'
+                  : 'Download'}
+              </button>
+            ) : (
+              <MusicDownloadDesktopHint compact />
+            )}
             <button
               type='button'
               aria-label={
-                trackFavorited
+                accountConnected
+                  ? trackFavorited
+                    ? 'Liked track'
+                    : 'Like track'
+                  : trackFavorited
                   ? 'Remove track from library'
                   : 'Save track to library'
               }
@@ -88,7 +156,13 @@ export function MusicFullPlayer() {
               disabled={!currentTrack}
               className='rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-[11px] uppercase tracking-[0.22em] text-white/78 transition hover:border-white/26 hover:bg-white hover:text-black disabled:cursor-not-allowed disabled:border-white/8 disabled:text-white/24'
             >
-              {trackFavorited ? 'Saved' : 'Save'}
+              {accountConnected
+                ? trackFavorited
+                  ? 'Liked'
+                  : 'Like'
+                : trackFavorited
+                ? 'Saved'
+                : 'Save'}
             </button>
             <button
               type='button'

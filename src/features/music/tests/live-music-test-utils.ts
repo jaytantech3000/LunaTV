@@ -1,8 +1,10 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 
+import type { MusicCollectionSummaryEntity } from '../domain/entities';
 import { useLyricsStore } from '../state/lyrics-store';
 import { useMusicAccountStore } from '../state/music-account-store';
 import { useMusicDataStore } from '../state/music-data-store';
+import { useMusicDownloadStore } from '../state/music-download-store';
 import { useMusicLibraryStore } from '../state/music-library-store';
 import { useMusicShellStore } from '../state/music-shell-store';
 import { usePlaybackStore } from '../state/playback-store';
@@ -58,6 +60,13 @@ export function resetLiveMusicStores(): void {
     savedCollectionKeys: [],
     favoriteTrackKeys: [],
   });
+  useMusicDownloadStore.setState({
+    hydrated: false,
+    hydrating: false,
+    batchDownloading: false,
+    error: null,
+    records: {},
+  });
   usePlaybackStore.setState({
     queue: [],
     currentTrackId: null,
@@ -105,6 +114,104 @@ export function createLiveMusicFetchMock(): typeof fetch {
     muted: false,
   };
   let musicAccountConnected = false;
+  const createCreatedPlaylist = (): MusicCollectionSummaryEntity => ({
+    id: '501',
+    source: 'netease' as const,
+    kind: 'playlist' as const,
+    title: 'Created Playlist',
+    coverUrl: 'https://cdn.music.test/created-playlist.jpg',
+    description: 'Created by Luna Session',
+    trackCount: 18,
+    accentColor: '#7b61ff',
+    accountPlaylistRole: 'owned' as const,
+  });
+  let musicAccountPlaylists: MusicCollectionSummaryEntity[] = [
+    createCreatedPlaylist(),
+  ];
+  let musicLikedTracks = [
+    {
+      id: '9501',
+      source: 'netease' as const,
+      title: 'Cloud Liked Track',
+      artists: ['Cloud Artist'],
+      album: 'Cloud Album',
+      coverUrl: 'https://cdn.music.test/cloud-liked-track.jpg',
+      durationMs: 202000,
+      stream: '',
+      playable: true,
+    },
+  ];
+  let musicRemoteRecentTracks = [
+    {
+      id: '9601',
+      source: 'netease' as const,
+      title: 'Cloud Recent Track',
+      artists: ['Cloud Recent Artist'],
+      album: 'Cloud Recent Album',
+      coverUrl: 'https://cdn.music.test/cloud-recent-track.jpg',
+      durationMs: 211000,
+      stream: '',
+      playable: true,
+    },
+  ];
+  const musicFavoriteTracks: Record<
+    string,
+    {
+      track: {
+        id: string;
+        source: 'netease';
+        title: string;
+        artists: string[];
+        album: string;
+        coverUrl: string;
+        durationMs: number;
+        stream: string;
+        playable: boolean;
+      };
+      savedAt: number;
+    }
+  > = {};
+  const musicRecentTrackRecords: Array<{
+    track: {
+      id: string;
+      source: 'netease';
+      title: string;
+      artists: string[];
+      album: string;
+      coverUrl: string;
+      durationMs: number;
+      stream: string;
+      playable: boolean;
+    };
+    playedAt: number;
+  }> = [];
+  const musicPlayRecords: Record<
+    string,
+    {
+      track: {
+        id: string;
+        source: 'netease';
+        title: string;
+        artists: string[];
+        album: string;
+        coverUrl: string;
+        durationMs: number;
+        stream: string;
+        playable: boolean;
+      };
+      playedAt: number;
+      playTimeMs: number;
+      durationMs: number;
+      completed: boolean;
+    }
+  > = {};
+  let musicPlaybackSession = {
+    queue: [] as unknown[],
+    currentTrackId: null as string | null,
+    positionMs: 0,
+    durationMs: 0,
+    savedAt: 0,
+  };
   const savedMusicCollections: Array<{
     summary: {
       id: string;
@@ -120,6 +227,48 @@ export function createLiveMusicFetchMock(): typeof fetch {
   }> = [];
   let fmRefreshCount = 0;
 
+  const buildRemoteLikedTrack = (trackId: string) => {
+    if (trackId === '9001') {
+      return {
+        id: '9001',
+        source: 'netease' as const,
+        title: 'Playable Track',
+        artists: ['Artist A'],
+        album: 'Album A',
+        coverUrl: 'https://cdn.music.test/album-a.jpg',
+        durationMs: 215000,
+        stream: '',
+        playable: true,
+      };
+    }
+
+    if (trackId === 'settings-track') {
+      return {
+        id: 'settings-track',
+        source: 'netease' as const,
+        title: 'Settings Track',
+        artists: ['Settings Artist'],
+        album: 'Settings Album',
+        coverUrl: 'https://cdn.music.test/settings-track.jpg',
+        durationMs: 199000,
+        stream: '',
+        playable: true,
+      };
+    }
+
+    return {
+      id: trackId,
+      source: 'netease' as const,
+      title: 'Freshly Liked Track',
+      artists: ['Fresh Artist'],
+      album: 'Fresh Album',
+      coverUrl: 'https://cdn.music.test/fresh-liked-track.jpg',
+      durationMs: 212000,
+      stream: '',
+      playable: true,
+    };
+  };
+
   const buildConnectedMusicAccount = () => ({
     source: 'netease' as const,
     authenticated: true,
@@ -129,18 +278,25 @@ export function createLiveMusicFetchMock(): typeof fetch {
       avatarUrl: 'https://cdn.music.test/luna-session.jpg',
       signature: 'Connected for daily picks',
     },
-    playlists: [
-      {
-        id: '501',
-        source: 'netease' as const,
-        kind: 'playlist' as const,
-        title: 'Created Playlist',
-        coverUrl: 'https://cdn.music.test/created-playlist.jpg',
-        description: 'Created by Luna Session',
-        trackCount: 18,
-        accentColor: '#7b61ff',
-      },
-    ],
+    playlists: [...musicAccountPlaylists],
+  });
+
+  const buildSubscribedPlaylist = (
+    playlistId: string
+  ): MusicCollectionSummaryEntity => ({
+    id: playlistId,
+    source: 'netease' as const,
+    kind: 'playlist' as const,
+    title: playlistId === '302' ? 'Search Playlist' : '官方榜单详情',
+    coverUrl:
+      playlistId === '302'
+        ? 'https://cdn.music.test/search-playlist.jpg'
+        : 'https://cdn.music.test/toplist.jpg',
+    description:
+      playlistId === '302' ? 'Search playlist description' : 'Toplist Detail',
+    trackCount: playlistId === '302' ? 24 : 1,
+    accentColor: playlistId === '302' ? '#7b61ff' : '#ff5f6d',
+    accountPlaylistRole: 'subscribed' as const,
   });
 
   return jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -485,6 +641,7 @@ export function createLiveMusicFetchMock(): typeof fetch {
     if (requestUrl.pathname === '/api/music/account') {
       if (requestMethod === 'POST') {
         musicAccountConnected = true;
+        musicAccountPlaylists = [createCreatedPlaylist()];
 
         return createJsonResponse(buildConnectedMusicAccount());
       }
@@ -504,21 +661,148 @@ export function createLiveMusicFetchMock(): typeof fetch {
               signature: 'Connected for daily picks',
             }
           : null,
-        playlists: musicAccountConnected
-          ? [
-              {
-                id: '501',
-                source: 'netease',
-                kind: 'playlist',
-                title: 'Created Playlist',
-                coverUrl: 'https://cdn.music.test/created-playlist.jpg',
-                description: 'Created by Luna Session',
-                trackCount: 18,
-                accentColor: '#7b61ff',
-              },
-            ]
-          : [],
+        playlists: musicAccountConnected ? [...musicAccountPlaylists] : [],
       });
+    }
+
+    if (requestUrl.pathname === '/api/music/account/playlists/subscriptions') {
+      if (!musicAccountConnected) {
+        return createJsonResponse(
+          {
+            error:
+              requestMethod === 'DELETE'
+                ? '未连接网易云账号，无法取消收藏歌单'
+                : '未连接网易云账号，无法收藏歌单',
+          },
+          {
+            status: 401,
+          }
+        );
+      }
+
+      const playlistId =
+        typeof requestBody?.playlistId === 'string'
+          ? requestBody.playlistId.trim()
+          : '';
+
+      if (requestMethod === 'POST' && playlistId) {
+        if (!musicAccountPlaylists.some((playlist) => playlist.id === playlistId)) {
+          musicAccountPlaylists = [
+            ...musicAccountPlaylists,
+            buildSubscribedPlaylist(playlistId),
+          ];
+        }
+
+        return createJsonResponse([...musicAccountPlaylists]);
+      }
+
+      if (requestMethod === 'DELETE' && playlistId) {
+        musicAccountPlaylists = musicAccountPlaylists.filter(
+          (playlist) =>
+            playlist.id !== playlistId || playlist.accountPlaylistRole === 'owned'
+        );
+
+        return createJsonResponse([...musicAccountPlaylists]);
+      }
+
+      return createJsonResponse([...musicAccountPlaylists]);
+    }
+
+    if (requestUrl.pathname === '/api/music/account/likes') {
+      if (!musicAccountConnected) {
+        return createJsonResponse(
+          {
+            error: '未连接网易云账号，无法获取喜欢歌曲',
+          },
+          {
+            status: 401,
+          }
+        );
+      }
+
+      if (requestMethod === 'POST') {
+        const trackId =
+          typeof requestBody?.trackId === 'string'
+            ? requestBody.trackId.trim()
+            : '';
+
+        if (trackId && !musicLikedTracks.some((track) => track.id === trackId)) {
+          musicLikedTracks = [...musicLikedTracks, buildRemoteLikedTrack(trackId)];
+        }
+
+        return createJsonResponse([...musicLikedTracks]);
+      }
+
+      if (requestMethod === 'DELETE') {
+        const trackId =
+          typeof requestBody?.trackId === 'string'
+            ? requestBody.trackId.trim()
+            : '';
+
+        musicLikedTracks = musicLikedTracks.filter((track) => track.id !== trackId);
+        return createJsonResponse([...musicLikedTracks]);
+      }
+
+      return createJsonResponse([...musicLikedTracks]);
+    }
+
+    if (requestUrl.pathname === '/api/music/account/recent-tracks') {
+      if (!musicAccountConnected) {
+        return createJsonResponse(
+          {
+            error: '未连接网易云账号，无法获取最近播放',
+          },
+          {
+            status: 401,
+          }
+        );
+      }
+
+      if (requestMethod === 'POST') {
+        const trackId =
+          typeof requestBody?.trackId === 'string'
+            ? requestBody.trackId.trim()
+            : '';
+
+        if (
+          trackId &&
+          !musicRemoteRecentTracks.some((track) => track.id === trackId)
+        ) {
+          const remoteTrack =
+            trackId === '9001'
+              ? {
+                  id: '9001',
+                  source: 'netease' as const,
+                  title: 'Playable Track',
+                  artists: ['Artist A'],
+                  album: 'Album A',
+                  coverUrl: 'https://cdn.music.test/album-a.jpg',
+                  durationMs: 215000,
+                  stream: '',
+                  playable: true,
+                }
+              : {
+                  id: trackId,
+                  source: 'netease' as const,
+                  title: `Remote recent ${trackId}`,
+                  artists: ['Cloud Recent Artist'],
+                  album: 'Cloud Recent Album',
+                  coverUrl: 'https://cdn.music.test/cloud-recent-track.jpg',
+                  durationMs: 211000,
+                  stream: '',
+                  playable: true,
+                };
+
+          musicRemoteRecentTracks = [
+            remoteTrack,
+            ...musicRemoteRecentTracks.filter((track) => track.id !== trackId),
+          ];
+        }
+
+        return createJsonResponse([...musicRemoteRecentTracks]);
+      }
+
+      return createJsonResponse([...musicRemoteRecentTracks]);
     }
 
     if (requestUrl.pathname === '/api/music/account/qr') {
@@ -601,6 +885,123 @@ export function createLiveMusicFetchMock(): typeof fetch {
       }
 
       return createJsonResponse({ ...musicPreferences });
+    }
+
+    if (requestUrl.pathname === '/api/music/profile/favorites') {
+      if (requestMethod === 'POST') {
+        const key =
+          typeof requestBody?.key === 'string' ? requestBody.key.trim() : '';
+        const favorite =
+          requestBody?.favorite && typeof requestBody.favorite === 'object'
+            ? (requestBody.favorite as (typeof musicFavoriteTracks)[string])
+            : null;
+
+        if (key && favorite?.track?.id) {
+          musicFavoriteTracks[key] = favorite;
+        }
+
+        return createJsonResponse({ success: true });
+      }
+
+      if (requestMethod === 'DELETE') {
+        const key = requestUrl.searchParams.get('key')?.trim() || '';
+
+        if (key) {
+          delete musicFavoriteTracks[key];
+        } else {
+          Object.keys(musicFavoriteTracks).forEach((entryKey) => {
+            delete musicFavoriteTracks[entryKey];
+          });
+        }
+
+        return createJsonResponse({ success: true });
+      }
+
+      return createJsonResponse({ ...musicFavoriteTracks });
+    }
+
+    if (requestUrl.pathname === '/api/music/profile/recent-tracks') {
+      if (requestMethod === 'POST') {
+        const track =
+          requestBody?.track && typeof requestBody.track === 'object'
+            ? (requestBody.track as (typeof musicRecentTrackRecords)[number])
+            : null;
+
+        if (track?.track?.id) {
+          const key = `${track.track.source}+${track.track.id}`;
+          const nextRecords = [
+            track,
+            ...musicRecentTrackRecords.filter(
+              (record) => `${record.track.source}+${record.track.id}` !== key
+            ),
+          ].sort((left, right) => right.playedAt - left.playedAt);
+
+          musicRecentTrackRecords.splice(
+            0,
+            musicRecentTrackRecords.length,
+            ...nextRecords
+          );
+        }
+
+        return createJsonResponse({ success: true });
+      }
+
+      if (requestMethod === 'DELETE') {
+        musicRecentTrackRecords.length = 0;
+        return createJsonResponse({ success: true });
+      }
+
+      return createJsonResponse([...musicRecentTrackRecords]);
+    }
+
+    if (requestUrl.pathname === '/api/music/profile/play-records') {
+      if (requestMethod === 'POST') {
+        const key =
+          typeof requestBody?.key === 'string' ? requestBody.key.trim() : '';
+        const record =
+          requestBody?.record && typeof requestBody.record === 'object'
+            ? (requestBody.record as (typeof musicPlayRecords)[string])
+            : null;
+
+        if (key && record?.track?.id) {
+          musicPlayRecords[key] = record;
+        }
+
+        return createJsonResponse({ success: true });
+      }
+
+      if (requestMethod === 'DELETE') {
+        const key = requestUrl.searchParams.get('key')?.trim() || '';
+
+        if (key) {
+          delete musicPlayRecords[key];
+        } else {
+          Object.keys(musicPlayRecords).forEach((entryKey) => {
+            delete musicPlayRecords[entryKey];
+          });
+        }
+
+        return createJsonResponse({ success: true });
+      }
+
+      return createJsonResponse({ ...musicPlayRecords });
+    }
+
+    if (requestUrl.pathname === '/api/music/profile/playback-session') {
+      if (requestMethod === 'POST') {
+        const session =
+          requestBody?.session && typeof requestBody.session === 'object'
+            ? (requestBody.session as typeof musicPlaybackSession)
+            : null;
+
+        if (session) {
+          musicPlaybackSession = session;
+        }
+
+        return createJsonResponse({ success: true });
+      }
+
+      return createJsonResponse(musicPlaybackSession);
     }
 
     if (requestUrl.pathname === '/api/music/profile/collections') {
@@ -1053,14 +1454,37 @@ export function createLiveMusicFetchMock(): typeof fetch {
 }
 
 export async function connectNeteaseSessionFromCookieFallback(): Promise<void> {
-  fireEvent.click(
-    await screen.findByRole('button', { name: 'Use cookie instead' })
-  );
-  fireEvent.change(screen.getByLabelText('Netease session cookie'), {
-    target: { value: 'MUSIC_U=mock-session' },
+  await act(async () => {
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Use cookie instead' })
+    );
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-  await screen.findByText('Session connected');
+
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText('Netease session cookie'), {
+      target: { value: 'MUSIC_U=mock-session' },
+    });
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  });
+
+  await act(async () => {
+    await screen.findByText('Session connected');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  });
 }
 
 export function mockMediaElementPlayback(): {

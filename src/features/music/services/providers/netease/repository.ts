@@ -9,6 +9,7 @@ import {
   fetchDailyRecommendations,
   fetchLyric,
   fetchNewestAlbums,
+  fetchRecentTracks,
   fetchPersonalFmTracks,
   fetchPlaylistDetail,
   fetchQrLoginCode,
@@ -25,6 +26,9 @@ import {
   NeteaseApiError,
   resolvePlaybackQuality,
   sendPersonalFmTrashFeedback,
+  sendPlaylistSubscriptionMutation,
+  sendTrackScrobble,
+  sendTrackLikeMutation,
 } from './client';
 import {
   createNeteaseSourceEntity,
@@ -72,8 +76,21 @@ function normalizePage(page?: number): number {
   return Number.isFinite(page) && page && page > 0 ? page : 1;
 }
 
+function normalizeOptionalText(
+  value: string | null | undefined
+): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
 function toPlayableTracks(tracks: Parameters<typeof toMusicTrackEntity>[0][]) {
   return tracks.map(toMusicTrackEntity).filter((track) => track.playable);
+}
+
+function toLibraryTracks(tracks: Parameters<typeof toMusicTrackEntity>[0][]) {
+  return tracks
+    .map(toMusicTrackEntity)
+    .filter((track) => Boolean(normalizeOptionalText(track.id)));
 }
 
 function requireMusicSessionCookie(
@@ -85,6 +102,90 @@ function requireMusicSessionCookie(
   }
 
   return sessionCookie;
+}
+
+async function requireAuthenticatedAccountProfile(
+  sessionCookie: string,
+  fallbackMessage: string
+) {
+  const profilePayload = await fetchAccountProfile(sessionCookie);
+
+  if (!profilePayload?.userId) {
+    throw new NeteaseApiError(fallbackMessage, 401);
+  }
+
+  return profilePayload;
+}
+
+function isLikedSongsPlaylistName(name: string | null | undefined): boolean {
+  const normalizedName = normalizeOptionalText(name)?.toLowerCase();
+
+  return (
+    normalizedName === '我喜欢的音乐' || normalizedName === 'liked songs'
+  );
+}
+
+async function resolveLikedSongsPlaylistId(sessionCookie: string) {
+  const profile = await requireAuthenticatedAccountProfile(
+    sessionCookie,
+    '网易云会话无效或已过期'
+  );
+  const playlists = await fetchUserPlaylists(
+    String(profile.userId),
+    sessionCookie
+  );
+  const likedPlaylist = playlists.find((playlist) => playlist.specialType === 5);
+  const fallbackPlaylist =
+    likedPlaylist ||
+    playlists.find((playlist) => isLikedSongsPlaylistName(playlist.name));
+
+  if (!fallbackPlaylist?.id) {
+    throw new NeteaseApiError('未找到喜欢歌曲歌单', 404);
+  }
+
+  return String(fallbackPlaylist.id);
+}
+
+async function getLikedTracks(
+  sessionCookie: string
+): Promise<MusicTrackEntity[]> {
+  const likedPlaylistId = await resolveLikedSongsPlaylistId(sessionCookie);
+  const likedPlaylist = await fetchPlaylistDetail(likedPlaylistId, {
+    cookieHeader: sessionCookie,
+  });
+
+  return toLibraryTracks(likedPlaylist.tracks || []);
+}
+
+async function getRecentTracks(
+  sessionCookie: string
+): Promise<MusicTrackEntity[]> {
+  const recentTracks = await fetchRecentTracks(sessionCookie);
+
+  return recentTracks.flatMap((item) => {
+    const trackPayload = item.data || item.song;
+
+    if (!trackPayload) {
+      return [];
+    }
+
+    const track = toMusicTrackEntity(trackPayload);
+
+    return normalizeOptionalText(track.id) ? [track] : [];
+  });
+}
+
+async function getAccountPlaylists(
+  sessionCookie: string,
+  accountUserId: string
+) {
+  return (await fetchUserPlaylists(accountUserId, sessionCookie))
+    .map((item, index) =>
+      toUserPlaylistSummaryEntity(item, index, {
+        accountUserId,
+      })
+    )
+    .filter((playlist) => Boolean(playlist.id));
 }
 
 async function getAccount(
@@ -101,9 +202,7 @@ async function getAccount(
   }
 
   const profile = toMusicAccountProfileEntity(profilePayload);
-  const playlists = (await fetchUserPlaylists(profile.userId, sessionCookie))
-    .map((item, index) => toUserPlaylistSummaryEntity(item, index))
-    .filter((playlist) => Boolean(playlist.id));
+  const playlists = await getAccountPlaylists(sessionCookie, profile.userId);
 
   return {
     source: 'netease',
@@ -111,6 +210,25 @@ async function getAccount(
     profile,
     playlists,
   };
+}
+
+async function setPlaylistSubscribed(
+  sessionCookie: string,
+  playlistId: string,
+  subscribed: boolean
+) {
+  const fallbackMessage = subscribed
+    ? '未连接网易云账号，无法收藏歌单'
+    : '未连接网易云账号，无法取消收藏歌单';
+  const profilePayload = await requireAuthenticatedAccountProfile(
+    sessionCookie,
+    fallbackMessage
+  );
+  const accountUserId = String(profilePayload.userId);
+
+  await sendPlaylistSubscriptionMutation(playlistId, subscribed, sessionCookie);
+
+  return getAccountPlaylists(sessionCookie, accountUserId);
 }
 
 async function createQrSession(): Promise<MusicAccountQrSessionEntity> {
@@ -424,6 +542,57 @@ export function createNeteaseRepository(): MusicProviderRepositorySet {
       async getAccount(source, sessionCookie) {
         assertNeteaseSource(source);
         return getAccount(sessionCookie);
+      },
+      async getLikedTracks(source, options) {
+        assertNeteaseSource(source);
+        const sessionCookie = requireMusicSessionCookie(
+          options?.sessionCookie,
+          '未连接网易云账号，无法获取喜欢歌曲'
+        );
+
+        return getLikedTracks(sessionCookie);
+      },
+      async setTrackLiked(source, trackId, liked, options) {
+        assertNeteaseSource(source);
+        const sessionCookie = requireMusicSessionCookie(
+          options?.sessionCookie,
+          liked
+            ? '未连接网易云账号，无法收藏歌曲'
+            : '未连接网易云账号，无法取消收藏歌曲'
+        );
+
+        await sendTrackLikeMutation(trackId, liked, sessionCookie);
+        return getLikedTracks(sessionCookie);
+      },
+      async setPlaylistSubscribed(source, playlistId, subscribed, options) {
+        assertNeteaseSource(source);
+        const sessionCookie = requireMusicSessionCookie(
+          options?.sessionCookie,
+          subscribed
+            ? '未连接网易云账号，无法收藏歌单'
+            : '未连接网易云账号，无法取消收藏歌单'
+        );
+
+        return setPlaylistSubscribed(sessionCookie, playlistId, subscribed);
+      },
+      async getRecentTracks(source, options) {
+        assertNeteaseSource(source);
+        const sessionCookie = requireMusicSessionCookie(
+          options?.sessionCookie,
+          '未连接网易云账号，无法获取最近播放'
+        );
+
+        return getRecentTracks(sessionCookie);
+      },
+      async reportTrackPlayed(source, trackId, options) {
+        assertNeteaseSource(source);
+        const sessionCookie = requireMusicSessionCookie(
+          options?.sessionCookie,
+          '未连接网易云账号，无法上报最近播放'
+        );
+
+        await sendTrackScrobble(trackId, sessionCookie);
+        return getRecentTracks(sessionCookie);
       },
       async createQrSession(source) {
         assertNeteaseSource(source);

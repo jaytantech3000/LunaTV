@@ -1,4 +1,8 @@
 import { useMusicAccountStore } from '../state/music-account-store';
+import type {
+  MusicAccountEntity,
+  MusicCollectionSummaryEntity,
+} from '../domain/entities';
 
 jest.mock('../services/music-account-api-client', () => ({
   connectMusicAccountSession: jest.fn(),
@@ -8,12 +12,25 @@ jest.mock('../services/music-account-api-client', () => ({
   pollMusicAccountQrSession: jest.fn(),
 }));
 
+jest.mock(
+  '../services/music-account-playlists',
+  () => ({
+    subscribeMusicAccountPlaylist: jest.fn(),
+    unsubscribeMusicAccountPlaylist: jest.fn(),
+  })
+);
+
 interface MockMusicAccountApiClientModule {
   connectMusicAccountSession: jest.Mock;
   createMusicAccountQrSession: jest.Mock;
   disconnectMusicAccountSession: jest.Mock;
   fetchMusicAccountState: jest.Mock;
   pollMusicAccountQrSession: jest.Mock;
+}
+
+interface MockMusicAccountPlaylistsModule {
+  subscribeMusicAccountPlaylist: jest.Mock;
+  unsubscribeMusicAccountPlaylist: jest.Mock;
 }
 
 interface MusicAccountQrViewState {
@@ -32,22 +49,53 @@ interface MusicAccountQrViewState {
 }
 
 interface MusicAccountStoreWithQr {
-  account: {
-    authenticated: boolean;
-    profile: {
-      nickname: string;
-    } | null;
-  } | null;
+  account: MusicAccountEntity | null;
   disconnectSession: () => Promise<void>;
+  error: string | null;
   qrState: MusicAccountQrViewState;
   retryQrLogin: () => Promise<void>;
   startQrLogin: () => Promise<void>;
   stopQrLoginPolling: () => void;
+  togglePlaylistSubscription: (
+    playlistId: string,
+    subscribed: boolean
+  ) => Promise<void>;
 }
 
 const accountApiClientModule = jest.requireMock(
   '../services/music-account-api-client'
 ) as MockMusicAccountApiClientModule;
+const accountPlaylistsModule = jest.requireMock(
+  '../services/music-account-playlists'
+) as MockMusicAccountPlaylistsModule;
+
+function createPlaylistSummary(
+  id: string,
+  title: string,
+  accountPlaylistRole?: MusicCollectionSummaryEntity['accountPlaylistRole']
+): MusicCollectionSummaryEntity {
+  return {
+    id,
+    source: 'netease',
+    kind: 'playlist',
+    title,
+    accountPlaylistRole,
+  };
+}
+
+function createConnectedAccount(
+  playlists: MusicCollectionSummaryEntity[]
+): MusicAccountEntity {
+  return {
+    source: 'netease',
+    authenticated: true,
+    profile: {
+      userId: '42',
+      nickname: 'Luna Session',
+    },
+    playlists,
+  };
+}
 
 function resetMusicAccountStoreState() {
   useMusicAccountStore.setState({
@@ -209,5 +257,111 @@ describe('useMusicAccountStore qr login flow', () => {
       (useMusicAccountStore.getState() as unknown as MusicAccountStoreWithQr)
         .qrState.status
     ).toBe('idle');
+  });
+});
+
+describe('useMusicAccountStore playlist subscriptions', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useRealTimers();
+    (
+      useMusicAccountStore.getState() as unknown as MusicAccountStoreWithQr
+    ).stopQrLoginPolling?.();
+    resetMusicAccountStoreState();
+  });
+
+  it('refreshes account.playlists after subscribing a playlist', async () => {
+    const initialPlaylists = [
+      createPlaylistSummary('501', 'Created Playlist', 'owned'),
+    ];
+    const refreshedPlaylists = [
+      ...initialPlaylists,
+      createPlaylistSummary('503', 'Fresh Collected Playlist', 'subscribed'),
+    ];
+    accountPlaylistsModule.subscribeMusicAccountPlaylist.mockResolvedValue(
+      refreshedPlaylists
+    );
+    useMusicAccountStore.setState({
+      account: createConnectedAccount(initialPlaylists),
+    });
+
+    await (
+      useMusicAccountStore.getState() as unknown as MusicAccountStoreWithQr
+    ).togglePlaylistSubscription('503', true);
+
+    expect(
+      accountPlaylistsModule.subscribeMusicAccountPlaylist
+    ).toHaveBeenCalledWith('503');
+    expect(
+      (useMusicAccountStore.getState() as unknown as MusicAccountStoreWithQr)
+        .account?.playlists
+    ).toEqual(refreshedPlaylists);
+    expect(
+      (useMusicAccountStore.getState() as unknown as MusicAccountStoreWithQr)
+        .error
+    ).toBeNull();
+  });
+
+  it('refreshes account.playlists after unsubscribing a playlist', async () => {
+    const initialPlaylists = [
+      createPlaylistSummary('501', 'Created Playlist', 'owned'),
+      createPlaylistSummary('502', 'Subscribed Playlist', 'subscribed'),
+    ];
+    const refreshedPlaylists = [
+      createPlaylistSummary('501', 'Created Playlist', 'owned'),
+    ];
+    accountPlaylistsModule.unsubscribeMusicAccountPlaylist.mockResolvedValue(
+      refreshedPlaylists
+    );
+    useMusicAccountStore.setState({
+      account: createConnectedAccount(initialPlaylists),
+    });
+
+    await (
+      useMusicAccountStore.getState() as unknown as MusicAccountStoreWithQr
+    ).togglePlaylistSubscription('502', false);
+
+    expect(
+      accountPlaylistsModule.unsubscribeMusicAccountPlaylist
+    ).toHaveBeenCalledWith('502');
+    expect(
+      (useMusicAccountStore.getState() as unknown as MusicAccountStoreWithQr)
+        .account?.playlists
+    ).toEqual(refreshedPlaylists);
+  });
+
+  it('keeps the previous playlist list when the remote mutation fails', async () => {
+    const initialPlaylists = [
+      createPlaylistSummary('501', 'Created Playlist', 'owned'),
+      createPlaylistSummary('502', 'Subscribed Playlist', 'subscribed'),
+    ];
+    const consoleErrorSpy = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    accountPlaylistsModule.unsubscribeMusicAccountPlaylist.mockRejectedValue(
+      new Error('cloud playlist failed')
+    );
+    useMusicAccountStore.setState({
+      account: createConnectedAccount(initialPlaylists),
+    });
+
+    try {
+      await expect(
+        (
+          useMusicAccountStore.getState() as unknown as MusicAccountStoreWithQr
+        ).togglePlaylistSubscription('502', false)
+      ).rejects.toThrow('cloud playlist failed');
+
+      expect(
+        (useMusicAccountStore.getState() as unknown as MusicAccountStoreWithQr)
+          .account?.playlists
+      ).toEqual(initialPlaylists);
+      expect(
+        (useMusicAccountStore.getState() as unknown as MusicAccountStoreWithQr)
+          .error
+      ).toBe('cloud playlist failed');
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 });

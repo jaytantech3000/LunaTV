@@ -1,5 +1,10 @@
 import type { DesktopReleaseHistoryItem } from '@/lib/desktop-release-history';
 import { getRuntimeConfig } from '@/lib/runtime-config';
+import type {
+  MusicDownloadRecord,
+  MusicPlaybackQuality,
+  MusicTrackEntity,
+} from '@/features/music/domain/entities';
 
 export interface DesktopLocalServiceStatus {
   running: boolean;
@@ -95,6 +100,16 @@ export interface DesktopMusicTrayState {
   source: string | null;
   playState: 'idle' | 'playing' | 'paused';
   queueLength: number;
+}
+
+export interface DesktopMusicTrackDownloadRequest {
+  track: MusicTrackEntity;
+  quality: MusicPlaybackQuality;
+  downloadUrl: string;
+}
+
+export interface DesktopMusicDownloadPlaybackPath {
+  filePath: string | null;
 }
 
 declare global {
@@ -387,4 +402,32 @@ export async function listenDesktopMusicTrayCommands(
 
     listener(command);
   });
+}
+
+export function listDesktopMusicDownloads(): Promise<MusicDownloadRecord[]> {
+  return invokeDesktopCommand<MusicDownloadRecord[]>('list_music_downloads');
+}
+
+export function downloadDesktopMusicTrack(
+  payload: DesktopMusicTrackDownloadRequest
+): Promise<MusicDownloadRecord> {
+  return invokeDesktopCommand<MusicDownloadRecord>('download_music_track', {
+    payload,
+  });
+}
+
+export function deleteDesktopMusicDownload(downloadId: string): Promise<void> {
+  return invokeDesktopCommand<void>('delete_music_download', {
+    downloadId,
+  });
+}
+
+export function resolveDesktopMusicDownloadPlayback(params: {
+  source: MusicTrackEntity['source'];
+  trackId: string;
+}): Promise<DesktopMusicDownloadPlaybackPath> {
+  return invokeDesktopCommand<DesktopMusicDownloadPlaybackPath>(
+    'resolve_music_download_playback',
+    params
+  );
 }

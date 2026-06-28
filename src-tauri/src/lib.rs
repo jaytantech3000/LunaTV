@@ -18,14 +18,14 @@ use futures::StreamExt;
 use minisign_verify::{PublicKey, Signature};
 use reqwest::{
     ClientBuilder, StatusCode,
-    header::{ACCEPT, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap, HeaderValue, RANGE},
+    header::{ACCEPT, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, HeaderMap, HeaderValue, RANGE},
 };
 use semver::Version;
 #[cfg(target_os = "windows")]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, Manager, RunEvent, State,
+    AppHandle, Emitter, Manager, RunEvent, Runtime, State,
     ipc::Channel,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -70,6 +70,9 @@ const MUSIC_TRAY_NEXT_ID: &str = "music-tray-next";
 const MUSIC_TRAY_QUIT_ID: &str = "music-tray-quit";
 const MUSIC_TRAY_IDLE_TITLE: &str = "Luna Music";
 const MUSIC_TRAY_IDLE_TOOLTIP: &str = "Luna Music is ready";
+const MUSIC_DOWNLOADS_DIR_NAME: &str = "music";
+const MUSIC_DOWNLOADS_AUDIO_DIR_NAME: &str = "audio";
+const MUSIC_DOWNLOADS_RECORDS_FILE_NAME: &str = "music-downloads.json";
 
 const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
 const PROFILE_SYNC_USER_DATA_DOMAINS: [&str; 5] = [
@@ -236,6 +239,58 @@ struct DesktopMusicTrayStatePayload {
     source: Option<String>,
     play_state: DesktopMusicTrayPlayState,
     queue_length: usize,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum DesktopMusicDownloadStatus {
+    Idle,
+    Downloading,
+    Downloaded,
+    Failed,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DesktopMusicTrackPayload {
+    id: String,
+    source: String,
+    title: String,
+    artists: Vec<String>,
+    album: String,
+    cover_url: String,
+    duration_ms: u64,
+    playable: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DesktopMusicDownloadRecordPayload {
+    download_id: String,
+    track: DesktopMusicTrackPayload,
+    quality: String,
+    status: DesktopMusicDownloadStatus,
+    progress_percent: u64,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    local_file_path: Option<String>,
+    error_message: Option<String>,
+    downloaded_at: Option<u64>,
+    updated_at: u64,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopMusicTrackDownloadRequestPayload {
+    track: DesktopMusicTrackPayload,
+    quality: String,
+    download_url: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopMusicDownloadPlaybackPathPayload {
+    file_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -784,6 +839,35 @@ fn update_music_tray_state(
     apply_music_tray_state(&app, &state).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn list_music_downloads(app: AppHandle) -> Result<Vec<DesktopMusicDownloadRecordPayload>, String> {
+    list_music_downloads_impl(&app).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn download_music_track(
+    app: AppHandle,
+    payload: DesktopMusicTrackDownloadRequestPayload,
+) -> Result<DesktopMusicDownloadRecordPayload, String> {
+    download_music_track_impl(&app, payload)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_music_download(app: AppHandle, download_id: String) -> Result<(), String> {
+    delete_music_download_impl(&app, download_id).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn resolve_music_download_playback(
+    app: AppHandle,
+    source: String,
+    track_id: String,
+) -> Result<DesktopMusicDownloadPlaybackPathPayload, String> {
+    resolve_music_download_playback_impl(&app, source, track_id).map_err(|error| error.to_string())
+}
+
 fn emit_music_tray_command(app: &AppHandle, command: &str) {
     if let Err(error) = app.emit(
         MUSIC_TRAY_EVENT_NAME,
@@ -1007,6 +1091,10 @@ pub fn run() {
             clear_paused_desktop_update_download,
             open_external_url,
             update_music_tray_state,
+            list_music_downloads,
+            download_music_track,
+            delete_music_download,
+            resolve_music_download_playback,
             install_desktop_release,
         ])
         .build(tauri::generate_context!())
@@ -3986,6 +4074,482 @@ fn write_json_value_file(path: &Path, value: &serde_json::Value) -> Result<()> {
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
+fn build_music_download_id(source: &str, track_id: &str) -> String {
+    format!("{}+{}", source.trim().to_lowercase(), track_id.trim())
+}
+
+fn normalize_music_download_quality(value: &str) -> String {
+    if value.trim().eq_ignore_ascii_case("high") {
+        "high".to_string()
+    } else {
+        "standard".to_string()
+    }
+}
+
+fn normalize_music_download_track_payload(
+    track: DesktopMusicTrackPayload,
+) -> Result<DesktopMusicTrackPayload> {
+    let id = normalize_required_string(track.id, "music download track id cannot be empty")?;
+    let source =
+        normalize_required_string(track.source, "music download track source cannot be empty")?;
+    let title =
+        normalize_required_string(track.title, "music download track title cannot be empty")?;
+    let artists = track
+        .artists
+        .into_iter()
+        .map(|artist| artist.trim().to_string())
+        .filter(|artist| !artist.is_empty())
+        .collect::<Vec<_>>();
+
+    if artists.is_empty() {
+        anyhow::bail!("music download track artists cannot be empty");
+    }
+
+    Ok(DesktopMusicTrackPayload {
+        id,
+        source,
+        title,
+        artists,
+        album: track.album.trim().to_string(),
+        cover_url: normalize_optional_trimmed_string(Some(track.cover_url.as_str())).unwrap_or_default(),
+        duration_ms: track.duration_ms,
+        playable: track.playable,
+    })
+}
+
+fn normalize_music_download_record_payload(
+    record: DesktopMusicDownloadRecordPayload,
+) -> Result<DesktopMusicDownloadRecordPayload> {
+    let track = normalize_music_download_track_payload(record.track)?;
+    let local_file_path = normalize_optional_trimmed_string(record.local_file_path.as_deref());
+    let error_message = normalize_optional_trimmed_string(record.error_message.as_deref());
+    let updated_at = if record.updated_at > 0 {
+        record.updated_at
+    } else {
+        current_timestamp_ms()
+    };
+    let downloaded_at = record.downloaded_at.filter(|value| *value > 0);
+    let total_bytes = record.total_bytes.max(record.downloaded_bytes);
+    let mut normalized = DesktopMusicDownloadRecordPayload {
+        download_id: build_music_download_id(&track.source, &track.id),
+        track,
+        quality: normalize_music_download_quality(&record.quality),
+        status: record.status,
+        progress_percent: record.progress_percent.min(100),
+        downloaded_bytes: record.downloaded_bytes,
+        total_bytes,
+        local_file_path,
+        error_message,
+        downloaded_at,
+        updated_at,
+    };
+
+    if matches!(normalized.status, DesktopMusicDownloadStatus::Downloading) {
+        normalized.status = DesktopMusicDownloadStatus::Failed;
+        normalized.progress_percent = 0;
+        normalized.local_file_path = None;
+        normalized.downloaded_at = None;
+        if normalized.error_message.is_none() {
+            normalized.error_message = Some("Download interrupted.".to_string());
+        }
+    }
+
+    if matches!(normalized.status, DesktopMusicDownloadStatus::Downloaded)
+        && normalized.local_file_path.is_none()
+    {
+        normalized.status = DesktopMusicDownloadStatus::Failed;
+        normalized.progress_percent = 0;
+        normalized.downloaded_at = None;
+        normalized.error_message = Some("Downloaded file is unavailable.".to_string());
+    }
+
+    Ok(normalized)
+}
+
+fn repair_music_download_record(
+    record: DesktopMusicDownloadRecordPayload,
+) -> DesktopMusicDownloadRecordPayload {
+    if !matches!(record.status, DesktopMusicDownloadStatus::Downloaded) {
+        return record;
+    }
+
+    let Some(local_file_path) = record.local_file_path.as_deref() else {
+        return DesktopMusicDownloadRecordPayload {
+            status: DesktopMusicDownloadStatus::Failed,
+            progress_percent: 0,
+            downloaded_at: None,
+            error_message: Some("Downloaded file is unavailable.".to_string()),
+            ..record
+        };
+    };
+
+    if Path::new(local_file_path).is_file() {
+        return record;
+    }
+
+    DesktopMusicDownloadRecordPayload {
+        status: DesktopMusicDownloadStatus::Failed,
+        progress_percent: 0,
+        local_file_path: None,
+        downloaded_at: None,
+        error_message: Some("Downloaded file is unavailable.".to_string()),
+        ..record
+    }
+}
+
+fn sort_music_download_records(records: &mut Vec<DesktopMusicDownloadRecordPayload>) {
+    records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+}
+
+fn read_music_download_records_raw<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Vec<DesktopMusicDownloadRecordPayload>> {
+    let paths = resolve_runtime_paths(app)?;
+    let records_path = paths.music_downloads_records_path();
+
+    if !records_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = fs::read_to_string(&records_path)
+        .with_context(|| format!("failed to read {}", records_path.display()))?;
+    let records: Vec<DesktopMusicDownloadRecordPayload> = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse {}", records_path.display()))?;
+
+    records
+        .into_iter()
+        .map(normalize_music_download_record_payload)
+        .collect()
+}
+
+fn write_music_download_records<R: Runtime>(
+    app: &AppHandle<R>,
+    records: &[DesktopMusicDownloadRecordPayload],
+) -> Result<()> {
+    let paths = resolve_runtime_paths(app)?;
+    let records_path = paths.music_downloads_records_path();
+
+    if let Some(parent_dir) = records_path.parent() {
+        fs::create_dir_all(parent_dir)
+            .with_context(|| format!("failed to create {}", parent_dir.display()))?;
+    }
+
+    let mut next_records = records.to_vec();
+    sort_music_download_records(&mut next_records);
+    let contents = serde_json::to_string_pretty(&next_records)
+        .with_context(|| format!("failed to serialize {}", records_path.display()))?;
+    fs::write(&records_path, contents)
+        .with_context(|| format!("failed to write {}", records_path.display()))
+}
+
+fn load_music_download_records<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Vec<DesktopMusicDownloadRecordPayload>> {
+    let records = read_music_download_records_raw(app)?
+        .into_iter()
+        .map(repair_music_download_record)
+        .collect::<Vec<_>>();
+    write_music_download_records(app, &records)?;
+    Ok(records)
+}
+
+fn upsert_music_download_record(
+    records: &mut Vec<DesktopMusicDownloadRecordPayload>,
+    record: DesktopMusicDownloadRecordPayload,
+) {
+    if let Some(existing_record) = records
+        .iter_mut()
+        .find(|entry| entry.download_id == record.download_id)
+    {
+        *existing_record = record;
+        return;
+    }
+
+    records.push(record);
+}
+
+fn infer_music_download_file_extension(download_url: &Url, content_type: Option<&str>) -> String {
+    let content_type = content_type
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if content_type.contains("audio/mp4") || content_type.contains("audio/x-m4a") {
+        return "m4a".to_string();
+    }
+    if content_type.contains("audio/aac") {
+        return "aac".to_string();
+    }
+    if content_type.contains("audio/flac") {
+        return "flac".to_string();
+    }
+    if content_type.contains("audio/wav") || content_type.contains("audio/wave") {
+        return "wav".to_string();
+    }
+    if content_type.contains("audio/ogg") {
+        return "ogg".to_string();
+    }
+    if content_type.contains("audio/mpeg") {
+        return "mp3".to_string();
+    }
+
+    download_url
+        .path_segments()
+        .and_then(|segments| segments.last())
+        .and_then(|file_name| file_name.rsplit_once('.').map(|(_, extension)| extension))
+        .map(|extension| extension.trim().to_ascii_lowercase())
+        .filter(|extension| !extension.is_empty() && extension.len() <= 8)
+        .unwrap_or_else(|| "mp3".to_string())
+}
+
+fn build_music_download_file_path(
+    app: &AppHandle,
+    track: &DesktopMusicTrackPayload,
+    quality: &str,
+    download_url: &Url,
+    content_type: Option<&str>,
+) -> Result<PathBuf> {
+    let runtime_paths = resolve_runtime_paths(app)?;
+    let mut hasher = DefaultHasher::new();
+    track.id.hash(&mut hasher);
+    track.source.hash(&mut hasher);
+    quality.hash(&mut hasher);
+    download_url.as_str().hash(&mut hasher);
+    let fingerprint = hasher.finish();
+    let extension = infer_music_download_file_extension(download_url, content_type);
+    let file_name = format!(
+        "music-{}-{}-{}-{fingerprint:016x}.{}",
+        sanitize_download_file_fragment(&track.source),
+        sanitize_download_file_fragment(&track.id),
+        sanitize_download_file_fragment(quality),
+        extension
+    );
+
+    Ok(runtime_paths.music_downloads_audio_dir().join(file_name))
+}
+
+fn build_music_download_record(
+    track: DesktopMusicTrackPayload,
+    quality: String,
+    status: DesktopMusicDownloadStatus,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    local_file_path: Option<String>,
+    error_message: Option<String>,
+) -> DesktopMusicDownloadRecordPayload {
+    let download_id = build_music_download_id(&track.source, &track.id);
+    let updated_at = current_timestamp_ms();
+    let is_downloaded = matches!(status, DesktopMusicDownloadStatus::Downloaded);
+    let progress_percent = if is_downloaded {
+        100
+    } else if total_bytes > 0 {
+        ((downloaded_bytes.saturating_mul(100)) / total_bytes).min(100)
+    } else {
+        0
+    };
+
+    DesktopMusicDownloadRecordPayload {
+        download_id,
+        track,
+        quality,
+        status,
+        progress_percent,
+        downloaded_bytes,
+        total_bytes,
+        local_file_path,
+        error_message,
+        downloaded_at: if is_downloaded { Some(updated_at) } else { None },
+        updated_at,
+    }
+}
+
+async fn perform_music_track_download(
+    app: &AppHandle,
+    track: &DesktopMusicTrackPayload,
+    quality: &str,
+    download_url: &Url,
+    previous_file_path: Option<&Path>,
+) -> Result<(PathBuf, u64, u64)> {
+    let client = ClientBuilder::new()
+        .user_agent(DESKTOP_UPDATER_USER_AGENT)
+        .build()
+        .context("failed to build music download client")?;
+    let response = client
+        .get(download_url.clone())
+        .send()
+        .await
+        .context("failed to request music download")?
+        .error_for_status()
+        .context("music download returned a non-success status")?;
+    let total_bytes = response.content_length().unwrap_or(0);
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    let resolved_url = response.url().clone();
+    let file_path =
+        build_music_download_file_path(app, track, quality, &resolved_url, content_type)?;
+
+    if let Some(existing_file_path) = previous_file_path {
+        if existing_file_path != file_path.as_path() {
+            remove_file_if_exists(existing_file_path);
+        }
+    }
+
+    if let Some(parent_dir) = file_path.parent() {
+        tokio_fs::create_dir_all(parent_dir)
+            .await
+            .with_context(|| format!("failed to create {}", parent_dir.display()))?;
+    }
+
+    let mut file = TokioOpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&file_path)
+        .await
+        .with_context(|| format!("failed to open {}", file_path.display()))?;
+    let mut downloaded_bytes = 0_u64;
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("failed to read music download chunk")?;
+        downloaded_bytes = add_download_lengths(downloaded_bytes, chunk.len() as u64)?;
+        file.write_all(&chunk)
+            .await
+            .with_context(|| format!("failed to write {}", file_path.display()))?;
+    }
+
+    file.flush()
+        .await
+        .with_context(|| format!("failed to flush {}", file_path.display()))?;
+
+    Ok((file_path, downloaded_bytes, total_bytes.max(downloaded_bytes)))
+}
+
+fn list_music_downloads_impl(app: &AppHandle) -> Result<Vec<DesktopMusicDownloadRecordPayload>> {
+    load_music_download_records(app)
+}
+
+async fn download_music_track_impl(
+    app: &AppHandle,
+    payload: DesktopMusicTrackDownloadRequestPayload,
+) -> Result<DesktopMusicDownloadRecordPayload> {
+    let track = normalize_music_download_track_payload(payload.track)?;
+    let quality = normalize_music_download_quality(&payload.quality);
+    let download_url = normalize_required_string(
+        payload.download_url,
+        "music download URL cannot be empty",
+    )?;
+    let parsed_download_url =
+        Url::parse(&download_url).context("music download URL is invalid")?;
+
+    if !matches!(parsed_download_url.scheme(), "http" | "https") {
+        anyhow::bail!("music download URL must use http or https");
+    }
+
+    let mut records = load_music_download_records(app)?;
+    let download_id = build_music_download_id(&track.source, &track.id);
+    let previous_file_path = records
+        .iter()
+        .find(|record| record.download_id == download_id)
+        .and_then(|record| record.local_file_path.as_deref())
+        .map(PathBuf::from);
+    let downloading_record = build_music_download_record(
+        track.clone(),
+        quality.clone(),
+        DesktopMusicDownloadStatus::Downloading,
+        0,
+        0,
+        None,
+        None,
+    );
+    upsert_music_download_record(&mut records, downloading_record);
+    write_music_download_records(app, &records)?;
+
+    match perform_music_track_download(
+        app,
+        &track,
+        &quality,
+        &parsed_download_url,
+        previous_file_path.as_deref(),
+    )
+    .await
+    {
+        Ok((file_path, downloaded_bytes, total_bytes)) => {
+            let record = build_music_download_record(
+                track,
+                quality,
+                DesktopMusicDownloadStatus::Downloaded,
+                downloaded_bytes,
+                total_bytes,
+                Some(file_path.display().to_string()),
+                None,
+            );
+            upsert_music_download_record(&mut records, record.clone());
+            write_music_download_records(app, &records)?;
+            Ok(record)
+        }
+        Err(error) => {
+            if let Some(file_path) = previous_file_path.as_deref() {
+                if !file_path.is_file() {
+                    remove_file_if_exists(file_path);
+                }
+            }
+
+            let record = build_music_download_record(
+                track,
+                quality,
+                DesktopMusicDownloadStatus::Failed,
+                0,
+                0,
+                None,
+                Some(error.to_string()),
+            );
+            upsert_music_download_record(&mut records, record);
+            write_music_download_records(app, &records)?;
+            Err(error)
+        }
+    }
+}
+
+fn delete_music_download_impl<R: Runtime>(app: &AppHandle<R>, download_id: String) -> Result<()> {
+    let download_id =
+        normalize_required_string(download_id, "music download id cannot be empty")?;
+    let mut records = load_music_download_records(app)?;
+
+    if let Some(index) = records.iter().position(|record| record.download_id == download_id) {
+        if let Some(local_file_path) = records[index].local_file_path.as_deref() {
+            remove_file_if_exists_or_error(Path::new(local_file_path))?;
+        }
+        records.remove(index);
+        write_music_download_records(app, &records)?;
+    }
+
+    Ok(())
+}
+
+fn resolve_music_download_playback_impl<R: Runtime>(
+    app: &AppHandle<R>,
+    source: String,
+    track_id: String,
+) -> Result<DesktopMusicDownloadPlaybackPathPayload> {
+    let source = normalize_required_string(source, "music download source cannot be empty")?;
+    let track_id = normalize_required_string(track_id, "music download track id cannot be empty")?;
+    let download_id = build_music_download_id(&source, &track_id);
+    let records = load_music_download_records(app)?;
+    let file_path = records
+        .into_iter()
+        .find(|record| {
+            record.download_id == download_id
+                && matches!(record.status, DesktopMusicDownloadStatus::Downloaded)
+        })
+        .and_then(|record| record.local_file_path);
+
+    Ok(DesktopMusicDownloadPlaybackPathPayload { file_path })
+}
+
 fn set_desktop_owner_password_value(
     config_value: &mut serde_json::Value,
     owner_username: &str,
@@ -4302,6 +4866,14 @@ fn remove_file_if_exists(path: &Path) {
         Err(error) => {
             tracing::warn!("failed to remove {}: {error}", path.display());
         }
+    }
+}
+
+fn remove_file_if_exists_or_error(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
     }
 }
 
@@ -5391,7 +5963,7 @@ fn project_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn resolve_runtime_paths(app: &AppHandle) -> Result<RuntimePaths> {
+fn resolve_runtime_paths<R: Runtime>(app: &AppHandle<R>) -> Result<RuntimePaths> {
     let data_dir = app
         .path()
         .app_data_dir()
@@ -5413,6 +5985,18 @@ struct RuntimePaths {
 impl RuntimePaths {
     fn admin_persistence_path(&self) -> PathBuf {
         self.data_dir.join(ADMIN_PERSISTENCE_FILE_NAME)
+    }
+
+    fn music_downloads_dir(&self) -> PathBuf {
+        self.data_dir.join(MUSIC_DOWNLOADS_DIR_NAME)
+    }
+
+    fn music_downloads_audio_dir(&self) -> PathBuf {
+        self.music_downloads_dir().join(MUSIC_DOWNLOADS_AUDIO_DIR_NAME)
+    }
+
+    fn music_downloads_records_path(&self) -> PathBuf {
+        self.music_downloads_dir().join(MUSIC_DOWNLOADS_RECORDS_FILE_NAME)
     }
 }
 
@@ -5566,7 +6150,11 @@ fn resolve_sidecar_binary_paths(app: &AppHandle, current_version: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_DESKTOP_OWNER_USERNAME, DesktopMusicTrayPlayState, DesktopMusicTrayStatePayload,
+        build_music_download_record, build_music_download_id, current_timestamp_ms,
+        delete_music_download_impl, load_music_download_records,
+        resolve_music_download_playback_impl, resolve_runtime_paths, write_music_download_records,
+        DEFAULT_DESKTOP_OWNER_USERNAME, DesktopMusicDownloadStatus,
+        DesktopMusicTrackPayload, DesktopMusicTrayPlayState, DesktopMusicTrayStatePayload,
         GithubReleaseAssetPayload, GithubReleasePayload, LOCAL_SERVICE_HEALTH_READ_TIMEOUT,
         LocalProfileSyncStatus, LocalServiceHealthCheck, LocalServiceStartupFailure,
         PortOccupant, SidecarBinaryVersionProbe, SidecarTrialResult, append_cache_busting_query,
@@ -5579,13 +6167,42 @@ mod tests {
         set_desktop_local_user_password_value, set_desktop_owner_password_value,
         should_reuse_untracked_local_service, summarize_trial_output,
     };
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use tauri::{
+        test::{mock_builder, mock_context, noop_assets, MockRuntime},
+        App,
+    };
     use std::time::Duration;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
     use url::Url;
+
+    fn create_music_download_test_app(test_name: &str) -> App<MockRuntime> {
+        let mut context = mock_context(noop_assets());
+        context.config_mut().identifier = format!(
+            "dev.lunatv.music-download-tests.{test_name}.{}",
+            current_timestamp_ms()
+        );
+
+        mock_builder().build(context).expect("build mock tauri app")
+    }
+
+    fn test_music_track_payload() -> DesktopMusicTrackPayload {
+        DesktopMusicTrackPayload {
+            id: "9001".to_string(),
+            source: "netease".to_string(),
+            title: "Playable Track".to_string(),
+            artists: vec!["Artist A".to_string()],
+            album: "Album A".to_string(),
+            cover_url: "https://cdn.music.test/album-a.jpg".to_string(),
+            duration_ms: 215_000,
+            playable: true,
+        }
+    }
 
     #[test]
     fn resolves_playing_music_tray_copy_from_active_track() {
@@ -6088,6 +6705,161 @@ mod tests {
         assert!(detail.contains("追更"));
         assert!(detail.contains("unreachable"));
         assert!(detail.contains("远端账号同步后端不可达"));
+    }
+
+    #[test]
+    fn deletes_music_download_file_and_record_when_local_file_exists() {
+        let app = create_music_download_test_app("delete-success");
+        let app_handle = app.handle().clone();
+        let runtime_paths = resolve_runtime_paths(&app_handle).expect("resolve runtime paths");
+        let _ = fs::remove_dir_all(&runtime_paths.data_dir);
+
+        let audio_dir = runtime_paths.music_downloads_audio_dir();
+        fs::create_dir_all(&audio_dir).expect("create music audio dir");
+        let file_path = audio_dir.join("playable-track.mp3");
+        fs::write(&file_path, b"music").expect("write music file");
+
+        let record = build_music_download_record(
+            test_music_track_payload(),
+            "high".to_string(),
+            DesktopMusicDownloadStatus::Downloaded,
+            5,
+            5,
+            Some(file_path.display().to_string()),
+            None,
+        );
+        write_music_download_records(&app_handle, &[record.clone()])
+            .expect("write music download records");
+
+        delete_music_download_impl(&app_handle, record.download_id.clone())
+            .expect("delete music download");
+
+        assert!(!file_path.exists());
+        assert!(
+            load_music_download_records(&app_handle)
+                .expect("reload music download records")
+                .is_empty()
+        );
+
+        let _ = fs::remove_dir_all(&runtime_paths.data_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeps_music_download_record_when_local_delete_fails() {
+        let app = create_music_download_test_app("delete-failure");
+        let app_handle = app.handle().clone();
+        let runtime_paths = resolve_runtime_paths(&app_handle).expect("resolve runtime paths");
+        let _ = fs::remove_dir_all(&runtime_paths.data_dir);
+
+        let audio_dir = runtime_paths.music_downloads_audio_dir();
+        fs::create_dir_all(&audio_dir).expect("create music audio dir");
+        let local_path = audio_dir.join("blocked-track.mp3");
+        fs::write(&local_path, b"music").expect("write blocking music file");
+        #[cfg(unix)]
+        let original_permissions = fs::metadata(&audio_dir)
+            .expect("read music audio dir metadata")
+            .permissions();
+        #[cfg(unix)]
+        {
+            let mut read_only_permissions = original_permissions.clone();
+            read_only_permissions.set_mode(0o555);
+            fs::set_permissions(&audio_dir, read_only_permissions)
+                .expect("set music audio dir read-only");
+        }
+
+        let record = build_music_download_record(
+            test_music_track_payload(),
+            "high".to_string(),
+            DesktopMusicDownloadStatus::Downloaded,
+            5,
+            5,
+            Some(local_path.display().to_string()),
+            None,
+        );
+        write_music_download_records(&app_handle, &[record.clone()])
+            .expect("write music download records");
+
+        let result = delete_music_download_impl(
+            &app_handle,
+            build_music_download_id(&record.track.source, &record.track.id),
+        );
+
+        #[cfg(unix)]
+        fs::set_permissions(&audio_dir, original_permissions)
+            .expect("restore music audio dir permissions");
+
+        assert!(result.is_err());
+        assert!(local_path.exists());
+        let records =
+            load_music_download_records(&app_handle).expect("reload music download records");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].download_id, record.download_id);
+        assert_eq!(records[0].local_file_path, record.local_file_path);
+        assert!(records[0].status == record.status);
+
+        let _ = fs::remove_dir_all(&runtime_paths.data_dir);
+    }
+
+    #[test]
+    fn resolves_music_download_playback_only_for_downloaded_records() {
+        let app = create_music_download_test_app("resolve-playback");
+        let app_handle = app.handle().clone();
+        let runtime_paths = resolve_runtime_paths(&app_handle).expect("resolve runtime paths");
+        let _ = fs::remove_dir_all(&runtime_paths.data_dir);
+
+        let file_path = runtime_paths
+            .music_downloads_audio_dir()
+            .join("playable-track.mp3");
+        fs::create_dir_all(
+            file_path
+                .parent()
+                .expect("music file should always have a parent directory"),
+        )
+        .expect("create music audio dir");
+        fs::write(&file_path, b"music").expect("write music file");
+
+        let downloaded_record = build_music_download_record(
+            test_music_track_payload(),
+            "high".to_string(),
+            DesktopMusicDownloadStatus::Downloaded,
+            5,
+            5,
+            Some(file_path.display().to_string()),
+            None,
+        );
+        let failed_record = build_music_download_record(
+            DesktopMusicTrackPayload {
+                id: "9002".to_string(),
+                ..test_music_track_payload()
+            },
+            "high".to_string(),
+            DesktopMusicDownloadStatus::Failed,
+            0,
+            0,
+            None,
+            Some("download failed".to_string()),
+        );
+        write_music_download_records(&app_handle, &[downloaded_record, failed_record])
+            .expect("write music download records");
+
+        let downloaded_path = resolve_music_download_playback_impl(
+            &app_handle,
+            "netease".to_string(),
+            "9001".to_string(),
+        )
+        .expect("resolve downloaded playback path");
+        let failed_path = resolve_music_download_playback_impl(
+            &app_handle,
+            "netease".to_string(),
+            "9002".to_string(),
+        )
+        .expect("resolve failed playback path");
+
+        assert_eq!(downloaded_path.file_path, Some(file_path.display().to_string()));
+        assert_eq!(failed_path.file_path, None);
+
+        let _ = fs::remove_dir_all(&runtime_paths.data_dir);
     }
 
     #[tokio::test(flavor = "current_thread")]

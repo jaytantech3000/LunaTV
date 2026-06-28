@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 
 import {
@@ -32,20 +32,35 @@ jest.mock('@/components/PageLayout', () => ({
 }));
 
 const originalFetch = global.fetch;
+const originalConsoleError = console.error;
 
 describe('music phase 2 live ui', () => {
   let mediaPlaybackMocks: ReturnType<typeof mockMediaElementPlayback>;
+  let consoleErrorSpy: jest.SpyInstance;
 
   beforeEach(() => {
     resetLiveMusicStores();
     global.fetch = createLiveMusicFetchMock();
     mediaPlaybackMocks = mockMediaElementPlayback();
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation((...args) => {
+      const [firstArg] = args;
+
+      if (
+        typeof firstArg === 'string' &&
+        firstArg.includes('not wrapped in act')
+      ) {
+        return;
+      }
+
+      originalConsoleError(...args);
+    });
     window.history.replaceState({}, '', '/music');
   });
 
   afterEach(() => {
     mediaPlaybackMocks.pauseSpy.mockRestore();
     mediaPlaybackMocks.playSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
   });
 
   afterAll(() => {
@@ -466,6 +481,10 @@ describe('music phase 2 live ui', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Saved collections')).toBeInTheDocument();
     expect(screen.getByText('Connected as Luna Session')).toBeInTheDocument();
+    expect(screen.getByText('Liked songs')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Clear recent plays' })
+    ).not.toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Use high playback quality' })
@@ -508,30 +527,46 @@ describe('music phase 2 live ui', () => {
       trackRequests.some((url) => url.searchParams.get('quality') === 'high')
     ).toBe(true);
 
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Navigate 音乐资料库' })
+    );
+    expect(await screen.findByRole('heading', { name: 'Liked songs' })).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole('button', { name: 'Navigate 设置' }));
     await screen.findByRole('heading', { name: 'Music settings' });
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Clear saved collections' })
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Clear saved tracks' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Clear recent plays' }));
     fireEvent.click(
       screen.getByRole('button', { name: 'Clear continue listening' })
     );
 
     expect(await screen.findByText('0 saved collections')).toBeInTheDocument();
-    expect(screen.getByText('0 saved tracks')).toBeInTheDocument();
-    expect(screen.getByText('0 recent plays')).toBeInTheDocument();
+    expect(screen.getByText('1 liked songs')).toBeInTheDocument();
     expect(screen.getByText('0 continue listening')).toBeInTheDocument();
 
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Disconnect Netease session' })
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Disconnect Netease session' })
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
 
     expect(
       await screen.findByText('No Netease session connected')
     ).toBeInTheDocument();
+    expect(await screen.findByText('Saved tracks')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: 'Clear recent plays' })
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear recent plays' }));
+    expect(await screen.findByText('0 recent plays')).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Navigate 每日推荐' })
     ).not.toBeInTheDocument();
@@ -853,6 +888,121 @@ describe('music phase 2 live ui', () => {
     expect(
       await screen.findByRole('heading', { name: '官方榜单详情' })
     ).toBeInTheDocument();
+  });
+
+  it('uses cloud playlist semantics and refreshes my playlists while connected', async () => {
+    render(
+      <>
+        <MusicPageShell />
+        <MusicPlayerRoot />
+      </>
+    );
+
+    await screen.findByRole('button', { name: 'Open collection 官方榜单' });
+    await connectNeteaseSessionFromCookieFallback();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Navigate 音乐资料库' }));
+    expect(await screen.findByRole('heading', { name: 'My playlists' })).toBeInTheDocument();
+    expect(screen.getByText('1 playlists · 1 liked songs')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('Search music'), {
+      target: { value: 'hello' },
+    });
+    fireEvent.submit(screen.getByTestId('music-search-form'));
+    expect(
+      await screen.findByText('Search results for hello')
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Open search collection Search Playlist',
+      })
+    );
+
+    expect(
+      await screen.findByRole('button', { name: 'Collect playlist' })
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collect playlist' }));
+
+    expect(
+      await screen.findByRole('button', { name: 'Uncollect playlist' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', {
+        name: 'Open personal playlist Search Playlist',
+      })
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Uncollect playlist' }));
+
+    expect(
+      await screen.findByRole('button', { name: 'Collect playlist' })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', {
+        name: 'Open personal playlist Search Playlist',
+      })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Open personal playlist Created Playlist',
+      })
+    );
+
+    expect(
+      await screen.findByRole('button', {
+        name: 'Playlist is in your playlists',
+      })
+    ).toBeDisabled();
+    expect(screen.getByText('In your playlists')).toBeInTheDocument();
+  });
+
+  it('restores local playlist save semantics after disconnecting the account', async () => {
+    render(
+      <>
+        <MusicPageShell />
+        <MusicPlayerRoot />
+      </>
+    );
+
+    await screen.findByRole('button', { name: 'Open collection 官方榜单' });
+    await connectNeteaseSessionFromCookieFallback();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Navigate 设置' }));
+    await screen.findByRole('heading', { name: 'Music settings' });
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Disconnect Netease session' })
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('Search music'), {
+      target: { value: 'hello' },
+    });
+    fireEvent.submit(screen.getByTestId('music-search-form'));
+    expect(
+      await screen.findByText('Search results for hello')
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Open search collection Search Playlist',
+      })
+    );
+
+    expect(
+      await screen.findByRole('button', { name: 'Save collection to library' })
+    ).toBeInTheDocument();
+    expect(screen.getByText('Save to library')).toBeInTheDocument();
   });
 
   it('syncs music url state as the shell changes surfaces', async () => {

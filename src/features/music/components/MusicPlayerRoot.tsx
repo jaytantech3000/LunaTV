@@ -13,21 +13,22 @@ import {
 } from '../services/desktop-music-tray';
 import { bindMusicKeyboardShortcuts } from '../services/keyboard-shortcuts';
 import { bindMusicMediaSession } from '../services/media-session';
+import { buildMusicDownloadId } from '../services/music-download-records';
 import {
   fetchMusicLyricDocument,
   fetchMusicTrackPlayback,
 } from '../services/music-api-client';
+import { resolveDownloadedMusicTrackPlaybackUrl } from '../services/music-downloads';
 import {
   buildMusicPlaybackSessionSnapshot,
   getMusicPlaybackSession,
   saveMusicPlaybackSession,
 } from '../services/music-playback-session';
-import {
-  saveMusicPlayRecord,
-  saveMusicRecentTrack,
-} from '../services/music-profile';
+import { saveMusicPlayRecord } from '../services/music-profile';
 import { useLyricsStore } from '../state/lyrics-store';
 import { useMusicDataStore } from '../state/music-data-store';
+import { useMusicDownloadStore } from '../state/music-download-store';
+import { useMusicLibraryStore } from '../state/music-library-store';
 import {
   selectCurrentQueueItem,
   usePlaybackStore,
@@ -96,6 +97,10 @@ function resolveMediaPositionMs(
   }
 
   return Math.max(fallbackPositionMs, 0);
+}
+
+function isLocalAssetStream(stream: string): boolean {
+  return stream.startsWith('asset:');
 }
 
 function persistActiveTrackPlayback(
@@ -199,6 +204,9 @@ export default function MusicPlayerRoot() {
   const currentTrackId = usePlaybackStore((state) => state.currentTrackId);
   const queueLength = usePlaybackStore((state) => state.queue.length);
   const advancePlayback = useMusicDataStore((state) => state.advancePlayback);
+  const hydrateDownloads = useMusicDownloadStore(
+    (state) => state.hydrateDownloads
+  );
   const preferredPlaybackQuality = useMusicDataStore(
     (state) => state.preferredPlaybackQuality
   );
@@ -209,9 +217,16 @@ export default function MusicPlayerRoot() {
   const currentTrackSource = currentTrack?.track.source ?? null;
   const currentTrackStream = currentTrack?.track.stream ?? '';
   const currentTrackDurationMs = currentTrack?.track.durationMs ?? 0;
+  const reportRecentTrack = useMusicLibraryStore(
+    (state) => state.reportRecentTrack
+  );
   const queueSessionSignature = queue
     .map((item) => `${item.queueId}:${item.track.id}`)
     .join('|');
+
+  useEffect(() => {
+    void hydrateDownloads();
+  }, [hydrateDownloads]);
 
   useEffect(() => {
     if (playbackSessionRestoreAttemptedRef.current) {
@@ -331,25 +346,71 @@ export default function MusicPlayerRoot() {
     const lyricsTrackId = useLyricsStore.getState().lyrics?.trackId ?? null;
     let disposed = false;
 
+    const needsLyrics = lyricsTrackId !== currentTrackId;
+
     if (currentTrackStream) {
       engine.load(currentTrackStream);
     }
 
-    const needsLyrics = lyricsTrackId !== currentTrackId;
+    void (async () => {
+      let resolvedStream = currentTrackStream;
 
-    if (!currentTrackStream && needsLyrics) {
-      void Promise.all([
-        fetchMusicTrackPlayback({
-          source: currentTrackSource,
-          id: currentTrackId,
-          quality: preferredPlaybackQuality,
-        }),
-        fetchMusicLyricDocument({
-          source: currentTrackSource,
-          id: currentTrackId,
-        }),
-      ])
-        .then(([trackPlayback, lyrics]) => {
+      if (!isLocalAssetStream(resolvedStream)) {
+        try {
+          const localStream =
+            await resolveDownloadedMusicTrackPlaybackUrl({
+              source: currentTrackSource,
+              trackId: currentTrackId,
+            });
+
+          if (disposed) {
+            return;
+          }
+
+          if (localStream) {
+            resolvedStream = localStream;
+
+            if (localStream !== currentTrackStream) {
+              usePlaybackStore.getState().updateTrack({
+                ...currentTrack.track,
+                stream: localStream,
+              });
+            }
+          } else {
+            const downloadRecord =
+              useMusicDownloadStore.getState().records[
+                buildMusicDownloadId(currentTrackSource, currentTrackId)
+              ] ?? null;
+
+            if (downloadRecord?.status === 'downloaded') {
+              await hydrateDownloads();
+
+              if (disposed) {
+                return;
+              }
+            }
+          }
+        } catch (error) {
+          console.error('解析本地下载音频失败', error);
+        }
+      }
+
+      if (disposed) {
+        return;
+      }
+
+      if (resolvedStream) {
+        if (resolvedStream !== currentTrackStream) {
+          engine.load(resolvedStream);
+        }
+      } else {
+        try {
+          const trackPlayback = await fetchMusicTrackPlayback({
+            source: currentTrackSource,
+            id: currentTrackId,
+            quality: preferredPlaybackQuality,
+          });
+
           if (disposed) {
             return;
           }
@@ -361,68 +422,38 @@ export default function MusicPlayerRoot() {
           };
 
           usePlaybackStore.getState().updateTrack(hydratedTrack);
-          useLyricsStore.getState().setLyrics(lyrics);
           engine.load(hydratedTrack.stream);
-        })
-        .catch((error) => {
+        } catch (error) {
           console.error('加载播放资源失败', error);
           usePlaybackStore
             .getState()
             .setError(resolveRootErrorMessage(error, '加载播放资源失败'));
+          return;
+        }
+      }
+
+      if (!needsLyrics) {
+        return;
+      }
+
+      try {
+        const lyrics = await fetchMusicLyricDocument({
+          source: currentTrackSource,
+          id: currentTrackId,
         });
 
-      return () => {
-        disposed = true;
-      };
-    }
+        if (disposed) {
+          return;
+        }
 
-    if (!currentTrackStream) {
-      void fetchMusicTrackPlayback({
-        source: currentTrackSource,
-        id: currentTrackId,
-        quality: preferredPlaybackQuality,
-      })
-        .then((trackPlayback) => {
-          if (disposed) {
-            return;
-          }
-
-          const hydratedTrack = {
-            ...currentTrack.track,
-            ...trackPlayback.track,
-            stream: trackPlayback.streamUrl,
-          };
-
-          usePlaybackStore.getState().updateTrack(hydratedTrack);
-          engine.load(hydratedTrack.stream);
-        })
-        .catch((error) => {
-          console.error('加载播放资源失败', error);
-          usePlaybackStore
-            .getState()
-            .setError(resolveRootErrorMessage(error, '加载播放资源失败'));
-        });
-    }
-
-    if (needsLyrics) {
-      void fetchMusicLyricDocument({
-        source: currentTrackSource,
-        id: currentTrackId,
-      })
-        .then((lyrics) => {
-          if (disposed) {
-            return;
-          }
-
-          useLyricsStore.getState().setLyrics(lyrics);
-        })
-        .catch((error) => {
-          console.error('加载歌词失败', error);
-          usePlaybackStore
-            .getState()
-            .setError(resolveRootErrorMessage(error, '加载歌词失败'));
-        });
-    }
+        useLyricsStore.getState().setLyrics(lyrics);
+      } catch (error) {
+        console.error('加载歌词失败', error);
+        usePlaybackStore
+          .getState()
+          .setError(resolveRootErrorMessage(error, '加载歌词失败'));
+      }
+    })();
 
     return () => {
       disposed = true;
@@ -432,6 +463,7 @@ export default function MusicPlayerRoot() {
     currentTrackId,
     currentTrackSource,
     currentTrackStream,
+    hydrateDownloads,
     preferredPlaybackQuality,
   ]);
 
@@ -460,10 +492,10 @@ export default function MusicPlayerRoot() {
 
     recentTrackKeyRef.current = trackKey;
 
-    void saveMusicRecentTrack(currentTrack.track).catch((error) => {
+    void reportRecentTrack(currentTrack.track).catch((error) => {
       console.error('记录最近播放失败', error);
     });
-  }, [currentTrack]);
+  }, [currentTrack, reportRecentTrack]);
 
   useEffect(() => {
     if (!playbackSessionReadyRef.current) {

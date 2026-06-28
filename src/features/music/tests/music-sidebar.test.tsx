@@ -148,6 +148,19 @@ function installMusicCollectionsProfileFetchMock(options?: {
   qrStatusSequence?: Array<'waiting' | 'scanned' | 'expired' | 'confirmed'>;
 }): jest.Mock {
   let qrStatusIndex = 0;
+  const musicLikedTracks = [
+    {
+      id: '9501',
+      source: 'netease',
+      title: 'Cloud Liked Track',
+      artists: ['Cloud Artist'],
+      album: 'Cloud Album',
+      coverUrl: 'https://cdn.music.test/cloud-liked-track.jpg',
+      durationMs: 202000,
+      stream: '',
+      playable: true,
+    },
+  ];
   let musicPreferences = {
     themeVariant: 'midnight',
     sidebarCollapsed: false,
@@ -243,6 +256,14 @@ function installMusicCollectionsProfileFetchMock(options?: {
           status: 'waiting',
           message: '等待扫码',
         });
+      }
+
+      if (requestUrl.includes('/api/music/account/likes')) {
+        if (requestMethod === 'GET') {
+          return createJsonResponse([...musicLikedTracks]);
+        }
+
+        return createJsonResponse([...musicLikedTracks]);
       }
 
       if (requestUrl.includes('/api/music/account')) {
@@ -498,6 +519,146 @@ describe('MusicSidebar account card', () => {
     ).toBeInTheDocument();
   });
 
+  it('refreshes the my-playlists rail when account playlists change', async () => {
+    setDesktopAuthCookie('desktop-owner', 'desktop-local');
+    mockLoadDesktopProfileBootstrapState.mockResolvedValue({
+      payload: {
+        appTarget: 'desktop',
+        runtime: {
+          profileSyncEnabled: false,
+        },
+        profileSync: {
+          enabled: false,
+          reachable: false,
+          authenticated: false,
+          username: null,
+          role: null,
+          storageType: null,
+          profileMode: null,
+          error: null,
+          errorKind: null,
+          syncDomains: ['playrecords', 'favorites', 'searchhistory'],
+        },
+        localAuth: {
+          username: 'desktop-owner',
+          passwordRequired: false,
+          multiUser: false,
+          ownerPasswordConfigured: true,
+        },
+      },
+      localAuth: {
+        username: 'desktop-owner',
+        passwordRequired: false,
+        multiUser: false,
+        ownerPasswordConfigured: true,
+      },
+    });
+
+    installMusicCollectionsProfileFetchMock({
+      musicAccountResponse: {
+        source: 'netease',
+        authenticated: true,
+        profile: {
+          userId: '42',
+          nickname: 'Luna User',
+        },
+        playlists: [
+          {
+            id: '501',
+            source: 'netease',
+            kind: 'playlist',
+            title: 'Created Playlist',
+            accountPlaylistRole: 'owned',
+          },
+        ],
+      },
+    });
+
+    render(<MusicSidebar />);
+
+    expect(await screen.findByText('My playlists')).toBeInTheDocument();
+    expect(
+      screen.getAllByRole('button', {
+        name: /Open personal playlist/i,
+      })
+    ).toHaveLength(1);
+
+    act(() => {
+      useMusicAccountStore.setState({
+        account: {
+          source: 'netease',
+          authenticated: true,
+          profile: {
+            userId: '42',
+            nickname: 'Luna User',
+          },
+          playlists: [
+            {
+              id: '501',
+              source: 'netease',
+              kind: 'playlist',
+              title: 'Created Playlist',
+              accountPlaylistRole: 'owned',
+            },
+            {
+              id: '302',
+              source: 'netease',
+              kind: 'playlist',
+              title: 'Search Playlist',
+              accountPlaylistRole: 'subscribed',
+            },
+          ],
+        },
+      });
+    });
+
+    expect(
+      await screen.findByRole('button', {
+        name: 'Open personal playlist Search Playlist',
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole('button', {
+        name: /Open personal playlist/i,
+      })
+    ).toHaveLength(2);
+
+    act(() => {
+      useMusicAccountStore.setState({
+        account: {
+          source: 'netease',
+          authenticated: true,
+          profile: {
+            userId: '42',
+            nickname: 'Luna User',
+          },
+          playlists: [
+            {
+              id: '501',
+              source: 'netease',
+              kind: 'playlist',
+              title: 'Created Playlist',
+              accountPlaylistRole: 'owned',
+            },
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', {
+          name: 'Open personal playlist Search Playlist',
+        })
+      ).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getAllByRole('button', {
+        name: /Open personal playlist/i,
+      })
+    ).toHaveLength(1);
+  });
+
   it('shows qr login by default and lets the user switch to cookie fallback', async () => {
     setDesktopAuthCookie('desktop-owner', 'desktop-local');
     mockLoadDesktopProfileBootstrapState.mockResolvedValue({
@@ -603,6 +764,12 @@ describe('MusicSidebar account card', () => {
 
     expect(await screen.findByText('Luna Session')).toBeInTheDocument();
     expect(screen.getByText('Session connected')).toBeInTheDocument();
+    expect(screen.getByText('Liked')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Liked songs and recent plays sync with Netease while resume state stays on this device.'
+      )
+    ).toBeInTheDocument();
   });
 
   it('shows saved collections in the expanded sidebar', async () => {

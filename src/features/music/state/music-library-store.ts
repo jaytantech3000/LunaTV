@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 
 import type {
+  MusicDownloadRecord,
   MusicCollectionSummaryEntity,
   MusicTrackEntity,
   QueueItemEntity,
@@ -29,8 +30,20 @@ import {
   getAllMusicFavorites,
   getAllMusicPlayRecords,
   getMusicRecentTracks,
+  saveMusicRecentTrack,
   saveMusicFavorite,
 } from '../services/music-profile';
+import {
+  likeMusicTrack,
+  listMusicLikedTracks,
+  unlikeMusicTrack,
+} from '../services/music-liked-tracks';
+import {
+  listMusicRecentTracks,
+  reportMusicTrackPlayed,
+} from '../services/music-recent-tracks';
+import { useMusicAccountStore } from './music-account-store';
+import { useMusicDownloadStore } from './music-download-store';
 
 interface MusicLibraryState {
   hydrated: boolean;
@@ -58,9 +71,10 @@ interface MusicLibraryState {
   clearFavoriteTracks: () => Promise<void>;
   clearRecentTracks: () => Promise<void>;
   clearResumeTracks: () => Promise<void>;
+  reportRecentTrack: (track: MusicTrackEntity) => Promise<void>;
   buildPlaybackQueue: (
     trackId: string,
-    context: 'library' | 'recent'
+    context: 'library' | 'recent' | 'download'
   ) => QueueItemEntity[];
 }
 
@@ -133,6 +147,69 @@ function buildRecentPlaybackTracks(
   return Array.from(trackMap.values());
 }
 
+function buildDownloadedPlaybackTracks(
+  records: Record<string, MusicDownloadRecord>
+): MusicTrackEntity[] {
+  return Object.values(records)
+    .filter((record) => record.status === 'downloaded')
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .map((record) => record.track);
+}
+
+function buildFavoriteTrackKeys(
+  favoriteTracks: MusicFavoriteRecord[]
+): string[] {
+  return favoriteTracks.map((record) =>
+    buildMusicProfileKey(record.track.source, record.track.id)
+  );
+}
+
+function buildLocalFavoriteTracks(
+  favorites: Record<string, MusicFavoriteRecord>
+): MusicFavoriteRecord[] {
+  return Object.values(favorites).sort((left, right) => right.savedAt - left.savedAt);
+}
+
+function isMusicAccountConnected(): boolean {
+  return Boolean(useMusicAccountStore.getState().account?.authenticated);
+}
+
+function buildAccountPlaylistKeys(): string[] {
+  const account = useMusicAccountStore.getState().account;
+
+  if (!account?.authenticated) {
+    return [];
+  }
+
+  return account.playlists.map((playlist) =>
+    buildMusicCollectionProfileKey(playlist.source, playlist.id)
+  );
+}
+
+function filterVisibleSavedCollections(
+  records: SavedMusicCollectionRecord[]
+): SavedMusicCollectionRecord[] {
+  if (!isMusicAccountConnected()) {
+    return records;
+  }
+
+  return records.filter((record) => record.summary.kind !== 'playlist');
+}
+
+function buildSavedCollectionKeys(
+  records: SavedMusicCollectionRecord[]
+): string[] {
+  const localKeys = records.map((record) =>
+    buildMusicCollectionProfileKey(record.summary.source, record.summary.id)
+  );
+
+  if (!isMusicAccountConnected()) {
+    return localKeys;
+  }
+
+  return Array.from(new Set([...localKeys, ...buildAccountPlaylistKeys()]));
+}
+
 export const useMusicLibraryStore = create<MusicLibraryState>((set, get) => ({
   hydrated: false,
   loading: false,
@@ -150,35 +227,70 @@ export const useMusicLibraryStore = create<MusicLibraryState>((set, get) => ({
     });
 
     try {
-      const [savedCollections, favorites, recentTracks, playRecords] =
-        await Promise.all([
-          getMusicSavedCollections(),
-          getAllMusicFavorites(),
-          getMusicRecentTracks(),
-          getAllMusicPlayRecords(),
-        ]);
-      const favoriteTracks = Object.values(favorites).sort(
-        (left, right) => right.savedAt - left.savedAt
-      );
+      const previousFavoriteTracks = get().favoriteTracks;
+      const previousFavoriteTrackKeys = get().favoriteTrackKeys;
+      const previousRecentTracks = get().recentTracks;
+      const [savedCollections, localRecentTracks, playRecords] = await Promise.all([
+        getMusicSavedCollections(),
+        getMusicRecentTracks(),
+        getAllMusicPlayRecords(),
+      ]);
       const resumeTracks = buildResumeTracks(playRecords);
+      const visibleSavedCollections = filterVisibleSavedCollections(
+        savedCollections
+      );
+      const savedCollectionKeys = buildSavedCollectionKeys(visibleSavedCollections);
+
+      if (isMusicAccountConnected()) {
+        let favoriteTracks = previousFavoriteTracks;
+        let recentTracks = previousRecentTracks;
+        let nextError: string | null = null;
+
+        try {
+          favoriteTracks = await listMusicLikedTracks();
+        } catch (error) {
+          console.error('同步网易云喜欢歌曲失败', error);
+          nextError = resolveLibraryErrorMessage(error);
+        }
+
+        try {
+          recentTracks = await listMusicRecentTracks();
+        } catch (error) {
+          console.error('同步网易云最近播放失败', error);
+          nextError = nextError || resolveLibraryErrorMessage(error);
+        }
+
+        set({
+          hydrated: true,
+          loading: false,
+          error: nextError,
+          savedCollections: visibleSavedCollections,
+          favoriteTracks,
+          recentTracks,
+          resumeTracks,
+          savedCollectionKeys,
+          favoriteTrackKeys:
+            nextError && favoriteTracks === previousFavoriteTracks
+              ? previousFavoriteTrackKeys
+              : buildFavoriteTrackKeys(favoriteTracks),
+        });
+        return;
+      }
+
+      const favoriteTracks = buildLocalFavoriteTracks(
+        await getAllMusicFavorites()
+      );
 
       set({
         hydrated: true,
         loading: false,
         error: null,
-        savedCollections,
+        savedCollections: visibleSavedCollections,
         favoriteTracks,
-        recentTracks,
+        recentTracks: localRecentTracks,
         resumeTracks,
-        savedCollectionKeys: savedCollections.map((record) =>
-          buildMusicCollectionProfileKey(
-            record.summary.source,
-            record.summary.id
-          )
-        ),
-        favoriteTrackKeys: favoriteTracks.map((record) =>
-          buildMusicProfileKey(record.track.source, record.track.id)
-        ),
+        savedCollectionKeys,
+        favoriteTrackKeys: buildFavoriteTrackKeys(favoriteTracks),
       });
     } catch (error) {
       console.error('加载本地音乐资料失败', error);
@@ -195,6 +307,36 @@ export const useMusicLibraryStore = create<MusicLibraryState>((set, get) => ({
       summary.id
     );
     const isSaved = get().savedCollectionKeys.includes(savedCollectionKey);
+
+    if (isMusicAccountConnected() && summary.kind === 'playlist') {
+      const previousSavedCollectionKeys = get().savedCollectionKeys;
+
+      set({
+        error: null,
+      });
+
+      try {
+        await useMusicAccountStore
+          .getState()
+          .togglePlaylistSubscription(summary.id, !isSaved);
+
+        set({
+          savedCollectionKeys: buildSavedCollectionKeys(get().savedCollections),
+        });
+      } catch (error) {
+        console.error(
+          isSaved ? '取消收藏云端歌单失败' : '收藏云端歌单失败',
+          error
+        );
+        set({
+          error: resolveLibraryErrorMessage(error),
+          savedCollectionKeys: previousSavedCollectionKeys,
+        });
+        throw error;
+      }
+
+      return;
+    }
 
     if (isSaved) {
       await deleteMusicCollection(summary.source, summary.id);
@@ -251,7 +393,7 @@ export const useMusicLibraryStore = create<MusicLibraryState>((set, get) => ({
     set({
       error: null,
       savedCollections: [],
-      savedCollectionKeys: [],
+      savedCollectionKeys: buildSavedCollectionKeys([]),
     });
 
     try {
@@ -269,6 +411,39 @@ export const useMusicLibraryStore = create<MusicLibraryState>((set, get) => ({
   toggleFavoriteTrack: async (track) => {
     const favoriteTrackKey = buildMusicProfileKey(track.source, track.id);
     const isFavorited = get().favoriteTrackKeys.includes(favoriteTrackKey);
+
+    if (isMusicAccountConnected()) {
+      const previousFavoriteTracks = get().favoriteTracks;
+      const previousFavoriteTrackKeys = get().favoriteTrackKeys;
+
+      set({
+        error: null,
+      });
+
+      try {
+        const favoriteTracks = isFavorited
+          ? await unlikeMusicTrack(track.id)
+          : await likeMusicTrack(track.id);
+
+        set({
+          favoriteTracks,
+          favoriteTrackKeys: buildFavoriteTrackKeys(favoriteTracks),
+        });
+      } catch (error) {
+        console.error(
+          isFavorited ? '取消喜欢歌曲失败' : '收藏喜欢歌曲失败',
+          error
+        );
+        set({
+          error: resolveLibraryErrorMessage(error),
+          favoriteTracks: previousFavoriteTracks,
+          favoriteTrackKeys: previousFavoriteTrackKeys,
+        });
+        throw error;
+      }
+
+      return;
+    }
 
     if (isFavorited) {
       await deleteMusicFavorite(track.source, track.id);
@@ -305,6 +480,10 @@ export const useMusicLibraryStore = create<MusicLibraryState>((set, get) => ({
     }
   },
   clearRecentTracks: async () => {
+    if (isMusicAccountConnected()) {
+      return;
+    }
+
     const previousRecentTracks = get().recentTracks;
 
     set({
@@ -342,11 +521,57 @@ export const useMusicLibraryStore = create<MusicLibraryState>((set, get) => ({
       throw error;
     }
   },
+  reportRecentTrack: async (track) => {
+    if (isMusicAccountConnected()) {
+      const previousRecentTracks = get().recentTracks;
+
+      set({
+        error: null,
+      });
+
+      try {
+        const recentTracks = await reportMusicTrackPlayed(track.id);
+
+        set({
+          recentTracks,
+        });
+      } catch (error) {
+        console.error('同步网易云最近播放失败', error);
+        set({
+          error: resolveLibraryErrorMessage(error),
+          recentTracks: previousRecentTracks,
+        });
+        throw error;
+      }
+
+      return;
+    }
+
+    set({
+      error: null,
+    });
+
+    try {
+      const recentTracks = await saveMusicRecentTrack(track);
+
+      set({
+        recentTracks,
+      });
+    } catch (error) {
+      console.error('记录本地最近播放失败', error);
+      set({
+        error: resolveLibraryErrorMessage(error),
+      });
+      throw error;
+    }
+  },
   buildPlaybackQueue: (trackId, context) => {
     const state = get();
     const contextTracks =
       context === 'library'
         ? state.favoriteTracks.map((record) => record.track)
+        : context === 'download'
+        ? buildDownloadedPlaybackTracks(useMusicDownloadStore.getState().records)
         : buildRecentPlaybackTracks(state.recentTracks, state.resumeTracks);
 
     if (!contextTracks.some((track) => track.id === trackId)) {
@@ -358,3 +583,29 @@ export const useMusicLibraryStore = create<MusicLibraryState>((set, get) => ({
     );
   },
 }));
+
+let lastMusicAccountAuthenticated: boolean | null =
+  useMusicAccountStore.getState().account?.authenticated ?? null;
+
+useMusicAccountStore.subscribe((state) => {
+  const currentAuthenticated = state.account?.authenticated ?? null;
+  const previousAuthenticated = lastMusicAccountAuthenticated;
+  lastMusicAccountAuthenticated = currentAuthenticated;
+
+  if (
+    currentAuthenticated === null ||
+    previousAuthenticated === null ||
+    currentAuthenticated === previousAuthenticated ||
+    !useMusicLibraryStore.getState().hydrated
+  ) {
+    return;
+  }
+
+  void Promise.resolve().then(() => {
+    if (!useMusicLibraryStore.getState().hydrated) {
+      return;
+    }
+
+    void useMusicLibraryStore.getState().hydrateLibrary();
+  });
+});

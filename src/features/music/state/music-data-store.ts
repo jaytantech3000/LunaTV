@@ -41,6 +41,7 @@ type MusicPlayContext =
   | 'collection'
   | 'discovery'
   | 'library'
+  | 'download'
   | 'recent';
 
 export interface MusicDataState {
@@ -167,7 +168,11 @@ function resolvePlaybackQueue(
   trackId: string,
   context?: MusicPlayContext
 ): QueueItemEntity[] {
-  if (context === 'library' || context === 'recent') {
+  if (
+    context === 'library' ||
+    context === 'recent' ||
+    context === 'download'
+  ) {
     const localQueue = useMusicLibraryStore
       .getState()
       .buildPlaybackQueue(trackId, context);

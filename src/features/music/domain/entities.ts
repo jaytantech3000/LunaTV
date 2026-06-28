@@ -6,6 +6,7 @@ export type MusicQueueContext =
   | 'featured'
   | 'recent'
   | 'library'
+  | 'download'
   | 'discovery'
   | 'fm';
 
@@ -29,6 +30,11 @@ export type MusicCollectionKind =
   | 'artist-toplist';
 
 export type MusicPlaybackQuality = 'standard' | 'high';
+export type MusicDownloadStatus =
+  | 'idle'
+  | 'downloading'
+  | 'downloaded'
+  | 'failed';
 
 export interface MusicSourceEntity {
   key: MusicSourceKey;
@@ -48,6 +54,20 @@ export interface MusicTrackEntity {
   durationMs: number;
   stream: string;
   playable: boolean;
+}
+
+export interface MusicDownloadRecord {
+  downloadId: string;
+  track: MusicTrackEntity;
+  quality: MusicPlaybackQuality;
+  status: MusicDownloadStatus;
+  progressPercent: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  localFilePath: string | null;
+  errorMessage: string | null;
+  downloadedAt: number | null;
+  updatedAt: number;
 }
 
 export interface QueueItemEntity {
@@ -78,6 +98,7 @@ export interface MusicCollectionSummaryEntity {
   description?: string;
   trackCount?: number;
   accentColor?: string;
+  accountPlaylistRole?: 'owned' | 'subscribed';
 }
 
 export interface MusicCollectionEntity {

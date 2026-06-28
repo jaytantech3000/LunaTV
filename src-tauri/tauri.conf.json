@@ -48,6 +48,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/moontv-local-service"]
+    "externalBin": [
+      "binaries/moontv-local-service"
+    ]
   }
 }

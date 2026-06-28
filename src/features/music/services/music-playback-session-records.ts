@@ -33,6 +33,7 @@ function resolveQueueContext(value: unknown): MusicQueueContext | null {
     case 'featured':
     case 'recent':
     case 'library':
+    case 'download':
     case 'discovery':
     case 'fm':
       return value;

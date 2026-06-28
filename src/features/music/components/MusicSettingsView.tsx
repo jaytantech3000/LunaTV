@@ -7,8 +7,10 @@ import { useState } from 'react';
 import { useLyricsStore } from '../state/lyrics-store';
 import { useMusicAccountStore } from '../state/music-account-store';
 import { useMusicDataStore } from '../state/music-data-store';
+import { useMusicDownloadStore } from '../state/music-download-store';
 import { useMusicLibraryStore } from '../state/music-library-store';
 import { useMusicShellStore } from '../state/music-shell-store';
+import { isMusicDownloadFeatureEnabled } from '../services/music-downloads';
 
 function SettingsToggleButton(props: {
   active: boolean;
@@ -81,6 +83,10 @@ export function MusicSettingsView() {
   const favoriteTracks = useMusicLibraryStore((state) => state.favoriteTracks);
   const recentTracks = useMusicLibraryStore((state) => state.recentTracks);
   const resumeTracks = useMusicLibraryStore((state) => state.resumeTracks);
+  const offlineDownloadCount = useMusicDownloadStore((state) =>
+    Object.values(state.records).filter((record) => record.status === 'downloaded')
+      .length
+  );
   const clearSavedCollections = useMusicLibraryStore(
     (state) => state.clearSavedCollections
   );
@@ -100,6 +106,14 @@ export function MusicSettingsView() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const connectedNickname =
     account?.authenticated && account.profile ? account.profile.nickname : null;
+  const accountConnected = Boolean(connectedNickname);
+  const showOfflineDownloadMetrics = isMusicDownloadFeatureEnabled();
+  const offlineDownloadCountLabel =
+    !showOfflineDownloadMetrics
+      ? 'Desktop app only'
+      : offlineDownloadCount === 1
+      ? '1 offline download'
+      : `${offlineDownloadCount} offline downloads`;
 
   const runAction = async (
     actionKey: string,
@@ -202,7 +216,7 @@ export function MusicSettingsView() {
             </div>
             <div className='mt-2 text-sm text-white/52'>
               {connectedNickname
-                ? 'Daily recommendations and personal FM stay available while the session is active.'
+                ? 'Daily recommendations, personal FM, liked songs, and recent plays stay synced while the session is active.'
                 : 'Connect a Netease session from the sidebar card to unlock daily recommendations and personal FM.'}
             </div>
           </div>
@@ -235,7 +249,7 @@ export function MusicSettingsView() {
             Keep the rebuilt desktop library lean
           </div>
         </div>
-        <div className='grid gap-4 md:grid-cols-2 xl:grid-cols-4'>
+        <div className='grid gap-4 md:grid-cols-2 xl:grid-cols-5'>
           <SettingsMetricCard
             label='Saved collections'
             valueLabel={`${savedCollections.length} saved collections`}
@@ -246,22 +260,30 @@ export function MusicSettingsView() {
             }}
           />
           <SettingsMetricCard
-            label='Saved tracks'
-            valueLabel={`${favoriteTracks.length} saved tracks`}
-            actionLabel='Clear saved tracks'
+            label={accountConnected ? 'Liked songs' : 'Saved tracks'}
+            valueLabel={`${favoriteTracks.length} ${accountConnected ? 'liked songs' : 'saved tracks'}`}
+            actionLabel={accountConnected ? undefined : 'Clear saved tracks'}
             disabled={busyAction === 'saved-tracks'}
-            onAction={() => {
-              void runAction('saved-tracks', clearFavoriteTracks);
-            }}
+            onAction={
+              accountConnected
+                ? undefined
+                : () => {
+                    void runAction('saved-tracks', clearFavoriteTracks);
+                  }
+            }
           />
           <SettingsMetricCard
             label='Recent plays'
             valueLabel={`${recentTracks.length} recent plays`}
-            actionLabel='Clear recent plays'
+            actionLabel={accountConnected ? undefined : 'Clear recent plays'}
             disabled={busyAction === 'recent-plays'}
-            onAction={() => {
-              void runAction('recent-plays', clearRecentTracks);
-            }}
+            onAction={
+              accountConnected
+                ? undefined
+                : () => {
+                    void runAction('recent-plays', clearRecentTracks);
+                  }
+            }
           />
           <SettingsMetricCard
             label='Continue listening'
@@ -271,6 +293,10 @@ export function MusicSettingsView() {
             onAction={() => {
               void runAction('continue-listening', clearResumeTracks);
             }}
+          />
+          <SettingsMetricCard
+            label='Offline downloads'
+            valueLabel={offlineDownloadCountLabel}
           />
         </div>
       </section>

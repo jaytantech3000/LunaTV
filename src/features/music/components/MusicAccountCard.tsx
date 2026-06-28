@@ -73,6 +73,11 @@ export function MusicAccountCard({ collapsed = false }: MusicAccountCardProps) {
   );
   const [entryMode, setEntryMode] = useState<MusicAccountEntryMode>('qr');
   const [sessionInput, setSessionInput] = useState('');
+  const accountConnected = Boolean(account?.authenticated && account.profile);
+  const favoriteLabel = accountConnected ? 'Liked' : 'Saved';
+  const summaryDetail = accountConnected
+    ? 'Liked songs and recent plays sync with Netease while resume state stays on this device.'
+    : summary.detail;
 
   useEffect(() => {
     let cancelled = false;
@@ -197,9 +202,9 @@ export function MusicAccountCard({ collapsed = false }: MusicAccountCardProps) {
       <div className='mt-4 rounded-[20px] border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/72'>
         {summary.modeLabel}
       </div>
-      <p className='mt-3 text-sm leading-6 text-white/56'>{summary.detail}</p>
+      <p className='mt-3 text-sm leading-6 text-white/56'>{summaryDetail}</p>
       <div className='mt-4 grid grid-cols-3 gap-2'>
-        {buildStatBlock('Saved', favoriteCount)}
+        {buildStatBlock(favoriteLabel, favoriteCount)}
         {buildStatBlock('Recent', recentCount)}
         {buildStatBlock('Resume', resumeCount)}
       </div>
@@ -231,7 +236,7 @@ export function MusicAccountCard({ collapsed = false }: MusicAccountCardProps) {
               </button>
             </div>
             <div className='mt-3 text-sm text-white/56'>
-              {`${account.playlists.length} playlists ready in the sidebar.`}
+              {`${account.playlists.length} playlists plus liked songs stay synced in the sidebar and library.`}
             </div>
             {account.profile.signature ? (
               <div className='mt-2 text-sm text-white/45'>
