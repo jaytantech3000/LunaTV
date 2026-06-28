@@ -95,6 +95,15 @@ export function resetLiveMusicStores(): void {
 
 export function createLiveMusicFetchMock(): typeof fetch {
   const musicSearchHistory: string[] = [];
+  let musicPreferences = {
+    themeVariant: 'midnight',
+    sidebarCollapsed: false,
+    preferredPlaybackQuality: 'standard',
+    lyricsFollowMode: 'auto',
+    playMode: 'list-loop',
+    volume: 0.9,
+    muted: false,
+  };
   let musicAccountConnected = false;
   const savedMusicCollections: Array<{
     summary: {
@@ -570,6 +579,28 @@ export function createLiveMusicFetchMock(): typeof fetch {
       }
 
       return createJsonResponse([...musicSearchHistory]);
+    }
+
+    if (requestUrl.pathname === '/api/music/profile/preferences') {
+      if (requestMethod === 'POST') {
+        const preferences =
+          requestBody?.preferences &&
+          typeof requestBody.preferences === 'object' &&
+          !Array.isArray(requestBody.preferences)
+            ? (requestBody.preferences as typeof musicPreferences)
+            : null;
+
+        if (preferences) {
+          musicPreferences = {
+            ...musicPreferences,
+            ...preferences,
+          };
+        }
+
+        return createJsonResponse({ success: true });
+      }
+
+      return createJsonResponse({ ...musicPreferences });
     }
 
     if (requestUrl.pathname === '/api/music/profile/collections') {

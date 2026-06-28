@@ -148,117 +148,154 @@ function installMusicCollectionsProfileFetchMock(options?: {
   qrStatusSequence?: Array<'waiting' | 'scanned' | 'expired' | 'confirmed'>;
 }): jest.Mock {
   let qrStatusIndex = 0;
-  const fetchMock = jest.fn(async (input: RequestInfo | URL) => {
-    const requestUrl = String(input);
+  let musicPreferences = {
+    themeVariant: 'midnight',
+    sidebarCollapsed: false,
+    preferredPlaybackQuality: 'standard',
+    lyricsFollowMode: 'auto',
+    playMode: 'list-loop',
+    volume: 0.9,
+    muted: false,
+  };
+  const fetchMock = jest.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      const requestMethod =
+        input instanceof Request ? input.method : init?.method || 'GET';
+      const rawRequestBody =
+        input instanceof Request
+          ? await input.clone().text()
+          : typeof init?.body === 'string'
+          ? init.body
+          : '';
+      const requestBody = rawRequestBody
+        ? (JSON.parse(rawRequestBody) as {
+            preferences?: Partial<typeof musicPreferences>;
+          })
+        : null;
 
-    if (requestUrl.includes('/api/music/account/qr')) {
-      if (!requestUrl.includes('&key=')) {
-        return createJsonResponse(
-          options?.musicQrSessionResponse || {
+      if (requestUrl.includes('/api/music/account/qr')) {
+        if (!requestUrl.includes('&key=')) {
+          return createJsonResponse(
+            options?.musicQrSessionResponse || {
+              key: 'mock-unikey',
+              status: 'waiting',
+              qrUrl: 'https://music.163.com/login?codekey=mock-unikey',
+              qrImageDataUrl: 'data:image/png;base64,mock-image',
+            }
+          );
+        }
+
+        const currentStatus =
+          options?.qrStatusSequence?.[
+            Math.min(qrStatusIndex, (options.qrStatusSequence?.length || 1) - 1)
+          ] || 'waiting';
+        qrStatusIndex += 1;
+
+        if (currentStatus === 'confirmed') {
+          return createJsonResponse({
             key: 'mock-unikey',
-            status: 'waiting',
-            qrUrl: 'https://music.163.com/login?codekey=mock-unikey',
-            qrImageDataUrl: 'data:image/png;base64,mock-image',
+            status: 'confirmed',
+            account: {
+              source: 'netease',
+              authenticated: true,
+              profile: {
+                userId: '42',
+                nickname: 'Luna Session',
+                avatarUrl: 'https://cdn.music.test/luna-session.jpg',
+                signature: 'Connected for daily picks',
+              },
+              playlists: [
+                {
+                  id: '501',
+                  source: 'netease',
+                  kind: 'playlist',
+                  title: 'Created Playlist',
+                  coverUrl: 'https://cdn.music.test/created-playlist.jpg',
+                  description: 'Created by Luna Session',
+                  trackCount: 18,
+                  accentColor: '#7b61ff',
+                },
+              ],
+            },
+            message: '登录成功，正在同步',
+          });
+        }
+
+        if (currentStatus === 'scanned') {
+          return createJsonResponse({
+            key: 'mock-unikey',
+            status: 'scanned',
+            message: '已扫码，请在手机确认',
+          });
+        }
+
+        if (currentStatus === 'expired') {
+          return createJsonResponse({
+            key: 'mock-unikey',
+            status: 'expired',
+            message: '二维码已失效，请重新生成',
+          });
+        }
+
+        return createJsonResponse({
+          key: 'mock-unikey',
+          status: 'waiting',
+          message: '等待扫码',
+        });
+      }
+
+      if (requestUrl.includes('/api/music/account')) {
+        return createJsonResponse(
+          options?.musicAccountResponse || {
+            source: 'netease',
+            authenticated: false,
+            profile: null,
+            playlists: [],
           }
         );
       }
 
-      const currentStatus =
-        options?.qrStatusSequence?.[
-          Math.min(qrStatusIndex, (options.qrStatusSequence?.length || 1) - 1)
-        ] || 'waiting';
-      qrStatusIndex += 1;
-
-      if (currentStatus === 'confirmed') {
+      if (requestUrl.includes('/api/music/home')) {
         return createJsonResponse({
-          key: 'mock-unikey',
-          status: 'confirmed',
-          account: {
-            source: 'netease',
-            authenticated: true,
-            profile: {
-              userId: '42',
-              nickname: 'Luna Session',
-              avatarUrl: 'https://cdn.music.test/luna-session.jpg',
-              signature: 'Connected for daily picks',
-            },
-            playlists: [
-              {
-                id: '501',
-                source: 'netease',
-                kind: 'playlist',
-                title: 'Created Playlist',
-                coverUrl: 'https://cdn.music.test/created-playlist.jpg',
-                description: 'Created by Luna Session',
-                trackCount: 18,
-                accentColor: '#7b61ff',
-              },
-            ],
-          },
-          message: '登录成功，正在同步',
-        });
-      }
-
-      if (currentStatus === 'scanned') {
-        return createJsonResponse({
-          key: 'mock-unikey',
-          status: 'scanned',
-          message: '已扫码，请在手机确认',
-        });
-      }
-
-      if (currentStatus === 'expired') {
-        return createJsonResponse({
-          key: 'mock-unikey',
-          status: 'expired',
-          message: '二维码已失效，请重新生成',
-        });
-      }
-
-      return createJsonResponse({
-        key: 'mock-unikey',
-        status: 'waiting',
-        message: '等待扫码',
-      });
-    }
-
-    if (requestUrl.includes('/api/music/account')) {
-      return createJsonResponse(
-        options?.musicAccountResponse || {
           source: 'netease',
-          authenticated: false,
-          profile: null,
-          playlists: [],
+          spotlight: [],
+          sections: [],
+          featuredQueue: [],
+        });
+      }
+
+      if (requestUrl.includes('/music/profile/collections')) {
+        return createJsonResponse([]);
+      }
+
+      if (requestUrl.includes('/music/profile/recent-tracks')) {
+        return createJsonResponse([]);
+      }
+
+      if (requestUrl.includes('/music/profile/preferences')) {
+        if (requestMethod === 'POST') {
+          musicPreferences = {
+            ...musicPreferences,
+            ...(requestBody?.preferences || {}),
+          };
+
+          return createJsonResponse({ success: true });
         }
-      );
-    }
 
-    if (requestUrl.includes('/api/music/home')) {
-      return createJsonResponse({
-        source: 'netease',
-        spotlight: [],
-        sections: [],
-        featuredQueue: [],
-      });
-    }
+        return createJsonResponse(musicPreferences);
+      }
 
-    if (requestUrl.includes('/music/profile/collections')) {
-      return createJsonResponse([]);
-    }
+      if (
+        requestUrl.includes('/music/profile/favorites') ||
+        requestUrl.includes('/music/profile/play-records')
+      ) {
+        return createJsonResponse({});
+      }
 
-    if (requestUrl.includes('/music/profile/recent-tracks')) {
-      return createJsonResponse([]);
+      return createJsonResponse({}, 404);
     }
-
-    if (
-      requestUrl.includes('/music/profile/favorites') ||
-      requestUrl.includes('/music/profile/play-records')
-    ) {
-      return createJsonResponse({});
-    }
-
-    return createJsonResponse({}, 404);
-  });
+  );
 
   global.fetch = fetchMock as typeof fetch;
   return fetchMock;

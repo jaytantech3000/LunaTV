@@ -190,6 +190,80 @@ describe('music phase 2 live ui', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('restores persisted music preferences on first load', async () => {
+    localStorage.setItem(
+      'moontv_music_preferences',
+      JSON.stringify({
+        themeVariant: 'sunset',
+        sidebarCollapsed: true,
+        preferredPlaybackQuality: 'high',
+        lyricsFollowMode: 'manual',
+        playMode: 'single-loop',
+        volume: 0.2,
+        muted: true,
+      })
+    );
+
+    render(
+      <>
+        <MusicPageShell />
+        <MusicPlayerRoot />
+      </>
+    );
+
+    await screen.findByRole('button', {
+      name: 'Open collection 官方榜单',
+    });
+    expect(
+      await screen.findByRole('button', { name: 'Expand music sidebar' })
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Navigate 设置' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Music settings' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Use high playback quality' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: 'Use sunset theme' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: 'Use manual lyric follow' })
+    ).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Navigate 发现首页',
+      })
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Play featured queue' })
+    );
+    expect(await screen.findByTestId('music-mini-player')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open full player' }));
+    expect(await screen.findByTestId('music-full-player')).toBeInTheDocument();
+    expect(screen.getByText('Loop one')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Unmute playback' })
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Set playback volume')).toHaveValue('20');
+
+    const trackRequests = (global.fetch as jest.Mock).mock.calls
+      .map(([input]) =>
+        input instanceof Request
+          ? new URL(input.url)
+          : new URL(String(input), 'http://localhost')
+      )
+      .filter((url) => url.pathname === '/api/music/track');
+
+    expect(
+      trackRequests.some((url) => url.searchParams.get('quality') === 'high')
+    ).toBe(true);
+  });
+
   it('opens an album collection from discovery and syncs the album url state', async () => {
     render(
       <>

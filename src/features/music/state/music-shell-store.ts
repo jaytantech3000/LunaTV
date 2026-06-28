@@ -3,6 +3,12 @@
 import { create } from 'zustand';
 
 import type { MusicHomeSectionTab } from '../domain/entities';
+import {
+  readCachedMusicPreferences,
+  saveMusicPreferencesPatch,
+} from '../services/music-preferences';
+
+const defaultMusicPreferences = readCachedMusicPreferences();
 
 interface MusicShellState {
   activeSection: MusicHomeSectionTab;
@@ -17,12 +23,26 @@ interface MusicShellState {
 
 export const useMusicShellStore = create<MusicShellState>((set) => ({
   activeSection: 'home',
-  sidebarCollapsed: false,
+  sidebarCollapsed: defaultMusicPreferences.sidebarCollapsed,
   mobileDrawerOpen: false,
   layoutMode: 'desktop',
-  themeVariant: 'midnight',
+  themeVariant: defaultMusicPreferences.themeVariant,
   toggleSidebar: () =>
-    set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+    set((state) => {
+      const sidebarCollapsed = !state.sidebarCollapsed;
+      void saveMusicPreferencesPatch({
+        sidebarCollapsed,
+      });
+
+      return {
+        sidebarCollapsed,
+      };
+    }),
   setActiveSection: (activeSection) => set({ activeSection }),
-  setThemeVariant: (themeVariant) => set({ themeVariant }),
+  setThemeVariant: (themeVariant) => {
+    void saveMusicPreferencesPatch({
+      themeVariant,
+    });
+    set({ themeVariant });
+  },
 }));

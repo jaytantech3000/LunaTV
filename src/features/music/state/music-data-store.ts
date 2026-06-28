@@ -28,6 +28,12 @@ import {
   searchMusicCatalog,
   trashMusicPersonalFmTrack,
 } from '../services/music-api-client';
+import {
+  readCachedMusicPreferences,
+  saveMusicPreferencesPatch,
+} from '../services/music-preferences';
+
+const defaultMusicPreferences = readCachedMusicPreferences();
 
 type MusicPlayContext =
   | 'featured'
@@ -236,11 +242,19 @@ export const useMusicDataStore = create<MusicDataState>((set, get) => ({
   homeView: null,
   searchResult: null,
   selectedCollection: null,
-  preferredPlaybackQuality: 'standard',
+  preferredPlaybackQuality: defaultMusicPreferences.preferredPlaybackQuality,
   loading: false,
   error: null,
   setPreferredPlaybackQuality: (preferredPlaybackQuality) =>
-    set({ preferredPlaybackQuality }),
+    set(() => {
+      void saveMusicPreferencesPatch({
+        preferredPlaybackQuality,
+      });
+
+      return {
+        preferredPlaybackQuality,
+      };
+    }),
   advancePlayback: async () => {
     const playbackState = usePlaybackStore.getState();
     const currentQueueItem = selectCurrentQueueItem(playbackState);

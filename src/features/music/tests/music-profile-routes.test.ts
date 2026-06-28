@@ -30,6 +30,8 @@ const mockDeleteAllMusicCollectionRecords = jest.fn();
 const mockGetMusicSearchHistory = jest.fn();
 const mockAddMusicSearchHistory = jest.fn();
 const mockDeleteMusicSearchHistory = jest.fn();
+const mockGetMusicPreferences = jest.fn();
+const mockSaveMusicPreferences = jest.fn();
 
 jest.mock('@/lib/server/profile-context', () => ({
   requireProfileContextFromRequest: (...args: unknown[]) =>
@@ -70,6 +72,9 @@ jest.mock('@/lib/core/profile/music-user-data-service', () => ({
     mockAddMusicSearchHistory(...args),
   deleteMusicSearchHistory: (...args: unknown[]) =>
     mockDeleteMusicSearchHistory(...args),
+  getMusicPreferences: (...args: unknown[]) => mockGetMusicPreferences(...args),
+  saveMusicPreferences: (...args: unknown[]) =>
+    mockSaveMusicPreferences(...args),
 }));
 
 describe('music profile api routes', () => {
@@ -487,6 +492,71 @@ describe('music profile api routes', () => {
         username: 'desktop-owner',
       }),
       undefined
+    );
+  });
+
+  it('reads and overwrites music preferences through the music profile preferences route', async () => {
+    const { GET, POST } = await importMusicProfileRoute(
+      '@/app/api/music/profile/preferences/route'
+    );
+
+    mockGetMusicPreferences.mockResolvedValue({
+      themeVariant: 'sunset',
+      sidebarCollapsed: true,
+      preferredPlaybackQuality: 'high',
+      lyricsFollowMode: 'manual',
+      playMode: 'single-loop',
+      volume: 0.42,
+      muted: true,
+    });
+
+    const getResponse = await GET(
+      new NextRequest('http://localhost/api/music/profile/preferences')
+    );
+    const getPayload = await getResponse.json();
+
+    expect(getResponse.status).toBe(200);
+    expect(getPayload).toEqual({
+      themeVariant: 'sunset',
+      sidebarCollapsed: true,
+      preferredPlaybackQuality: 'high',
+      lyricsFollowMode: 'manual',
+      playMode: 'single-loop',
+      volume: 0.42,
+      muted: true,
+    });
+
+    const postResponse = await POST(
+      new NextRequest('http://localhost/api/music/profile/preferences', {
+        method: 'POST',
+        body: JSON.stringify({
+          preferences: {
+            themeVariant: 'midnight',
+            sidebarCollapsed: false,
+            preferredPlaybackQuality: 'standard',
+            lyricsFollowMode: 'auto',
+            playMode: 'list-loop',
+            volume: 0.9,
+            muted: false,
+          },
+        }),
+      })
+    );
+
+    expect(postResponse.status).toBe(200);
+    expect(mockSaveMusicPreferences).toHaveBeenCalledWith(
+      expect.objectContaining({
+        username: 'desktop-owner',
+      }),
+      {
+        themeVariant: 'midnight',
+        sidebarCollapsed: false,
+        preferredPlaybackQuality: 'standard',
+        lyricsFollowMode: 'auto',
+        playMode: 'list-loop',
+        volume: 0.9,
+        muted: false,
+      }
     );
   });
 });

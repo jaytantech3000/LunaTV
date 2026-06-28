@@ -16,17 +16,21 @@ import {
   buildMusicCollectionProfileKey,
   subscribeToMusicCollectionProfileUpdates,
 } from '../services/music-collection-profile';
+import { getMusicPreferences } from '../services/music-preferences';
 import { subscribeToMusicProfileUpdates } from '../services/music-profile';
 import { resolveMusicCollectionSection } from '../services/music-section-support';
 import {
   applyMusicUrlState,
   buildMusicUrlStatePath,
 } from '../services/music-url-state';
+import { useLyricsStore } from '../state/lyrics-store';
 import { useMusicDataStore } from '../state/music-data-store';
 import { useMusicLibraryStore } from '../state/music-library-store';
 import { useMusicShellStore } from '../state/music-shell-store';
+import { usePlaybackStore } from '../state/playback-store';
 
 export function MusicShell() {
+  const preferencesHydratedRef = useRef(false);
   const routeStateAppliedRef = useRef(false);
   const activeSection = useMusicShellStore((state) => state.activeSection);
   const sidebarCollapsed = useMusicShellStore(
@@ -72,6 +76,47 @@ export function MusicShell() {
       void bootstrap();
     }
   }, [bootstrap, homeView]);
+
+  useEffect(() => {
+    if (preferencesHydratedRef.current) {
+      return;
+    }
+
+    preferencesHydratedRef.current = true;
+    let cancelled = false;
+
+    const hydrateMusicPreferences = async () => {
+      const preferences = await getMusicPreferences();
+
+      if (cancelled) {
+        return;
+      }
+
+      useMusicShellStore.setState({
+        sidebarCollapsed: preferences.sidebarCollapsed,
+        themeVariant: preferences.themeVariant,
+      });
+      useMusicDataStore.setState({
+        preferredPlaybackQuality: preferences.preferredPlaybackQuality,
+      });
+      usePlaybackStore.setState({
+        playMode: preferences.playMode,
+        volume: preferences.volume,
+        muted: preferences.muted,
+      });
+      useLyricsStore.setState({
+        followMode: preferences.lyricsFollowMode,
+      });
+    };
+
+    void hydrateMusicPreferences().catch((error) => {
+      console.error('同步音乐偏好失败', error);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (routeStateAppliedRef.current) {

@@ -3,6 +3,12 @@
 import { create } from 'zustand';
 
 import type { MusicTrackEntity, QueueItemEntity } from '../domain/entities';
+import {
+  readCachedMusicPreferences,
+  saveMusicPreferencesPatch,
+} from '../services/music-preferences';
+
+const defaultMusicPreferences = readCachedMusicPreferences();
 
 export interface PlaybackState {
   queue: QueueItemEntity[];
@@ -54,9 +60,9 @@ export const usePlaybackStore = create<PlaybackState>((set) => ({
   queue: [],
   currentTrackId: null,
   playState: 'idle',
-  playMode: 'list-loop',
-  volume: 0.9,
-  muted: false,
+  playMode: defaultMusicPreferences.playMode,
+  volume: defaultMusicPreferences.volume,
+  muted: defaultMusicPreferences.muted,
   positionMs: 0,
   durationMs: 0,
   bufferedMs: 0,
@@ -170,17 +176,44 @@ export const usePlaybackStore = create<PlaybackState>((set) => ({
       bufferedMs: Math.max(bufferedMs, 0),
     })),
   togglePlayMode: () =>
-    set((state) => ({
-      playMode: state.playMode === 'list-loop' ? 'single-loop' : 'list-loop',
-    })),
+    set((state) => {
+      const playMode =
+        state.playMode === 'list-loop' ? 'single-loop' : 'list-loop';
+      void saveMusicPreferencesPatch({
+        playMode,
+      });
+
+      return {
+        playMode,
+      };
+    }),
   setVolume: (volume) =>
-    set(() => ({
-      volume: clampPlaybackLevel(volume),
-    })),
-  setMuted: (muted) => set({ muted }),
+    set(() => {
+      const normalizedVolume = clampPlaybackLevel(volume);
+      void saveMusicPreferencesPatch({
+        volume: normalizedVolume,
+      });
+
+      return {
+        volume: normalizedVolume,
+      };
+    }),
+  setMuted: (muted) => {
+    void saveMusicPreferencesPatch({
+      muted,
+    });
+    set({ muted });
+  },
   toggleMuted: () =>
-    set((state) => ({
-      muted: !state.muted,
-    })),
+    set((state) => {
+      const muted = !state.muted;
+      void saveMusicPreferencesPatch({
+        muted,
+      });
+
+      return {
+        muted,
+      };
+    }),
   setError: (error) => set({ error }),
 }));

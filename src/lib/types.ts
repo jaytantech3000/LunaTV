@@ -1,4 +1,5 @@
 import type { SavedMusicCollectionRecord } from '@/features/music/services/music-collection-profile-records';
+import type { MusicPreferences } from '@/features/music/services/music-preferences-records';
 import type {
   MusicFavoriteRecord,
   MusicPlayRecord,
@@ -99,6 +100,13 @@ export interface IStorage {
   getMusicSearchHistory(userName: string): Promise<string[]>;
   addMusicSearchHistory(userName: string, query: string): Promise<void>;
   deleteMusicSearchHistory(userName: string, query?: string): Promise<void>;
+
+  // 音乐偏好相关
+  getMusicPreferences(userName: string): Promise<MusicPreferences | null>;
+  setMusicPreferences(
+    userName: string,
+    preferences: MusicPreferences
+  ): Promise<void>;
 
   // 音乐已保存合集相关
   getMusicCollection(

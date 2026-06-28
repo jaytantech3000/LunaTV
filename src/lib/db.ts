@@ -1,6 +1,7 @@
 /* eslint-disable no-console, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
 
 import type { SavedMusicCollectionRecord } from '@/features/music/services/music-collection-profile-records';
+import type { MusicPreferences } from '@/features/music/services/music-preferences-records';
 import type {
   MusicFavoriteRecord,
   MusicPlayRecord,
@@ -179,6 +180,20 @@ export class DbManager {
     query?: string
   ): Promise<void> {
     await this.storage.deleteMusicSearchHistory(userName, query);
+  }
+
+  async getMusicPreferences(
+    userName: string
+  ): Promise<MusicPreferences | null> {
+    await this.ensureMigrated();
+    return this.storage.getMusicPreferences(userName);
+  }
+
+  async saveMusicPreferences(
+    userName: string,
+    preferences: MusicPreferences
+  ): Promise<void> {
+    await this.storage.setMusicPreferences(userName, preferences);
   }
 
   // 音乐已保存合集相关方法
