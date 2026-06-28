@@ -1,8 +1,8 @@
-# LunaTV Music System Rebuild Phase 1 Design
+# LunaTV Music System Rebuild Phase 1 Big-Bang Design
 
 **Goal**
 
-Rebuild a new music subsystem from scratch inside the current `React + Next.js + Tauri` host, using `YesPlayMusic` as a reference for information architecture (信息架构), player interaction (播放器交互), and page organization (页面组织). Phase 1 delivers only the new application shell (应用壳层) and playback core (播放核心), without reusing the old music frontend implementation.
+Rebuild the music subsystem from scratch inside the current `React + Next.js + Tauri` host, using `YesPlayMusic` as the reference for information architecture (信息架构), player interaction (播放器交互), and page organization (页面组织), and replace the live `/music` entry directly. Phase 1 uses a `big-bang` path: delete the old music system first, then rebuild the new application shell (应用壳层) and playback core (播放核心) in the same route space.
 
 **Full Program Breakdown**
 
@@ -14,42 +14,43 @@ The full rebuild is split into five independently deliverable sub-projects:
 4. Account capabilities (账号能力): login, personal playlists, favorites, history, daily recommendations, FM, settings
 5. Desktop integration (桌面集成): Tauri media keys, tray, cache, downloads, native desktop features
 
-This design document covers only **Phase 1 = sub-projects 1 + 2**. Later Phase 2 and Phase 3 work will get their own specs after this phase becomes stable.
+This design document covers only **Phase 1 = sub-projects 1 + 2**. The full objective still requires finishing the data domain, account capabilities, and desktop integration later, but the current phase focuses first on “delete old + rebuild the shell and playback core.”
 
 **Scope**
 
-- Build an isolated `music-v2` feature and mount it first behind a temporary `/music-v2` entry
-- Rebuild the overall page information architecture, navigation zones, main content layout, and responsive shell
-- Rebuild the playback-related state layer, including queue, play state, surface state, and lyric-sync state
+- Delete the old `components/music`, `lib/music`, `musicPlayerStore`, old `/api/music/*`, and old audio-stream route directly
+- Rebuild the page shell on the official `/music` route without creating `/music-v2` or any parallel fallback entry
+- Create a new `src/features/music/` directory to own the new components, state, services, and domain models
+- Rebuild the playback state layer, including queue, play state, surface state, and lyric-sync state
 - Rebuild the mini player, expanded player, lyrics panel, queue panel, keyboard shortcuts, and media-session bindings
-- Add automated coverage for the new state model, component interaction, and cutover flow
-- Reserve clean repository / adapter boundaries for later Phase 2 data-domain integration
+- Allow fixture / mock data in Phase 1 as long as the new boundaries are already running independently
+- Reserve clean repository / adapter boundaries for later Phase 2 data integration
 
 **Out of Scope**
 
-- Do not reuse the old player shell, page components, or interaction state under `components/music`
-- Do not reuse the old `musicPlayerStore`, old `MusicPlayerRoot`, or old `/api/music/*` as bridge implementations (过桥实现)
-- Do not add login, daily recommendations, comments, FM, settings pages, tray integration, or the full product surface (产品面) in Phase 1
-- Do not require fully live data connectivity in Phase 1; fixture / mock data is acceptable as long as the new boundaries are exercised
-- Do not delete the old `/music` implementation at the start; keep it as the rollback surface before the final cutover
+- Do not keep the old `/music` implementation as a rollback surface
+- Do not reuse the old `MusicPlayerRoot`, old `musicPlayerStore`, old `music-client`, or old provider implementations
+- Do not add login, daily recommendations, comments, FM, settings pages, tray integration, or the full product surface in Phase 1
+- Do not finish every live data source in Phase 1
+- Do not preserve dual-track components or dual-track state just for compatibility with the deleted system
 
 **Current Findings**
 
-- The current music feature is spread across layout, sidebar, mobile bottom navigation, the `/music` route, `/api/music/*`, `lib/music/*`, and `musicPlayerStore`, so this is not a single-page replacement
-- The old system couples UI, playback state, and provider data boundaries too tightly to serve as a valid base for a “from-scratch rebuild”
-- A direct big-bang deletion would keep `/music` unavailable for too long during development and would make rollback much harder
+- The current music feature is spread across layout, sidebar, mobile bottom navigation, the `/music` route, `/api/music/*`, `lib/music/*`, and `musicPlayerStore`
+- The old system couples UI, playback state, and provider data boundaries too tightly to serve as the base for a true rebuild-from-scratch
+- The user has explicitly accepted the `big-bang` path, so `/music` is allowed to be in an active rebuild state during development and no parallel fallback version is required
 
 **Core Approach**
 
-1. Use the `Strangler Fig Pattern`: build `music-v2` in parallel and cut over to the official `/music` route only after it is ready
+1. Use a `Big Bang Rewrite`: clear the old music system first, then rebuild the new one on the same route
 2. Use `Repository Pattern + Adapter Pattern`: define stable music-domain interfaces first, then adapt each source behind them
 3. Split player state into a playback core and a UI shell so provider-specific fields do not leak into global state
-4. Deliver only the new shell and new playback core in Phase 1, then layer data and account capabilities in later phases
+4. Deliver the new application shell and playback core on the official `/music` route in Phase 1, then layer data and account capabilities in later phases
 
 **Target Directory Structure**
 
 ```text
-src/features/music-v2/
+src/features/music/
   app/
   components/
   domain/
@@ -68,11 +69,12 @@ Suggested responsibilities:
 - `components/`
   - `MusicShell`
   - `MusicSidebar`
+  - `MusicTopBar`
+  - `MusicHero`
   - `MusicMiniPlayer`
   - `MusicFullPlayer`
   - `MusicQueueDrawer`
   - `MusicLyricsPanel`
-  - `MusicTopBar`
 - `domain/`
   - `track`
   - `playlist`
@@ -85,7 +87,7 @@ Suggested responsibilities:
   - `media-session`
   - `keyboard-shortcuts`
   - `theme-palette`
-  - later extensible `music-repository`
+  - `fixture-repository`
 - `state/`
   - four dedicated zustand stores
 - `tests/`
@@ -98,11 +100,11 @@ Phase 1 keeps only stable domain state and forbids source-specific fields.
 - `musicShellStore`
   - owns the page shell
   - primary fields:
-    - `activeView`
+    - `activeSection`
     - `sidebarCollapsed`
     - `mobileDrawerOpen`
-    - `activeTab`
     - `layoutMode`
+    - `themeVariant`
 - `playbackStore`
   - owns the playback core
   - primary fields:
@@ -115,7 +117,6 @@ Phase 1 keeps only stable domain state and forbids source-specific fields.
     - `positionMs`
     - `durationMs`
     - `bufferedMs`
-    - `quality`
     - `error`
 - `playerSurfaceStore`
   - owns the UI shell
@@ -136,7 +137,7 @@ Phase 1 keeps only stable domain state and forbids source-specific fields.
 
 **Unified Domain Models**
 
-Queue items, playable track objects, and lyric documents all use new unified entities:
+Queue items, playable tracks, and lyric documents all use new unified models:
 
 - `MusicTrackEntity`
   - `id`
@@ -163,23 +164,26 @@ Explicit constraints:
 
 - Do not put raw upstream fields such as `neteaseSong`, `audiusTrack`, or `jamendoTrack` directly into stores
 - Components may consume only unified entities and selectors
-- When a provider changes, only the adapter / repository layer should change; UI components must stay insulated (隔离)
+- When a provider changes, only the adapter / repository layer may change; UI components must remain insulated (隔离)
 
 **Information Architecture and UI Shell**
 
-The Phase 1 `music-v2` page uses a new shell structure without requiring the full business surface on day one:
+Phase 1 rewires the official `/music` page directly into a new shell structure:
 
 - Left side:
-  - primary music navigation
-  - first-level section placeholders
-  - future account area placeholder
+  - `Home`
+  - `Explore`
+  - `Library`
+  - a static account card
 - Top:
-  - search-entry shell
-  - current context title
-  - future user-action area placeholder
+  - search-shell input
+  - current section title
+  - view-switch and theme action slots
 - Main content:
-  - new visual shell by default
-  - initial iterations may use mock data to validate lists, artwork, switching, and responsiveness
+  - hero zone
+  - recommendation card grid
+  - recent-play area
+  - current queue summary
 - Bottom:
   - persistent new mini player shell
 - Fullscreen layer:
@@ -201,7 +205,7 @@ The Phase 1 playback core is driven by an `audio-engine` service, while UI compo
   - syncs `playbackStore`
   - owns `play / pause / seek / next / previous / setVolume`
 - `media-session`
-  - binds system media session behavior
+  - binds system media-session behavior
   - maps artwork, title, pause, and track-skip actions
 - `keyboard-shortcuts`
   - binds play/pause on space, track skip, volume, and expand/collapse shortcuts
@@ -216,18 +220,18 @@ Constraints:
 
 **Data Boundaries**
 
-`music-v2` is fully isolated from the old data layer:
+Phase 1 cuts all dependencies on the old data layer immediately:
 
-- It must not depend on:
+- Delete:
   - `src/lib/music/service.ts`
   - `src/lib/transport/music-client.ts`
   - `src/stores/musicPlayerStore.ts`
   - the current `/api/music/*`
+  - the old `/media/audio/stream`
 - New namespace:
-  - `src/features/music-v2/domain/*`
-  - `src/features/music-v2/services/*`
-  - `src/features/music-v2/state/*`
-  - new `/api/music-v2/*` routes
+  - `src/features/music/domain/*`
+  - `src/features/music/services/*`
+  - `src/features/music/state/*`
 
 Interfaces reserved for Phase 2:
 
@@ -238,23 +242,26 @@ Interfaces reserved for Phase 2:
 - `streamRepository`
 - `authRepository`
 
-Even if Phase 1 starts with fixture / mock data, it must still travel through these interfaces end to end instead of borrowing the old API surface.
+Phase 1 starts with a `fixture-repository`, but it must still travel through these interfaces end to end instead of borrowing the old API surface.
 
-**Cutover and Migration Strategy**
+**Big-Bang Migration Strategy**
 
-Use parallel rebuild plus final cutover:
+Use a “delete old first, then restore a minimal runnable shell” path:
 
-1. Create `/music-v2`
-2. Finish the new shell, stores, player services, and base interaction
-3. Stabilize `music-v2` with automated tests and smoke verification
-4. Cut the official `/music` route over to `music-v2`
-5. Delete the old music system
+1. Create the `codex/music` branch
+2. Delete the old music directories, old store, old API routes, and old audio-stream implementation
+3. Create the new `src/features/music/` tree and the minimal `/music` shell immediately
+4. Recover `/music` quickly into a page that can open, interact, and play fixture data
+5. Continue shipping the shell, player, lyrics, queue, and shortcuts in the same branch
 
-This still satisfies “tear down and rebuild everything” while avoiding a long period where the official `/music` route is unavailable.
+Constraints:
+
+- Deletions and the new shell must land together so the branch never sits in a non-compiling midpoint
+- The official `/music` route may not reattach the old components or the old store
 
 **Deletion List**
 
-After the final cutover to `music-v2`, delete the old system as a batch:
+The old system is deleted at the start of this phase:
 
 - `src/components/music/*`
 - `src/lib/music/*`
@@ -264,7 +271,7 @@ After the final cutover to `music-v2`, delete the old system as a batch:
 - `src/app/media/audio/stream/route.ts`
 - `src/app/media/audio/stream/route.test.ts`
 
-Replacement points:
+The following connection points must be replaced or repaired immediately:
 
 - `src/app/music/page.tsx`
 - `src/app/layout.tsx`
@@ -273,8 +280,8 @@ Replacement points:
 
 Notes:
 
-- `Sidebar` and `MobileBottomNav` keep the `/music` navigation semantics and only change implementation targets during the final cutover
-- Deleting the old system should be its own purge stage so new and old code are not removed in a tangled way
+- `Sidebar` and `MobileBottomNav` keep the `/music` navigation semantics
+- The old `MusicPlayerRoot` in `layout.tsx` must be removed during the same deletion batch and replaced with the new player root
 
 **Error Handling and Edge Cases**
 
@@ -282,7 +289,7 @@ Notes:
   - hide the mini player
   - do not auto-open the full player
 - When cover art or lyrics are missing:
-  - keep placeholder behavior
+  - use fallback artwork and an empty-lyrics message
   - prevent layout collapse
 - When shortcuts, media session, or browser capabilities are unavailable:
   - log a meaningful error
@@ -310,43 +317,43 @@ Phase 1 adds four testing layers:
    - `MusicFullPlayer`
    - `MusicQueueDrawer`
    - `MusicLyricsPanel`
-4. Pre-cutover smoke test
-   - open `music-v2`
-   - start one track
-   - expand player
-   - change track
+4. Big-bang smoke test
+   - open the official `/music`
+   - render the new shell
+   - play a fixture track
+   - expand the player
+   - switch tracks
    - confirm lyric highlighting
    - collapse back to the mini player
 
 Priority:
 
 - Prefer adding `Playwright` for page-level smoke verification
-- If this iteration does not add `Playwright`, use `RTL + Jest` to cover the critical end-to-end behavior instead
+- If this iteration does not add `Playwright`, cover the critical end-to-end path with `RTL + Jest`
 - Manual verification alone is not acceptable
 
 **Acceptance Criteria**
 
-- `music-v2` exists as an isolated directory, state layer, and service boundary
-- `music-v2` can run without depending on the old `musicPlayerStore` or old `/api/music/*`
+- The old `music` frontend implementation, old store, old API routes, and old audio-stream implementation are deleted on this branch
+- The official `/music` route is owned by the new `src/features/music/` implementation
+- The new system does not depend on the old `musicPlayerStore`, old `/api/music/*`, or old `lib/music/*`
 - The new system owns the mini player, full player, lyrics, queue, shortcuts, and media session
-- Before final cutover, the old `/music` route still exists as a rollback surface
-- After cutover, the old music directory and old audio-stream implementation can be deleted as one batch
 - Automated coverage exists for the new critical state and interaction paths
 
 **Later Phases**
 
 - **Phase 2**
   - integrate real search, playlists, albums, artists, lyrics, and stream providers
-  - implement the new `/api/music-v2/*`
+  - rebuild the new `/api/music/*`
 - **Phase 3**
   - integrate login, personal playlists, favorites, history, daily recommendations, FM, and settings
   - integrate desktop media keys, tray, cache, downloads, and other desktop-specific capabilities
 
 **Milestones**
 
-1. Establish the `music-v2` shell and base directory
+1. Delete the old music system and restore a minimal runnable `/music` shell
 2. Build the four stores and `audio-engine`
-3. Ship mini player, full player, lyrics, and queue
-4. Connect mock data and base smoke coverage
-5. Cut over `/music`
-6. Purge the old music system
+3. Ship the mini player, full player, lyrics, and queue
+4. Connect fixture data and the big-bang smoke test
+5. Integrate the real data domain
+6. Integrate account and desktop capabilities
