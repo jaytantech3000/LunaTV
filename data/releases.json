@@ -1,7 +1,105 @@
 {
-  "generatedAt": "2026-06-27T17:28:16.509Z",
+  "generatedAt": "2026-06-28T17:11:12.241Z",
   "repository": "jaytantech3000/LunaTV",
   "releases": [
+    {
+      "id": "345947597",
+      "tagName": "desktop-v200.0.1-beta.22",
+      "version": "200.0.1-beta.22",
+      "name": "LunaTV Desktop 200.0.1 Beta 22",
+      "prerelease": true,
+      "publishedAt": "2026-06-28T16:47:17Z",
+      "htmlUrl": "https://github.com/jaytantech3000/LunaTV/releases/tag/desktop-v200.0.1-beta.22",
+      "notes": "**Full Changelog**: https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.20...desktop-v200.0.1-beta.22",
+      "changeSummary": {
+        "en": {
+          "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.20...desktop-v200.0.1-beta.22",
+          "added": [
+            "music: add playback state core",
+            "music: add playback services",
+            "music: build rebuilt player surfaces",
+            "music: rebuild desktop netease music flow",
+            "music: persist desktop music preferences",
+            "music: restore desktop playback sessions",
+            "music: add desktop downloads and account sync"
+          ],
+          "changed": [
+            "music: bootstrap big-bang shell",
+            "music: replace legacy data layer with fixtures"
+          ],
+          "fixed": [],
+          "other": [
+            "music: add GitHub player research memo",
+            "music: add rebuild phase 1 design",
+            "music: switch rebuild docs to big-bang",
+            "music: verify big-bang rebuild shell",
+            "music: update progress ledger",
+            "music: add phase2 netease slice design",
+            "music: add phase3a account login design",
+            "music: add phase3a account login plan"
+          ]
+        },
+        "zh-CN": {
+          "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.20...desktop-v200.0.1-beta.22",
+          "added": [
+            "音乐：增加 playback state core",
+            "音乐：增加 playback services",
+            "音乐：build rebuilt player surfaces",
+            "音乐：rebuild 桌面端 网易云 音乐 flow",
+            "音乐：持久化桌面端 音乐 preferences",
+            "音乐：恢复桌面端 playback sessions",
+            "音乐：增加桌面端 downloads and account sync"
+          ],
+          "changed": [
+            "音乐：bootstrap big-bang shell",
+            "音乐：用fixtures替换 legacy data layer"
+          ],
+          "fixed": [],
+          "other": [
+            "音乐：增加 GitHub player research memo",
+            "音乐：增加 rebuild phase 1 design",
+            "音乐：switch rebuild docs to big-bang",
+            "音乐：verify big-bang rebuild shell",
+            "音乐：调整 progress ledger",
+            "音乐：增加 phase2 网易云 slice design",
+            "音乐：增加 phase3a account login design",
+            "音乐：增加 phase3a account login plan"
+          ]
+        }
+      },
+      "assets": [
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.22_windows-x64-setup.exe",
+          "platformLabel": "Windows x64",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.22/LunaTV.Desktop_200.0.1-beta.22_windows-x64-setup.exe",
+          "size": 29120039
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.22_macos-arm64.app.tar.gz",
+          "platformLabel": "macOS Apple Silicon",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.22/LunaTV.Desktop_200.0.1-beta.22_macos-arm64.app.tar.gz",
+          "size": 34797776
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.22_macos-arm64.dmg",
+          "platformLabel": "macOS Apple Silicon",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.22/LunaTV.Desktop_200.0.1-beta.22_macos-arm64.dmg",
+          "size": 35272607
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.22_macos-x64.app.tar.gz",
+          "platformLabel": "macOS Intel",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.22/LunaTV.Desktop_200.0.1-beta.22_macos-x64.app.tar.gz",
+          "size": 35461638
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.22_macos-x64.dmg",
+          "platformLabel": "macOS Intel",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.22/LunaTV.Desktop_200.0.1-beta.22_macos-x64.dmg",
+          "size": 36064322
+        }
+      ]
+    },
     {
       "id": "345742627",
       "tagName": "desktop-v200.0.1-beta.21",
