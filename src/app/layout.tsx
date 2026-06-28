@@ -12,7 +12,8 @@ import {
 
 import DesktopRuntimeSync from '@/components/DesktopRuntimeSync';
 import DesktopUpdateBootstrap from '@/components/DesktopUpdateBootstrap';
-import MusicPlayerRoot from '@/components/music/MusicPlayerRoot';
+
+import MusicPlayerRoot from '@/features/music/components/MusicPlayerRoot';
 
 import { GlobalErrorIndicator } from '../components/GlobalErrorIndicator';
 import { SiteProvider } from '../components/SiteProvider';
