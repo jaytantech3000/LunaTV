@@ -2,6 +2,13 @@
 
 import { Redis } from '@upstash/redis';
 
+import type { SavedMusicCollectionRecord } from '@/features/music/services/music-collection-profile-records';
+import type {
+  MusicFavoriteRecord,
+  MusicPlayRecord,
+  MusicRecentTrackRecord,
+} from '@/features/music/services/music-profile-records';
+
 import { AdminConfig } from './admin.types';
 import { hashPassword, isHashed, verifyPassword } from './password';
 import {
@@ -72,6 +79,236 @@ export class UpstashRedisStorage implements IStorage {
 
   constructor() {
     this.client = getUpstashRedisClient();
+  }
+
+  // ---------- 音乐播放记录 ----------
+  private musicPlayRecordHashKey(user: string) {
+    return `u:${user}:music:pr`;
+  }
+
+  async getMusicPlayRecord(
+    userName: string,
+    key: string
+  ): Promise<MusicPlayRecord | null> {
+    const val = await withRetry(() =>
+      this.client.hget(this.musicPlayRecordHashKey(userName), key)
+    );
+    return val ? (val as MusicPlayRecord) : null;
+  }
+
+  async setMusicPlayRecord(
+    userName: string,
+    key: string,
+    record: MusicPlayRecord
+  ): Promise<void> {
+    await withRetry(() =>
+      this.client.hset(this.musicPlayRecordHashKey(userName), { [key]: record })
+    );
+  }
+
+  async getAllMusicPlayRecords(
+    userName: string
+  ): Promise<Record<string, MusicPlayRecord>> {
+    const all = await withRetry(() =>
+      this.client.hgetall(this.musicPlayRecordHashKey(userName))
+    );
+    if (!all || Object.keys(all).length === 0) {
+      return {};
+    }
+
+    const result: Record<string, MusicPlayRecord> = {};
+    for (const [field, value] of Object.entries(all)) {
+      if (value) {
+        result[field] = value as MusicPlayRecord;
+      }
+    }
+    return result;
+  }
+
+  async deleteMusicPlayRecord(userName: string, key: string): Promise<void> {
+    await withRetry(() =>
+      this.client.hdel(this.musicPlayRecordHashKey(userName), key)
+    );
+  }
+
+  async deleteAllMusicPlayRecords(userName: string): Promise<void> {
+    await withRetry(() =>
+      this.client.del(this.musicPlayRecordHashKey(userName))
+    );
+  }
+
+  // ---------- 音乐收藏 ----------
+  private musicFavoriteHashKey(user: string) {
+    return `u:${user}:music:fav`;
+  }
+
+  async getMusicFavorite(
+    userName: string,
+    key: string
+  ): Promise<MusicFavoriteRecord | null> {
+    const val = await withRetry(() =>
+      this.client.hget(this.musicFavoriteHashKey(userName), key)
+    );
+    return val ? (val as MusicFavoriteRecord) : null;
+  }
+
+  async setMusicFavorite(
+    userName: string,
+    key: string,
+    favorite: MusicFavoriteRecord
+  ): Promise<void> {
+    await withRetry(() =>
+      this.client.hset(this.musicFavoriteHashKey(userName), { [key]: favorite })
+    );
+  }
+
+  async getAllMusicFavorites(
+    userName: string
+  ): Promise<Record<string, MusicFavoriteRecord>> {
+    const all = await withRetry(() =>
+      this.client.hgetall(this.musicFavoriteHashKey(userName))
+    );
+    if (!all || Object.keys(all).length === 0) {
+      return {};
+    }
+
+    const result: Record<string, MusicFavoriteRecord> = {};
+    for (const [field, value] of Object.entries(all)) {
+      if (value) {
+        result[field] = value as MusicFavoriteRecord;
+      }
+    }
+    return result;
+  }
+
+  async deleteMusicFavorite(userName: string, key: string): Promise<void> {
+    await withRetry(() =>
+      this.client.hdel(this.musicFavoriteHashKey(userName), key)
+    );
+  }
+
+  async deleteAllMusicFavorites(userName: string): Promise<void> {
+    await withRetry(() => this.client.del(this.musicFavoriteHashKey(userName)));
+  }
+
+  // ---------- 音乐最近播放 ----------
+  private musicRecentTracksKey(user: string) {
+    return `u:${user}:music:recent`;
+  }
+
+  async getMusicRecentTracks(
+    userName: string
+  ): Promise<MusicRecentTrackRecord[]> {
+    const val = await withRetry(() =>
+      this.client.get(this.musicRecentTracksKey(userName))
+    );
+    return Array.isArray(val) ? (val as MusicRecentTrackRecord[]) : [];
+  }
+
+  async setMusicRecentTracks(
+    userName: string,
+    records: MusicRecentTrackRecord[]
+  ): Promise<void> {
+    await withRetry(() =>
+      this.client.set(this.musicRecentTracksKey(userName), records)
+    );
+  }
+
+  async deleteAllMusicRecentTracks(userName: string): Promise<void> {
+    await withRetry(() => this.client.del(this.musicRecentTracksKey(userName)));
+  }
+
+  // ---------- 音乐搜索历史 ----------
+  private musicSearchHistoryKey(user: string) {
+    return `u:${user}:music:sh`;
+  }
+
+  async getMusicSearchHistory(userName: string): Promise<string[]> {
+    const result = await withRetry(() =>
+      this.client.lrange(this.musicSearchHistoryKey(userName), 0, -1)
+    );
+
+    return ensureStringArray(result as any[]);
+  }
+
+  async addMusicSearchHistory(userName: string, query: string): Promise<void> {
+    const key = this.musicSearchHistoryKey(userName);
+
+    await withRetry(() => this.client.lrem(key, 0, ensureString(query)));
+    await withRetry(() => this.client.lpush(key, ensureString(query)));
+    await withRetry(() => this.client.ltrim(key, 0, SEARCH_HISTORY_LIMIT - 1));
+  }
+
+  async deleteMusicSearchHistory(
+    userName: string,
+    query?: string
+  ): Promise<void> {
+    const key = this.musicSearchHistoryKey(userName);
+
+    if (query) {
+      await withRetry(() => this.client.lrem(key, 0, ensureString(query)));
+      return;
+    }
+
+    await withRetry(() => this.client.del(key));
+  }
+
+  // ---------- 音乐已保存合集 ----------
+  private musicCollectionHashKey(user: string) {
+    return `u:${user}:music:col`;
+  }
+
+  async getMusicCollection(
+    userName: string,
+    key: string
+  ): Promise<SavedMusicCollectionRecord | null> {
+    const val = await withRetry(() =>
+      this.client.hget(this.musicCollectionHashKey(userName), key)
+    );
+
+    return val ? (val as SavedMusicCollectionRecord) : null;
+  }
+
+  async setMusicCollection(
+    userName: string,
+    key: string,
+    record: SavedMusicCollectionRecord
+  ): Promise<void> {
+    await withRetry(() =>
+      this.client.hset(this.musicCollectionHashKey(userName), { [key]: record })
+    );
+  }
+
+  async getAllMusicCollections(
+    userName: string
+  ): Promise<Record<string, SavedMusicCollectionRecord>> {
+    const all = await withRetry(() =>
+      this.client.hgetall(this.musicCollectionHashKey(userName))
+    );
+    if (!all || Object.keys(all).length === 0) {
+      return {};
+    }
+
+    const result: Record<string, SavedMusicCollectionRecord> = {};
+    for (const [field, value] of Object.entries(all)) {
+      if (value) {
+        result[field] = value as SavedMusicCollectionRecord;
+      }
+    }
+
+    return result;
+  }
+
+  async deleteMusicCollection(userName: string, key: string): Promise<void> {
+    await withRetry(() =>
+      this.client.hdel(this.musicCollectionHashKey(userName), key)
+    );
+  }
+
+  async deleteAllMusicCollections(userName: string): Promise<void> {
+    await withRetry(() =>
+      this.client.del(this.musicCollectionHashKey(userName))
+    );
   }
 
   // ---------- 播放记录 ----------
@@ -268,6 +505,16 @@ export class UpstashRedisStorage implements IStorage {
 
     // 删除搜索历史
     await withRetry(() => this.client.del(this.shKey(userName)));
+
+    // 删除音乐搜索历史
+    await withRetry(() =>
+      this.client.del(this.musicSearchHistoryKey(userName))
+    );
+
+    // 删除音乐已保存合集
+    await withRetry(() =>
+      this.client.del(this.musicCollectionHashKey(userName))
+    );
 
     // 删除播放记录（Hash key 直接删除）
     await withRetry(() => this.client.del(this.prHashKey(userName)));

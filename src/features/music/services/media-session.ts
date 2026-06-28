@@ -1,17 +1,13 @@
 import type { QueueItemEntity } from '../domain/entities';
 
-interface NavigatorWithMediaSession extends Navigator {
-  mediaSession?: {
-    metadata: MediaMetadata | null;
-  };
-}
-
 export function bindMusicMediaSession(track: QueueItemEntity | null) {
   if (typeof navigator === 'undefined') {
     return;
   }
 
-  const navigatorWithMediaSession = navigator as NavigatorWithMediaSession;
+  const navigatorWithMediaSession = navigator as Navigator & {
+    mediaSession?: MediaSession | null;
+  };
   if (!navigatorWithMediaSession.mediaSession) {
     return;
   }

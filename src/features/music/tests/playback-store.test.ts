@@ -13,7 +13,7 @@ const FEATURED_QUEUE: QueueItemEntity[] = [
     fromContext: 'featured',
     track: {
       id: 't1',
-      source: 'fixture',
+      source: 'netease',
       title: 'A',
       artists: ['x'],
       album: 'aa',
@@ -29,7 +29,7 @@ const FEATURED_QUEUE: QueueItemEntity[] = [
     fromContext: 'featured',
     track: {
       id: 't2',
-      source: 'fixture',
+      source: 'netease',
       title: 'B',
       artists: ['y'],
       album: 'bb',
@@ -53,6 +53,7 @@ describe('music playback state', () => {
       positionMs: 0,
       durationMs: 0,
       bufferedMs: 0,
+      requestedSeekMs: null,
       error: null,
     });
     usePlayerSurfaceStore.setState({
@@ -87,6 +88,65 @@ describe('music playback state', () => {
     expect(usePlaybackStore.getState().currentTrackId).toBe('t2');
   });
 
+  it('selects an explicit queue track and resumes playback from the top', () => {
+    const playback = usePlaybackStore.getState();
+    playback.seedQueue(FEATURED_QUEUE);
+    playback.setPlayState('paused');
+    playback.setPositionMs(480);
+
+    playback.selectTrack('t2');
+
+    expect(usePlaybackStore.getState().currentTrackId).toBe('t2');
+    expect(usePlaybackStore.getState().playState).toBe('playing');
+    expect(usePlaybackStore.getState().positionMs).toBe(0);
+  });
+
+  it('hydrates an existing queue track without reordering the queue', () => {
+    const playback = usePlaybackStore.getState();
+    playback.seedQueue(FEATURED_QUEUE);
+
+    playback.updateTrack({
+      ...FEATURED_QUEUE[1].track,
+      stream: '/b-hydrated.mp3',
+      durationMs: 223000,
+    });
+
+    expect(usePlaybackStore.getState().queue[0]?.track.id).toBe('t1');
+    expect(usePlaybackStore.getState().queue[1]?.track.stream).toBe(
+      '/b-hydrated.mp3'
+    );
+  });
+
+  it('stores seek requests while updating the visible playback position', () => {
+    const playback = usePlaybackStore.getState();
+    playback.seedQueue(FEATURED_QUEUE);
+
+    playback.requestSeek(64000);
+
+    expect(usePlaybackStore.getState().requestedSeekMs).toBe(64000);
+    expect(usePlaybackStore.getState().positionMs).toBe(64000);
+  });
+
+  it('stores buffered progress in playback state', () => {
+    const playback = usePlaybackStore.getState();
+
+    playback.setBufferedMs(128000);
+
+    expect(usePlaybackStore.getState().bufferedMs).toBe(128000);
+  });
+
+  it('updates play mode and volume preferences in playback state', () => {
+    const playback = usePlaybackStore.getState();
+
+    playback.togglePlayMode();
+    playback.setVolume(0.35);
+    playback.toggleMuted();
+
+    expect(usePlaybackStore.getState().playMode).toBe('single-loop');
+    expect(usePlaybackStore.getState().volume).toBe(0.35);
+    expect(usePlaybackStore.getState().muted).toBe(true);
+  });
+
   it('opens the full player without mutating the queue', () => {
     usePlayerSurfaceStore.getState().openFullPlayer();
 
@@ -96,7 +156,7 @@ describe('music playback state', () => {
   it('tracks the active lyric line index', () => {
     useLyricsStore.getState().setLyrics({
       trackId: 't1',
-      source: 'fixture',
+      source: 'netease',
       offsetMs: 0,
       lines: [{ timeMs: 0, text: 'line 1' }],
     });

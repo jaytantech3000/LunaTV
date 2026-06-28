@@ -83,6 +83,20 @@ export type DesktopReleaseInstallEvent =
       event: 'Installing';
     };
 
+export type DesktopMusicTrayCommand =
+  | 'open-music'
+  | 'toggle-play'
+  | 'play-next'
+  | 'play-previous';
+
+export interface DesktopMusicTrayState {
+  title: string | null;
+  artistText: string | null;
+  source: string | null;
+  playState: 'idle' | 'playing' | 'paused';
+  queueLength: number;
+}
+
 declare global {
   interface Window {
     __TAURI__?: unknown;
@@ -329,5 +343,48 @@ export function clearPausedDesktopUpdateDownload(): Promise<void> {
 export function openDesktopExternalUrl(url: string): Promise<void> {
   return invokeDesktopCommand<void>('open_external_url', {
     url,
+  });
+}
+
+function isDesktopMusicTrayCommand(
+  value: unknown
+): value is DesktopMusicTrayCommand {
+  return (
+    value === 'open-music' ||
+    value === 'toggle-play' ||
+    value === 'play-next' ||
+    value === 'play-previous'
+  );
+}
+
+export function updateDesktopMusicTrayState(
+  state: DesktopMusicTrayState
+): Promise<void> {
+  return invokeDesktopCommand<void>('update_music_tray_state', {
+    state,
+  });
+}
+
+export async function listenDesktopMusicTrayCommands(
+  listener: (command: DesktopMusicTrayCommand) => void
+): Promise<() => void> {
+  ensureDesktopTarget();
+
+  if (!isDesktopTauriRuntimeAvailable()) {
+    throw new Error(
+      'Desktop IPC is unavailable in browser preview. Run inside the Tauri shell.'
+    );
+  }
+
+  const { listen } = await import('@tauri-apps/api/event');
+
+  return listen<{ command?: unknown }>('music-tray-command', (event) => {
+    const command = event.payload?.command;
+
+    if (!isDesktopMusicTrayCommand(command)) {
+      return;
+    }
+
+    listener(command);
   });
 }

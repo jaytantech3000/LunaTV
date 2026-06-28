@@ -5,12 +5,12 @@ import { bindMusicMediaSession } from '../services/media-session';
 import { usePlaybackStore } from '../state/playback-store';
 
 const CURRENT_TRACK: QueueItemEntity = {
-  queueId: 'fixture-1',
+  queueId: 'netease-1',
   addedAt: 1,
   fromContext: 'featured',
   track: {
     id: 't1',
-    source: 'fixture',
+    source: 'netease',
     title: 'Neon Harbour',
     artists: ['Luna Ensemble'],
     album: 'Afterglow',
@@ -34,6 +34,10 @@ class TestMediaMetadata {
 }
 
 describe('playback services', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   beforeEach(() => {
     usePlaybackStore.setState({
       queue: [],
@@ -45,6 +49,7 @@ describe('playback services', () => {
       positionMs: 0,
       durationMs: 0,
       bufferedMs: 0,
+      requestedSeekMs: null,
       error: null,
     });
 
@@ -59,6 +64,9 @@ describe('playback services', () => {
   });
 
   it('writes current time and pause state back into playbackStore', () => {
+    const pauseSpy = jest
+      .spyOn(HTMLMediaElement.prototype, 'pause')
+      .mockImplementation(() => undefined);
     const audio = document.createElement('audio');
     const engine = createAudioEngine(audio);
 
@@ -66,6 +74,7 @@ describe('playback services', () => {
     engine.syncPosition(32000);
     engine.pause();
 
+    expect(pauseSpy).toHaveBeenCalledTimes(1);
     expect(usePlaybackStore.getState().durationMs).toBe(215000);
     expect(usePlaybackStore.getState().positionMs).toBe(32000);
     expect(usePlaybackStore.getState().playState).toBe('paused');
@@ -93,5 +102,33 @@ describe('playback services', () => {
 
     expect(onTogglePlay).toHaveBeenCalledTimes(1);
     expect(onNext).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores keyboard shortcuts while typing in editable fields', () => {
+    const onTogglePlay = jest.fn();
+    const onNext = jest.fn();
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    const unbind = bindMusicKeyboardShortcuts(onTogglePlay, onNext);
+
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        code: 'Space',
+        bubbles: true,
+      })
+    );
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        code: 'ArrowRight',
+        bubbles: true,
+      })
+    );
+
+    unbind();
+    document.body.removeChild(input);
+
+    expect(onTogglePlay).not.toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
   });
 });

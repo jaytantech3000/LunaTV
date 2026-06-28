@@ -2,21 +2,35 @@ import { usePlaybackStore } from '../state/playback-store';
 
 export interface AudioEngine {
   load: (src: string) => void;
-  play: () => void;
+  play: () => Promise<void>;
   pause: () => void;
   syncDuration: (durationMs: number) => void;
   syncPosition: (positionMs: number) => void;
+  syncVolume: (volume: number) => void;
+  syncMuted: (muted: boolean) => void;
+}
+
+function clampAudioVolume(volume: number): number {
+  if (!Number.isFinite(volume)) {
+    return 0;
+  }
+
+  return Math.min(Math.max(volume, 0), 1);
 }
 
 export function createAudioEngine(audio: HTMLAudioElement): AudioEngine {
   return {
     load(src) {
-      audio.src = src;
+      if (audio.src !== src) {
+        audio.src = src;
+      }
     },
-    play() {
+    async play() {
+      await audio.play();
       usePlaybackStore.getState().setPlayState('playing');
     },
     pause() {
+      audio.pause();
       usePlaybackStore.getState().setPlayState('paused');
     },
     syncDuration(durationMs) {
@@ -24,6 +38,12 @@ export function createAudioEngine(audio: HTMLAudioElement): AudioEngine {
     },
     syncPosition(positionMs) {
       usePlaybackStore.getState().setPositionMs(positionMs);
+    },
+    syncVolume(volume) {
+      audio.volume = clampAudioVolume(volume);
+    },
+    syncMuted(muted) {
+      audio.muted = muted;
     },
   };
 }

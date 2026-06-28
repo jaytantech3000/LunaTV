@@ -11,6 +11,8 @@ interface LyricsState {
   manualSeekLock: boolean;
   setLyrics: (lyrics: LyricDocumentEntity | null) => void;
   setActiveLineIndex: (activeLineIndex: number) => void;
+  setFollowMode: (followMode: 'auto' | 'manual') => void;
+  toggleFollowMode: () => void;
 }
 
 export const useLyricsStore = create<LyricsState>((set) => ({
@@ -20,4 +22,9 @@ export const useLyricsStore = create<LyricsState>((set) => ({
   manualSeekLock: false,
   setLyrics: (lyrics) => set({ lyrics, activeLineIndex: lyrics ? 0 : -1 }),
   setActiveLineIndex: (activeLineIndex) => set({ activeLineIndex }),
+  setFollowMode: (followMode) => set({ followMode }),
+  toggleFollowMode: () =>
+    set((state) => ({
+      followMode: state.followMode === 'auto' ? 'manual' : 'auto',
+    })),
 }));

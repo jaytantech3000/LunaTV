@@ -18,4 +18,12 @@ describe('useMusicShellStore', () => {
     store.toggleSidebar();
     expect(useMusicShellStore.getState().sidebarCollapsed).toBe(true);
   });
+
+  it('updates theme and active section explicitly for shell-level settings', () => {
+    useMusicShellStore.getState().setThemeVariant('sunset');
+    useMusicShellStore.getState().setActiveSection('settings');
+
+    expect(useMusicShellStore.getState().themeVariant).toBe('sunset');
+    expect(useMusicShellStore.getState().activeSection).toBe('settings');
+  });
 });

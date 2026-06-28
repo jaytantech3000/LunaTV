@@ -24,7 +24,12 @@ use semver::Version;
 #[cfg(target_os = "windows")]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, RunEvent, State, ipc::Channel};
+use tauri::{
+    AppHandle, Emitter, Manager, RunEvent, State,
+    ipc::Channel,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+};
 use tauri_plugin_updater::{Update as DesktopUpdateHandle, UpdaterExt};
 use tokio::{
     fs::{self as tokio_fs, OpenOptions as TokioOpenOptions},
@@ -56,6 +61,15 @@ const DESKTOP_UPDATER_NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const DESKTOP_RELEASE_TAG_PREFIX: &str = "desktop-v";
 const DESKTOP_RELEASE_MANIFEST_NAME: &str = "latest.json";
+const MUSIC_TRAY_ID: &str = "music-tray";
+const MUSIC_TRAY_EVENT_NAME: &str = "music-tray-command";
+const MUSIC_TRAY_OPEN_ID: &str = "music-tray-open";
+const MUSIC_TRAY_TOGGLE_PLAY_ID: &str = "music-tray-toggle-play";
+const MUSIC_TRAY_PREVIOUS_ID: &str = "music-tray-previous";
+const MUSIC_TRAY_NEXT_ID: &str = "music-tray-next";
+const MUSIC_TRAY_QUIT_ID: &str = "music-tray-quit";
+const MUSIC_TRAY_IDLE_TITLE: &str = "Luna Music";
+const MUSIC_TRAY_IDLE_TOOLTIP: &str = "Luna Music is ready";
 
 const DEFAULT_DESKTOP_CONFIG: &str = include_str!("../../config.example.json");
 const PROFILE_SYNC_USER_DATA_DOMAINS: [&str; 5] = [
@@ -198,6 +212,30 @@ struct DesktopAuthStatus {
 struct DesktopAuthSession {
     username: String,
     role: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MusicTrayCommandEventPayload {
+    command: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum DesktopMusicTrayPlayState {
+    Idle,
+    Playing,
+    Paused,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopMusicTrayStatePayload {
+    title: Option<String>,
+    artist_text: Option<String>,
+    source: Option<String>,
+    play_state: DesktopMusicTrayPlayState,
+    queue_length: usize,
 }
 
 #[derive(Clone)]
@@ -738,6 +776,178 @@ fn open_external_url(url: String) -> Result<(), String> {
     open_url_in_system_browser(parsed_url.as_str()).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn update_music_tray_state(
+    app: AppHandle,
+    state: DesktopMusicTrayStatePayload,
+) -> Result<(), String> {
+    apply_music_tray_state(&app, &state).map_err(|error| error.to_string())
+}
+
+fn emit_music_tray_command(app: &AppHandle, command: &str) {
+    if let Err(error) = app.emit(
+        MUSIC_TRAY_EVENT_NAME,
+        MusicTrayCommandEventPayload {
+            command: command.to_string(),
+        },
+    ) {
+        tracing::warn!("failed to emit music tray command {command}: {error}");
+    }
+}
+
+fn focus_main_window(app: &AppHandle) -> Result<()> {
+    let window = app
+        .get_webview_window("main")
+        .context("main window is unavailable")?;
+
+    if window.is_minimized().unwrap_or(false) {
+        let _ = window.unminimize();
+    }
+
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
+fn open_music_from_tray(app: &AppHandle) {
+    if let Err(error) = focus_main_window(app) {
+        tracing::warn!("failed to focus main window from music tray: {error}");
+    }
+
+    emit_music_tray_command(app, "open-music");
+}
+
+fn handle_music_tray_menu_event(app: &AppHandle, menu_id: &str) {
+    match menu_id {
+        MUSIC_TRAY_OPEN_ID => open_music_from_tray(app),
+        MUSIC_TRAY_TOGGLE_PLAY_ID => emit_music_tray_command(app, "toggle-play"),
+        MUSIC_TRAY_PREVIOUS_ID => emit_music_tray_command(app, "play-previous"),
+        MUSIC_TRAY_NEXT_ID => emit_music_tray_command(app, "play-next"),
+        MUSIC_TRAY_QUIT_ID => app.exit(0),
+        _ => {}
+    }
+}
+
+fn handle_music_tray_icon_event(app: &AppHandle, event: &TrayIconEvent) {
+    let should_open_music = matches!(
+        event,
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } | TrayIconEvent::DoubleClick {
+            button: MouseButton::Left,
+            ..
+        }
+    );
+
+    if should_open_music {
+        open_music_from_tray(app);
+    }
+}
+
+fn resolve_music_tray_title(state: &DesktopMusicTrayStatePayload) -> Option<String> {
+    let title = normalize_optional_trimmed_string(state.title.as_deref());
+
+    if let Some(title) = title {
+        let prefix = match state.play_state {
+            DesktopMusicTrayPlayState::Idle => "Ready",
+            DesktopMusicTrayPlayState::Playing => "Playing",
+            DesktopMusicTrayPlayState::Paused => "Paused",
+        };
+
+        return Some(format!("{prefix}: {title}"));
+    }
+
+    Some(MUSIC_TRAY_IDLE_TITLE.to_string())
+}
+
+fn resolve_music_tray_tooltip(state: &DesktopMusicTrayStatePayload) -> String {
+    let title = normalize_optional_trimmed_string(state.title.as_deref());
+
+    if let Some(title) = title {
+        let status = match state.play_state {
+            DesktopMusicTrayPlayState::Idle => "Ready",
+            DesktopMusicTrayPlayState::Playing => "Playing",
+            DesktopMusicTrayPlayState::Paused => "Paused",
+        };
+        let artist_text = normalize_optional_trimmed_string(state.artist_text.as_deref())
+            .unwrap_or_else(|| "Unknown artist".to_string());
+        let queue_text = if state.queue_length > 0 {
+            format!("{} in queue", state.queue_length)
+        } else {
+            "Queue empty".to_string()
+        };
+        let source_text = normalize_optional_trimmed_string(state.source.as_deref())
+            .unwrap_or_else(|| "music".to_string());
+
+        return format!("{status}: {title}\n{artist_text}\n{queue_text} · {source_text}");
+    }
+
+    MUSIC_TRAY_IDLE_TOOLTIP.to_string()
+}
+
+fn apply_music_tray_state(app: &AppHandle, state: &DesktopMusicTrayStatePayload) -> Result<()> {
+    let tray = app
+        .tray_by_id(MUSIC_TRAY_ID)
+        .context("music tray is unavailable")?;
+    let tooltip = resolve_music_tray_tooltip(state);
+    let title = resolve_music_tray_title(state);
+
+    let _ = tray.set_tooltip(Some(tooltip.as_str()));
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = tray.set_title(title.as_deref());
+    }
+
+    Ok(())
+}
+
+fn install_music_tray(app: &AppHandle) -> Result<()> {
+    let open_item = MenuItem::with_id(app, MUSIC_TRAY_OPEN_ID, "Open Music", true, None::<&str>)?;
+    let previous_item =
+        MenuItem::with_id(app, MUSIC_TRAY_PREVIOUS_ID, "Previous", true, None::<&str>)?;
+    let toggle_play_item =
+        MenuItem::with_id(app, MUSIC_TRAY_TOGGLE_PLAY_ID, "Play / Pause", true, None::<&str>)?;
+    let next_item = MenuItem::with_id(app, MUSIC_TRAY_NEXT_ID, "Next", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, MUSIC_TRAY_QUIT_ID, "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &open_item,
+            &PredefinedMenuItem::separator(app)?,
+            &previous_item,
+            &toggle_play_item,
+            &next_item,
+            &PredefinedMenuItem::separator(app)?,
+            &quit_item,
+        ],
+    )?;
+
+    let mut tray_builder = TrayIconBuilder::with_id(MUSIC_TRAY_ID)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip(MUSIC_TRAY_IDLE_TOOLTIP)
+        .on_menu_event(|app, event| {
+            handle_music_tray_menu_event(app, event.id().as_ref());
+        })
+        .on_tray_icon_event(|tray, event| {
+            handle_music_tray_icon_event(tray.app_handle(), &event);
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray_builder = tray_builder.icon(icon);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        tray_builder = tray_builder.title(MUSIC_TRAY_IDLE_TITLE);
+    }
+
+    let _tray = tray_builder.build(app)?;
+    Ok(())
+}
+
 fn normalize_compile_time_value(value: Option<&'static str>) -> Option<String> {
     value
         .map(str::trim)
@@ -770,6 +980,7 @@ pub fn run() {
             }
 
             app.handle().plugin(updater_builder.build())?;
+            install_music_tray(app.handle())?;
             spawn_local_service_start(app.handle().clone());
             Ok(())
         })
@@ -795,6 +1006,7 @@ pub fn run() {
             cancel_active_desktop_update_download,
             clear_paused_desktop_update_download,
             open_external_url,
+            update_music_tray_state,
             install_desktop_release,
         ])
         .build(tauri::generate_context!())
@@ -5354,15 +5566,16 @@ fn resolve_sidecar_binary_paths(app: &AppHandle, current_version: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_DESKTOP_OWNER_USERNAME, GithubReleaseAssetPayload, GithubReleasePayload,
-        LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus, LocalServiceHealthCheck,
-        LocalServiceStartupFailure, PortOccupant, SidecarBinaryVersionProbe, SidecarTrialResult,
-        append_cache_busting_query, build_profile_sync_status_diagnostic_detail,
-        collect_diagnostics_error_text, describe_primary_port_issue,
-        ensure_default_desktop_owner_auth_value, extract_desktop_release_version,
-        extract_profile_sync_api_base_url, find_desktop_release_manifest_url,
-        local_service_health_check, normalize_desktop_release_history,
-        normalize_release_repository_slug, select_preferred_sidecar_candidates,
+        DEFAULT_DESKTOP_OWNER_USERNAME, DesktopMusicTrayPlayState, DesktopMusicTrayStatePayload,
+        GithubReleaseAssetPayload, GithubReleasePayload, LOCAL_SERVICE_HEALTH_READ_TIMEOUT,
+        LocalProfileSyncStatus, LocalServiceHealthCheck, LocalServiceStartupFailure,
+        PortOccupant, SidecarBinaryVersionProbe, SidecarTrialResult, append_cache_busting_query,
+        build_profile_sync_status_diagnostic_detail, collect_diagnostics_error_text,
+        describe_primary_port_issue, ensure_default_desktop_owner_auth_value,
+        extract_desktop_release_version, extract_profile_sync_api_base_url,
+        find_desktop_release_manifest_url, local_service_health_check,
+        normalize_desktop_release_history, normalize_release_repository_slug,
+        resolve_music_tray_title, resolve_music_tray_tooltip, select_preferred_sidecar_candidates,
         set_desktop_local_user_password_value, set_desktop_owner_password_value,
         should_reuse_untracked_local_service, summarize_trial_output,
     };
@@ -5373,6 +5586,43 @@ mod tests {
         net::TcpListener,
     };
     use url::Url;
+
+    #[test]
+    fn resolves_playing_music_tray_copy_from_active_track() {
+        let state = DesktopMusicTrayStatePayload {
+            title: Some("Playable Track".to_string()),
+            artist_text: Some("Artist A / Artist B".to_string()),
+            source: Some("netease".to_string()),
+            play_state: DesktopMusicTrayPlayState::Playing,
+            queue_length: 2,
+        };
+
+        assert_eq!(
+            resolve_music_tray_title(&state),
+            Some("Playing: Playable Track".to_string())
+        );
+        assert_eq!(
+            resolve_music_tray_tooltip(&state),
+            "Playing: Playable Track\nArtist A / Artist B\n2 in queue · netease"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_idle_music_tray_copy_without_track() {
+        let state = DesktopMusicTrayStatePayload {
+            title: None,
+            artist_text: None,
+            source: None,
+            play_state: DesktopMusicTrayPlayState::Idle,
+            queue_length: 0,
+        };
+
+        assert_eq!(
+            resolve_music_tray_title(&state),
+            Some("Luna Music".to_string())
+        );
+        assert_eq!(resolve_music_tray_tooltip(&state), "Luna Music is ready");
+    }
 
     #[test]
     fn injects_default_owner_username_without_forcing_password() {
