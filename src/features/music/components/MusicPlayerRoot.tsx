@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from 'react';
 
+import { MusicFullPlayer } from './MusicFullPlayer';
+import { MusicMiniPlayer } from './MusicMiniPlayer';
 import { createAudioEngine } from '../services/audio-engine';
 
 export default function MusicPlayerRoot() {
@@ -16,5 +18,11 @@ export default function MusicPlayerRoot() {
     engine.syncPosition(0);
   }, []);
 
-  return <audio ref={audioRef} hidden preload='metadata' />;
+  return (
+    <>
+      <MusicMiniPlayer />
+      <MusicFullPlayer />
+      <audio ref={audioRef} hidden preload='metadata' />
+    </>
+  );
 }
