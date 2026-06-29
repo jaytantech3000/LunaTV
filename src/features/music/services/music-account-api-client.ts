@@ -1,3 +1,5 @@
+import { apiFetch } from '@/lib/transport/api-client';
+
 import type {
   LiveMusicSourceKey,
   MusicAccountEntity,
@@ -67,7 +69,7 @@ async function fetchMusicAccountJson<T>(
   let response: Response;
 
   try {
-    response = await fetch(path, {
+    response = await apiFetch(path, {
       cache: 'no-store',
       ...init,
       headers: {

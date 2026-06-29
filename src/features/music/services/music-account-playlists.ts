@@ -1,3 +1,5 @@
+import { apiFetch } from '@/lib/transport/api-client';
+
 import type {
   MusicCollectionKind,
   MusicCollectionSummaryEntity,
@@ -144,7 +146,7 @@ async function fetchMusicAccountPlaylistsJson<T>(
   let response: Response;
 
   try {
-    response = await fetch(buildMusicAccountPlaylistsPath(), {
+    response = await apiFetch(buildMusicAccountPlaylistsPath(), {
       cache: 'no-store',
       ...init,
       headers: {

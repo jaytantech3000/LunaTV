@@ -1,5 +1,7 @@
-import { sanitizeMusicFavoriteRecord } from './music-profile-records';
+import { apiFetch } from '@/lib/transport/api-client';
+
 import type { MusicFavoriteRecord } from './music-profile';
+import { sanitizeMusicFavoriteRecord } from './music-profile-records';
 
 interface MusicApiErrorPayload {
   error?: string;
@@ -77,7 +79,7 @@ async function fetchMusicLikedTracksJson<T>(
   let response: Response;
 
   try {
-    response = await fetch(buildMusicLikedTracksPath(), {
+    response = await apiFetch(buildMusicLikedTracksPath(), {
       cache: 'no-store',
       ...init,
       headers: {

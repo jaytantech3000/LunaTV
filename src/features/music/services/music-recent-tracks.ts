@@ -1,5 +1,7 @@
-import { sanitizeMusicRecentTrackRecord } from './music-profile-records';
+import { apiFetch } from '@/lib/transport/api-client';
+
 import type { MusicRecentTrackRecord } from './music-profile';
+import { sanitizeMusicRecentTrackRecord } from './music-profile-records';
 
 interface MusicApiErrorPayload {
   error?: string;
@@ -77,7 +79,7 @@ async function fetchMusicRecentTracksJson<T>(
   let response: Response;
 
   try {
-    response = await fetch(buildMusicRecentTracksPath(), {
+    response = await apiFetch(buildMusicRecentTracksPath(), {
       cache: 'no-store',
       ...init,
       headers: {
@@ -117,7 +119,9 @@ async function fetchMusicRecentTracksJson<T>(
   return payload as T;
 }
 
-export async function listMusicRecentTracks(): Promise<MusicRecentTrackRecord[]> {
+export async function listMusicRecentTracks(): Promise<
+  MusicRecentTrackRecord[]
+> {
   const payload = await fetchMusicRecentTracksJson<unknown[]>(
     {
       method: 'GET',

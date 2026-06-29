@@ -1,3 +1,5 @@
+import { apiFetch } from '@/lib/transport/api-client';
+
 import type {
   LiveMusicSourceKey,
   LyricDocumentEntity,
@@ -76,7 +78,7 @@ async function fetchMusicJson<T>(
   let response: Response;
 
   try {
-    response = await fetch(buildMusicApiPath(pathname, searchParams), {
+    response = await apiFetch(buildMusicApiPath(pathname, searchParams), {
       cache: 'no-store',
       method: options?.method || 'GET',
       headers: options?.body
