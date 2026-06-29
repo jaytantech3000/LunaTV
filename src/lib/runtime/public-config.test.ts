@@ -69,7 +69,23 @@ describe('buildPublicRuntimeConfig', () => {
     });
   });
 
-  it('keeps desktop music disabled until the admin switch enables it', async () => {
+  it('defaults desktop music to enabled when the admin config omits the switch', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...buildAdminConfig(),
+      SiteConfig: {
+        ...buildAdminConfig().SiteConfig,
+        EnableWebMusic: undefined as unknown as boolean,
+      },
+    });
+
+    await expect(buildPublicRuntimeConfig()).resolves.toMatchObject({
+      APP_TARGET: 'desktop',
+      ENABLE_WEB_MUSIC: true,
+      ENABLE_WEB_LIVE: false,
+    });
+  });
+
+  it('respects an explicit admin disable for desktop music', async () => {
     mockGetConfig.mockResolvedValue({
       ...buildAdminConfig(),
       SiteConfig: {

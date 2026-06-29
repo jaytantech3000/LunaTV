@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
       DisableYellowFilter,
       FluidSearch,
       EnableWebLive: EnableWebLive ?? false,
-      EnableWebMusic: EnableWebMusic ?? false,
+      EnableWebMusic: EnableWebMusic ?? true,
     };
 
     // 写入数据库

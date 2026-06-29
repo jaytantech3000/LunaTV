@@ -29,7 +29,7 @@ function buildAdminConfig(overrides: Partial<AdminConfig> = {}): AdminConfig {
       DisableYellowFilter: false,
       FluidSearch: true,
       EnableWebLive: false,
-      EnableWebMusic: false,
+      EnableWebMusic: true,
     },
     UserConfig: {
       Users: [],
@@ -121,5 +121,31 @@ describe('configSelfCheck player enhancement migration', () => {
       AudioDynamicProtection: true,
       AudioFixedCeiling: false,
     });
+  });
+
+  it('defaults web music to enabled when the persisted switch is missing', () => {
+    const adminConfig = buildAdminConfig({
+      SiteConfig: {
+        ...buildAdminConfig().SiteConfig,
+        EnableWebMusic: undefined as unknown as boolean,
+      },
+    });
+
+    const result = configSelfCheck(adminConfig);
+
+    expect(result.SiteConfig.EnableWebMusic).toBe(true);
+  });
+
+  it('keeps an explicit web music disable intact', () => {
+    const adminConfig = buildAdminConfig({
+      SiteConfig: {
+        ...buildAdminConfig().SiteConfig,
+        EnableWebMusic: false,
+      },
+    });
+
+    const result = configSelfCheck(adminConfig);
+
+    expect(result.SiteConfig.EnableWebMusic).toBe(false);
   });
 });

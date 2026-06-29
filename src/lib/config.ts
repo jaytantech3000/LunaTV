@@ -453,7 +453,7 @@ async function getInitConfig(
         process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
       FluidSearch: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
       EnableWebLive: false,
-      EnableWebMusic: false,
+      EnableWebMusic: true,
     },
     UserConfig: {
       Users: [],
@@ -620,13 +620,13 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
         process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
       FluidSearch: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
       EnableWebLive: false,
-      EnableWebMusic: false,
+      EnableWebMusic: true,
     };
   } else {
     adminConfig.SiteConfig.EnableWebLive =
       adminConfig.SiteConfig.EnableWebLive ?? false;
     adminConfig.SiteConfig.EnableWebMusic =
-      adminConfig.SiteConfig.EnableWebMusic ?? false;
+      adminConfig.SiteConfig.EnableWebMusic ?? true;
   }
   if (
     !adminConfig.AdFilterConfig ||

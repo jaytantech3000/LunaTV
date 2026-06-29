@@ -124,7 +124,7 @@ function buildDesktopRuntimeBootstrapScript() {
         ),
         ENABLE_WEB_MUSIC: coalesce(
           runtime.enableWebMusic,
-          coalesce(current.ENABLE_WEB_MUSIC, false)
+          coalesce(current.ENABLE_WEB_MUSIC, true)
         ),
         PLAYER_AUDIO_SPIKE_PROTECTION: nextAudioLevel !== 'off',
         PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: nextAudioLevel,

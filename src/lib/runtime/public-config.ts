@@ -38,7 +38,7 @@ export function isAdminPanelEnabled(): boolean {
   return !(process.env.NEXT_PUBLIC_API_BASE_URL || '').trim();
 }
 
-function isWebMusicEnabled(appTarget: AppRuntimeConfig['APP_TARGET']): boolean {
+function isWebMusicEnabled(): boolean {
   const explicitFlag = process.env.NEXT_PUBLIC_ENABLE_WEB_MUSIC;
   if (explicitFlag === 'true') {
     return true;
@@ -48,7 +48,7 @@ function isWebMusicEnabled(appTarget: AppRuntimeConfig['APP_TARGET']): boolean {
     return false;
   }
 
-  return appTarget !== 'desktop';
+  return true;
 }
 
 export async function resolveSitePresentation(
@@ -118,7 +118,7 @@ export async function buildPublicRuntimeConfig(
     CUSTOM_CATEGORIES: [],
     FLUID_SEARCH: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
     ENABLE_WEB_LIVE: false,
-    ENABLE_WEB_MUSIC: isWebMusicEnabled(appTarget),
+    ENABLE_WEB_MUSIC: isWebMusicEnabled(),
     API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || '',
     MEDIA_PROXY_BASE_URL:
       process.env.NEXT_PUBLIC_MEDIA_PROXY_BASE_URL ||
@@ -179,7 +179,7 @@ export async function buildPublicRuntimeConfig(
     ENABLE_WEB_MUSIC:
       nextConfig.SiteConfig.EnableWebMusic ??
       baseRuntimeConfig.ENABLE_WEB_MUSIC ??
-      false,
+      true,
     PLAYER_AUDIO_SPIKE_PROTECTION: audioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: audioSpikeProtectionLevel,
     PLAYER_AUDIO_DYNAMIC_PROTECTION: audioDynamicProtection,

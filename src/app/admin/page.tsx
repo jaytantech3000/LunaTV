@@ -4394,7 +4394,7 @@ const SiteConfigComponent = ({
     DisableYellowFilter: false,
     FluidSearch: true,
     EnableWebLive: false,
-    EnableWebMusic: false,
+    EnableWebMusic: true,
   });
   const [adFilterEnabled, setAdFilterEnabled] = useState(true);
   const [adFilterSaving, setAdFilterSaving] = useState(false);
@@ -4462,7 +4462,7 @@ const SiteConfigComponent = ({
         DisableYellowFilter: config.SiteConfig.DisableYellowFilter ?? false,
         FluidSearch: config.SiteConfig.FluidSearch ?? true,
         EnableWebLive: config.SiteConfig.EnableWebLive ?? false,
-        EnableWebMusic: config.SiteConfig.EnableWebMusic ?? false,
+        EnableWebMusic: config.SiteConfig.EnableWebMusic ?? true,
       });
       setAdFilterEnabled(config.AdFilterConfig?.enabled ?? true);
     }

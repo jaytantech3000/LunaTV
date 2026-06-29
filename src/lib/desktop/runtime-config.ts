@@ -114,7 +114,7 @@ export function mergeDesktopRuntimePublicConfig(
     ENABLE_WEB_LIVE:
       payload.enableWebLive ?? currentConfig.ENABLE_WEB_LIVE ?? false,
     ENABLE_WEB_MUSIC:
-      payload.enableWebMusic ?? currentConfig.ENABLE_WEB_MUSIC ?? false,
+      payload.enableWebMusic ?? currentConfig.ENABLE_WEB_MUSIC ?? true,
     PLAYER_AUDIO_SPIKE_PROTECTION: audioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: audioSpikeProtectionLevel,
     PLAYER_AUDIO_DYNAMIC_PROTECTION: audioDynamicProtection,
