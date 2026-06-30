@@ -13,6 +13,7 @@ import {
   loginDesktopSession,
 } from '@/lib/desktop/auth-session';
 import { loadDesktopProfileBootstrapState } from '@/lib/desktop/profile-bootstrap';
+import { buildDesktopProfileSyncLoginStatusMessage } from '@/lib/desktop/profile-sync-status-copy';
 import type { DesktopAuthStatus } from '@/lib/desktop/tauri-client';
 import { getProjectPageUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
@@ -210,9 +211,7 @@ export function LoginPageClient() {
             )
           );
           setStatusMessage(
-            profileSyncStatus.reachable
-              ? '桌面版当前使用云端账号与用户数据同步。'
-              : '云端账号同步服务当前不可用，请检查远端服务地址。'
+            buildDesktopProfileSyncLoginStatusMessage(profileSyncStatus)
           );
 
           if (profileSyncStatus.authenticated) {

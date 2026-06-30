@@ -1,6 +1,7 @@
 import {
   buildDesktopProfileSyncDiagnostics,
   buildDesktopProfileSyncErrorHint,
+  buildDesktopProfileSyncLoginStatusMessage,
   buildDesktopProfileSyncStatusDetail,
   buildDesktopProfileSyncStatusValue,
   resolveDesktopProfileSyncDomainsText,
@@ -11,6 +12,20 @@ describe('desktop profile sync status copy helpers', () => {
     expect(resolveDesktopProfileSyncDomainsText(null)).toBe(
       '播放记录、收藏、追更、搜索历史、跳过片头片尾'
     );
+    expect(
+      buildDesktopProfileSyncStatusDetail({
+        enabled: false,
+        reachable: false,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: null,
+        profileMode: null,
+        error: null,
+        errorKind: 'not-configured',
+        syncDomains: null,
+      })
+    ).toContain('请前往 desktop-admin 开启帐号同步');
   });
 
   it('builds enabled sync detail with domains, account, and hints', () => {
@@ -74,6 +89,33 @@ describe('desktop profile sync status copy helpers', () => {
       { label: '最近错误', value: '远端账号同步后端不可达。' },
       { label: '同步域', value: '收藏、追更' },
     ]);
+  });
+
+  it('treats reachable sync protocol failures as degraded instead of healthy', () => {
+    const status = {
+      enabled: true,
+      reachable: true,
+      authenticated: false,
+      username: 'kid',
+      role: 'user',
+      storageType: 'redis',
+      profileMode: 'shared-multi-user',
+      error: 'unexpected profile sync response',
+      errorKind: 'protocol-incompatible',
+      syncDomains: ['favorites', 'follows'],
+    } as const;
+
+    expect(buildDesktopProfileSyncStatusValue(status)).toBe('已连接但状态异常');
+    expect(buildDesktopProfileSyncDiagnostics(status)).toEqual([
+      { label: '当前模式', value: '远端多用户 / redis' },
+      { label: '远端可达性', value: '可达，但状态异常' },
+      { label: '远端账号', value: 'kid' },
+      { label: '最近错误', value: 'unexpected profile sync response' },
+      { label: '同步域', value: '收藏、追更' },
+    ]);
+    expect(buildDesktopProfileSyncLoginStatusMessage(status)).toBe(
+      '云端账号同步协议不兼容，请升级桌面端或 Web 端。'
+    );
   });
 
   it('returns an empty hint when the error kind is absent', () => {

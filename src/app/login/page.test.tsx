@@ -76,6 +76,15 @@ function createDesktopBootstrapPayload(options: {
   authenticated?: boolean;
   profileMode?: 'single-user-local' | 'shared-multi-user';
   storageType?: string | null;
+  error?: string | null;
+  errorKind?:
+    | 'not-configured'
+    | 'invalid-base-url'
+    | 'unreachable'
+    | 'unauthorized'
+    | 'protocol-incompatible'
+    | 'upstream-failure'
+    | null;
   localAuth?: {
     username: string;
     passwordRequired: boolean;
@@ -97,8 +106,8 @@ function createDesktopBootstrapPayload(options: {
       role: null,
       storageType: options.storageType ?? 'redis',
       profileMode: options.profileMode ?? 'shared-multi-user',
-      error: null,
-      errorKind: null,
+      error: options.error ?? null,
+      errorKind: options.errorKind ?? null,
       syncDomains: [
         'playrecords',
         'favorites',
@@ -160,6 +169,31 @@ describe('LoginPage desktop profile sync branches', () => {
     });
     expect(screen.getByPlaceholderText('输入用户名')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('输入访问密码')).toBeInTheDocument();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  it('surfaces protocol incompatibility instead of treating sync as healthy', async () => {
+    const payload = createDesktopBootstrapPayload({
+      profileSyncEnabled: true,
+      reachable: true,
+      authenticated: false,
+      profileMode: 'shared-multi-user',
+      error: 'unexpected profile sync response',
+      errorKind: 'protocol-incompatible',
+    });
+    mockLoadDesktopProfileBootstrapState.mockResolvedValue({
+      payload,
+      localAuth: payload.localAuth,
+    });
+
+    render(<LoginPageClient />);
+
+    expect(
+      await screen.findByText('云端账号同步协议不兼容，请升级桌面端或 Web 端。')
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('桌面版当前使用云端账号与用户数据同步。')
+    ).not.toBeInTheDocument();
     expect(mockRouter.replace).not.toHaveBeenCalled();
   });
 

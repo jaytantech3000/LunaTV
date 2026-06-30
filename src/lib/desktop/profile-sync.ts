@@ -32,6 +32,106 @@ export interface DesktopProfileSyncStatusState {
   error: string;
 }
 
+export type DesktopProfileSyncConflictStrategy = 'web-first' | 'local-first';
+
+export interface DesktopProfileSyncLocalAccountSummary {
+  username: string;
+  playRecordCount: number;
+  favoriteCount: number;
+  followCount: number;
+  searchHistoryCount: number;
+  skipConfigCount: number;
+}
+
+export interface DesktopProfileSyncOnboardingPlanItem {
+  localUsername: string;
+  remoteUsername: string;
+  requiresAccountCreation: boolean;
+  summary: DesktopProfileSyncLocalAccountSummary;
+}
+
+export interface DesktopProfileSyncOnboardingPlan {
+  currentLocalUsername: string;
+  currentRemoteUsername: string;
+  items: DesktopProfileSyncOnboardingPlanItem[];
+}
+
+export interface DesktopProfileSyncDownloadPreview {
+  hasDownloads: boolean;
+  currentOwnerUsername: string | null;
+  targetUsername: string | null;
+  taskCount: number;
+  libraryCount: number;
+}
+
+export interface DesktopProfileSyncOnboardingPreviewRequest {
+  remoteBaseUrl?: string;
+  username: string;
+  password: string;
+  currentLocalUsername: string;
+}
+
+export interface DesktopProfileSyncOnboardingPreviewResponse {
+  remoteBaseUrl: string;
+  currentRemoteUsername: string;
+  currentRemoteRole: string;
+  plan: DesktopProfileSyncOnboardingPlan;
+  downloadPreview: DesktopProfileSyncDownloadPreview;
+  warnings: string[];
+}
+
+export interface DesktopProfileSyncMergedSummary {
+  playRecordCount: number;
+  favoriteCount: number;
+  followCount: number;
+  searchHistoryCount: number;
+  skipConfigCount: number;
+}
+
+export interface DesktopProfileSyncMigratedAccount {
+  localUsername: string;
+  remoteUsername: string;
+  localSummary: DesktopProfileSyncLocalAccountSummary;
+  mergedSummary: DesktopProfileSyncMergedSummary;
+}
+
+export interface DesktopProfileSyncCreatedAccount {
+  username: string;
+  initialPassword: string;
+}
+
+export interface DesktopProfileSyncDownloadRebindResult {
+  didRebind: boolean;
+  previousOwnerUsername: string | null;
+  nextOwnerUsername: string | null;
+  taskCount: number;
+  libraryCount: number;
+  resourceIndexCount: number;
+}
+
+export interface DesktopProfileSyncOnboardingExecuteRequest
+  extends DesktopProfileSyncOnboardingPreviewRequest {
+  strategy: DesktopProfileSyncConflictStrategy;
+}
+
+export interface DesktopProfileSyncOnboardingExecuteResponse {
+  remoteBaseUrl: string;
+  currentRemoteUsername: string;
+  currentRemoteRole: string;
+  createdAccounts: DesktopProfileSyncCreatedAccount[];
+  migratedAccounts: DesktopProfileSyncMigratedAccount[];
+  downloadRebind: DesktopProfileSyncDownloadRebindResult;
+  warnings: string[];
+}
+
+export type DesktopProfileSyncState =
+  | 'disabled'
+  | 'offline'
+  | 'auth-expired'
+  | 'degraded'
+  | 'connected'
+  | 'ready';
+
 function normalizeRole(
   role?: DesktopProfileSyncStatus['role']
 ): 'owner' | 'admin' | 'user' {
@@ -40,6 +140,28 @@ function normalizeRole(
   }
 
   return 'user';
+}
+
+export function resolveDesktopProfileSyncState(
+  status: DesktopProfileSyncStatus | null | undefined
+): DesktopProfileSyncState {
+  if (!status?.enabled) {
+    return 'disabled';
+  }
+
+  if (!status.reachable) {
+    return 'offline';
+  }
+
+  if (status.errorKind === 'unauthorized') {
+    return 'auth-expired';
+  }
+
+  if (status.errorKind) {
+    return 'degraded';
+  }
+
+  return status.authenticated ? 'ready' : 'connected';
 }
 
 export async function getDesktopProfileSyncStatus(): Promise<DesktopProfileSyncStatus | null> {
@@ -56,6 +178,70 @@ export async function getDesktopProfileSyncStatus(): Promise<DesktopProfileSyncS
   }
 
   return (await response.json()) as DesktopProfileSyncStatus;
+}
+
+async function readDesktopProfileSyncJsonResponse<T>(
+  response: Response
+): Promise<T> {
+  if (response.ok) {
+    return response.json() as Promise<T>;
+  }
+
+  let errorMessage = `Profile sync request failed: ${response.status}`;
+
+  try {
+    const payload = (await response.clone().json()) as {
+      error?: string;
+    };
+    if (typeof payload.error === 'string' && payload.error.trim()) {
+      errorMessage = payload.error.trim();
+    }
+  } catch {
+    try {
+      const fallbackText = (await response.text()).trim();
+      if (fallbackText) {
+        errorMessage = fallbackText;
+      }
+    } catch {
+      // Ignore secondary parse failures and keep the status fallback.
+    }
+  }
+
+  throw new Error(errorMessage);
+}
+
+export async function previewDesktopProfileSyncOnboarding(
+  payload: DesktopProfileSyncOnboardingPreviewRequest
+): Promise<DesktopProfileSyncOnboardingPreviewResponse> {
+  const response = await apiFetch('/admin/profile-sync/onboarding/preview', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+  });
+
+  return readDesktopProfileSyncJsonResponse<DesktopProfileSyncOnboardingPreviewResponse>(
+    response
+  );
+}
+
+export async function executeDesktopProfileSyncOnboarding(
+  payload: DesktopProfileSyncOnboardingExecuteRequest
+): Promise<DesktopProfileSyncOnboardingExecuteResponse> {
+  const response = await apiFetch('/admin/profile-sync/onboarding/execute', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+  });
+
+  return readDesktopProfileSyncJsonResponse<DesktopProfileSyncOnboardingExecuteResponse>(
+    response
+  );
 }
 
 export function describeDesktopProfileSyncStatusReadError(

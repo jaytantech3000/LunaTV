@@ -33,15 +33,16 @@ export function resolveProfileRuntime(
   const profileMode = syncEnabled
     ? config.PROFILE_SYNC_PROFILE_MODE || deriveProfileMode(storageType)
     : config.PROFILE_MODE || deriveProfileMode(storageType);
-  const usesRemoteUserData = storageType !== 'localstorage';
   const runtimeKind =
     appTarget === 'desktop'
       ? syncEnabled
         ? 'desktop-profile-sync'
         : 'desktop-local'
-      : usesRemoteUserData
+      : storageType !== 'localstorage'
       ? 'web-remote'
       : 'web-local';
+  const usesRemoteUserData =
+    runtimeKind === 'desktop-profile-sync' || runtimeKind === 'web-remote';
 
   return {
     appTarget,

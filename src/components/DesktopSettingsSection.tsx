@@ -880,9 +880,9 @@ export default function DesktopSettingsSection({
                 </h4>
                 <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
                   本地单用户认证由配置文件中的 `auth.username` / `auth.password`
-                  控制。若需要和网页版共用账号及用户数据，请配置
-                  `profile_sync.api_base_url` 指向 Web
-                  后端；未配置时保持纯本地模式。
+                  控制。若需要和网页版共用账号及用户数据，请前往 `desktop-admin`
+                  页面里的“开启帐号同步”卡片完成开通；这里的 JSON
+                  编辑区不再作为默认开通入口。
                 </p>
                 <p className='mt-2 text-xs text-gray-500 dark:text-gray-400'>
                   首次安装且 `owner`

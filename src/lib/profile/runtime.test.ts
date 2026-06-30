@@ -79,6 +79,28 @@ describe('profile runtime resolver', () => {
     expect(isDesktopProfileSyncRuntime(config)).toBe(true);
   });
 
+  it('keeps desktop profile sync on remote user-data semantics even when remote storage is localstorage', () => {
+    const config = {
+      APP_TARGET: 'desktop' as const,
+      STORAGE_TYPE: 'localstorage',
+      PROFILE_SYNC_ENABLED: true,
+      PROFILE_SYNC_STORAGE_TYPE: 'localstorage',
+      PROFILE_SYNC_PROFILE_MODE: 'single-user-local' as const,
+    };
+
+    expect(resolveProfileRuntime(config)).toEqual({
+      appTarget: 'desktop',
+      runtimeKind: 'desktop-profile-sync',
+      syncEnabled: true,
+      storageType: 'localstorage',
+      profileMode: 'single-user-local',
+      usesRemoteUserData: true,
+    });
+    expect(shouldUseRemoteProfileStorage(config)).toBe(true);
+    expect(shouldUseProfileApiStorage(config)).toBe(true);
+    expect(isDesktopProfileSyncRuntime(config)).toBe(true);
+  });
+
   it('keeps local web storage on the browser fallback path', () => {
     expect(shouldUseProfileApiStorage({ STORAGE_TYPE: 'localstorage' })).toBe(
       false

@@ -31,6 +31,7 @@ import {
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
 import DesktopProfileSyncDiagnosticsGrid from '@/components/DesktopProfileSyncDiagnosticsGrid';
+import DesktopProfileSyncOnboardingCard from '@/components/DesktopProfileSyncOnboardingCard';
 import DesktopSettingsSection from '@/components/DesktopSettingsSection';
 import PageLayout from '@/components/PageLayout';
 
@@ -221,6 +222,11 @@ export default function DesktopAdminPage() {
                 }
               />
             </section>
+
+            <DesktopProfileSyncOnboardingCard
+              currentLocalUsername={authInfo?.username || authStatus?.username}
+              profileSyncEnabled={Boolean(profileSyncStatus?.enabled)}
+            />
 
             <section className='rounded-lg border border-gray-200 bg-white px-4 py-4 dark:border-gray-800 dark:bg-gray-950'>
               <div className='flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-200'>

@@ -6,7 +6,11 @@ import {
   clearDesktopDownloadStoreSnapshot,
 } from './desktop-runtime';
 import { clearResourceIndexes } from './resource-index';
-import { purgeOfflineDownloads } from './session';
+import {
+  armDesktopDownloadOwnershipHandoff,
+  purgeOfflineDownloads,
+  syncDownloadOwner,
+} from './session';
 
 jest.mock('@/lib/auth', () => ({
   getAuthInfoFromBrowserCookie: jest.fn(),
@@ -48,11 +52,15 @@ describe('download session helpers', () => {
   const mockStoreState = {
     ownerUsername: null as string | null,
     resetDownloads: jest.fn(),
-    setOwnerUsername: jest.fn(),
+    setOwnerUsername: jest.fn((ownerUsername: string | null) => {
+      mockStoreState.ownerUsername = ownerUsername;
+    }),
   };
 
   beforeEach(() => {
     jest.clearAllMocks();
+    sessionStorage.clear();
+    mockStoreState.ownerUsername = null;
 
     const storeModule = jest.requireMock('@/stores/downloadStore') as {
       useDownloadStore: {
@@ -122,5 +130,32 @@ describe('download session helpers', () => {
     expect(
       storeModule.useDownloadStore.persist.clearStorage
     ).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebinds ownership instead of purging downloads when a matching desktop handoff is armed', async () => {
+    const authModule = jest.requireMock('@/lib/auth') as {
+      getAuthInfoFromBrowserCookie: jest.Mock;
+    };
+
+    mockStoreState.ownerUsername = 'local-owner';
+    authModule.getAuthInfoFromBrowserCookie.mockReturnValue({
+      username: 'remote-owner',
+    });
+
+    armDesktopDownloadOwnershipHandoff({
+      previousOwnerUsername: 'local-owner',
+      nextOwnerUsername: 'remote-owner',
+    });
+
+    await syncDownloadOwner();
+
+    expect(clearDownloadCache).not.toHaveBeenCalled();
+    expect(clearResourceIndexes).not.toHaveBeenCalled();
+    expect(clearDesktopDownloadEngineTasks).not.toHaveBeenCalled();
+    expect(clearDesktopDownloadStoreSnapshot).not.toHaveBeenCalled();
+    expect(mockStoreState.resetDownloads).not.toHaveBeenCalled();
+    expect(mockStoreState.setOwnerUsername).toHaveBeenCalledWith(
+      'remote-owner'
+    );
   });
 });

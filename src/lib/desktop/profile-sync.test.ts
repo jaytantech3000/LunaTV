@@ -6,8 +6,11 @@ import {
 import {
   applyDesktopProfileSyncStatus,
   describeDesktopProfileSyncStatusReadError,
+  executeDesktopProfileSyncOnboarding,
   getDesktopProfileSyncStatus,
+  previewDesktopProfileSyncOnboarding,
   readDesktopProfileSyncStatusState,
+  resolveDesktopProfileSyncState,
 } from '@/lib/desktop/profile-sync';
 import { PROFILE_SYNC_USER_DATA_DOMAINS } from '@/lib/profile/contracts';
 import { getRuntimeConfig } from '@/lib/runtime-config';
@@ -76,6 +79,79 @@ describe('desktop profile sync helpers', () => {
     });
   });
 
+  it('posts the onboarding preview request through the desktop local service', async () => {
+    const payload = {
+      remoteBaseUrl: 'https://luna.hkcu.qzz.io',
+      currentRemoteUsername: 'remote-owner',
+      currentRemoteRole: 'owner',
+      plan: {
+        currentLocalUsername: 'local-owner',
+        currentRemoteUsername: 'remote-owner',
+        items: [],
+      },
+      downloadPreview: {
+        hasDownloads: false,
+        currentOwnerUsername: null,
+        targetUsername: null,
+        taskCount: 0,
+        libraryCount: 0,
+      },
+      warnings: [],
+    };
+    const requestPayload = {
+      remoteBaseUrl: 'https://luna.hkcu.qzz.io',
+      username: 'remote-owner',
+      password: 'secret',
+      currentLocalUsername: 'local-owner',
+    };
+
+    (apiFetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue(payload),
+    });
+
+    await expect(
+      previewDesktopProfileSyncOnboarding(requestPayload)
+    ).resolves.toEqual(payload);
+    expect(apiFetch).toHaveBeenCalledWith(
+      '/admin/profile-sync/onboarding/preview',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestPayload),
+        cache: 'no-store',
+      }
+    );
+  });
+
+  it('surfaces onboarding execute errors returned by the local service', async () => {
+    const requestPayload = {
+      remoteBaseUrl: 'https://luna.hkcu.qzz.io',
+      username: 'remote-owner',
+      password: 'secret',
+      currentLocalUsername: 'local-owner',
+      strategy: 'web-first' as const,
+    };
+
+    (apiFetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 403,
+      clone: jest.fn().mockReturnValue({
+        json: jest.fn().mockResolvedValue({
+          error: '只有 Web owner/admin 可以开启帐号同步',
+        }),
+      }),
+      text: jest.fn().mockResolvedValue(''),
+    });
+
+    await expect(
+      executeDesktopProfileSyncOnboarding(requestPayload)
+    ).rejects.toThrow('只有 Web owner/admin 可以开启帐号同步');
+  });
+
   it('normalizes profile sync read errors into a stable status payload', async () => {
     (apiFetch as jest.Mock).mockRejectedValue(
       new Error('local service unavailable')
@@ -91,6 +167,38 @@ describe('desktop profile sync helpers', () => {
     expect(describeDesktopProfileSyncStatusReadError({})).toBe(
       '未能从本地服务读取 profile sync 状态。'
     );
+  });
+
+  it('classifies reachable sync failures separately from offline and auth-expired states', () => {
+    expect(
+      resolveDesktopProfileSyncState({
+        enabled: true,
+        reachable: true,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'redis',
+        profileMode: 'shared-multi-user',
+        error: 'unexpected profile sync response',
+        errorKind: 'protocol-incompatible',
+        syncDomains: [...PROFILE_SYNC_USER_DATA_DOMAINS],
+      })
+    ).toBe('degraded');
+
+    expect(
+      resolveDesktopProfileSyncState({
+        enabled: true,
+        reachable: true,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'redis',
+        profileMode: 'shared-multi-user',
+        error: '远端账号同步后端返回 401',
+        errorKind: 'unauthorized',
+        syncDomains: [...PROFILE_SYNC_USER_DATA_DOMAINS],
+      })
+    ).toBe('auth-expired');
   });
 
   it('projects authenticated sync state into runtime config and browser auth', () => {

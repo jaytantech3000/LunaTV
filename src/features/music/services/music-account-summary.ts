@@ -6,6 +6,7 @@ import {
   type LoadedDesktopProfileBootstrapState,
   loadDesktopProfileBootstrapState,
 } from '@/lib/desktop/profile-bootstrap';
+import { resolveDesktopProfileSyncState } from '@/lib/desktop/profile-sync';
 import { resolveProfileRuntime } from '@/lib/profile/runtime';
 
 export interface MusicAccountSummary {
@@ -74,11 +75,15 @@ function resolveDesktopSyncSummary(
     profileSyncStatus?.username?.trim() ||
     authInfo?.username?.trim() ||
     'Remote profile';
-  const statusLabel = !profileSyncStatus?.reachable
-    ? 'Sync offline'
-    : profileSyncStatus.authenticated
-    ? 'Sync ready'
-    : 'Sync sign-in required';
+  const syncState = resolveDesktopProfileSyncState(profileSyncStatus);
+  const statusLabel =
+    syncState === 'offline'
+      ? 'Sync offline'
+      : syncState === 'ready'
+      ? 'Sync ready'
+      : syncState === 'degraded'
+      ? 'Sync needs attention'
+      : 'Sync sign-in required';
 
   return {
     username,

@@ -72,6 +72,7 @@ mod music_api;
 mod playback_prefetch;
 mod profile_local;
 mod profile_sync;
+mod profile_sync_onboarding;
 mod vod_proxy;
 
 pub(crate) use content_search::{search_all_sites, search_site};
@@ -106,6 +107,9 @@ use profile_sync::{
     proxy_profile_sync_music_recent_tracks, proxy_profile_sync_passthrough,
     proxy_profile_sync_playrecords, proxy_profile_sync_search_history,
     proxy_profile_sync_skip_configs,
+};
+use profile_sync_onboarding::{
+    execute_profile_sync_onboarding, preview_profile_sync_onboarding,
 };
 use vod_proxy::{get_vod_key, get_vod_m3u8, get_vod_segment};
 
@@ -1882,6 +1886,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/admin/config", get(get_admin_config))
         .route("/api/admin/reset", get(reset_admin_config))
         .route("/api/admin/config_file", post(update_admin_config_file))
+        .route(
+            "/api/admin/profile-sync/onboarding/preview",
+            post(preview_profile_sync_onboarding),
+        )
+        .route(
+            "/api/admin/profile-sync/onboarding/execute",
+            post(execute_profile_sync_onboarding),
+        )
         .route(
             "/api/admin/data_migration/export",
             post(export_admin_data_migration),
@@ -11578,6 +11590,49 @@ segment0.ts
         );
 
         upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_onboarding_routes_are_registered() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        for path in [
+            "/api/admin/profile-sync/onboarding/preview",
+            "/api/admin/profile-sync/onboarding/execute",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from("{}"))
+                        .expect("profile sync onboarding request"),
+                )
+                .await
+                .expect("profile sync onboarding response");
+
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let payload = read_json_body(response).await;
+            assert_eq!(
+                payload.get("error").and_then(Value::as_str),
+                Some("缺少 Web 用户名")
+            );
+        }
     }
 
     #[tokio::test]

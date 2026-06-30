@@ -1756,6 +1756,12 @@ fn build_profile_sync_status_diagnostic_detail(
         "远端不可达".to_string()
     } else if profile_sync_status.error_kind.as_deref() == Some("unauthorized") {
         "远端可达，但当前登录态已失效".to_string()
+    } else if profile_sync_status
+        .error_kind
+        .as_deref()
+        .is_some_and(|value| !value.is_empty())
+    {
+        "远端可达，但当前同步状态异常".to_string()
     } else if profile_sync_status.authenticated {
         "远端可达，当前已登录".to_string()
     } else {
@@ -6705,6 +6711,28 @@ mod tests {
         assert!(detail.contains("追更"));
         assert!(detail.contains("unreachable"));
         assert!(detail.contains("远端账号同步后端不可达"));
+    }
+
+    #[test]
+    fn profile_sync_diagnostic_detail_marks_reachable_sync_errors_as_abnormal() {
+        let status = LocalProfileSyncStatus {
+            enabled: true,
+            reachable: true,
+            authenticated: false,
+            username: Some("kid".to_string()),
+            role: Some("user".to_string()),
+            storage_type: Some("redis".to_string()),
+            profile_mode: Some("shared-multi-user".to_string()),
+            error: Some("unexpected profile sync response".to_string()),
+            error_kind: Some("protocol-incompatible".to_string()),
+            sync_domains: vec!["favorites".to_string()],
+        };
+
+        let detail = build_profile_sync_status_diagnostic_detail(&status);
+
+        assert!(detail.contains("远端可达，但当前同步状态异常"));
+        assert!(detail.contains("protocol-incompatible"));
+        assert!(detail.contains("unexpected profile sync response"));
     }
 
     #[test]

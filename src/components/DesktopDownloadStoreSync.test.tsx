@@ -1,5 +1,7 @@
 import { act, render, waitFor } from '@testing-library/react';
 
+import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
+
 import { useDownloadStore } from '@/stores/downloadStore';
 
 jest.mock('@/lib/download/desktop-runtime', () => ({
@@ -464,5 +466,99 @@ describe('DesktopDownloadStoreSync', () => {
         },
       })
     );
+  });
+
+  it('reloads the desktop snapshot after runtime refresh events to finish owner handoff', async () => {
+    useDownloadStore.setState({
+      hasHydrated: true,
+      maxConcurrentTasks: 3,
+      ownerUsername: 'remote-owner',
+      tasks: {},
+      library: {
+        'demo:1': {
+          contentId: 'demo:1',
+          source: 'demo',
+          vodId: '1',
+          sourceName: 'Demo Source',
+          title: 'Demo Title',
+          poster: 'https://img.example.com/demo.jpg',
+          year: '2026',
+          episodeTitles: ['Episode 1'],
+          ownerUsername: 'local-owner',
+          episodes: [],
+          totalSizeBytes: 0,
+          updatedAt: 1,
+        },
+      },
+    });
+
+    mockGetDesktopDownloadStoreSnapshot
+      .mockResolvedValueOnce({
+        maxConcurrentTasks: 3,
+        ownerUsername: 'remote-owner',
+        tasks: {},
+        library: {
+          'demo:1': {
+            contentId: 'demo:1',
+            source: 'demo',
+            vodId: '1',
+            sourceName: 'Demo Source',
+            title: 'Demo Title',
+            poster: 'https://img.example.com/demo.jpg',
+            year: '2026',
+            episodeTitles: ['Episode 1'],
+            ownerUsername: 'local-owner',
+            episodes: [],
+            totalSizeBytes: 0,
+            updatedAt: 1,
+          },
+        },
+      })
+      .mockResolvedValue({
+        maxConcurrentTasks: 3,
+        ownerUsername: 'remote-owner',
+        tasks: {},
+        library: {
+          'demo:1': {
+            contentId: 'demo:1',
+            source: 'demo',
+            vodId: '1',
+            sourceName: 'Demo Source',
+            title: 'Demo Title',
+            poster: 'https://img.example.com/demo.jpg',
+            year: '2026',
+            episodeTitles: ['Episode 1'],
+            ownerUsername: 'remote-owner',
+            episodes: [],
+            totalSizeBytes: 0,
+            updatedAt: 2,
+          },
+        },
+      });
+    mockGetDesktopDownloadEngineSnapshot.mockResolvedValue({
+      maxConcurrentTasks: 3,
+      tasks: {},
+      lastEvent: null,
+    });
+
+    render(<DesktopDownloadStoreSync />);
+
+    await waitFor(() => {
+      expect(mockSyncDesktopDownloadEngineState).toHaveBeenCalledTimes(1);
+    });
+
+    expect(useDownloadStore.getState().library['demo:1']?.ownerUsername).toBe(
+      'local-owner'
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event(DESKTOP_RUNTIME_UPDATED_EVENT));
+    });
+
+    await waitFor(() => {
+      expect(useDownloadStore.getState().library['demo:1']?.ownerUsername).toBe(
+        'remote-owner'
+      );
+    });
   });
 });

@@ -1,6 +1,9 @@
 import { PROFILE_SYNC_USER_DATA_DOMAINS } from '@/lib/profile/contracts';
 
-import type { DesktopProfileSyncStatus } from './profile-sync';
+import {
+  type DesktopProfileSyncStatus,
+  resolveDesktopProfileSyncState,
+} from './profile-sync';
 
 export interface DesktopProfileSyncDiagnosticItem {
   label: string;
@@ -58,19 +61,18 @@ function resolveDesktopProfileSyncReachabilityText(
     return '读取失败';
   }
 
-  if (!profileSyncStatus?.enabled) {
-    return '未启用';
+  switch (resolveDesktopProfileSyncState(profileSyncStatus)) {
+    case 'disabled':
+      return '未启用';
+    case 'offline':
+      return '不可达';
+    case 'auth-expired':
+      return '可达，但登录失效';
+    case 'degraded':
+      return '可达，但状态异常';
+    default:
+      return '可达';
   }
-
-  if (!profileSyncStatus.reachable) {
-    return '不可达';
-  }
-
-  if (profileSyncStatus.errorKind === 'unauthorized') {
-    return '可达，但登录失效';
-  }
-
-  return '可达';
 }
 
 function resolveDesktopProfileSyncAccountText(
@@ -142,19 +144,47 @@ export function buildDesktopProfileSyncStatusValue(
     return '状态未知';
   }
 
-  if (!profileSyncStatus?.enabled) {
-    return '未启用';
+  switch (resolveDesktopProfileSyncState(profileSyncStatus)) {
+    case 'disabled':
+      return '未启用';
+    case 'offline':
+      return '已启用但不可达';
+    case 'auth-expired':
+      return '已连接但登录失效';
+    case 'degraded':
+      return '已连接但状态异常';
+    case 'ready':
+      return '已连接并已登录';
+    case 'connected':
+      return '已连接';
   }
+}
 
-  if (!profileSyncStatus.reachable) {
-    return '已启用但不可达';
+export function buildDesktopProfileSyncLoginStatusMessage(
+  profileSyncStatus: DesktopProfileSyncStatus | null | undefined
+): string {
+  switch (resolveDesktopProfileSyncState(profileSyncStatus)) {
+    case 'disabled':
+      return '当前保持桌面本地登录。';
+    case 'offline':
+      return '云端账号同步服务当前不可用，请检查远端服务地址。';
+    case 'auth-expired':
+      return '云端账号登录已失效，请重新登录。';
+    case 'degraded':
+      switch (profileSyncStatus?.errorKind) {
+        case 'invalid-base-url':
+          return '云端账号同步配置无效，请检查远端服务地址。';
+        case 'protocol-incompatible':
+          return '云端账号同步协议不兼容，请升级桌面端或 Web 端。';
+        case 'upstream-failure':
+          return '云端账号同步服务异常，请检查远端 Web 后端。';
+        default:
+          return '云端账号同步状态异常，请检查远端服务。';
+      }
+    case 'connected':
+    case 'ready':
+      return '桌面版当前使用云端账号与用户数据同步。';
   }
-
-  if (profileSyncStatus.errorKind === 'unauthorized') {
-    return '已连接但登录失效';
-  }
-
-  return profileSyncStatus.authenticated ? '已连接并已登录' : '已连接';
 }
 
 export function buildDesktopProfileSyncStatusDetail(
@@ -173,7 +203,7 @@ export function buildDesktopProfileSyncStatusDetail(
   const domainsText = resolveDesktopProfileSyncDomainsText(profileSyncStatus);
 
   if (!profileSyncStatus.enabled) {
-    return `未配置 profile_sync.api_base_url，当前保持纯本地桌面模式。若后续启用远端同步，将同步：${domainsText}。`;
+    return `当前保持纯本地桌面模式。若需要启用帐号同步，请前往 desktop-admin 开启帐号同步；启用后将同步：${domainsText}。`;
   }
 
   const modeText =

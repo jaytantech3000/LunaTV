@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 
+import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 import {
   areDesktopDownloadTaskCollectionsEquivalent,
   cacheDesktopDownloadEngineSnapshot,
@@ -69,6 +70,10 @@ function shouldHydrateDesktopPersistedSnapshot(
   mergedSnapshot: PersistedDownloadStoreState,
   hasEngineSnapshot: boolean
 ): boolean {
+  if (localSnapshot.ownerUsername !== mergedSnapshot.ownerUsername) {
+    return true;
+  }
+
   if (hasEngineSnapshot) {
     if (
       localSnapshot.maxConcurrentTasks !== mergedSnapshot.maxConcurrentTasks
@@ -84,6 +89,15 @@ function shouldHydrateDesktopPersistedSnapshot(
     ) {
       return true;
     }
+  }
+
+  if (
+    mergedSnapshot.ownerUsername &&
+    Object.values(localSnapshot.library).some(
+      (item) => item.ownerUsername !== mergedSnapshot.ownerUsername
+    )
+  ) {
+    return true;
   }
 
   if (!localSnapshot.ownerUsername && mergedSnapshot.ownerUsername) {
@@ -268,63 +282,76 @@ export default function DesktopDownloadStoreSync() {
       syncRuntimeCompletedTasksToLibrary(runtimeSnapshot);
     };
 
+    const reloadDesktopSnapshot = async () => {
+      const [remoteSnapshot, engineSnapshot] = await Promise.all([
+        getDesktopDownloadStoreSnapshot<PersistedDownloadStoreState>().catch(
+          () => null
+        ),
+        getDesktopDownloadEngineSnapshot().catch(() => null),
+      ]);
+      if (!active) {
+        return;
+      }
+
+      if (engineSnapshot) {
+        cacheDesktopDownloadEngineSnapshot(engineSnapshot);
+      }
+
+      const localSnapshot = buildPersistedDownloadStoreState(
+        useDownloadStore.getState()
+      );
+      const mergedSnapshot = buildMergedDesktopPersistedSnapshot(
+        localSnapshot,
+        remoteSnapshot,
+        engineSnapshot
+      );
+
+      if (
+        shouldHydrateDesktopPersistedSnapshot(
+          localSnapshot,
+          mergedSnapshot,
+          Boolean(engineSnapshot)
+        )
+      ) {
+        skipNextPersist = true;
+        useDownloadStore.getState().replacePersistedState(mergedSnapshot);
+      } else if (
+        (!remoteSnapshot || isPersistedDownloadStoreEmpty(remoteSnapshot)) &&
+        !isPersistedDownloadStoreEmpty(localSnapshot)
+      ) {
+        await putDesktopDownloadStoreSnapshot(localSnapshot).catch(
+          () => undefined
+        );
+      }
+
+      if (engineSnapshot) {
+        syncRuntimeCompletedTasksToLibrary(engineSnapshot, {
+          hydrateAllDoneTasks: true,
+        });
+      }
+
+      const nextState = useDownloadStore.getState();
+      await syncDesktopDownloadEngineState(
+        {
+          maxConcurrentTasks: nextState.maxConcurrentTasks,
+          tasks: nextState.tasks,
+        },
+        engineSnapshot
+      ).catch(() => undefined);
+    };
+
+    const handleRuntimeUpdated = () => {
+      void reloadDesktopSnapshot();
+    };
+
+    window.addEventListener(
+      DESKTOP_RUNTIME_UPDATED_EVENT,
+      handleRuntimeUpdated
+    );
+
     void (async () => {
       try {
-        const [remoteSnapshot, engineSnapshot] = await Promise.all([
-          getDesktopDownloadStoreSnapshot<PersistedDownloadStoreState>().catch(
-            () => null
-          ),
-          getDesktopDownloadEngineSnapshot().catch(() => null),
-        ]);
-        if (!active) {
-          return;
-        }
-
-        if (engineSnapshot) {
-          cacheDesktopDownloadEngineSnapshot(engineSnapshot);
-        }
-
-        const localSnapshot = buildPersistedDownloadStoreState(
-          useDownloadStore.getState()
-        );
-        const mergedSnapshot = buildMergedDesktopPersistedSnapshot(
-          localSnapshot,
-          remoteSnapshot,
-          engineSnapshot
-        );
-
-        if (
-          shouldHydrateDesktopPersistedSnapshot(
-            localSnapshot,
-            mergedSnapshot,
-            Boolean(engineSnapshot)
-          )
-        ) {
-          skipNextPersist = true;
-          useDownloadStore.getState().replacePersistedState(mergedSnapshot);
-        } else if (
-          (!remoteSnapshot || isPersistedDownloadStoreEmpty(remoteSnapshot)) &&
-          !isPersistedDownloadStoreEmpty(localSnapshot)
-        ) {
-          await putDesktopDownloadStoreSnapshot(localSnapshot).catch(
-            () => undefined
-          );
-        }
-
-        if (engineSnapshot) {
-          syncRuntimeCompletedTasksToLibrary(engineSnapshot, {
-            hydrateAllDoneTasks: true,
-          });
-        }
-
-        const nextState = useDownloadStore.getState();
-        await syncDesktopDownloadEngineState(
-          {
-            maxConcurrentTasks: nextState.maxConcurrentTasks,
-            tasks: nextState.tasks,
-          },
-          engineSnapshot
-        ).catch(() => undefined);
+        await reloadDesktopSnapshot();
       } finally {
         if (active) {
           initialized = true;
@@ -370,6 +397,10 @@ export default function DesktopDownloadStoreSync() {
       active = false;
       unsubscribe();
       unsubscribeRuntimeSnapshots?.();
+      window.removeEventListener(
+        DESKTOP_RUNTIME_UPDATED_EVENT,
+        handleRuntimeUpdated
+      );
 
       if (saveTimer) {
         clearTimeout(saveTimer);

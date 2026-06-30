@@ -320,7 +320,9 @@ impl ProfileSyncClient {
                 enabled,
                 reachable: matches!(
                     error.kind,
-                    ProfileSyncErrorKind::Unauthorized | ProfileSyncErrorKind::UpstreamFailure
+                    ProfileSyncErrorKind::Unauthorized
+                        | ProfileSyncErrorKind::ProtocolIncompatible
+                        | ProfileSyncErrorKind::UpstreamFailure
                 ),
                 authenticated: session.is_some()
                     && !matches!(error.kind, ProfileSyncErrorKind::Unauthorized),
@@ -694,6 +696,31 @@ mod tests {
                 .as_deref()
                 .is_some_and(|value| value.contains("401"))
         );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn build_status_response_reports_protocol_incompatible_as_reachable_error() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/server-config",
+            get(|| async move { (StatusCode::OK, "not-json").into_response() }),
+        ))
+        .await;
+        let client = ProfileSyncClient::new(reqwest::Client::new());
+
+        let payload = client
+            .build_status_response(Some(&upstream.base_url()), None)
+            .await;
+
+        assert!(payload.enabled);
+        assert!(payload.reachable);
+        assert!(!payload.authenticated);
+        assert_eq!(
+            payload.error_kind,
+            Some(ProfileSyncErrorKind::ProtocolIncompatible)
+        );
+        assert!(payload.error.as_deref().is_some_and(|value| !value.is_empty()));
 
         upstream.abort();
     }
