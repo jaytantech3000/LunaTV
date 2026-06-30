@@ -141,10 +141,160 @@ jobs:
           tauriScript: pnpm exec tauri
           args: ${{ matrix.args }}
 
+  release_outcome:
+    name: Evaluate Release Outcome
+    runs-on: ubuntu-latest
+    needs: publish_release
+    if: ${{ always() }}
+    outputs:
+      should_publish: ${{ steps.evaluate.outputs.should_publish }}
+      summary_conclusion: ${{ steps.evaluate.outputs.summary_conclusion }}
+      success_count: ${{ steps.evaluate.outputs.success_count }}
+      total_count: ${{ steps.evaluate.outputs.total_count }}
+      succeeded_platforms: ${{ steps.evaluate.outputs.succeeded_platforms }}
+      failed_platforms: ${{ steps.evaluate.outputs.failed_platforms }}
+    permissions:
+      actions: read
+
+    steps:
+      - name: Evaluate desktop build results
+        id: evaluate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const publishJobNames = new Set([
+              'macOS Intel',
+              'macOS Apple Silicon',
+              'Windows x64',
+            ]);
+            const jobs = await github.paginate(
+              github.rest.actions.listJobsForWorkflowRun,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId,
+                per_page: 100,
+              }
+            );
+            const publishJobs = jobs.filter((job) =>
+              publishJobNames.has(job.name)
+            );
+
+            if (publishJobs.length === 0) {
+              core.setFailed(
+                'No desktop platform build jobs were found for this workflow run.'
+              );
+              return;
+            }
+
+            const succeededPlatforms = publishJobs
+              .filter((job) => job.conclusion === 'success')
+              .map((job) => job.name);
+            const failedPlatforms = publishJobs
+              .filter((job) => job.conclusion !== 'success')
+              .map((job) => `${job.name} (${job.conclusion || 'unknown'})`);
+            const successCount = publishJobs.filter(
+              (job) => job.conclusion === 'success'
+            ).length;
+            const totalCount = publishJobs.length;
+            const summaryConclusion =
+              successCount === 0
+                ? 'failure'
+                : successCount === publishJobs.length
+                ? 'success'
+                : 'neutral';
+            core.info(
+              `Desktop platform builds succeeded: ${successCount}/${publishJobs.length}.`
+            );
+            core.setOutput(
+              'should_publish',
+              successCount > 0 ? 'true' : 'false'
+            );
+            core.setOutput('summary_conclusion', summaryConclusion);
+            core.setOutput('success_count', String(successCount));
+            core.setOutput('total_count', String(totalCount));
+            core.setOutput(
+              'succeeded_platforms',
+              JSON.stringify(succeededPlatforms)
+            );
+            core.setOutput('failed_platforms', JSON.stringify(failedPlatforms));
+
+            if (successCount === 0) {
+              core.notice(
+                'No desktop platform build succeeded. Downstream publish jobs will be skipped.'
+              );
+            }
+
+  publish_release_summary:
+    name: Publish Release Summary
+    runs-on: ubuntu-latest
+    needs: [publish_release, release_outcome]
+    if: ${{ always() }}
+    permissions:
+      checks: write
+
+    steps:
+      - name: Publish desktop platform summary check
+        uses: actions/github-script@v7
+        env:
+          SUMMARY_CONCLUSION: ${{ needs.release_outcome.outputs.summary_conclusion }}
+          SUCCESS_COUNT: ${{ needs.release_outcome.outputs.success_count }}
+          TOTAL_COUNT: ${{ needs.release_outcome.outputs.total_count }}
+          SUCCEEDED_PLATFORMS: ${{ needs.release_outcome.outputs.succeeded_platforms }}
+          FAILED_PLATFORMS: ${{ needs.release_outcome.outputs.failed_platforms }}
+        with:
+          script: |
+            const successCount = Number(process.env.SUCCESS_COUNT || '0');
+            const totalCount = Number(process.env.TOTAL_COUNT || '0');
+            const summaryConclusion =
+              process.env.SUMMARY_CONCLUSION || 'failure';
+            const succeededPlatforms = JSON.parse(
+              process.env.SUCCEEDED_PLATFORMS || '[]'
+            );
+            const failedPlatforms = JSON.parse(
+              process.env.FAILED_PLATFORMS || '[]'
+            );
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const title =
+              summaryConclusion === 'success'
+                ? `All desktop platforms succeeded: ${successCount}/${totalCount}`
+                : summaryConclusion === 'neutral'
+                ? `Partial failure: ${successCount}/${totalCount} desktop platforms succeeded`
+                : `All desktop platforms failed: ${successCount}/${totalCount} succeeded`;
+
+            const summaryLines = [
+              `Workflow run: ${runUrl}`,
+              '',
+              `Succeeded platforms (${succeededPlatforms.length}):`,
+              ...(succeededPlatforms.length > 0
+                ? succeededPlatforms.map((platform) => `- ${platform}`)
+                : ['- none']),
+              '',
+              `Failed platforms (${failedPlatforms.length}):`,
+              ...(failedPlatforms.length > 0
+                ? failedPlatforms.map((platform) => `- ${platform}`)
+                : ['- none']),
+            ];
+
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Desktop Platform Build Summary',
+              head_sha: context.sha,
+              status: 'completed',
+              conclusion: summaryConclusion,
+              output: {
+                title,
+                summary: summaryLines.join('\n'),
+              },
+            });
+
   normalize_release_assets:
     name: Normalize Release Assets
     runs-on: ubuntu-latest
-    needs: publish_release
+    needs: [publish_release, release_outcome]
+    if: ${{ always() && needs.release_outcome.outputs.should_publish == 'true' }}
     permissions:
       contents: write
     env:
