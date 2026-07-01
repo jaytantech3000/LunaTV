@@ -35,9 +35,17 @@ describe('DesktopProfileSyncOnboardingCard', () => {
   const mockRequestDesktopRuntimeRefresh = jest.mocked(
     requestDesktopRuntimeRefresh
   );
+  const mockClipboardWriteText = jest.fn<Promise<void>, [string]>();
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockClipboardWriteText.mockReset();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: mockClipboardWriteText,
+      },
+    });
   });
 
   it('shows the production default address and renders the preview plan', async () => {
@@ -238,5 +246,43 @@ describe('DesktopProfileSyncOnboardingCard', () => {
     expect(screen.getByText('已自动创建 1 个 Web 帐号')).toBeInTheDocument();
     expect(screen.getByText('beta')).toBeInTheDocument();
     expect(screen.getByText('初始密码：123456')).toBeInTheDocument();
+  });
+
+  it('copies the titled error message from the error panel', async () => {
+    mockClipboardWriteText.mockResolvedValue(undefined);
+    mockPreviewDesktopProfileSyncOnboarding.mockRejectedValue(
+      new Error('Web 端同步接口返回 500')
+    );
+
+    render(
+      <DesktopProfileSyncOnboardingCard
+        currentLocalUsername='local-owner'
+        profileSyncEnabled={false}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText('Web 用户名'), {
+      target: { value: 'remote-owner' },
+    });
+    fireEvent.change(screen.getByLabelText('Web 密码'), {
+      target: { value: 'secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '生成迁移预览' }));
+
+    expect(
+      await screen.findByText('Web 端同步接口返回 500')
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '复制错误信息' }));
+
+    await waitFor(() => {
+      expect(mockClipboardWriteText).toHaveBeenCalledWith(
+        '错误信息\nWeb 端同步接口返回 500'
+      );
+    });
+
+    expect(
+      await screen.findByRole('button', { name: '已复制错误信息' })
+    ).toBeInTheDocument();
   });
 });

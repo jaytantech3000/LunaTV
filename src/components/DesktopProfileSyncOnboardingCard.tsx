@@ -1,7 +1,15 @@
 'use client';
 
-import { Cloud, RefreshCw, ShieldCheck, UserPlus, X } from 'lucide-react';
-import { useState } from 'react';
+import {
+  Check,
+  Cloud,
+  Copy,
+  RefreshCw,
+  ShieldCheck,
+  UserPlus,
+  X,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 import {
   type DesktopProfileSyncConflictStrategy,
@@ -25,6 +33,7 @@ import {
 } from '@/components/AppChrome';
 
 const DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL = 'https://luna.hkcu.qzz.io';
+const ERROR_COPY_RESET_DELAY_MS = 2000;
 
 function getErrorMessage(error: unknown): string {
   if (typeof error === 'string' && error.trim()) {
@@ -36,6 +45,23 @@ function getErrorMessage(error: unknown): string {
   }
 
   return '帐号同步开通失败';
+}
+
+async function copyText(value: string): Promise<boolean> {
+  if (!value || typeof navigator === 'undefined' || !navigator.clipboard) {
+    return false;
+  }
+
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function buildCopyableErrorMessage(errorMessage: string): string {
+  return `错误信息\n${errorMessage}`;
 }
 
 function formatSummaryLine(summary: {
@@ -194,12 +220,33 @@ export default function DesktopProfileSyncOnboardingCard({
   const [infoMessage, setInfoMessage] = useState('');
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [errorCopyState, setErrorCopyState] = useState<
+    'idle' | 'success' | 'error'
+  >('idle');
 
   const normalizedCurrentLocalUsername = currentLocalUsername?.trim() || '';
   const canSubmit =
     Boolean(normalizedCurrentLocalUsername) &&
     Boolean(username.trim()) &&
     Boolean(password.trim());
+
+  useEffect(() => {
+    setErrorCopyState('idle');
+  }, [errorMessage]);
+
+  useEffect(() => {
+    if (errorCopyState === 'idle') {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setErrorCopyState('idle');
+    }, ERROR_COPY_RESET_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [errorCopyState]);
 
   const handlePreview = async () => {
     if (!canSubmit) {
@@ -261,6 +308,11 @@ export default function DesktopProfileSyncOnboardingCard({
     } finally {
       setIsExecuting(false);
     }
+  };
+
+  const handleCopyErrorMessage = async () => {
+    const didCopy = await copyText(buildCopyableErrorMessage(errorMessage));
+    setErrorCopyState(didCopy ? 'success' : 'error');
   };
 
   return (
@@ -440,8 +492,44 @@ export default function DesktopProfileSyncOnboardingCard({
           )}
 
           {errorMessage ? (
-            <div className='rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300'>
-              {errorMessage}
+            <div className='rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300'>
+              <div className='flex items-start justify-between gap-3'>
+                <div className='min-w-0'>
+                  <div className='text-sm font-medium'>错误信息</div>
+                  <div className='mt-1 text-sm leading-6'>{errorMessage}</div>
+                </div>
+                <div
+                  className='flex shrink-0 items-center gap-2'
+                  aria-live='polite'
+                >
+                  {errorCopyState === 'success' ? (
+                    <span className='text-xs font-medium'>已复制</span>
+                  ) : null}
+                  {errorCopyState === 'error' ? (
+                    <span className='text-xs font-medium'>复制失败</span>
+                  ) : null}
+                  <AppIconButton
+                    aria-label={
+                      errorCopyState === 'success'
+                        ? '已复制错误信息'
+                        : '复制错误信息'
+                    }
+                    title={
+                      errorCopyState === 'success'
+                        ? '已复制错误信息'
+                        : '复制错误信息'
+                    }
+                    onClick={handleCopyErrorMessage}
+                    className='h-8 w-8 border border-red-200 bg-white/80 text-red-600 hover:bg-white hover:text-red-700 dark:border-red-800/80 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/70 dark:hover:text-red-100'
+                  >
+                    {errorCopyState === 'success' ? (
+                      <Check className='h-4 w-4' />
+                    ) : (
+                      <Copy className='h-4 w-4' />
+                    )}
+                  </AppIconButton>
+                </div>
+              </div>
             </div>
           ) : null}
 
