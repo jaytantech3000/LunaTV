@@ -5,6 +5,7 @@
 import {
   Check,
   ChevronDown,
+  Cloud,
   ExternalLink,
   KeyRound,
   Loader2,
@@ -519,6 +520,29 @@ export const UserMenu: React.FC = () => {
     }, 0);
   };
 
+  const handleDesktopAccountSync = () => {
+    if (
+      pendingNavigation?.kind === 'nav' &&
+      pendingNavigation.href === '/desktop-admin'
+    ) {
+      setIsOpen(false);
+      return;
+    }
+
+    flushSync(() => {
+      setIsOpen(false);
+      beginNavigation({
+        href: '/desktop-admin',
+        kind: 'nav',
+        label: '帐号同步',
+      });
+    });
+    prefetchRoute('/desktop-admin');
+    window.setTimeout(() => {
+      router.push('/desktop-admin');
+    }, 0);
+  };
+
   const handleChangePassword = () => {
     setIsOpen(false);
     openChangePasswordDialog();
@@ -778,6 +802,9 @@ export const UserMenu: React.FC = () => {
 
   const isOpeningAdmin =
     pendingNavigation?.kind === 'nav' && pendingNavigation.href === '/admin';
+  const isOpeningDesktopAccountSync =
+    pendingNavigation?.kind === 'nav' &&
+    pendingNavigation.href === '/desktop-admin';
 
   // 检查是否显示管理面板按钮
   const isAuthenticated = Boolean(authInfo?.username);
@@ -787,6 +814,7 @@ export const UserMenu: React.FC = () => {
       (authInfo?.role === 'owner' || authInfo?.role === 'admin')
     : adminPanelEnabled &&
       (authInfo?.role === 'owner' || authInfo?.role === 'admin');
+  const showDesktopAccountSyncEntry = isDesktopTarget && showAdminPanel;
 
   // 检查是否显示修改密码按钮
   const showChangePassword =
@@ -935,6 +963,30 @@ export const UserMenu: React.FC = () => {
               </div>
               <span className='font-medium'>
                 {isOpeningAdmin ? '正在打开管理面板...' : '管理面板'}
+              </span>
+            </button>
+          )}
+
+          {showDesktopAccountSyncEntry && (
+            <button
+              onClick={handleDesktopAccountSync}
+              onPointerDown={() => prefetchRoute('/desktop-admin')}
+              onMouseEnter={() => prefetchRoute('/desktop-admin')}
+              onFocus={() => prefetchRoute('/desktop-admin')}
+              disabled={isOpeningDesktopAccountSync}
+              aria-busy={isOpeningDesktopAccountSync}
+              className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm disabled:cursor-progress disabled:opacity-80'
+            >
+              <div className='relative flex h-4 w-4 items-center justify-center'>
+                <Cloud className='h-4 w-4 text-gray-500 dark:text-gray-400' />
+                {isOpeningDesktopAccountSync ? (
+                  <Loader2 className='absolute -right-1.5 -top-1.5 h-3 w-3 animate-spin text-emerald-500 dark:text-emerald-400' />
+                ) : null}
+              </div>
+              <span className='font-medium'>
+                {isOpeningDesktopAccountSync
+                  ? '正在打开帐号同步...'
+                  : '帐号同步'}
               </span>
             </button>
           )}
