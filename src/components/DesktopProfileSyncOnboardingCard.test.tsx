@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 
 import {
   executeDesktopProfileSyncOnboarding,
@@ -48,7 +54,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
     });
   });
 
-  it('shows the production default address and renders the preview plan', async () => {
+  it('shows the production default address and renders the preview guidance', async () => {
     mockPreviewDesktopProfileSyncOnboarding.mockResolvedValue({
       remoteBaseUrl: 'https://luna.hkcu.qzz.io',
       currentRemoteUsername: 'remote-owner',
@@ -92,7 +98,10 @@ describe('DesktopProfileSyncOnboardingCard', () => {
         taskCount: 2,
         libraryCount: 1,
       },
-      warnings: [],
+      warnings: [
+        '仅当前仍保留的这套离线下载可以迁移，之前已清理的旧归属无法恢复。',
+        '如果继续执行时需要自动创建 Web 帐号，会生成初始密码 123456。完成后请立即登录修改。',
+      ],
     });
 
     render(
@@ -131,9 +140,20 @@ describe('DesktopProfileSyncOnboardingCard', () => {
     expect(
       screen.getByText('离线下载将重绑到 remote-owner（2 个任务 / 1 个条目）')
     ).toBeInTheDocument();
+    expect(screen.getByText('开始前请确认')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '仅当前仍保留的这套离线下载可以迁移，之前已清理的旧归属无法恢复。'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '如果继续执行时需要自动创建 Web 帐号，会生成初始密码 123456。完成后请立即登录修改。'
+      )
+    ).toBeInTheDocument();
   });
 
-  it('executes onboarding, arms download handoff, and surfaces the initial password prompt', async () => {
+  it('executes onboarding, arms download handoff, and surfaces the migration result summary', async () => {
     mockPreviewDesktopProfileSyncOnboarding.mockResolvedValue({
       remoteBaseUrl: 'https://luna.hkcu.qzz.io',
       currentRemoteUsername: 'remote-owner',
@@ -205,10 +225,13 @@ describe('DesktopProfileSyncOnboardingCard', () => {
         libraryCount: 1,
         resourceIndexCount: 2,
       },
-      warnings: [],
+      warnings: [
+        '仅当前仍保留的这套离线下载可以迁移，之前已清理的旧归属无法恢复。',
+        '如果本次自动创建了 Web 帐号，请登录后立即修改初始密码。',
+      ],
     });
 
-    render(
+    const { rerender } = render(
       <DesktopProfileSyncOnboardingCard
         currentLocalUsername='local-owner'
         profileSyncEnabled={false}
@@ -243,9 +266,77 @@ describe('DesktopProfileSyncOnboardingCard', () => {
     });
     expect(mockRequestDesktopRuntimeRefresh).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByText('已自动创建 1 个 Web 帐号')).toBeInTheDocument();
+    expect(screen.getByText('已切换到 Web 帐号')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '桌面端已开始使用 Web 帐号 remote-owner，离线下载归属也已按本次结果更新。'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText('当前使用的 Web 帐号')).toBeInTheDocument();
+    expect(screen.getByText('本次自动创建的帐号')).toBeInTheDocument();
+    expect(
+      screen.getByText('已自动创建 1 个 Web 帐号，请尽快修改初始密码。')
+    ).toBeInTheDocument();
     expect(screen.getByText('beta')).toBeInTheDocument();
     expect(screen.getByText('初始密码：123456')).toBeInTheDocument();
+    expect(screen.getByText('接下来建议')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '仅当前仍保留的这套离线下载可以迁移，之前已清理的旧归属无法恢复。'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '如果本次自动创建了 Web 帐号，请登录后立即修改初始密码。'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('同步已开启，正在同步到当前页面。')
+    ).toBeInTheDocument();
+    expect(screen.getByText('1/3 已提交同步结果')).toBeInTheDocument();
+    expect(screen.getByText('2/3 正在刷新桌面运行时状态')).toBeInTheDocument();
+    expect(screen.getByText('3/3 等待当前页面更新')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute(
+      'aria-valuenow',
+      '67'
+    );
+
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        rerender(
+          <DesktopProfileSyncOnboardingCard
+            currentLocalUsername='local-owner'
+            profileSyncEnabled={true}
+          />
+        );
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText('桌面状态已刷新完成。')).toBeInTheDocument();
+      expect(screen.getByText('2/3 已刷新桌面运行时状态')).toBeInTheDocument();
+      expect(screen.getByText('3/3 当前页面已更新')).toBeInTheDocument();
+      expect(screen.getByRole('progressbar')).toHaveAttribute(
+        'aria-valuenow',
+        '100'
+      );
+
+      act(() => {
+        jest.advanceTimersByTime(1499);
+      });
+      expect(screen.getByText('桌面状态已刷新完成。')).toBeInTheDocument();
+
+      act(() => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(
+        screen.queryByText('桌面状态已刷新完成。')
+      ).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('同步刷新进度')).not.toBeInTheDocument();
+    } finally {
+      jest.runOnlyPendingTimers();
+      jest.useRealTimers();
+    }
   });
 
   it('copies the titled error message from the error panel', async () => {

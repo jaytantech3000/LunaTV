@@ -1,18 +1,24 @@
-use std::{collections::{BTreeMap, BTreeSet}, fs, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    str::FromStr,
+};
 
+use anyhow::{Context, Result};
 use axum::{
     Json,
     extract::State,
     http::{Method, StatusCode},
     response::Response,
 };
-use anyhow::{Context, Result};
 use moontv_profile::LocalProfileSnapshot;
 use moontv_sync::{
     ProfileSyncError, ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncSessionMutation,
+    build_profile_sync_target_url,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tracing::warn;
 
 use crate::{
     AppError, AppResult, AppState, download_runtime::DesktopDownloadResourceIndexRecord,
@@ -22,6 +28,8 @@ use crate::{
 
 const DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL: &str = "https://luna.hkcu.qzz.io";
 const AUTO_CREATED_WEB_ACCOUNT_INITIAL_PASSWORD: &str = "123456";
+const REMOTE_PROFILE_SYNC_MERGE_ROUTE_PATH: &str = "/api/admin/profile-sync/merge";
+const REMOTE_PROFILE_SYNC_RESPONSE_BODY_PREFIX_LIMIT: usize = 160;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -137,7 +145,10 @@ pub(crate) fn apply_profile_sync_api_base_url_to_config_file(
         .as_object_mut()
         .context("profile_sync must be an object after normalization")?;
 
-    match remote_base_url.map(str::trim).filter(|value| !value.is_empty()) {
+    match remote_base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(remote_base_url) => {
             profile_sync_object.insert(
                 "api_base_url".to_string(),
@@ -332,6 +343,7 @@ pub(crate) async fn preview_profile_sync_onboarding(
         &remote_accounts,
     );
     let download_preview = inspect_download_preview(&state, &remote_session.username)?;
+    let requires_account_creation = plan.items.iter().any(|item| item.requires_account_creation);
 
     no_store_json_response(&DesktopProfileSyncOnboardingPreviewResponse {
         remote_base_url,
@@ -339,7 +351,7 @@ pub(crate) async fn preview_profile_sync_onboarding(
         current_remote_role: remote_session.role,
         plan,
         download_preview,
-        warnings: default_onboarding_warnings(),
+        warnings: preview_onboarding_warnings(requires_account_creation),
     })
 }
 
@@ -424,10 +436,10 @@ pub(crate) async fn execute_profile_sync_onboarding(
         remote_base_url,
         current_remote_username: remote_session.username,
         current_remote_role: remote_session.role,
+        warnings: execute_onboarding_warnings(!created_accounts.is_empty()),
         created_accounts,
         migrated_accounts,
         download_rebind,
-        warnings: default_onboarding_warnings(),
     })
 }
 
@@ -443,10 +455,8 @@ fn ensure_profile_sync_not_enabled(state: &AppState) -> AppResult<()> {
 }
 
 fn resolve_remote_base_url(remote_base_url: Option<String>) -> AppResult<String> {
-    Ok(
-        normalize_owned_string(remote_base_url)
-            .unwrap_or_else(|| DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL.to_string()),
-    )
+    Ok(normalize_owned_string(remote_base_url)
+        .unwrap_or_else(|| DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL.to_string()))
 }
 
 fn map_profile_sync_error_to_app_error(error: ProfileSyncError) -> AppError {
@@ -505,13 +515,15 @@ async fn fetch_remote_admin_config(
     state: &AppState,
     remote_base_url: &str,
 ) -> AppResult<RemoteAdminConfigResponse> {
-    let response = send_remote_json_request(state, remote_base_url, Method::GET, "/api/admin/config", None)
-        .await?;
-    decode_remote_json_response(
-        response,
-        Some("只有 Web owner/admin 可以开启帐号同步"),
+    let response = send_remote_json_request(
+        state,
+        remote_base_url,
+        Method::GET,
+        "/api/admin/config",
+        None,
     )
-    .await
+    .await?;
+    decode_remote_json_response(response, Some("只有 Web owner/admin 可以开启帐号同步")).await
 }
 
 async fn create_remote_user(
@@ -531,11 +543,8 @@ async fn create_remote_user(
         })),
     )
     .await?;
-    decode_remote_json_response::<Value>(
-        response,
-        Some("只有 Web owner/admin 可以创建同步帐号"),
-    )
-    .await?;
+    decode_remote_json_response::<Value>(response, Some("只有 Web owner/admin 可以创建同步帐号"))
+        .await?;
     Ok(())
 }
 
@@ -546,11 +555,14 @@ async fn merge_remote_profile_snapshot(
     strategy: DesktopProfileSyncConflictStrategy,
     snapshot: &LocalProfileSnapshot,
 ) -> AppResult<DesktopProfileSyncMergedSummary> {
+    let target_url =
+        build_profile_sync_target_url(remote_base_url, REMOTE_PROFILE_SYNC_MERGE_ROUTE_PATH)
+            .map_err(map_profile_sync_error_to_app_error)?;
     let response = send_remote_json_request(
         state,
         remote_base_url,
         Method::POST,
-        "/api/admin/profile-sync/merge",
+        REMOTE_PROFILE_SYNC_MERGE_ROUTE_PATH,
         Some(json!({
             "targetUsername": target_username,
             "strategy": strategy.as_str(),
@@ -564,6 +576,14 @@ async fn merge_remote_profile_snapshot(
         })),
     )
     .await?;
+    if should_surface_remote_merge_upstream_diagnostics(&response) {
+        return Err(build_remote_merge_upstream_diagnostic_error(
+            Method::POST,
+            target_url.as_str(),
+            response,
+        )
+        .await);
+    }
     let payload = decode_remote_json_response::<RemoteProfileMergeResponse>(
         response,
         Some("只有 Web owner/admin 可以执行资料迁移"),
@@ -584,7 +604,8 @@ async fn send_remote_json_request(
         .with_accept(Some("application/json".to_string()));
 
     if let Some(payload) = payload {
-        let body = serde_json::to_vec(&payload).map_err(|error| AppError::internal(error.to_string()))?;
+        let body =
+            serde_json::to_vec(&payload).map_err(|error| AppError::internal(error.to_string()))?;
         request = request
             .with_content_type(Some("application/json".to_string()))
             .with_body(body);
@@ -647,17 +668,100 @@ fn decode_remote_error_message(body: &[u8]) -> Option<String> {
 
     serde_json::from_slice::<Value>(body)
         .ok()
-        .and_then(|payload| payload.get("error").and_then(Value::as_str).map(str::trim).map(str::to_string))
+        .and_then(|payload| {
+            payload
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .map(str::to_string)
+        })
         .filter(|value| !value.is_empty())
         .or_else(|| {
             String::from_utf8(body.to_vec())
                 .ok()
                 .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
+                .filter(|value| !value.is_empty() && !looks_like_html_document(value))
         })
 }
 
-fn load_local_account_summaries(state: &AppState) -> AppResult<Vec<DesktopProfileSyncLocalAccountSummary>> {
+fn looks_like_html_document(value: &str) -> bool {
+    let trimmed = value.trim_start();
+    let lowercase = trimmed.to_ascii_lowercase();
+
+    lowercase.starts_with("<!doctype html") || lowercase.starts_with("<html")
+}
+
+fn should_surface_remote_merge_upstream_diagnostics(response: &reqwest::Response) -> bool {
+    response.status() == StatusCode::NOT_FOUND
+        || response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.to_ascii_lowercase().contains("text/html"))
+}
+
+async fn build_remote_merge_upstream_diagnostic_error(
+    method: Method,
+    target_url: &str,
+    response: reqwest::Response,
+) -> AppError {
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    let body_prefix = match response.bytes().await {
+        Ok(body) => {
+            summarize_upstream_body_prefix(&body, REMOTE_PROFILE_SYNC_RESPONSE_BODY_PREFIX_LIMIT)
+                .unwrap_or_else(|| "<empty>".to_string())
+        }
+        Err(error) => format!("<failed to read body: {error}>"),
+    };
+    let message = format!(
+        "远端资料迁移接口异常：{} {} 返回 {}，content-type: {}，body 前缀: {}",
+        method.as_str(),
+        target_url,
+        status,
+        content_type,
+        body_prefix,
+    );
+
+    warn!("{message}");
+    AppError::bad_request(message)
+}
+
+fn summarize_upstream_body_prefix(body: &[u8], limit: usize) -> Option<String> {
+    if body.is_empty() {
+        return None;
+    }
+
+    let compact = String::from_utf8_lossy(body)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if compact.is_empty() {
+        return None;
+    }
+
+    let mut truncated = String::new();
+    let mut char_count = 0usize;
+    for ch in compact.chars() {
+        if char_count == limit {
+            truncated.push_str("...");
+            return Some(truncated);
+        }
+        truncated.push(ch);
+        char_count += 1;
+    }
+
+    Some(truncated)
+}
+
+fn load_local_account_summaries(
+    state: &AppState,
+) -> AppResult<Vec<DesktopProfileSyncLocalAccountSummary>> {
     let persistence = state
         .load_admin_persistence()
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -748,8 +852,7 @@ fn inspect_download_preview(
         .and_then(Value::as_object)
         .map(|library| library.len())
         .unwrap_or(0);
-    let has_downloads =
-        current_owner_username.is_some() || task_count > 0 || library_count > 0;
+    let has_downloads = current_owner_username.is_some() || task_count > 0 || library_count > 0;
 
     Ok(DesktopProfileSyncDownloadPreview {
         has_downloads,
@@ -792,8 +895,7 @@ fn rebind_local_offline_downloads(
         .and_then(Value::as_object)
         .map(|library| library.len())
         .unwrap_or(0);
-    let has_downloads =
-        previous_owner_username.is_some() || task_count > 0 || library_count > 0;
+    let has_downloads = previous_owner_username.is_some() || task_count > 0 || library_count > 0;
     if !has_downloads {
         return Ok(DesktopProfileSyncDownloadRebindResult {
             did_rebind: false,
@@ -810,9 +912,8 @@ fn rebind_local_offline_downloads(
     state
         .write_download_store_snapshot(&rebound_snapshot)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let resource_index_count =
-        rebind_download_resource_indexes(state, next_owner_username)
-            .map_err(|error| AppError::internal(error.to_string()))?;
+    let resource_index_count = rebind_download_resource_indexes(state, next_owner_username)
+        .map_err(|error| AppError::internal(error.to_string()))?;
 
     Ok(DesktopProfileSyncDownloadRebindResult {
         did_rebind: true,
@@ -824,10 +925,7 @@ fn rebind_local_offline_downloads(
     })
 }
 
-fn rebind_download_resource_indexes(
-    state: &AppState,
-    next_owner_username: &str,
-) -> Result<usize> {
+fn rebind_download_resource_indexes(state: &AppState, next_owner_username: &str) -> Result<usize> {
     let resource_index_dir = state.download_runtime_resource_index_dir();
     if !resource_index_dir.exists() {
         return Ok(0);
@@ -838,7 +936,10 @@ fn rebind_download_resource_indexes(
         .with_context(|| format!("failed to read {}", resource_index_dir.display()))?
     {
         let entry = entry.with_context(|| {
-            format!("failed to read entry under {}", resource_index_dir.display())
+            format!(
+                "failed to read entry under {}",
+                resource_index_dir.display()
+            )
         })?;
         let path = entry.path();
         if !path.is_file() {
@@ -878,15 +979,30 @@ fn persist_remote_base_url_into_local_config(
     .map_err(|error| AppError::internal(error.to_string()))
 }
 
-fn default_onboarding_warnings() -> Vec<String> {
-    vec![
-        "当前只能迁移仍然存在的这一套离线下载；历史已被清理的旧归属无法恢复。"
-            .to_string(),
-        format!(
-            "自动创建的 Web 帐号初始密码固定为 {}，创建后请立即修改。",
+fn base_onboarding_warnings() -> Vec<String> {
+    vec!["仅当前仍保留的这套离线下载可以迁移，之前已清理的旧归属无法恢复。".to_string()]
+}
+
+fn preview_onboarding_warnings(show_password_warning: bool) -> Vec<String> {
+    let mut warnings = base_onboarding_warnings();
+    if show_password_warning {
+        warnings.push(format!(
+            "如果继续执行时需要自动创建 Web 帐号，会生成初始密码 {}。完成后请立即登录修改。",
             AUTO_CREATED_WEB_ACCOUNT_INITIAL_PASSWORD
-        ),
-    ]
+        ));
+    }
+
+    warnings
+}
+
+fn execute_onboarding_warnings(show_password_warning: bool) -> Vec<String> {
+    let mut warnings = base_onboarding_warnings();
+    if show_password_warning {
+        warnings
+            .push("如果本次自动创建了 Web 帐号，请登录后立即修改初始密码。".to_string());
+    }
+
+    warnings
 }
 
 impl DesktopProfileSyncConflictStrategy {
@@ -906,7 +1022,8 @@ mod tests {
         DesktopProfileSyncConflictStrategy, DesktopProfileSyncLocalAccountSummary,
         DesktopProfileSyncOnboardingPlan, DesktopProfileSyncOnboardingPlanItem,
         DesktopProfileSyncRemoteAccountState, apply_profile_sync_api_base_url_to_config_file,
-        plan_profile_sync_onboarding, rebind_download_store_snapshot_owner,
+        plan_profile_sync_onboarding, preview_onboarding_warnings,
+        rebind_download_store_snapshot_owner,
     };
 
     #[test]
@@ -999,6 +1116,19 @@ mod tests {
                     },
                 ],
             }
+        );
+    }
+
+    #[test]
+    fn preview_warnings_explain_auto_created_account_follow_up() {
+        assert_eq!(
+            preview_onboarding_warnings(true),
+            vec![
+                "仅当前仍保留的这套离线下载可以迁移，之前已清理的旧归属无法恢复。"
+                    .to_string(),
+                "如果继续执行时需要自动创建 Web 帐号，会生成初始密码 123456。完成后请立即登录修改。"
+                    .to_string(),
+            ]
         );
     }
 

@@ -34,6 +34,9 @@ import {
 
 const DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL = 'https://luna.hkcu.qzz.io';
 const ERROR_COPY_RESET_DELAY_MS = 2000;
+const RUNTIME_REFRESH_COMPLETED_RESET_DELAY_MS = 1500;
+
+type RuntimeRefreshProgressPhase = 'refreshing' | 'completed';
 
 function getErrorMessage(error: unknown): string {
   if (typeof error === 'string' && error.trim()) {
@@ -100,6 +103,88 @@ function DownloadPreview({
   );
 }
 
+function RuntimeRefreshProgressCard({
+  phase,
+}: {
+  phase: RuntimeRefreshProgressPhase;
+}) {
+  const isCompleted = phase === 'completed';
+  const progressValue = isCompleted ? 100 : 67;
+  const title = isCompleted
+    ? '桌面状态已刷新完成。'
+    : '同步已开启，正在同步到当前页面。';
+  const detail = isCompleted
+    ? '当前页面和右上角用户菜单都已切换到最新同步状态。'
+    : '桌面正在刷新运行时状态，通常只需几秒。';
+  const steps = [
+    {
+      label: '1/3 已提交同步结果',
+      tone: 'complete' as const,
+    },
+    {
+      label: isCompleted
+        ? '2/3 已刷新桌面运行时状态'
+        : '2/3 正在刷新桌面运行时状态',
+      tone: isCompleted ? ('complete' as const) : ('active' as const),
+    },
+    {
+      label: isCompleted ? '3/3 当前页面已更新' : '3/3 等待当前页面更新',
+      tone: isCompleted ? ('complete' as const) : ('pending' as const),
+    },
+  ];
+
+  return (
+    <div className='rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm dark:border-emerald-900/60 dark:bg-emerald-900/20'>
+      <div className='flex items-start gap-3'>
+        <div className='mt-0.5 text-emerald-600 dark:text-emerald-300'>
+          {isCompleted ? (
+            <Check className='h-4 w-4' />
+          ) : (
+            <RefreshCw className='h-4 w-4 animate-spin' />
+          )}
+        </div>
+        <div className='min-w-0 flex-1'>
+          <div className='font-medium text-emerald-900 dark:text-emerald-100'>
+            {title}
+          </div>
+          <div className='mt-1 text-emerald-700/90 dark:text-emerald-200/90'>
+            {detail}
+          </div>
+          <div
+            className='mt-3 h-2 overflow-hidden rounded-full bg-emerald-100 dark:bg-emerald-950/60'
+            role='progressbar'
+            aria-label='同步刷新进度'
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressValue}
+          >
+            <div
+              className='h-full rounded-full bg-emerald-500 transition-all duration-300 dark:bg-emerald-400'
+              style={{ width: `${progressValue}%` }}
+            />
+          </div>
+          <div className='mt-3 space-y-2'>
+            {steps.map((step) => (
+              <div
+                key={step.label}
+                className={
+                  step.tone === 'complete'
+                    ? 'text-emerald-800 dark:text-emerald-100'
+                    : step.tone === 'active'
+                    ? 'font-medium text-emerald-900 dark:text-emerald-50'
+                    : 'text-emerald-700/70 dark:text-emerald-200/70'
+                }
+              >
+                {step.label}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SuccessDialog({
   result,
   onClose,
@@ -124,8 +209,8 @@ function SuccessDialog({
               <ShieldCheck className='h-5 w-5' />
             </AppIconBadge>
             <AppDialogTitleBlock
-              title='帐号同步已开启'
-              subtitle='桌面正在切换到 Web 帐号模式，离线下载归属也已按当前结果处理。'
+              title='已切换到 Web 帐号'
+              subtitle={`桌面端已开始使用 Web 帐号 ${result.currentRemoteUsername}，离线下载归属也已按本次结果更新。`}
             />
           </div>
           <AppIconButton onClick={onClose} aria-label='关闭同步完成弹窗'>
@@ -136,7 +221,7 @@ function SuccessDialog({
         <div className='space-y-4 px-5 py-5 sm:px-6'>
           <AppSurfaceCard className='bg-gray-50 px-4 py-4 dark:bg-gray-800/40'>
             <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
-              当前 Web 帐号
+              当前使用的 Web 帐号
             </div>
             <div className='mt-1 text-sm text-gray-600 dark:text-gray-300'>
               {result.currentRemoteUsername}
@@ -145,12 +230,12 @@ function SuccessDialog({
 
           <AppSurfaceCard className='space-y-2 px-4 py-4 dark:bg-gray-900'>
             <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
-              自动创建帐号
+              本次自动创建的帐号
             </div>
             {result.createdAccounts.length ? (
               <>
                 <div className='text-sm text-gray-600 dark:text-gray-300'>
-                  {`已自动创建 ${result.createdAccounts.length} 个 Web 帐号`}
+                  {`已自动创建 ${result.createdAccounts.length} 个 Web 帐号，请尽快修改初始密码。`}
                 </div>
                 {result.createdAccounts.map((account) => (
                   <div
@@ -166,7 +251,7 @@ function SuccessDialog({
               </>
             ) : (
               <div className='text-sm text-gray-600 dark:text-gray-300'>
-                本次没有新增 Web 帐号。
+                本次未创建新的 Web 帐号。
               </div>
             )}
           </AppSurfaceCard>
@@ -174,7 +259,7 @@ function SuccessDialog({
           {result.warnings.length ? (
             <AppSurfaceCard className='space-y-2 px-4 py-4 dark:bg-gray-900'>
               <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
-                提示
+                接下来建议
               </div>
               {result.warnings.map((warning) => (
                 <div
@@ -217,9 +302,10 @@ export default function DesktopProfileSyncOnboardingCard({
   const [result, setResult] =
     useState<DesktopProfileSyncOnboardingExecuteResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
-  const [infoMessage, setInfoMessage] = useState('');
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [runtimeRefreshPhase, setRuntimeRefreshPhase] =
+    useState<RuntimeRefreshProgressPhase | null>(null);
   const [errorCopyState, setErrorCopyState] = useState<
     'idle' | 'success' | 'error'
   >('idle');
@@ -248,6 +334,28 @@ export default function DesktopProfileSyncOnboardingCard({
     };
   }, [errorCopyState]);
 
+  useEffect(() => {
+    if (runtimeRefreshPhase !== 'refreshing' || !profileSyncEnabled) {
+      return;
+    }
+
+    setRuntimeRefreshPhase('completed');
+  }, [profileSyncEnabled, runtimeRefreshPhase]);
+
+  useEffect(() => {
+    if (runtimeRefreshPhase !== 'completed') {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setRuntimeRefreshPhase(null);
+    }, RUNTIME_REFRESH_COMPLETED_RESET_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [runtimeRefreshPhase]);
+
   const handlePreview = async () => {
     if (!canSubmit) {
       setErrorMessage('请先补全当前本地帐号、Web 用户名和密码。');
@@ -256,7 +364,7 @@ export default function DesktopProfileSyncOnboardingCard({
 
     setIsPreviewing(true);
     setErrorMessage('');
-    setInfoMessage('');
+    setRuntimeRefreshPhase(null);
     setResult(null);
 
     try {
@@ -284,7 +392,7 @@ export default function DesktopProfileSyncOnboardingCard({
 
     setIsExecuting(true);
     setErrorMessage('');
-    setInfoMessage('');
+    setRuntimeRefreshPhase(null);
 
     try {
       const nextResult = await executeDesktopProfileSyncOnboarding({
@@ -301,9 +409,10 @@ export default function DesktopProfileSyncOnboardingCard({
         nextOwnerUsername:
           nextResult.downloadRebind.nextOwnerUsername ?? undefined,
       });
+      setRuntimeRefreshPhase('refreshing');
       requestDesktopRuntimeRefresh();
-      setInfoMessage('同步已开启，正在刷新桌面运行时状态。');
     } catch (error) {
+      setRuntimeRefreshPhase(null);
       setErrorMessage(getErrorMessage(error));
     } finally {
       setIsExecuting(false);
@@ -474,7 +583,7 @@ export default function DesktopProfileSyncOnboardingCard({
                   {preview.warnings.length ? (
                     <AppSurfaceCard className='space-y-2 px-4 py-4 dark:bg-gray-900'>
                       <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
-                        执行前提示
+                        开始前请确认
                       </div>
                       {preview.warnings.map((warning) => (
                         <div
@@ -533,10 +642,8 @@ export default function DesktopProfileSyncOnboardingCard({
             </div>
           ) : null}
 
-          {!errorMessage && infoMessage ? (
-            <div className='rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-900/20 dark:text-emerald-300'>
-              {infoMessage}
-            </div>
+          {!errorMessage && runtimeRefreshPhase ? (
+            <RuntimeRefreshProgressCard phase={runtimeRefreshPhase} />
           ) : null}
         </div>
       </AppSurfaceCard>
