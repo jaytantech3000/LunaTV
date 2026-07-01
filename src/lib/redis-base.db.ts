@@ -4,7 +4,13 @@ import { createClient, RedisClientType } from 'redis';
 
 import { AdminConfig } from './admin.types';
 import { hashPassword, isHashed, verifyPassword } from './password';
-import { Favorite, IStorage, PlayRecord, SkipConfig } from './types';
+import {
+  Favorite,
+  FollowRecord,
+  IStorage,
+  PlayRecord,
+  SkipConfig,
+} from './types';
 
 // 搜索历史最大条数
 const SEARCH_HISTORY_LIMIT = 20;
@@ -244,6 +250,60 @@ export abstract class BaseRedisStorage implements IStorage {
 
   async deleteAllFavorites(userName: string): Promise<void> {
     await this.withRetry(() => this.client.del(this.favHashKey(userName)));
+  }
+
+  // ---------- 追更 ----------
+  private followHashKey(user: string) {
+    return `u:${user}:follow`;
+  }
+
+  async getFollowRecord(
+    userName: string,
+    key: string
+  ): Promise<FollowRecord | null> {
+    const val = await this.withRetry(() =>
+      this.client.hGet(this.followHashKey(userName), key)
+    );
+    return val ? (JSON.parse(val) as FollowRecord) : null;
+  }
+
+  async setFollowRecord(
+    userName: string,
+    key: string,
+    follow: FollowRecord
+  ): Promise<void> {
+    await this.withRetry(() =>
+      this.client.hSet(
+        this.followHashKey(userName),
+        key,
+        JSON.stringify(follow)
+      )
+    );
+  }
+
+  async getAllFollowRecords(
+    userName: string
+  ): Promise<Record<string, FollowRecord>> {
+    const all = await this.withRetry(() =>
+      this.client.hGetAll(this.followHashKey(userName))
+    );
+    const result: Record<string, FollowRecord> = {};
+    for (const [field, raw] of Object.entries(all)) {
+      if (raw) {
+        result[field] = JSON.parse(raw) as FollowRecord;
+      }
+    }
+    return result;
+  }
+
+  async deleteFollowRecord(userName: string, key: string): Promise<void> {
+    await this.withRetry(() =>
+      this.client.hDel(this.followHashKey(userName), key)
+    );
+  }
+
+  async deleteAllFollowRecords(userName: string): Promise<void> {
+    await this.withRetry(() => this.client.del(this.followHashKey(userName)));
   }
 
   // ---------- 用户注册 / 登录 ----------

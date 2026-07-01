@@ -4,7 +4,13 @@ import { Redis } from '@upstash/redis';
 
 import { AdminConfig } from './admin.types';
 import { hashPassword, isHashed, verifyPassword } from './password';
-import { Favorite, IStorage, PlayRecord, SkipConfig } from './types';
+import {
+  Favorite,
+  FollowRecord,
+  IStorage,
+  PlayRecord,
+  SkipConfig,
+} from './types';
 
 // 搜索历史最大条数
 const SEARCH_HISTORY_LIMIT = 20;
@@ -159,6 +165,56 @@ export class UpstashRedisStorage implements IStorage {
 
   async deleteAllFavorites(userName: string): Promise<void> {
     await withRetry(() => this.client.del(this.favHashKey(userName)));
+  }
+
+  // ---------- 追更 ----------
+  private followHashKey(user: string) {
+    return `u:${user}:follow`;
+  }
+
+  async getFollowRecord(
+    userName: string,
+    key: string
+  ): Promise<FollowRecord | null> {
+    const val = await withRetry(() =>
+      this.client.hget(this.followHashKey(userName), key)
+    );
+    return val ? (val as FollowRecord) : null;
+  }
+
+  async setFollowRecord(
+    userName: string,
+    key: string,
+    follow: FollowRecord
+  ): Promise<void> {
+    await withRetry(() =>
+      this.client.hset(this.followHashKey(userName), { [key]: follow })
+    );
+  }
+
+  async getAllFollowRecords(
+    userName: string
+  ): Promise<Record<string, FollowRecord>> {
+    const all = await withRetry(() =>
+      this.client.hgetall(this.followHashKey(userName))
+    );
+    if (!all || Object.keys(all).length === 0) return {};
+
+    const result: Record<string, FollowRecord> = {};
+    for (const [field, value] of Object.entries(all)) {
+      if (value) {
+        result[field] = value as FollowRecord;
+      }
+    }
+    return result;
+  }
+
+  async deleteFollowRecord(userName: string, key: string): Promise<void> {
+    await withRetry(() => this.client.hdel(this.followHashKey(userName), key));
+  }
+
+  async deleteAllFollowRecords(userName: string): Promise<void> {
+    await withRetry(() => this.client.del(this.followHashKey(userName)));
   }
 
   // ---------- 用户注册 / 登录 ----------
