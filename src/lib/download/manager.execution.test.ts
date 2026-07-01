@@ -127,9 +127,6 @@ describe('downloadManager cache lookup fallback', () => {
   const mockIsDesktopLocalDownloadRuntimeEnabled = jest.mocked(
     isDesktopLocalDownloadRuntimeEnabled
   );
-  const mockFetchDesktopDownloadCacheResponse = jest.mocked(
-    fetchDesktopDownloadCacheResponse
-  );
   const mockUpsertDesktopDownloadEngineTask = jest.mocked(
     upsertDesktopDownloadEngineTask
   );
@@ -138,8 +135,7 @@ describe('downloadManager cache lookup fallback', () => {
     jest.useRealTimers();
     mockedHasCachedDownload.mockReset();
     mockedParseManifestForDownloadWithFallback.mockReset();
-    mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(true);
-    mockFetchDesktopDownloadCacheResponse.mockReset();
+    mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(false);
     mockUpsertDesktopDownloadEngineTask.mockReset();
     mockUpsertDesktopDownloadEngineTask.mockResolvedValue(undefined as never);
     resetDownloadStore();
@@ -174,8 +170,7 @@ describe('downloadManager cache lookup fallback', () => {
       resourceUrls: ['https://example.com/final.ts'],
       isMasterPlaylist: false,
     });
-
-    mockFetchDesktopDownloadCacheResponse.mockResolvedValue(
+    global.fetch = jest.fn().mockResolvedValue(
       new Response(null, {
         status: 200,
         headers: {
@@ -201,21 +196,19 @@ describe('downloadManager cache lookup fallback', () => {
       progress: 100,
       sizeBytes: 12,
     });
-    expect(mockUpsertDesktopDownloadEngineTask).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: task.id,
-        status: 'done',
-        progress: 100,
-        downloadedResources: 1,
-        totalResources: 1,
-      })
-    );
-    expect(fetchDesktopDownloadCacheResponse).toHaveBeenCalledWith(
+    expect(global.fetch).toHaveBeenCalledWith(
       'https://example.com/final.ts',
       expect.objectContaining({
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: expect.objectContaining({
+          'x-moontv-download-intent': 'background',
+        }),
         signal: expect.any(AbortSignal),
       })
     );
+    expect(fetchDesktopDownloadCacheResponse).not.toHaveBeenCalled();
+    expect(mockUpsertDesktopDownloadEngineTask).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
   });
 });
