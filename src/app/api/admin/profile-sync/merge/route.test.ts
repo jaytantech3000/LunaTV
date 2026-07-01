@@ -3,11 +3,15 @@ jest.mock('@/lib/auth', () => ({
 }));
 
 jest.mock('@/lib/config', () => ({
+  configSelfCheck: jest.fn((config) => config),
   getConfig: jest.fn(),
+  setCachedConfig: jest.fn(),
 }));
 
 jest.mock('@/lib/db', () => ({
   db: {
+    getAdminConfig: jest.fn(),
+    saveAdminConfig: jest.fn(),
     getAllPlayRecords: jest.fn(),
     savePlayRecord: jest.fn(),
     deleteAllPlayRecords: jest.fn(),
@@ -62,6 +66,27 @@ describe('/api/admin/profile-sync/merge', () => {
       username: 'admin-user',
     });
     (getConfig as jest.Mock).mockResolvedValue({
+      ConfigSubscribtion: {
+        URL: '',
+        AutoUpdate: false,
+        LastCheck: '',
+      },
+      ConfigFile:
+        '{"auth":{"username":"owner","password":"remote-owner-secret"}}',
+      SiteConfig: {
+        SiteName: 'Remote LunaTV',
+        Announcement: '',
+        SearchDownstreamMaxPage: 5,
+        SiteInterfaceCacheTime: 7200,
+        DoubanProxyType: 'custom',
+        DoubanProxy: '',
+        DoubanImageProxyType: 'custom',
+        DoubanImageProxy: '',
+        DisableYellowFilter: false,
+        FluidSearch: true,
+        EnableWebLive: false,
+        EnableWebMusic: true,
+      },
       UserConfig: {
         Users: [
           { username: 'owner', role: 'owner' },
@@ -199,6 +224,130 @@ describe('/api/admin/profile-sync/merge', () => {
       3,
       'target-user',
       'remote-shared'
+    );
+  });
+
+  it('persists the desktop admin config snapshot when provided', async () => {
+    (getAuthInfoFromCookie as jest.Mock).mockReturnValue({
+      username: 'admin-user',
+    });
+    (getConfig as jest.Mock).mockResolvedValue({
+      ConfigSubscribtion: {
+        URL: '',
+        AutoUpdate: false,
+        LastCheck: '',
+      },
+      ConfigFile:
+        '{"auth":{"username":"owner","password":"remote-owner-secret"}}',
+      SiteConfig: {
+        SiteName: 'Remote LunaTV',
+        Announcement: '',
+        SearchDownstreamMaxPage: 5,
+        SiteInterfaceCacheTime: 7200,
+        DoubanProxyType: 'custom',
+        DoubanProxy: '',
+        DoubanImageProxyType: 'custom',
+        DoubanImageProxy: '',
+        DisableYellowFilter: false,
+        FluidSearch: true,
+        EnableWebLive: false,
+        EnableWebMusic: true,
+      },
+      UserConfig: {
+        Users: [
+          { username: 'owner', role: 'owner' },
+          { username: 'admin-user', role: 'admin', banned: false },
+          { username: 'target-user', role: 'user', banned: false },
+        ],
+      },
+    });
+    (db.getAllPlayRecords as jest.Mock).mockResolvedValue({});
+    (db.getAllFavorites as jest.Mock).mockResolvedValue({});
+    (db.getAllFollowRecords as jest.Mock).mockResolvedValue({});
+    (db.getSearchHistory as jest.Mock).mockResolvedValue([]);
+    (db.getAllSkipConfigs as jest.Mock).mockResolvedValue({});
+
+    const adminConfig = {
+      ConfigSubscribtion: {
+        URL: '',
+        AutoUpdate: false,
+        LastCheck: '',
+      },
+      ConfigFile: '{"auth":{"username":"owner","password":"owner-secret"}}',
+      SiteConfig: {
+        SiteName: 'Desktop LunaTV',
+        Announcement: '同步公告',
+        SearchDownstreamMaxPage: 5,
+        SiteInterfaceCacheTime: 7200,
+        DoubanProxyType: 'custom',
+        DoubanProxy: '',
+        DoubanImageProxyType: 'custom',
+        DoubanImageProxy: '',
+        DisableYellowFilter: false,
+        FluidSearch: true,
+        EnableWebLive: false,
+        EnableWebMusic: true,
+      },
+      UserConfig: {
+        Users: [
+          {
+            username: 'owner',
+            role: 'owner',
+          },
+        ],
+        Tags: [],
+      },
+      SourceConfig: [
+        {
+          key: 'demo',
+          name: 'Demo',
+          api: 'https://example.com/api.php/provide/vod',
+          from: 'custom',
+        },
+      ],
+      CustomCategories: [],
+      LiveConfig: [],
+      AdFilterConfig: {
+        enabled: true,
+      },
+      PlayerEnhancementConfig: {
+        AudioSpikeProtection: false,
+        VisualEnhancement: false,
+      },
+    };
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/admin/profile-sync/merge', {
+        method: 'POST',
+        body: JSON.stringify({
+          targetUsername: 'target-user',
+          strategy: 'web-first',
+          snapshot: {
+            playRecords: {},
+            favorites: {},
+            follows: {},
+            searchHistory: [],
+            skipConfigs: {},
+          },
+          adminConfig,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(db.saveAdminConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ConfigFile:
+          '{"auth":{"username":"owner","password":"remote-owner-secret"}}',
+        SiteConfig: expect.objectContaining({
+          SiteName: 'Desktop LunaTV',
+        }),
+        SourceConfig: expect.arrayContaining([
+          expect.objectContaining({
+            key: 'demo',
+          }),
+        ]),
+      })
     );
   });
 });

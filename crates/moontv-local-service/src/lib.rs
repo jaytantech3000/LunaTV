@@ -11942,6 +11942,170 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn profile_sync_onboarding_execute_sends_admin_config_snapshot_to_merge_route() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/login",
+                    post(|| async move {
+                        Json(json!({
+                            "ok": true,
+                            "username": "remote-owner",
+                            "role": "owner"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/config",
+                    get(|| async move {
+                        Json(json!({
+                            "Role": "owner",
+                            "Config": {
+                                "UserConfig": {
+                                    "Users": [
+                                        {
+                                            "username": "remote-owner"
+                                        }
+                                    ]
+                                }
+                            }
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/profile-sync/merge",
+                    post(|Json(payload): Json<Value>| async move {
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("SiteConfig"))
+                                .and_then(|value| value.get("SiteName"))
+                                .and_then(Value::as_str),
+                            Some("Desktop LunaTV")
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("SourceConfig"))
+                                .and_then(Value::as_array)
+                                .map(Vec::len),
+                            Some(1)
+                        );
+
+                        Json(json!({
+                            "summary": {
+                                "playRecordCount": 0,
+                                "favoriteCount": 0,
+                                "followCount": 0,
+                                "searchHistoryCount": 0,
+                                "skipConfigCount": 0
+                            }
+                        }))
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let raw_config = json!({
+          "auth": {
+            "username": "owner",
+            "password": "owner-secret"
+          },
+          "api_site": {
+            "demo": {
+              "api": "https://example.com/api.php/provide/vod",
+              "name": "Demo Source"
+            }
+          }
+        });
+        let config_path = write_test_config(&temp_dir, raw_config.clone());
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "",
+                  "AutoUpdate": false,
+                  "LastCheck": ""
+                },
+                "ConfigFile": serde_json::to_string_pretty(&raw_config)
+                  .expect("serialize raw config"),
+                "SiteConfig": {
+                  "SiteName": "Desktop LunaTV",
+                  "Announcement": "",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "owner",
+                      "role": "owner"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [
+                  {
+                    "key": "demo",
+                    "name": "Demo Source",
+                    "api": "https://example.com/api.php/provide/vod",
+                    "detail": null,
+                    "ua": null,
+                    "referer": null,
+                    "from": "config",
+                    "disabled": false,
+                    "disable_ad_filter": false
+                  }
+                ],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/admin/profile-sync/onboarding/execute")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "remoteBaseUrl": upstream.base_url(),
+                          "username": "remote-owner",
+                          "password": "secret",
+                          "currentLocalUsername": "owner",
+                          "strategy": "web-first"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync onboarding execute request"),
+            )
+            .await
+            .expect("profile sync onboarding execute response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
     async fn admin_source_disable_affects_runtime_search() {
         let upstream = spawn_mock_server(mock_upstream_router()).await;
         let temp_dir = TestDir::new();

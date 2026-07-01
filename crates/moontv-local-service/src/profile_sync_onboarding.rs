@@ -374,6 +374,7 @@ pub(crate) async fn execute_profile_sync_onboarding(
     let local_account_summaries = load_local_account_summaries(&state)?;
     ensure_current_local_account(&local_account_summaries, &current_local_username)?;
     let local_snapshot_map = load_local_snapshot_map(&state, &local_account_summaries)?;
+    let local_admin_config_snapshot = load_local_admin_config_snapshot(&state)?;
     let remote_admin_config = fetch_remote_admin_config(&state, &remote_base_url).await?;
     ensure_remote_admin_role(&remote_admin_config.role)?;
     let remote_accounts = remote_admin_config
@@ -407,7 +408,7 @@ pub(crate) async fn execute_profile_sync_onboarding(
     }
 
     let mut migrated_accounts = Vec::new();
-    for item in plan.items {
+    for (index, item) in plan.items.into_iter().enumerate() {
         let snapshot = local_snapshot_map
             .get(&item.local_username)
             .cloned()
@@ -418,6 +419,7 @@ pub(crate) async fn execute_profile_sync_onboarding(
             &item.remote_username,
             strategy,
             &snapshot,
+            (index == 0).then_some(&local_admin_config_snapshot),
         )
         .await?;
 
@@ -554,26 +556,35 @@ async fn merge_remote_profile_snapshot(
     target_username: &str,
     strategy: DesktopProfileSyncConflictStrategy,
     snapshot: &LocalProfileSnapshot,
+    admin_config_snapshot: Option<&Value>,
 ) -> AppResult<DesktopProfileSyncMergedSummary> {
     let target_url =
         build_profile_sync_target_url(remote_base_url, REMOTE_PROFILE_SYNC_MERGE_ROUTE_PATH)
             .map_err(map_profile_sync_error_to_app_error)?;
+    let mut payload = json!({
+        "targetUsername": target_username,
+        "strategy": strategy.as_str(),
+        "snapshot": {
+            "playRecords": snapshot.play_records,
+            "favorites": snapshot.favorites,
+            "follows": snapshot.follow_records,
+            "searchHistory": snapshot.search_history,
+            "skipConfigs": snapshot.skip_configs,
+        }
+    });
+    if let Some(admin_config_snapshot) = admin_config_snapshot {
+        payload
+            .as_object_mut()
+            .context("profile sync merge payload must be an object")
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .insert("adminConfig".to_string(), admin_config_snapshot.clone());
+    }
     let response = send_remote_json_request(
         state,
         remote_base_url,
         Method::POST,
         REMOTE_PROFILE_SYNC_MERGE_ROUTE_PATH,
-        Some(json!({
-            "targetUsername": target_username,
-            "strategy": strategy.as_str(),
-            "snapshot": {
-                "playRecords": snapshot.play_records,
-                "favorites": snapshot.favorites,
-                "follows": snapshot.follow_records,
-                "searchHistory": snapshot.search_history,
-                "skipConfigs": snapshot.skip_configs,
-            }
-        })),
+        Some(payload),
     )
     .await?;
     if should_surface_remote_merge_upstream_diagnostics(&response) {
@@ -819,6 +830,14 @@ fn load_local_snapshot_map(
     }
 
     Ok(snapshots)
+}
+
+fn load_local_admin_config_snapshot(state: &AppState) -> AppResult<Value> {
+    let persistence = state
+        .load_admin_persistence()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    serde_json::to_value(&persistence.config).map_err(|error| AppError::internal(error.to_string()))
 }
 
 fn inspect_download_preview(

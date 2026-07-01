@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import type { AdminConfig } from '@/lib/admin.types';
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getConfig } from '@/lib/config';
+import { configSelfCheck, getConfig, setCachedConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 import {
   type DesktopProfileMergeStrategy,
@@ -20,6 +20,7 @@ interface DesktopProfileSyncMergeRequestBody {
   targetUsername?: string;
   strategy?: DesktopProfileMergeStrategy;
   snapshot?: DesktopProfileSnapshot;
+  adminConfig?: AdminConfig;
 }
 
 function isSupportedStorageType(): boolean {
@@ -193,6 +194,48 @@ function normalizeSnapshot(
   return snapshot;
 }
 
+function normalizeAdminConfigSnapshot(
+  adminConfig: DesktopProfileSyncMergeRequestBody['adminConfig']
+): AdminConfig | null {
+  if (!adminConfig || !isObjectRecord(adminConfig)) {
+    return null;
+  }
+
+  return adminConfig;
+}
+
+function mergeAdminPanelSnapshot(
+  currentConfig: AdminConfig,
+  snapshot: AdminConfig,
+  operatorRole: 'owner' | 'admin'
+): AdminConfig {
+  return configSelfCheck({
+    ...currentConfig,
+    ConfigSubscribtion:
+      operatorRole === 'owner'
+        ? snapshot.ConfigSubscribtion || currentConfig.ConfigSubscribtion
+        : currentConfig.ConfigSubscribtion,
+    ConfigFile:
+      operatorRole === 'owner'
+        ? snapshot.ConfigFile || currentConfig.ConfigFile
+        : currentConfig.ConfigFile,
+    SiteConfig: snapshot.SiteConfig || currentConfig.SiteConfig,
+    SourceConfig: Array.isArray(snapshot.SourceConfig)
+      ? snapshot.SourceConfig
+      : currentConfig.SourceConfig,
+    CustomCategories: Array.isArray(snapshot.CustomCategories)
+      ? snapshot.CustomCategories
+      : currentConfig.CustomCategories,
+    LiveConfig: Array.isArray(snapshot.LiveConfig)
+      ? snapshot.LiveConfig
+      : currentConfig.LiveConfig,
+    AdFilterConfig: snapshot.AdFilterConfig || currentConfig.AdFilterConfig,
+    PlayerEnhancementConfig:
+      snapshot.PlayerEnhancementConfig || currentConfig.PlayerEnhancementConfig,
+    UserConfig: currentConfig.UserConfig,
+  });
+}
+
 export async function POST(request: NextRequest) {
   if (!isSupportedStorageType()) {
     return NextResponse.json(
@@ -210,7 +253,8 @@ export async function POST(request: NextRequest) {
     }
 
     const config = await getConfig();
-    if (!resolveOperatorRole(config, authInfo.username)) {
+    const operatorRole = resolveOperatorRole(config, authInfo.username);
+    if (!operatorRole) {
       return NextResponse.json({ error: '权限不足' }, { status: 401 });
     }
 
@@ -218,6 +262,7 @@ export async function POST(request: NextRequest) {
     const targetUsername = body.targetUsername?.trim();
     const strategy = body.strategy;
     const localSnapshot = normalizeSnapshot(body.snapshot);
+    const adminConfigSnapshot = normalizeAdminConfigSnapshot(body.adminConfig);
 
     if (!targetUsername) {
       return NextResponse.json({ error: '缺少目标用户名' }, { status: 400 });
@@ -256,6 +301,16 @@ export async function POST(request: NextRequest) {
       remoteSnapshot.skipConfigs,
       mergedSnapshot.skipConfigs
     );
+
+    if (adminConfigSnapshot) {
+      const mergedAdminConfig = mergeAdminPanelSnapshot(
+        config,
+        adminConfigSnapshot,
+        operatorRole
+      );
+      await db.saveAdminConfig(mergedAdminConfig);
+      await setCachedConfig(mergedAdminConfig);
+    }
 
     return NextResponse.json(
       {
