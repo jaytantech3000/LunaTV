@@ -1,7 +1,69 @@
 {
-  "generatedAt": "2026-07-02T02:25:40.161Z",
+  "generatedAt": "2026-07-02T03:47:02.763Z",
   "repository": "jaytantech3000/LunaTV",
   "releases": [
+    {
+      "id": "347812521",
+      "tagName": "desktop-v200.0.1-beta.31",
+      "version": "200.0.1-beta.31",
+      "name": "LunaTV Desktop 200.0.1 Beta 31",
+      "prerelease": true,
+      "publishedAt": "2026-07-02T03:26:01Z",
+      "htmlUrl": "https://github.com/jaytantech3000/LunaTV/releases/tag/desktop-v200.0.1-beta.31",
+      "notes": "**Full Changelog**: https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.30...desktop-v200.0.1-beta.31",
+      "changeSummary": {
+        "en": {
+          "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.30...desktop-v200.0.1-beta.31",
+          "added": [],
+          "changed": [],
+          "fixed": [
+            "desktop: restore session reuse and sync settings"
+          ],
+          "other": []
+        },
+        "zh-CN": {
+          "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.30...desktop-v200.0.1-beta.31",
+          "added": [],
+          "changed": [],
+          "fixed": [
+            "桌面端：恢复 session reuse and sync settings"
+          ],
+          "other": []
+        }
+      },
+      "assets": [
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.31_windows-x64-setup.exe",
+          "platformLabel": "Windows x64",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.31/LunaTV.Desktop_200.0.1-beta.31_windows-x64-setup.exe",
+          "size": 29229970
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.31_macos-arm64.app.tar.gz",
+          "platformLabel": "macOS Apple Silicon",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.31/LunaTV.Desktop_200.0.1-beta.31_macos-arm64.app.tar.gz",
+          "size": 34923581
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.31_macos-arm64.dmg",
+          "platformLabel": "macOS Apple Silicon",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.31/LunaTV.Desktop_200.0.1-beta.31_macos-arm64.dmg",
+          "size": 35388038
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.31_macos-x64.app.tar.gz",
+          "platformLabel": "macOS Intel",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.31/LunaTV.Desktop_200.0.1-beta.31_macos-x64.app.tar.gz",
+          "size": 35617786
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.31_macos-x64.dmg",
+          "platformLabel": "macOS Intel",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.31/LunaTV.Desktop_200.0.1-beta.31_macos-x64.dmg",
+          "size": 36203419
+        }
+      ]
+    },
     {
       "id": "347794375",
       "tagName": "desktop-v200.0.1-beta.30",
