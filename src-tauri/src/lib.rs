@@ -991,8 +991,13 @@ fn install_music_tray(app: &AppHandle) -> Result<()> {
     let open_item = MenuItem::with_id(app, MUSIC_TRAY_OPEN_ID, "Open Music", true, None::<&str>)?;
     let previous_item =
         MenuItem::with_id(app, MUSIC_TRAY_PREVIOUS_ID, "Previous", true, None::<&str>)?;
-    let toggle_play_item =
-        MenuItem::with_id(app, MUSIC_TRAY_TOGGLE_PLAY_ID, "Play / Pause", true, None::<&str>)?;
+    let toggle_play_item = MenuItem::with_id(
+        app,
+        MUSIC_TRAY_TOGGLE_PLAY_ID,
+        "Play / Pause",
+        true,
+        None::<&str>,
+    )?;
     let next_item = MenuItem::with_id(app, MUSIC_TRAY_NEXT_ID, "Next", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, MUSIC_TRAY_QUIT_ID, "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(
@@ -4117,7 +4122,8 @@ fn normalize_music_download_track_payload(
         title,
         artists,
         album: track.album.trim().to_string(),
-        cover_url: normalize_optional_trimmed_string(Some(track.cover_url.as_str())).unwrap_or_default(),
+        cover_url: normalize_optional_trimmed_string(Some(track.cover_url.as_str()))
+            .unwrap_or_default(),
         duration_ms: track.duration_ms,
         playable: track.playable,
     })
@@ -4365,7 +4371,11 @@ fn build_music_download_record(
         total_bytes,
         local_file_path,
         error_message,
-        downloaded_at: if is_downloaded { Some(updated_at) } else { None },
+        downloaded_at: if is_downloaded {
+            Some(updated_at)
+        } else {
+            None
+        },
         updated_at,
     }
 }
@@ -4431,7 +4441,11 @@ async fn perform_music_track_download(
         .await
         .with_context(|| format!("failed to flush {}", file_path.display()))?;
 
-    Ok((file_path, downloaded_bytes, total_bytes.max(downloaded_bytes)))
+    Ok((
+        file_path,
+        downloaded_bytes,
+        total_bytes.max(downloaded_bytes),
+    ))
 }
 
 fn list_music_downloads_impl(app: &AppHandle) -> Result<Vec<DesktopMusicDownloadRecordPayload>> {
@@ -4444,12 +4458,9 @@ async fn download_music_track_impl(
 ) -> Result<DesktopMusicDownloadRecordPayload> {
     let track = normalize_music_download_track_payload(payload.track)?;
     let quality = normalize_music_download_quality(&payload.quality);
-    let download_url = normalize_required_string(
-        payload.download_url,
-        "music download URL cannot be empty",
-    )?;
-    let parsed_download_url =
-        Url::parse(&download_url).context("music download URL is invalid")?;
+    let download_url =
+        normalize_required_string(payload.download_url, "music download URL cannot be empty")?;
+    let parsed_download_url = Url::parse(&download_url).context("music download URL is invalid")?;
 
     if !matches!(parsed_download_url.scheme(), "http" | "https") {
         anyhow::bail!("music download URL must use http or https");
@@ -4521,11 +4532,13 @@ async fn download_music_track_impl(
 }
 
 fn delete_music_download_impl<R: Runtime>(app: &AppHandle<R>, download_id: String) -> Result<()> {
-    let download_id =
-        normalize_required_string(download_id, "music download id cannot be empty")?;
+    let download_id = normalize_required_string(download_id, "music download id cannot be empty")?;
     let mut records = load_music_download_records(app)?;
 
-    if let Some(index) = records.iter().position(|record| record.download_id == download_id) {
+    if let Some(index) = records
+        .iter()
+        .position(|record| record.download_id == download_id)
+    {
         if let Some(local_file_path) = records[index].local_file_path.as_deref() {
             remove_file_if_exists_or_error(Path::new(local_file_path))?;
         }
@@ -5998,11 +6011,13 @@ impl RuntimePaths {
     }
 
     fn music_downloads_audio_dir(&self) -> PathBuf {
-        self.music_downloads_dir().join(MUSIC_DOWNLOADS_AUDIO_DIR_NAME)
+        self.music_downloads_dir()
+            .join(MUSIC_DOWNLOADS_AUDIO_DIR_NAME)
     }
 
     fn music_downloads_records_path(&self) -> PathBuf {
-        self.music_downloads_dir().join(MUSIC_DOWNLOADS_RECORDS_FILE_NAME)
+        self.music_downloads_dir()
+            .join(MUSIC_DOWNLOADS_RECORDS_FILE_NAME)
     }
 }
 
@@ -6156,31 +6171,31 @@ fn resolve_sidecar_binary_paths(app: &AppHandle, current_version: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::{
-        build_music_download_record, build_music_download_id, current_timestamp_ms,
-        delete_music_download_impl, load_music_download_records,
-        resolve_music_download_playback_impl, resolve_runtime_paths, write_music_download_records,
-        DEFAULT_DESKTOP_OWNER_USERNAME, DesktopMusicDownloadStatus,
-        DesktopMusicTrackPayload, DesktopMusicTrayPlayState, DesktopMusicTrayStatePayload,
-        GithubReleaseAssetPayload, GithubReleasePayload, LOCAL_SERVICE_HEALTH_READ_TIMEOUT,
-        LocalProfileSyncStatus, LocalServiceHealthCheck, LocalServiceStartupFailure,
-        PortOccupant, SidecarBinaryVersionProbe, SidecarTrialResult, append_cache_busting_query,
+        DEFAULT_DESKTOP_OWNER_USERNAME, DesktopMusicDownloadStatus, DesktopMusicTrackPayload,
+        DesktopMusicTrayPlayState, DesktopMusicTrayStatePayload, GithubReleaseAssetPayload,
+        GithubReleasePayload, LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus,
+        LocalServiceHealthCheck, LocalServiceStartupFailure, PortOccupant,
+        SidecarBinaryVersionProbe, SidecarTrialResult, append_cache_busting_query,
+        build_music_download_id, build_music_download_record,
         build_profile_sync_status_diagnostic_detail, collect_diagnostics_error_text,
-        describe_primary_port_issue, ensure_default_desktop_owner_auth_value,
-        extract_desktop_release_version, extract_profile_sync_api_base_url,
-        find_desktop_release_manifest_url, local_service_health_check,
-        normalize_desktop_release_history, normalize_release_repository_slug,
-        resolve_music_tray_title, resolve_music_tray_tooltip, select_preferred_sidecar_candidates,
-        set_desktop_local_user_password_value, set_desktop_owner_password_value,
-        should_reuse_untracked_local_service, summarize_trial_output,
+        current_timestamp_ms, delete_music_download_impl, describe_primary_port_issue,
+        ensure_default_desktop_owner_auth_value, extract_desktop_release_version,
+        extract_profile_sync_api_base_url, find_desktop_release_manifest_url,
+        load_music_download_records, local_service_health_check, normalize_desktop_release_history,
+        normalize_release_repository_slug, resolve_music_download_playback_impl,
+        resolve_music_tray_title, resolve_music_tray_tooltip, resolve_runtime_paths,
+        select_preferred_sidecar_candidates, set_desktop_local_user_password_value,
+        set_desktop_owner_password_value, should_reuse_untracked_local_service,
+        summarize_trial_output, write_music_download_records,
     };
-    use std::{fs, path::PathBuf};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    use tauri::{
-        test::{mock_builder, mock_context, noop_assets, MockRuntime},
-        App,
-    };
     use std::time::Duration;
+    use std::{fs, path::PathBuf};
+    use tauri::{
+        App,
+        test::{MockRuntime, mock_builder, mock_context, noop_assets},
+    };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -6884,7 +6899,10 @@ mod tests {
         )
         .expect("resolve failed playback path");
 
-        assert_eq!(downloaded_path.file_path, Some(file_path.display().to_string()));
+        assert_eq!(
+            downloaded_path.file_path,
+            Some(file_path.display().to_string())
+        );
         assert_eq!(failed_path.file_path, None);
 
         let _ = fs::remove_dir_all(&runtime_paths.data_dir);

@@ -9,6 +9,7 @@ import {
 import {
   executeDesktopProfileSyncOnboarding,
   previewDesktopProfileSyncOnboarding,
+  syncDesktopProfileNow,
 } from '@/lib/desktop/profile-sync';
 import { requestDesktopRuntimeRefresh } from '@/lib/desktop/runtime-config';
 import { armDesktopDownloadOwnershipHandoff } from '@/lib/download/session';
@@ -18,6 +19,7 @@ import DesktopProfileSyncOnboardingCard from './DesktopProfileSyncOnboardingCard
 jest.mock('@/lib/desktop/profile-sync', () => ({
   executeDesktopProfileSyncOnboarding: jest.fn(),
   previewDesktopProfileSyncOnboarding: jest.fn(),
+  syncDesktopProfileNow: jest.fn(),
 }));
 
 jest.mock('@/lib/desktop/runtime-config', () => ({
@@ -35,6 +37,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
   const mockExecuteDesktopProfileSyncOnboarding = jest.mocked(
     executeDesktopProfileSyncOnboarding
   );
+  const mockSyncDesktopProfileNow = jest.mocked(syncDesktopProfileNow);
   const mockArmDesktopDownloadOwnershipHandoff = jest.mocked(
     armDesktopDownloadOwnershipHandoff
   );
@@ -54,7 +57,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
     });
   });
 
-  it('shows the production default address and renders the preview guidance', async () => {
+  it('opens the onboarding dialog and renders the preview guidance', async () => {
     mockPreviewDesktopProfileSyncOnboarding.mockResolvedValue({
       remoteBaseUrl: 'https://luna.hkcu.qzz.io',
       currentRemoteUsername: 'remote-owner',
@@ -108,8 +111,11 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       <DesktopProfileSyncOnboardingCard
         currentLocalUsername='local-owner'
         profileSyncEnabled={false}
+        selectedSyncDomains={['playrecords', 'favorites']}
       />
     );
+
+    fireEvent.click(screen.getByRole('button', { name: '开启同步' }));
 
     expect(screen.getByLabelText('Web 服务地址')).toHaveValue(
       'https://luna.hkcu.qzz.io'
@@ -141,19 +147,9 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       screen.getByText('离线下载将重绑到 remote-owner（2 个任务 / 1 个条目）')
     ).toBeInTheDocument();
     expect(screen.getByText('开始前请确认')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        '仅当前仍保留的这套离线下载可以迁移，之前已清理的旧归属无法恢复。'
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        '如果继续执行时需要自动创建 Web 帐号，会生成初始密码 123456。完成后请立即登录修改。'
-      )
-    ).toBeInTheDocument();
   });
 
-  it('executes onboarding, arms download handoff, and surfaces the migration result summary', async () => {
+  it('executes onboarding with the selected sync domains and surfaces the success dialog', async () => {
     mockPreviewDesktopProfileSyncOnboarding.mockResolvedValue({
       remoteBaseUrl: 'https://luna.hkcu.qzz.io',
       currentRemoteUsername: 'remote-owner',
@@ -209,11 +205,11 @@ describe('DesktopProfileSyncOnboardingCard', () => {
             skipConfigCount: 1,
           },
           mergedSummary: {
-            playRecordCount: 3,
+            playRecordCount: 0,
             favoriteCount: 1,
-            followCount: 2,
-            searchHistoryCount: 4,
-            skipConfigCount: 1,
+            followCount: 0,
+            searchHistoryCount: 0,
+            skipConfigCount: 0,
           },
         },
       ],
@@ -235,9 +231,11 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       <DesktopProfileSyncOnboardingCard
         currentLocalUsername='local-owner'
         profileSyncEnabled={false}
+        selectedSyncDomains={['favorites']}
       />
     );
 
+    fireEvent.click(screen.getByRole('button', { name: '开启同步' }));
     fireEvent.change(screen.getByLabelText('Web 用户名'), {
       target: { value: 'remote-owner' },
     });
@@ -249,6 +247,12 @@ describe('DesktopProfileSyncOnboardingCard', () => {
     await screen.findByText('local-owner -> remote-owner');
 
     fireEvent.click(screen.getByRole('button', { name: '开始开启同步' }));
+    expect(
+      screen.getByRole('heading', { name: '选择同步优先级' })
+    ).toBeInTheDocument();
+    expect(mockExecuteDesktopProfileSyncOnboarding).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('本地为主'));
+    fireEvent.click(screen.getByRole('button', { name: '确认并开启同步' }));
 
     await waitFor(() => {
       expect(mockExecuteDesktopProfileSyncOnboarding).toHaveBeenCalledWith({
@@ -256,7 +260,8 @@ describe('DesktopProfileSyncOnboardingCard', () => {
         username: 'remote-owner',
         password: 'secret',
         currentLocalUsername: 'local-owner',
-        strategy: 'web-first',
+        strategy: 'local-first',
+        syncDomains: ['favorites'],
       });
     });
 
@@ -265,41 +270,13 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       nextOwnerUsername: 'remote-owner',
     });
     expect(mockRequestDesktopRuntimeRefresh).toHaveBeenCalledTimes(1);
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByText('已切换到 Web 帐号')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        '桌面端已开始使用 Web 帐号 remote-owner，离线下载归属也已按本次结果更新。'
-      )
-    ).toBeInTheDocument();
-    expect(screen.getByText('当前使用的 Web 帐号')).toBeInTheDocument();
+    expect(await screen.findByText('已切换到 Web 帐号')).toBeInTheDocument();
     expect(screen.getByText('本次自动创建的帐号')).toBeInTheDocument();
-    expect(
-      screen.getByText('已自动创建 1 个 Web 帐号，请尽快修改初始密码。')
-    ).toBeInTheDocument();
     expect(screen.getByText('beta')).toBeInTheDocument();
     expect(screen.getByText('初始密码：123456')).toBeInTheDocument();
-    expect(screen.getByText('接下来建议')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        '仅当前仍保留的这套离线下载可以迁移，之前已清理的旧归属无法恢复。'
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        '如果本次自动创建了 Web 帐号，请登录后立即修改初始密码。'
-      )
-    ).toBeInTheDocument();
     expect(
       screen.getByText('同步已开启，正在同步到当前页面。')
     ).toBeInTheDocument();
-    expect(screen.getByText('1/3 已提交同步结果')).toBeInTheDocument();
-    expect(screen.getByText('2/3 正在刷新桌面运行时状态')).toBeInTheDocument();
-    expect(screen.getByText('3/3 等待当前页面更新')).toBeInTheDocument();
-    expect(screen.getByRole('progressbar')).toHaveAttribute(
-      'aria-valuenow',
-      '67'
-    );
 
     jest.useFakeTimers();
     try {
@@ -308,38 +285,81 @@ describe('DesktopProfileSyncOnboardingCard', () => {
           <DesktopProfileSyncOnboardingCard
             currentLocalUsername='local-owner'
             profileSyncEnabled={true}
+            selectedSyncDomains={['favorites']}
           />
         );
         await Promise.resolve();
       });
 
       expect(screen.getByText('桌面状态已刷新完成。')).toBeInTheDocument();
-      expect(screen.getByText('2/3 已刷新桌面运行时状态')).toBeInTheDocument();
-      expect(screen.getByText('3/3 当前页面已更新')).toBeInTheDocument();
-      expect(screen.getByRole('progressbar')).toHaveAttribute(
-        'aria-valuenow',
-        '100'
-      );
 
       act(() => {
-        jest.advanceTimersByTime(1499);
+        jest.advanceTimersByTime(1500);
       });
-      expect(screen.getByText('桌面状态已刷新完成。')).toBeInTheDocument();
 
-      act(() => {
-        jest.advanceTimersByTime(1);
-      });
       expect(
         screen.queryByText('桌面状态已刷新完成。')
       ).not.toBeInTheDocument();
-      expect(screen.queryByLabelText('同步刷新进度')).not.toBeInTheDocument();
     } finally {
       jest.runOnlyPendingTimers();
       jest.useRealTimers();
     }
   });
 
-  it('copies the titled error message from the error panel', async () => {
+  it('asks for strategy before sync-now when enabled', async () => {
+    mockSyncDesktopProfileNow.mockResolvedValue({
+      enabled: true,
+      reachable: true,
+      authenticated: true,
+      username: 'remote-owner',
+      role: 'owner',
+      storageType: 'redis',
+      profileMode: 'shared-multi-user',
+      error: null,
+      errorKind: null,
+      syncDomains: ['playrecords'],
+      lastSyncError: null,
+    });
+
+    render(
+      <DesktopProfileSyncOnboardingCard
+        currentLocalUsername='local-owner'
+        profileSyncEnabled
+        selectedSyncDomains={['playrecords']}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '同步' }));
+    expect(
+      screen.getByRole('heading', { name: '选择同步优先级' })
+    ).toBeInTheDocument();
+    expect(mockSyncDesktopProfileNow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('云端为主'));
+    fireEvent.click(screen.getByRole('button', { name: '确认并同步' }));
+
+    await waitFor(() => {
+      expect(mockSyncDesktopProfileNow).toHaveBeenCalledWith({
+        syncDomains: ['playrecords'],
+        strategy: 'web-first',
+      });
+    });
+
+    expect(await screen.findByText('同步成功')).toBeInTheDocument();
+  });
+
+  it('renders a compact warning strip when sync is enabled but still needs attention', () => {
+    render(
+      <DesktopProfileSyncOnboardingCard
+        currentLocalUsername='local-owner'
+        profileSyncEnabled
+      />
+    );
+
+    expect(screen.getByText('已开启帐号同步')).toBeInTheDocument();
+    expect(screen.getByText('当前使用 Web 帐号')).toBeInTheDocument();
+  });
+
+  it('copies the titled error message from the modal error panel', async () => {
     mockClipboardWriteText.mockResolvedValue(undefined);
     mockPreviewDesktopProfileSyncOnboarding.mockRejectedValue(
       new Error('Web 端同步接口返回 500')
@@ -352,6 +372,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       />
     );
 
+    fireEvent.click(screen.getByRole('button', { name: '开启同步' }));
     fireEvent.change(screen.getByLabelText('Web 用户名'), {
       target: { value: 'remote-owner' },
     });

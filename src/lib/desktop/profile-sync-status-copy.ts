@@ -1,4 +1,4 @@
-import { PROFILE_SYNC_USER_DATA_DOMAINS } from '@/lib/profile/contracts';
+import { PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS } from '@/lib/profile/contracts';
 
 import {
   type DesktopProfileSyncStatus,
@@ -16,41 +16,12 @@ const PROFILE_SYNC_DOMAIN_LABELS: Record<string, string> = {
   follows: '追更',
   searchhistory: '搜索历史',
   skipconfigs: '跳过片头片尾',
+  adminsettings: '管理员设置',
 };
 
 function normalizeErrorMessage(errorMessage?: string | null): string {
   const normalized = errorMessage?.trim();
   return normalized || '';
-}
-
-function resolveDesktopProfileSyncModeText(
-  profileSyncStatus: DesktopProfileSyncStatus | null | undefined,
-  readErrorMessage?: string | null
-): string {
-  if (normalizeErrorMessage(readErrorMessage)) {
-    return '状态未知';
-  }
-
-  if (!profileSyncStatus) {
-    return '待读取';
-  }
-
-  if (!profileSyncStatus.enabled) {
-    return '本地模式';
-  }
-
-  const modeText =
-    profileSyncStatus.profileMode === 'shared-multi-user'
-      ? '远端多用户'
-      : profileSyncStatus.profileMode
-      ? '远端单用户'
-      : '远端模式待定';
-
-  if (!profileSyncStatus.storageType?.trim()) {
-    return modeText;
-  }
-
-  return `${modeText} / ${profileSyncStatus.storageType.trim()}`;
 }
 
 function resolveDesktopProfileSyncReachabilityText(
@@ -80,11 +51,11 @@ function resolveDesktopProfileSyncAccountText(
   readErrorMessage?: string | null
 ): string {
   if (normalizeErrorMessage(readErrorMessage)) {
-    return '-';
+    return '无法读取';
   }
 
   if (!profileSyncStatus?.enabled) {
-    return '本地模式';
+    return '未启用';
   }
 
   const username = profileSyncStatus.username?.trim();
@@ -110,7 +81,7 @@ export function resolveDesktopProfileSyncDomainsText(
   const domains =
     profileSyncStatus?.syncDomains && profileSyncStatus.syncDomains.length > 0
       ? profileSyncStatus.syncDomains
-      : [...PROFILE_SYNC_USER_DATA_DOMAINS];
+      : [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS];
 
   return domains
     .map((domain) => PROFILE_SYNC_DOMAIN_LABELS[domain] || domain)
@@ -193,7 +164,7 @@ export function buildDesktopProfileSyncStatusDetail(
 ): string {
   const normalizedErrorMessage = normalizeErrorMessage(readErrorMessage);
   if (normalizedErrorMessage) {
-    return `未能从本地服务读取 profile sync 状态。最近错误：${normalizedErrorMessage}`;
+    return `未能从本地服务读取 profile sync 状态。请前往配置页检查本地服务。最近错误：${normalizedErrorMessage}`;
   }
 
   if (!profileSyncStatus) {
@@ -203,7 +174,7 @@ export function buildDesktopProfileSyncStatusDetail(
   const domainsText = resolveDesktopProfileSyncDomainsText(profileSyncStatus);
 
   if (!profileSyncStatus.enabled) {
-    return `当前保持纯本地桌面模式。若需要启用帐号同步，请前往 desktop-admin 开启帐号同步；启用后将同步：${domainsText}。`;
+    return `当前保持纯本地桌面模式。若需要启用帐号同步，请前往帐号同步页开启帐号同步；启用后将同步：${domainsText}。`;
   }
 
   const modeText =
@@ -244,13 +215,6 @@ export function buildDesktopProfileSyncDiagnostics(
 ): DesktopProfileSyncDiagnosticItem[] {
   return [
     {
-      label: '当前模式',
-      value: resolveDesktopProfileSyncModeText(
-        profileSyncStatus,
-        readErrorMessage
-      ),
-    },
-    {
       label: '远端可达性',
       value: resolveDesktopProfileSyncReachabilityText(
         profileSyncStatus,
@@ -258,7 +222,7 @@ export function buildDesktopProfileSyncDiagnostics(
       ),
     },
     {
-      label: '远端账号',
+      label: '当前帐号',
       value: resolveDesktopProfileSyncAccountText(
         profileSyncStatus,
         readErrorMessage
@@ -272,7 +236,7 @@ export function buildDesktopProfileSyncDiagnostics(
       ),
     },
     {
-      label: '同步域',
+      label: '同步范围',
       value: resolveDesktopProfileSyncDomainsText(profileSyncStatus),
     },
   ];

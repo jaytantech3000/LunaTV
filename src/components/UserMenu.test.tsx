@@ -164,7 +164,7 @@ describe('UserMenu', () => {
     jest.useRealTimers();
   });
 
-  it('shows a desktop account sync entry for desktop owner users and routes it to /desktop-admin', async () => {
+  it('shows a desktop account sync entry for desktop owner users and routes it to /account-sync', async () => {
     render(<UserMenu />);
 
     fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
@@ -173,7 +173,7 @@ describe('UserMenu', () => {
     fireEvent.click(syncEntry);
 
     expect(beginNavigation).toHaveBeenCalledWith({
-      href: '/desktop-admin',
+      href: '/account-sync',
       kind: 'nav',
       label: '帐号同步',
     });
@@ -183,13 +183,13 @@ describe('UserMenu', () => {
     });
 
     await waitFor(() => {
-      expect(mockRouter.push).toHaveBeenCalledWith('/desktop-admin');
+      expect(mockRouter.push).toHaveBeenCalledWith('/account-sync');
     });
   });
 
   it('keeps admin and account sync pending states independent', async () => {
     mockPendingNavigation = {
-      href: '/desktop-admin',
+      href: '/account-sync',
       kind: 'nav',
       label: '帐号同步',
       startedAt: Date.now(),
@@ -203,5 +203,26 @@ describe('UserMenu', () => {
       await screen.findByRole('button', { name: '正在打开帐号同步...' })
     ).toBeDisabled();
     expect(screen.getByRole('button', { name: '管理面板' })).not.toBeDisabled();
+  });
+
+  it('routes the settings entry to /config', async () => {
+    render(<UserMenu />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: '设置' }));
+
+    expect(beginNavigation).toHaveBeenCalledWith({
+      href: '/config',
+      kind: 'nav',
+      label: '设置',
+    });
+
+    act(() => {
+      jest.advanceTimersByTime(1);
+    });
+
+    await waitFor(() => {
+      expect(mockRouter.push).toHaveBeenCalledWith('/config');
+    });
   });
 });

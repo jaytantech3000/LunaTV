@@ -14,7 +14,7 @@ use axum::{
 use moontv_profile::LocalProfileSnapshot;
 use moontv_sync::{
     ProfileSyncError, ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncSessionMutation,
-    build_profile_sync_target_url,
+    ProfileSyncStatusResponse, build_profile_sync_target_url,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -23,7 +23,8 @@ use tracing::warn;
 use crate::{
     AppError, AppResult, AppState, download_runtime::DesktopDownloadResourceIndexRecord,
     no_store_json_response, normalize_owned_string, persist_admin_config_file_with_subscription,
-    read_json_file, require_owned_string,
+    profile_sync::build_profile_sync_status_payload, read_json_file, require_owned_string,
+    sync_domains_include_adminsettings, validate_profile_sync_selected_domains,
 };
 
 const DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL: &str = "https://luna.hkcu.qzz.io";
@@ -124,9 +125,10 @@ pub(crate) fn plan_profile_sync_onboarding(
     }
 }
 
-pub(crate) fn apply_profile_sync_api_base_url_to_config_file(
+pub(crate) fn apply_profile_sync_settings_to_config_file(
     config_file: &str,
     remote_base_url: Option<&str>,
+    sync_domains: Option<&[String]>,
 ) -> Result<String> {
     let mut config_value = serde_json::from_str::<Value>(config_file.trim())
         .context("failed to parse config file json")?;
@@ -160,7 +162,27 @@ pub(crate) fn apply_profile_sync_api_base_url_to_config_file(
         }
     }
 
+    if let Some(sync_domains) = sync_domains {
+        profile_sync_object.insert(
+            "sync_domains".to_string(),
+            Value::Array(
+                sync_domains
+                    .iter()
+                    .map(|domain| Value::String(domain.clone()))
+                    .collect(),
+            ),
+        );
+    }
+
     serde_json::to_string_pretty(&config_value).context("failed to encode config file json")
+}
+
+#[cfg(test)]
+pub(crate) fn apply_profile_sync_api_base_url_to_config_file(
+    config_file: &str,
+    remote_base_url: Option<&str>,
+) -> Result<String> {
+    apply_profile_sync_settings_to_config_file(config_file, remote_base_url, None)
 }
 
 pub(crate) fn rebind_download_store_snapshot_owner(
@@ -205,6 +227,14 @@ pub(crate) struct DesktopProfileSyncOnboardingExecuteRequest {
     username: Option<String>,
     password: Option<String>,
     current_local_username: Option<String>,
+    strategy: Option<String>,
+    sync_domains: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopProfileSyncSyncNowRequest {
+    sync_domains: Option<Vec<String>>,
     strategy: Option<String>,
 }
 
@@ -276,6 +306,14 @@ pub(crate) struct DesktopProfileSyncOnboardingExecuteResponse {
     migrated_accounts: Vec<DesktopProfileSyncMigratedAccount>,
     download_rebind: DesktopProfileSyncDownloadRebindResult,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopProfileSyncSyncNowResponse {
+    #[serde(flatten)]
+    status: ProfileSyncStatusResponse,
+    last_sync_error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -366,15 +404,16 @@ pub(crate) async fn execute_profile_sync_onboarding(
     let password = require_owned_string(payload.password, "缺少 Web 密码")?;
     let current_local_username =
         require_owned_string(payload.current_local_username, "缺少当前本地帐号")?;
-    let strategy = require_owned_string(payload.strategy, "缺少冲突策略")?
-        .parse::<DesktopProfileSyncConflictStrategy>()
-        .map_err(AppError::bad_request)?;
+    let strategy = parse_required_conflict_strategy(payload.strategy)?;
+    let sync_domains = validate_profile_sync_selected_domains(payload.sync_domains)?;
     let remote_session =
         login_remote_profile_sync(&state, &remote_base_url, &username, &password).await?;
     let local_account_summaries = load_local_account_summaries(&state)?;
     ensure_current_local_account(&local_account_summaries, &current_local_username)?;
     let local_snapshot_map = load_local_snapshot_map(&state, &local_account_summaries)?;
-    let local_admin_config_snapshot = load_local_admin_config_snapshot(&state)?;
+    let local_admin_config_snapshot = sync_domains_include_adminsettings(&sync_domains)
+        .then(|| load_local_admin_config_snapshot(&state))
+        .transpose()?;
     let remote_admin_config = fetch_remote_admin_config(&state, &remote_base_url).await?;
     ensure_remote_admin_role(&remote_admin_config.role)?;
     let remote_accounts = remote_admin_config
@@ -413,13 +452,16 @@ pub(crate) async fn execute_profile_sync_onboarding(
             .get(&item.local_username)
             .cloned()
             .ok_or_else(|| AppError::internal("missing local profile snapshot during migration"))?;
+        let filtered_snapshot = build_local_snapshot_for_sync_domains(&snapshot, &sync_domains);
         let merged_summary = merge_remote_profile_snapshot(
             &state,
             &remote_base_url,
             &item.remote_username,
             strategy,
-            &snapshot,
-            (index == 0).then_some(&local_admin_config_snapshot),
+            &filtered_snapshot,
+            (index == 0)
+                .then_some(local_admin_config_snapshot.as_ref())
+                .flatten(),
         )
         .await?;
 
@@ -432,7 +474,7 @@ pub(crate) async fn execute_profile_sync_onboarding(
     }
 
     let download_rebind = rebind_local_offline_downloads(&state, &remote_session.username)?;
-    persist_remote_base_url_into_local_config(&state, &remote_base_url)?;
+    persist_profile_sync_settings_into_local_config(&state, &remote_base_url, &sync_domains)?;
 
     no_store_json_response(&DesktopProfileSyncOnboardingExecuteResponse {
         remote_base_url,
@@ -443,6 +485,123 @@ pub(crate) async fn execute_profile_sync_onboarding(
         migrated_accounts,
         download_rebind,
     })
+}
+
+pub(crate) async fn post_profile_sync_sync_now(
+    State(state): State<AppState>,
+    Json(payload): Json<DesktopProfileSyncSyncNowRequest>,
+) -> AppResult<Response> {
+    let mut config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let Some(remote_base_url) = config.profile_sync_api_base_url.clone() else {
+        return Err(AppError::bad_request("当前桌面尚未开启帐号同步"));
+    };
+    let sync_domains = validate_profile_sync_selected_domains(payload.sync_domains)?;
+    let strategy = parse_optional_conflict_strategy(
+        payload.strategy,
+        DesktopProfileSyncConflictStrategy::LocalFirst,
+    )?;
+    let remote_session = require_profile_sync_session(&state).await?;
+
+    if sync_domains_include_adminsettings(&sync_domains) {
+        ensure_remote_admin_settings_sync_role(&remote_session.role)?;
+    }
+
+    persist_profile_sync_settings_into_local_config(&state, &remote_base_url, &sync_domains)?;
+    config.profile_sync_domains = sync_domains.clone();
+
+    let last_sync_error = match sync_profile_now(
+        &state,
+        &remote_base_url,
+        &remote_session,
+        &sync_domains,
+        strategy,
+    )
+    .await
+    {
+        Ok(()) => None,
+        Err(error) => Some(error.message),
+    };
+    let status = build_profile_sync_status_payload(&state, &config).await;
+
+    no_store_json_response(&DesktopProfileSyncSyncNowResponse {
+        status,
+        last_sync_error,
+    })
+}
+
+fn build_local_snapshot_for_sync_domains(
+    snapshot: &LocalProfileSnapshot,
+    sync_domains: &[String],
+) -> LocalProfileSnapshot {
+    let selected_domains = sync_domains
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+
+    LocalProfileSnapshot {
+        play_records: selected_domains
+            .contains("playrecords")
+            .then(|| snapshot.play_records.clone())
+            .unwrap_or_default(),
+        favorites: selected_domains
+            .contains("favorites")
+            .then(|| snapshot.favorites.clone())
+            .unwrap_or_default(),
+        follow_records: selected_domains
+            .contains("follows")
+            .then(|| snapshot.follow_records.clone())
+            .unwrap_or_default(),
+        search_history: selected_domains
+            .contains("searchhistory")
+            .then(|| snapshot.search_history.clone())
+            .unwrap_or_default(),
+        skip_configs: selected_domains
+            .contains("skipconfigs")
+            .then(|| snapshot.skip_configs.clone())
+            .unwrap_or_default(),
+    }
+}
+
+async fn require_profile_sync_session(state: &AppState) -> AppResult<ProfileSyncSession> {
+    state
+        .profile_sync_session
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, "当前 Web 帐号未登录，请重新开启同步"))
+}
+
+async fn sync_profile_now(
+    state: &AppState,
+    remote_base_url: &str,
+    remote_session: &ProfileSyncSession,
+    sync_domains: &[String],
+    strategy: DesktopProfileSyncConflictStrategy,
+) -> AppResult<()> {
+    let snapshot = state
+        .profile_store()
+        .load_snapshot(&remote_session.username)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let filtered_snapshot = build_local_snapshot_for_sync_domains(&snapshot, sync_domains);
+    let admin_config_snapshot = if sync_domains_include_adminsettings(sync_domains) {
+        Some(load_local_admin_config_snapshot(state)?)
+    } else {
+        None
+    };
+
+    merge_remote_profile_snapshot(
+        state,
+        remote_base_url,
+        &remote_session.username,
+        strategy,
+        &filtered_snapshot,
+        admin_config_snapshot.as_ref(),
+    )
+    .await?;
+
+    Ok(())
 }
 
 fn ensure_profile_sync_not_enabled(state: &AppState) -> AppResult<()> {
@@ -461,18 +620,53 @@ fn resolve_remote_base_url(remote_base_url: Option<String>) -> AppResult<String>
         .unwrap_or_else(|| DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL.to_string()))
 }
 
+fn parse_required_conflict_strategy(
+    strategy: Option<String>,
+) -> AppResult<DesktopProfileSyncConflictStrategy> {
+    require_owned_string(strategy, "缺少冲突策略")?
+        .parse::<DesktopProfileSyncConflictStrategy>()
+        .map_err(AppError::bad_request)
+}
+
+fn parse_optional_conflict_strategy(
+    strategy: Option<String>,
+    default_strategy: DesktopProfileSyncConflictStrategy,
+) -> AppResult<DesktopProfileSyncConflictStrategy> {
+    match normalize_owned_string(strategy) {
+        Some(value) => value
+            .parse::<DesktopProfileSyncConflictStrategy>()
+            .map_err(AppError::bad_request),
+        None => Ok(default_strategy),
+    }
+}
+
 fn map_profile_sync_error_to_app_error(error: ProfileSyncError) -> AppError {
     AppError::new(error.http_status(), error.message)
 }
 
+fn is_remote_admin_role(role: &str) -> bool {
+    role == "owner" || role == "admin"
+}
+
 fn ensure_remote_admin_role(role: &str) -> AppResult<()> {
-    if role == "owner" || role == "admin" {
+    if is_remote_admin_role(role) {
         return Ok(());
     }
 
     Err(AppError::new(
         StatusCode::FORBIDDEN,
         "只有 Web owner/admin 可以开启帐号同步",
+    ))
+}
+
+fn ensure_remote_admin_settings_sync_role(role: &str) -> AppResult<()> {
+    if is_remote_admin_role(role) {
+        return Ok(());
+    }
+
+    Err(AppError::new(
+        StatusCode::FORBIDDEN,
+        "只有 Web owner/admin 可以同步管理员设置",
     ))
 }
 
@@ -622,11 +816,17 @@ async fn send_remote_json_request(
             .with_body(body);
     }
 
-    state
+    let response = state
         .profile_sync
         .send(Some(remote_base_url), request)
         .await
-        .map_err(map_profile_sync_error_to_app_error)
+        .map_err(map_profile_sync_error_to_app_error)?;
+
+    if response.status() == StatusCode::UNAUTHORIZED {
+        *state.profile_sync_session.write().await = None;
+    }
+
+    Ok(response)
 }
 
 async fn decode_remote_json_response<T: for<'de> Deserialize<'de>>(
@@ -974,17 +1174,19 @@ fn rebind_download_resource_indexes(state: &AppState, next_owner_username: &str)
     Ok(rewritten_count)
 }
 
-fn persist_remote_base_url_into_local_config(
+fn persist_profile_sync_settings_into_local_config(
     state: &AppState,
     remote_base_url: &str,
+    sync_domains: &[String],
 ) -> AppResult<()> {
     let persistence = state
         .load_admin_persistence()
         .map_err(|error| AppError::internal(error.to_string()))?;
     let subscription = persistence.config.config_subscribtion.clone();
-    let next_config_file = apply_profile_sync_api_base_url_to_config_file(
+    let next_config_file = apply_profile_sync_settings_to_config_file(
         &persistence.config.config_file,
         Some(remote_base_url),
+        Some(sync_domains),
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
 

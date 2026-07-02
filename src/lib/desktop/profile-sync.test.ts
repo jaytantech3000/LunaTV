@@ -11,8 +11,9 @@ import {
   previewDesktopProfileSyncOnboarding,
   readDesktopProfileSyncStatusState,
   resolveDesktopProfileSyncState,
+  syncDesktopProfileNow,
 } from '@/lib/desktop/profile-sync';
-import { PROFILE_SYNC_USER_DATA_DOMAINS } from '@/lib/profile/contracts';
+import { PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS } from '@/lib/profile/contracts';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 
@@ -64,7 +65,7 @@ describe('desktop profile sync helpers', () => {
       profileMode: null,
       error: '远端账号同步后端不可达',
       errorKind: 'unreachable',
-      syncDomains: [...PROFILE_SYNC_USER_DATA_DOMAINS],
+      syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
     };
 
     (apiFetch as jest.Mock).mockResolvedValue({
@@ -127,6 +128,47 @@ describe('desktop profile sync helpers', () => {
     );
   });
 
+  it('posts sync-now through the desktop local service', async () => {
+    const responsePayload = {
+      enabled: true,
+      reachable: true,
+      authenticated: true,
+      username: 'admin',
+      role: 'owner',
+      storageType: 'redis',
+      profileMode: 'shared-multi-user',
+      error: null,
+      errorKind: null,
+      syncDomains: ['playrecords', 'adminsettings'],
+      lastSyncError: null,
+    };
+
+    (apiFetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue(responsePayload),
+    });
+
+    await expect(
+      syncDesktopProfileNow({
+        syncDomains: ['playrecords', 'adminsettings'],
+        strategy: 'local-first',
+      })
+    ).resolves.toEqual(responsePayload);
+
+    expect(apiFetch).toHaveBeenCalledWith('/profile-sync/sync-now', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        syncDomains: ['playrecords', 'adminsettings'],
+        strategy: 'local-first',
+      }),
+      cache: 'no-store',
+    });
+  });
+
   it('surfaces onboarding execute errors returned by the local service', async () => {
     const requestPayload = {
       remoteBaseUrl: 'https://luna.hkcu.qzz.io',
@@ -181,7 +223,7 @@ describe('desktop profile sync helpers', () => {
         profileMode: 'shared-multi-user',
         error: 'unexpected profile sync response',
         errorKind: 'protocol-incompatible',
-        syncDomains: [...PROFILE_SYNC_USER_DATA_DOMAINS],
+        syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
       })
     ).toBe('degraded');
 
@@ -196,7 +238,7 @@ describe('desktop profile sync helpers', () => {
         profileMode: 'shared-multi-user',
         error: '远端账号同步后端返回 401',
         errorKind: 'unauthorized',
-        syncDomains: [...PROFILE_SYNC_USER_DATA_DOMAINS],
+        syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
       })
     ).toBe('auth-expired');
   });
@@ -212,7 +254,7 @@ describe('desktop profile sync helpers', () => {
       profileMode: 'shared-multi-user',
       error: null,
       errorKind: null,
-      syncDomains: [...PROFILE_SYNC_USER_DATA_DOMAINS],
+      syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
     } as const;
 
     const result = applyDesktopProfileSyncStatus(status);
@@ -242,7 +284,7 @@ describe('desktop profile sync helpers', () => {
       profileMode: 'shared-multi-user',
       error: null,
       errorKind: null,
-      syncDomains: [...PROFILE_SYNC_USER_DATA_DOMAINS],
+      syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
     });
 
     expect(clearAuthInfoInBrowser).toHaveBeenCalled();
@@ -266,7 +308,7 @@ describe('desktop profile sync helpers', () => {
       profileMode: null,
       error: null,
       errorKind: 'not-configured',
-      syncDomains: [...PROFILE_SYNC_USER_DATA_DOMAINS],
+      syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
     });
 
     expect(clearAuthInfoInBrowser).toHaveBeenCalled();

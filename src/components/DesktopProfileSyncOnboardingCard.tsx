@@ -9,17 +9,24 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
 import {
   type DesktopProfileSyncConflictStrategy,
+  type DesktopProfileSyncManualSyncResponse,
   type DesktopProfileSyncOnboardingExecuteResponse,
   type DesktopProfileSyncOnboardingPreviewResponse,
   executeDesktopProfileSyncOnboarding,
   previewDesktopProfileSyncOnboarding,
+  syncDesktopProfileNow,
 } from '@/lib/desktop/profile-sync';
 import { requestDesktopRuntimeRefresh } from '@/lib/desktop/runtime-config';
 import { armDesktopDownloadOwnershipHandoff } from '@/lib/download/session';
+import {
+  type ProfileSyncUserDataDomain,
+  PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS,
+} from '@/lib/profile/contracts';
 
 import {
   AppButton,
@@ -37,6 +44,7 @@ const ERROR_COPY_RESET_DELAY_MS = 2000;
 const RUNTIME_REFRESH_COMPLETED_RESET_DELAY_MS = 1500;
 
 type RuntimeRefreshProgressPhase = 'refreshing' | 'completed';
+type SyncStrategyDialogMode = 'sync-now' | 'enable-sync';
 
 function getErrorMessage(error: unknown): string {
   if (typeof error === 'string' && error.trim()) {
@@ -185,6 +193,88 @@ function RuntimeRefreshProgressCard({
   );
 }
 
+function SyncStrategyDialog({
+  mode,
+  strategy,
+  onStrategyChange,
+  onClose,
+  onConfirm,
+}: {
+  mode: SyncStrategyDialogMode;
+  strategy: DesktopProfileSyncConflictStrategy;
+  onStrategyChange: (nextStrategy: DesktopProfileSyncConflictStrategy) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const confirmLabel = mode === 'enable-sync' ? '确认并开启同步' : '确认并同步';
+
+  return (
+    <AppDialogBackdrop className='z-[1210] flex items-center justify-center p-4'>
+      <AppDialogPanel
+        role='dialog'
+        aria-modal='true'
+        className='w-full max-w-2xl overflow-hidden'
+      >
+        <AppDialogHeader>
+          <div className='flex items-center gap-3'>
+            <AppIconBadge tone='emerald'>
+              <ShieldCheck className='h-5 w-5' />
+            </AppIconBadge>
+            <AppDialogTitleBlock
+              title={<h2>选择同步优先级</h2>}
+              subtitle='遇到同键冲突时，决定优先保留云端还是本地结果。'
+            />
+          </div>
+          <AppIconButton onClick={onClose} aria-label='关闭同步优先级弹窗'>
+            <X className='h-4 w-4' />
+          </AppIconButton>
+        </AppDialogHeader>
+
+        <div className='space-y-4 px-5 py-5 sm:px-6'>
+          <label className='flex cursor-pointer items-start gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'>
+            <input
+              type='radio'
+              name='desktop-profile-sync-confirm-strategy'
+              aria-label='云端为主'
+              checked={strategy === 'web-first'}
+              onChange={() => onStrategyChange('web-first')}
+            />
+            <span>
+              云端为主
+              <span className='block text-xs leading-6 text-gray-500 dark:text-gray-400'>
+                保留远端已有资料，本地同键冲突项只补缺。
+              </span>
+            </span>
+          </label>
+
+          <label className='flex cursor-pointer items-start gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'>
+            <input
+              type='radio'
+              name='desktop-profile-sync-confirm-strategy'
+              aria-label='本地为主'
+              checked={strategy === 'local-first'}
+              onChange={() => onStrategyChange('local-first')}
+            />
+            <span>
+              本地为主
+              <span className='block text-xs leading-6 text-gray-500 dark:text-gray-400'>
+                用当前桌面资料覆盖同键远端项，适合把本机现状完整推上去。
+              </span>
+            </span>
+          </label>
+
+          <div className='flex justify-end gap-3'>
+            <AppButton onClick={onClose}>取消</AppButton>
+            <AppButton onClick={onConfirm} variant='accent'>
+              {confirmLabel}
+            </AppButton>
+          </div>
+        </div>
+      </AppDialogPanel>
+    </AppDialogBackdrop>
+  );
+}
+
 function SuccessDialog({
   result,
   onClose,
@@ -286,10 +376,17 @@ function SuccessDialog({
 export default function DesktopProfileSyncOnboardingCard({
   currentLocalUsername,
   profileSyncEnabled,
+  selectedSyncDomains = PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS,
+  isSyncUnavailable = false,
+  onSyncSuccess,
 }: {
   currentLocalUsername?: string | null;
   profileSyncEnabled: boolean;
+  selectedSyncDomains?: readonly ProfileSyncUserDataDomain[];
+  isSyncUnavailable?: boolean;
+  onSyncSuccess?: (nextStatus: DesktopProfileSyncManualSyncResponse) => void;
 }) {
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [remoteBaseUrl, setRemoteBaseUrl] = useState(
     DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL
   );
@@ -297,6 +394,8 @@ export default function DesktopProfileSyncOnboardingCard({
   const [password, setPassword] = useState('');
   const [strategy, setStrategy] =
     useState<DesktopProfileSyncConflictStrategy>('web-first');
+  const [syncStrategyDialogMode, setSyncStrategyDialogMode] =
+    useState<SyncStrategyDialogMode | null>(null);
   const [preview, setPreview] =
     useState<DesktopProfileSyncOnboardingPreviewResponse | null>(null);
   const [result, setResult] =
@@ -309,8 +408,16 @@ export default function DesktopProfileSyncOnboardingCard({
   const [errorCopyState, setErrorCopyState] = useState<
     'idle' | 'success' | 'error'
   >('idle');
+  const [isSyncingNow, setIsSyncingNow] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<{
+    tone: 'neutral' | 'success' | 'error';
+    message: string;
+  } | null>(null);
 
   const normalizedCurrentLocalUsername = currentLocalUsername?.trim() || '';
+  const normalizedSelectedSyncDomains = selectedSyncDomains.length
+    ? [...selectedSyncDomains]
+    : [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS];
   const canSubmit =
     Boolean(normalizedCurrentLocalUsername) &&
     Boolean(username.trim()) &&
@@ -384,7 +491,9 @@ export default function DesktopProfileSyncOnboardingCard({
     }
   };
 
-  const handleExecute = async () => {
+  const handleExecute = async (
+    nextStrategy: DesktopProfileSyncConflictStrategy
+  ) => {
     if (!canSubmit) {
       setErrorMessage('请先补全当前本地帐号、Web 用户名和密码。');
       return;
@@ -400,9 +509,16 @@ export default function DesktopProfileSyncOnboardingCard({
         username: username.trim(),
         password,
         currentLocalUsername: normalizedCurrentLocalUsername,
-        strategy,
+        strategy: nextStrategy,
+        syncDomains: normalizedSelectedSyncDomains,
       });
       setResult(nextResult);
+      setIsOnboardingOpen(false);
+      setPreview(null);
+      setSyncFeedback({
+        tone: 'success',
+        message: '同步已开启',
+      });
       armDesktopDownloadOwnershipHandoff({
         previousOwnerUsername:
           nextResult.downloadRebind.previousOwnerUsername ?? undefined,
@@ -424,28 +540,177 @@ export default function DesktopProfileSyncOnboardingCard({
     setErrorCopyState(didCopy ? 'success' : 'error');
   };
 
+  const handleSyncNow = async (
+    nextStrategy: DesktopProfileSyncConflictStrategy
+  ) => {
+    if (!normalizedSelectedSyncDomains.length) {
+      setSyncFeedback({
+        tone: 'error',
+        message: '同步失败：请至少选择一个同步范围',
+      });
+      return;
+    }
+
+    setIsSyncingNow(true);
+    setSyncFeedback({
+      tone: 'neutral',
+      message: '同步中...',
+    });
+
+    try {
+      const nextStatus = await syncDesktopProfileNow({
+        syncDomains: normalizedSelectedSyncDomains,
+        strategy: nextStrategy,
+      });
+      const lastSyncError = nextStatus.lastSyncError?.trim();
+      setSyncFeedback(
+        lastSyncError
+          ? {
+              tone: 'error',
+              message: `同步失败：${lastSyncError}`,
+            }
+          : {
+              tone: 'success',
+              message: '同步成功',
+            }
+      );
+      onSyncSuccess?.(nextStatus);
+    } catch (error) {
+      setSyncFeedback({
+        tone: 'error',
+        message: `同步失败：${getErrorMessage(error)}`,
+      });
+    } finally {
+      setIsSyncingNow(false);
+    }
+  };
+
+  const openSyncStrategyDialog = (mode: SyncStrategyDialogMode) => {
+    if (mode === 'sync-now' && !normalizedSelectedSyncDomains.length) {
+      setSyncFeedback({
+        tone: 'error',
+        message: '同步失败：请至少选择一个同步范围',
+      });
+      return;
+    }
+
+    setSyncStrategyDialogMode(mode);
+  };
+
+  const closeSyncStrategyDialog = () => {
+    setSyncStrategyDialogMode(null);
+  };
+
+  const handleConfirmSyncStrategy = () => {
+    const currentMode = syncStrategyDialogMode;
+
+    if (!currentMode) {
+      return;
+    }
+
+    setSyncStrategyDialogMode(null);
+
+    if (currentMode === 'enable-sync') {
+      void handleExecute(strategy);
+      return;
+    }
+
+    void handleSyncNow(strategy);
+  };
+
+  const actionTitle = profileSyncEnabled ? '已开启帐号同步' : '开启帐号同步';
+  const actionMessage = syncFeedback?.message
+    ? syncFeedback.message
+    : isSyncUnavailable
+    ? '当前无法读取本地同步状态'
+    : profileSyncEnabled
+    ? '当前使用 Web 帐号'
+    : '当前仍在使用本地模式';
+  const actionMessageClass =
+    syncFeedback?.tone === 'error'
+      ? 'text-amber-700 dark:text-amber-300'
+      : syncFeedback?.tone === 'success'
+      ? 'text-emerald-700 dark:text-emerald-300'
+      : 'text-gray-500 dark:text-gray-400';
+
   return (
     <>
       <AppSurfaceCard className='overflow-hidden'>
         <div className='border-b border-gray-200 bg-gradient-to-r from-emerald-500/10 via-sky-500/10 to-white px-5 py-5 dark:border-gray-800 dark:from-emerald-500/15 dark:via-sky-500/10 dark:to-gray-950 sm:px-6'>
-          <div className='flex items-start gap-3'>
+          <div className='flex items-start justify-between gap-4'>
             <AppIconBadge tone='emerald'>
               <Cloud className='h-5 w-5' />
             </AppIconBadge>
-            <AppDialogTitleBlock
-              title='开启帐号同步'
-              subtitle='在 desktop-admin 内完成 Web 登录、资料迁移预览和正式开通，不再需要手改 profile_sync.api_base_url。'
-            />
+            <div className='min-w-0 flex-1 space-y-1'>
+              <div className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+                {actionTitle}
+              </div>
+              <div className={`text-sm leading-6 ${actionMessageClass}`}>
+                {actionMessage}
+              </div>
+              {isSyncUnavailable ? (
+                <Link
+                  href='/config'
+                  className='inline-flex text-sm font-medium text-emerald-700 underline underline-offset-2 dark:text-emerald-300'
+                >
+                  去配置
+                </Link>
+              ) : null}
+            </div>
+            <AppButton
+              onClick={
+                profileSyncEnabled
+                  ? () => openSyncStrategyDialog('sync-now')
+                  : () => setIsOnboardingOpen(true)
+              }
+              disabled={
+                isSyncUnavailable || isPreviewing || isExecuting || isSyncingNow
+              }
+              variant='accent'
+            >
+              {isSyncingNow ? (
+                <RefreshCw className='h-4 w-4 animate-spin' />
+              ) : (
+                <Cloud className='h-4 w-4' />
+              )}
+              {profileSyncEnabled ? '同步' : '开启同步'}
+            </AppButton>
           </div>
         </div>
 
-        <div className='space-y-5 px-5 py-5 sm:px-6'>
-          {profileSyncEnabled ? (
-            <div className='rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-900/20 dark:text-emerald-200'>
-              当前桌面已经开启帐号同步。如需检查连接状态或重新登录，请继续使用下方诊断信息和右上角用户菜单。
-            </div>
-          ) : (
-            <>
+        <div className='space-y-4 px-5 py-5 sm:px-6'>
+          {!errorMessage && runtimeRefreshPhase ? (
+            <RuntimeRefreshProgressCard phase={runtimeRefreshPhase} />
+          ) : null}
+        </div>
+      </AppSurfaceCard>
+
+      {isOnboardingOpen && typeof document !== 'undefined' ? (
+        <AppDialogBackdrop className='z-[1200] flex items-center justify-center p-4'>
+          <AppDialogPanel
+            role='dialog'
+            aria-modal='true'
+            className='w-full max-w-4xl overflow-hidden'
+          >
+            <AppDialogHeader>
+              <div className='flex items-center gap-3'>
+                <AppIconBadge tone='emerald'>
+                  <Cloud className='h-5 w-5' />
+                </AppIconBadge>
+                <AppDialogTitleBlock
+                  title='开启帐号同步'
+                  subtitle='在弹窗内完成 Web 登录、迁移预览和正式开通。'
+                />
+              </div>
+              <AppIconButton
+                onClick={() => setIsOnboardingOpen(false)}
+                aria-label='关闭开启同步弹窗'
+              >
+                <X className='h-4 w-4' />
+              </AppIconButton>
+            </AppDialogHeader>
+
+            <div className='space-y-5 px-5 py-5 sm:px-6'>
               <div className='grid gap-4 lg:grid-cols-2'>
                 <label className='space-y-2 text-sm text-gray-700 dark:text-gray-200'>
                   <span className='font-medium'>Web 服务地址</span>
@@ -488,41 +753,6 @@ export default function DesktopProfileSyncOnboardingCard({
                 </label>
               </div>
 
-              <div className='space-y-3 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4 dark:border-gray-700 dark:bg-gray-900/50'>
-                <div className='flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100'>
-                  <ShieldCheck className='h-4 w-4 text-emerald-600 dark:text-emerald-400' />
-                  冲突策略
-                </div>
-                <label className='flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-white px-3 py-3 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'>
-                  <input
-                    type='radio'
-                    name='desktop-profile-sync-strategy'
-                    checked={strategy === 'web-first'}
-                    onChange={() => setStrategy('web-first')}
-                  />
-                  <span>
-                    A：Web 优先
-                    <span className='block text-xs text-gray-500 dark:text-gray-400'>
-                      远端已有资料优先保留，本地同键冲突项只补缺。
-                    </span>
-                  </span>
-                </label>
-                <label className='flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-white px-3 py-3 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'>
-                  <input
-                    type='radio'
-                    name='desktop-profile-sync-strategy'
-                    checked={strategy === 'local-first'}
-                    onChange={() => setStrategy('local-first')}
-                  />
-                  <span>
-                    B：本地优先
-                    <span className='block text-xs text-gray-500 dark:text-gray-400'>
-                      本地资料覆盖同键远端项，适合把桌面现状完整迁过去。
-                    </span>
-                  </span>
-                </label>
-              </div>
-
               <div className='flex flex-wrap gap-3'>
                 <AppButton
                   onClick={handlePreview}
@@ -536,7 +766,7 @@ export default function DesktopProfileSyncOnboardingCard({
                   生成迁移预览
                 </AppButton>
                 <AppButton
-                  onClick={handleExecute}
+                  onClick={() => openSyncStrategyDialog('enable-sync')}
                   disabled={isPreviewing || isExecuting || !preview}
                   variant='accent'
                 >
@@ -597,56 +827,64 @@ export default function DesktopProfileSyncOnboardingCard({
                   ) : null}
                 </div>
               ) : null}
-            </>
-          )}
 
-          {errorMessage ? (
-            <div className='rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300'>
-              <div className='flex items-start justify-between gap-3'>
-                <div className='min-w-0'>
-                  <div className='text-sm font-medium'>错误信息</div>
-                  <div className='mt-1 text-sm leading-6'>{errorMessage}</div>
+              {errorMessage ? (
+                <div className='rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300'>
+                  <div className='flex items-start justify-between gap-3'>
+                    <div className='min-w-0'>
+                      <div className='text-sm font-medium'>错误信息</div>
+                      <div className='mt-1 text-sm leading-6'>
+                        {errorMessage}
+                      </div>
+                    </div>
+                    <div
+                      className='flex shrink-0 items-center gap-2'
+                      aria-live='polite'
+                    >
+                      {errorCopyState === 'success' ? (
+                        <span className='text-xs font-medium'>已复制</span>
+                      ) : null}
+                      {errorCopyState === 'error' ? (
+                        <span className='text-xs font-medium'>复制失败</span>
+                      ) : null}
+                      <AppIconButton
+                        aria-label={
+                          errorCopyState === 'success'
+                            ? '已复制错误信息'
+                            : '复制错误信息'
+                        }
+                        title={
+                          errorCopyState === 'success'
+                            ? '已复制错误信息'
+                            : '复制错误信息'
+                        }
+                        onClick={handleCopyErrorMessage}
+                        className='h-8 w-8 border border-red-200 bg-white/80 text-red-600 hover:bg-white hover:text-red-700 dark:border-red-800/80 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/70 dark:hover:text-red-100'
+                      >
+                        {errorCopyState === 'success' ? (
+                          <Check className='h-4 w-4' />
+                        ) : (
+                          <Copy className='h-4 w-4' />
+                        )}
+                      </AppIconButton>
+                    </div>
+                  </div>
                 </div>
-                <div
-                  className='flex shrink-0 items-center gap-2'
-                  aria-live='polite'
-                >
-                  {errorCopyState === 'success' ? (
-                    <span className='text-xs font-medium'>已复制</span>
-                  ) : null}
-                  {errorCopyState === 'error' ? (
-                    <span className='text-xs font-medium'>复制失败</span>
-                  ) : null}
-                  <AppIconButton
-                    aria-label={
-                      errorCopyState === 'success'
-                        ? '已复制错误信息'
-                        : '复制错误信息'
-                    }
-                    title={
-                      errorCopyState === 'success'
-                        ? '已复制错误信息'
-                        : '复制错误信息'
-                    }
-                    onClick={handleCopyErrorMessage}
-                    className='h-8 w-8 border border-red-200 bg-white/80 text-red-600 hover:bg-white hover:text-red-700 dark:border-red-800/80 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/70 dark:hover:text-red-100'
-                  >
-                    {errorCopyState === 'success' ? (
-                      <Check className='h-4 w-4' />
-                    ) : (
-                      <Copy className='h-4 w-4' />
-                    )}
-                  </AppIconButton>
-                </div>
-              </div>
+              ) : null}
             </div>
-          ) : null}
+          </AppDialogPanel>
+        </AppDialogBackdrop>
+      ) : null}
 
-          {!errorMessage && runtimeRefreshPhase ? (
-            <RuntimeRefreshProgressCard phase={runtimeRefreshPhase} />
-          ) : null}
-        </div>
-      </AppSurfaceCard>
+      {syncStrategyDialogMode && typeof document !== 'undefined' ? (
+        <SyncStrategyDialog
+          mode={syncStrategyDialogMode}
+          strategy={strategy}
+          onStrategyChange={setStrategy}
+          onClose={closeSyncStrategyDialog}
+          onConfirm={handleConfirmSyncStrategy}
+        />
+      ) : null}
 
       <SuccessDialog result={result} onClose={() => setResult(null)} />
     </>

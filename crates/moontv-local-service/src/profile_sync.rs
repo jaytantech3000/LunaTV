@@ -147,6 +147,7 @@ pub(crate) async fn build_profile_sync_status_payload(
         .build_status_response(
             config.profile_sync_api_base_url.as_deref(),
             session.as_ref(),
+            &config.profile_sync_domains,
         )
         .await
 }

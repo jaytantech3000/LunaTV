@@ -112,6 +112,7 @@ export interface DesktopProfileSyncDownloadRebindResult {
 export interface DesktopProfileSyncOnboardingExecuteRequest
   extends DesktopProfileSyncOnboardingPreviewRequest {
   strategy: DesktopProfileSyncConflictStrategy;
+  syncDomains?: readonly string[];
 }
 
 export interface DesktopProfileSyncOnboardingExecuteResponse {
@@ -122,6 +123,16 @@ export interface DesktopProfileSyncOnboardingExecuteResponse {
   migratedAccounts: DesktopProfileSyncMigratedAccount[];
   downloadRebind: DesktopProfileSyncDownloadRebindResult;
   warnings: string[];
+}
+
+export interface DesktopProfileSyncManualSyncRequest {
+  syncDomains: readonly string[];
+  strategy: DesktopProfileSyncConflictStrategy;
+}
+
+export interface DesktopProfileSyncManualSyncResponse
+  extends DesktopProfileSyncStatus {
+  lastSyncError?: string | null;
 }
 
 export type DesktopProfileSyncState =
@@ -240,6 +251,23 @@ export async function executeDesktopProfileSyncOnboarding(
   });
 
   return readDesktopProfileSyncJsonResponse<DesktopProfileSyncOnboardingExecuteResponse>(
+    response
+  );
+}
+
+export async function syncDesktopProfileNow(
+  payload: DesktopProfileSyncManualSyncRequest
+): Promise<DesktopProfileSyncManualSyncResponse> {
+  const response = await apiFetch('/profile-sync/sync-now', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+  });
+
+  return readDesktopProfileSyncJsonResponse<DesktopProfileSyncManualSyncResponse>(
     response
   );
 }

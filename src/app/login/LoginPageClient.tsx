@@ -28,11 +28,11 @@ function shouldAskUsernameForProfileSync(
   profileMode?: 'single-user-local' | 'shared-multi-user' | string | null,
   storageType?: string | null
 ): boolean {
-  if (profileMode) {
-    return profileMode === 'shared-multi-user';
+  if (profileMode === 'single-user-local' || storageType === 'localstorage') {
+    return false;
   }
 
-  return Boolean(storageType && storageType !== 'localstorage');
+  return true;
 }
 
 function resolveLoginErrorMessage(

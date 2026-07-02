@@ -74,7 +74,7 @@ function createDesktopBootstrapPayload(options: {
   profileSyncEnabled: boolean;
   reachable?: boolean;
   authenticated?: boolean;
-  profileMode?: 'single-user-local' | 'shared-multi-user';
+  profileMode?: 'single-user-local' | 'shared-multi-user' | null;
   storageType?: string | null;
   error?: string | null;
   errorKind?:
@@ -104,8 +104,12 @@ function createDesktopBootstrapPayload(options: {
       authenticated: options.authenticated ?? false,
       username: null,
       role: null,
-      storageType: options.storageType ?? 'redis',
-      profileMode: options.profileMode ?? 'shared-multi-user',
+      storageType:
+        options.storageType !== undefined ? options.storageType : 'redis',
+      profileMode:
+        options.profileMode !== undefined
+          ? options.profileMode
+          : 'shared-multi-user',
       error: options.error ?? null,
       errorKind: options.errorKind ?? null,
       syncDomains: [
@@ -195,6 +199,32 @@ describe('LoginPage desktop profile sync branches', () => {
       screen.queryByText('桌面版当前使用云端账号与用户数据同步。')
     ).not.toBeInTheDocument();
     expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  it('still asks for username when desktop profile sync is enabled but remote mode is unavailable', async () => {
+    const payload = createDesktopBootstrapPayload({
+      profileSyncEnabled: true,
+      reachable: false,
+      authenticated: false,
+      profileMode: null,
+      storageType: null,
+      error: 'connect failed',
+      errorKind: 'unreachable',
+    });
+    mockLoadDesktopProfileBootstrapState.mockResolvedValue({
+      payload,
+      localAuth: payload.localAuth,
+    });
+
+    render(<LoginPageClient />);
+
+    expect(
+      await screen.findByText(
+        '云端账号同步服务当前不可用，请检查远端服务地址。'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('输入用户名')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('输入访问密码')).toBeInTheDocument();
   });
 
   it('falls back to the local desktop auth branch when profile sync is disabled', async () => {
