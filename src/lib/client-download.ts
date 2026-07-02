@@ -82,26 +82,34 @@ const DEFAULT_SIGNED_DOWNLOAD_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_LOCAL_SERVICE_RELEASE_TAG = 'local-service-latest';
 const LOCAL_SERVICE_RELEASE_CHANNELS = ['luna', 'nova'] as const;
 
+function matchesDesktopAssetSuffix(
+  name: string,
+  suffixes: string[]
+): boolean {
+  return suffixes.some((suffix) => name.endsWith(suffix));
+}
+
 const DESKTOP_ASSET_RULES: DesktopAssetRule[] = [
   {
     key: 'mac-arm64',
     label: 'macOS Apple Silicon',
-    matcher: (name) => name.includes('aarch64.dmg'),
+    matcher: (name) =>
+      matchesDesktopAssetSuffix(name, ['aarch64.dmg', 'arm64.dmg']),
   },
   {
     key: 'mac-x64',
     label: 'macOS Intel',
-    matcher: (name) => name.includes('x64.dmg'),
+    matcher: (name) => matchesDesktopAssetSuffix(name, ['x64.dmg']),
   },
   {
     key: 'win-x64-setup',
     label: 'Windows 安装包',
-    matcher: (name) => name.includes('x64-setup.exe'),
+    matcher: (name) => matchesDesktopAssetSuffix(name, ['x64-setup.exe']),
   },
   {
     key: 'win-x64-portable',
     label: 'Windows 便携版',
-    matcher: (name) => name.includes('portable.zip'),
+    matcher: (name) => matchesDesktopAssetSuffix(name, ['portable.zip']),
   },
 ];
 

@@ -184,9 +184,10 @@ describe('client-download helpers', () => {
     const { assets, missingAssetKeys } = listDesktopReleaseAssets({
       assets: [
         {
-          browser_download_url: 'https://example.com/LunaTV-aarch64.dmg',
+          browser_download_url:
+            'https://example.com/LunaTV.Desktop_200.0.1-beta.31_macos-arm64.dmg',
           id: 11,
-          name: 'LunaTV-aarch64.dmg',
+          name: 'LunaTV.Desktop_200.0.1-beta.31_macos-arm64.dmg',
           size: 10,
         },
         {
@@ -209,6 +210,18 @@ describe('client-download helpers', () => {
     expect(missingAssetKeys).toEqual(['mac-x64', 'win-x64-portable']);
     expect(getDesktopAssetKeyForName('LunaTV-portable.zip')).toBe(
       'win-x64-portable'
+    );
+  });
+
+  it('recognizes both legacy and current macOS desktop dmg naming', () => {
+    expect(
+      getDesktopAssetKeyForName('LunaTV.Desktop_200.0.1-beta.31_macos-arm64.dmg')
+    ).toBe('mac-arm64');
+    expect(
+      getDesktopAssetKeyForName('LunaTV.Desktop_200.0.1-beta.31_macos-x64.dmg')
+    ).toBe('mac-x64');
+    expect(getDesktopAssetKeyForName('LunaTV.Desktop_aarch64.dmg')).toBe(
+      'mac-arm64'
     );
   });
 
