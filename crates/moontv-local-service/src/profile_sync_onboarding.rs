@@ -6,25 +6,27 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
-    Json,
     extract::State,
     http::{Method, StatusCode},
     response::Response,
+    Json,
 };
 use moontv_profile::LocalProfileSnapshot;
 use moontv_sync::{
-    ProfileSyncError, ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncSessionMutation,
-    ProfileSyncStatusResponse, build_profile_sync_target_url,
+    build_profile_sync_target_url, ProfileSyncError, ProfileSyncForwardRequest, ProfileSyncSession,
+    ProfileSyncSessionMutation, ProfileSyncStatusResponse,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tracing::warn;
 
 use crate::{
-    AppError, AppResult, AppState, download_runtime::DesktopDownloadResourceIndexRecord,
-    no_store_json_response, normalize_owned_string, persist_admin_config_file_with_subscription,
+    DesktopAdminConfig,
+    download_runtime::DesktopDownloadResourceIndexRecord, no_store_json_response,
+    normalize_owned_string, persist_admin_config_file_with_subscription,
     profile_sync::build_profile_sync_status_payload, read_json_file, require_owned_string,
-    sync_domains_include_adminsettings, validate_profile_sync_selected_domains,
+    sync_domains_include_adminsettings, validate_profile_sync_selected_domains, AppError,
+    AppResult, AppState,
 };
 
 const DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL: &str = "https://luna.hkcu.qzz.io";
@@ -321,24 +323,7 @@ struct RemoteAdminConfigResponse {
     #[serde(rename = "Role")]
     role: String,
     #[serde(rename = "Config")]
-    config: RemoteAdminConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteAdminConfig {
-    #[serde(rename = "UserConfig")]
-    user_config: RemoteAdminUserConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteAdminUserConfig {
-    #[serde(rename = "Users")]
-    users: Vec<RemoteAdminUserConfigItem>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteAdminUserConfigItem {
-    username: String,
+    config: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -364,16 +349,7 @@ pub(crate) async fn preview_profile_sync_onboarding(
     ensure_current_local_account(&local_account_summaries, &current_local_username)?;
     let remote_admin_config = fetch_remote_admin_config(&state, &remote_base_url).await?;
     ensure_remote_admin_role(&remote_admin_config.role)?;
-    let remote_accounts = remote_admin_config
-        .config
-        .user_config
-        .users
-        .into_iter()
-        .map(|user| DesktopProfileSyncRemoteAccountState {
-            username: user.username,
-            exists: true,
-        })
-        .collect::<Vec<_>>();
+    let remote_accounts = extract_remote_accounts_from_admin_config(&remote_admin_config.config);
     let plan = plan_profile_sync_onboarding(
         local_account_summaries,
         &current_local_username,
@@ -411,21 +387,15 @@ pub(crate) async fn execute_profile_sync_onboarding(
     let local_account_summaries = load_local_account_summaries(&state)?;
     ensure_current_local_account(&local_account_summaries, &current_local_username)?;
     let local_snapshot_map = load_local_snapshot_map(&state, &local_account_summaries)?;
-    let local_admin_config_snapshot = sync_domains_include_adminsettings(&sync_domains)
+    let should_sync_adminsettings = sync_domains_include_adminsettings(&sync_domains);
+    let should_push_local_admin_config =
+        should_sync_adminsettings && strategy == DesktopProfileSyncConflictStrategy::LocalFirst;
+    let local_admin_config_snapshot = should_push_local_admin_config
         .then(|| load_local_admin_config_snapshot(&state))
         .transpose()?;
     let remote_admin_config = fetch_remote_admin_config(&state, &remote_base_url).await?;
     ensure_remote_admin_role(&remote_admin_config.role)?;
-    let remote_accounts = remote_admin_config
-        .config
-        .user_config
-        .users
-        .into_iter()
-        .map(|user| DesktopProfileSyncRemoteAccountState {
-            username: user.username,
-            exists: true,
-        })
-        .collect::<Vec<_>>();
+    let remote_accounts = extract_remote_accounts_from_admin_config(&remote_admin_config.config);
     let plan = plan_profile_sync_onboarding(
         local_account_summaries,
         &current_local_username,
@@ -474,7 +444,20 @@ pub(crate) async fn execute_profile_sync_onboarding(
     }
 
     let download_rebind = rebind_local_offline_downloads(&state, &remote_session.username)?;
-    persist_profile_sync_settings_into_local_config(&state, &remote_base_url, &sync_domains)?;
+    if should_sync_adminsettings && strategy == DesktopProfileSyncConflictStrategy::WebFirst {
+        let remote_admin_config = fetch_remote_admin_config(&state, &remote_base_url).await?;
+        ensure_remote_admin_role(&remote_admin_config.role)?;
+        let remote_admin_config =
+            decode_remote_admin_config_snapshot(remote_admin_config.config)?;
+        apply_remote_admin_config_to_local_state(
+            &state,
+            &remote_base_url,
+            &sync_domains,
+            remote_admin_config,
+        )?;
+    } else {
+        persist_profile_sync_settings_into_local_config(&state, &remote_base_url, &sync_domains)?;
+    }
 
     no_store_json_response(&DesktopProfileSyncOnboardingExecuteResponse {
         remote_base_url,
@@ -570,7 +553,12 @@ async fn require_profile_sync_session(state: &AppState) -> AppResult<ProfileSync
         .read()
         .await
         .clone()
-        .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, "当前 Web 帐号未登录，请重新开启同步"))
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::UNAUTHORIZED,
+                "当前 Web 帐号未登录，请重新开启同步",
+            )
+        })
 }
 
 async fn sync_profile_now(
@@ -585,7 +573,10 @@ async fn sync_profile_now(
         .load_snapshot(&remote_session.username)
         .map_err(|error| AppError::internal(error.to_string()))?;
     let filtered_snapshot = build_local_snapshot_for_sync_domains(&snapshot, sync_domains);
-    let admin_config_snapshot = if sync_domains_include_adminsettings(sync_domains) {
+    let should_sync_adminsettings = sync_domains_include_adminsettings(sync_domains);
+    let admin_config_snapshot = if should_sync_adminsettings
+        && strategy == DesktopProfileSyncConflictStrategy::LocalFirst
+    {
         Some(load_local_admin_config_snapshot(state)?)
     } else {
         None
@@ -600,6 +591,18 @@ async fn sync_profile_now(
         admin_config_snapshot.as_ref(),
     )
     .await?;
+
+    if should_sync_adminsettings && strategy == DesktopProfileSyncConflictStrategy::WebFirst {
+        let remote_admin_config = fetch_remote_admin_config(state, remote_base_url).await?;
+        ensure_remote_admin_role(&remote_admin_config.role)?;
+        let remote_admin_config = decode_remote_admin_config_snapshot(remote_admin_config.config)?;
+        apply_remote_admin_config_to_local_state(
+            state,
+            remote_base_url,
+            sync_domains,
+            remote_admin_config,
+        )?;
+    }
 
     Ok(())
 }
@@ -720,6 +723,33 @@ async fn fetch_remote_admin_config(
     )
     .await?;
     decode_remote_json_response(response, Some("只有 Web owner/admin 可以开启帐号同步")).await
+}
+
+fn extract_remote_accounts_from_admin_config(
+    config: &Value,
+) -> Vec<DesktopProfileSyncRemoteAccountState> {
+    config
+        .get("UserConfig")
+        .and_then(|value| value.get("Users"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|user| {
+            user.get("username")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|username| !username.is_empty())
+                .map(|username| DesktopProfileSyncRemoteAccountState {
+                    username: username.to_string(),
+                    exists: true,
+                })
+        })
+        .collect()
+}
+
+fn decode_remote_admin_config_snapshot(config: Value) -> AppResult<DesktopAdminConfig> {
+    serde_json::from_value(config)
+        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))
 }
 
 async fn create_remote_user(
@@ -1200,6 +1230,42 @@ fn persist_profile_sync_settings_into_local_config(
     .map_err(|error| AppError::internal(error.to_string()))
 }
 
+fn apply_remote_admin_config_to_local_state(
+    state: &AppState,
+    remote_base_url: &str,
+    sync_domains: &[String],
+    mut remote_admin_config: DesktopAdminConfig,
+) -> AppResult<()> {
+    let mut persistence = state
+        .load_admin_persistence()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let next_config_file = apply_profile_sync_settings_to_config_file(
+        &remote_admin_config.config_file,
+        Some(remote_base_url),
+        Some(sync_domains),
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+
+    remote_admin_config.config_file = next_config_file.clone();
+    persistence.config = remote_admin_config;
+    persistence.profile_sync_api_base_url = Some(remote_base_url.to_string());
+    persistence.profile_sync_sync_domains = sync_domains.to_vec();
+
+    state
+        .write_raw_config(&next_config_file)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    state
+        .save_admin_persistence(&persistence)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    let merged_persistence = state
+        .load_admin_persistence()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    state
+        .save_admin_persistence(&merged_persistence)
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
 fn base_onboarding_warnings() -> Vec<String> {
     vec!["仅当前仍保留的这套离线下载可以迁移，之前已清理的旧归属无法恢复。".to_string()]
 }
@@ -1219,8 +1285,7 @@ fn preview_onboarding_warnings(show_password_warning: bool) -> Vec<String> {
 fn execute_onboarding_warnings(show_password_warning: bool) -> Vec<String> {
     let mut warnings = base_onboarding_warnings();
     if show_password_warning {
-        warnings
-            .push("如果本次自动创建了 Web 帐号，请登录后立即修改初始密码。".to_string());
+        warnings.push("如果本次自动创建了 Web 帐号，请登录后立即修改初始密码。".to_string());
     }
 
     warnings
@@ -1240,11 +1305,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
+        apply_profile_sync_api_base_url_to_config_file, plan_profile_sync_onboarding,
+        preview_onboarding_warnings, rebind_download_store_snapshot_owner,
         DesktopProfileSyncConflictStrategy, DesktopProfileSyncLocalAccountSummary,
         DesktopProfileSyncOnboardingPlan, DesktopProfileSyncOnboardingPlanItem,
-        DesktopProfileSyncRemoteAccountState, apply_profile_sync_api_base_url_to_config_file,
-        plan_profile_sync_onboarding, preview_onboarding_warnings,
-        rebind_download_store_snapshot_owner,
+        DesktopProfileSyncRemoteAccountState,
     };
 
     #[test]

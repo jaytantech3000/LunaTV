@@ -12265,6 +12265,310 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn profile_sync_sync_now_web_first_with_adminsettings_applies_remote_admin_config_locally(
+    ) {
+        let captured_payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let captured_payloads_for_route = Arc::clone(&captured_payloads);
+        let remote_raw_config = json!({
+          "auth": {
+            "username": "remote-owner",
+            "password": "remote-owner-secret"
+          },
+          "api_site": {
+            "remote": {
+              "api": "https://remote.example/api.php/provide/vod",
+              "name": "Remote Source"
+            }
+          }
+        });
+        let remote_admin_config_response = json!({
+          "Role": "owner",
+          "Config": {
+            "ConfigSubscribtion": {
+              "URL": "https://remote.example/subscription",
+              "AutoUpdate": true,
+              "LastCheck": "2026-07-02T00:00:00Z"
+            },
+            "ConfigFile": serde_json::to_string_pretty(&remote_raw_config)
+              .expect("serialize remote raw config"),
+            "SiteConfig": {
+              "SiteName": "Remote LunaTV",
+              "Announcement": "Remote announcement",
+              "SearchDownstreamMaxPage": 8,
+              "SiteInterfaceCacheTime": 3600,
+              "DoubanProxyType": "custom",
+              "DoubanProxy": "https://remote.example/douban",
+              "DoubanImageProxyType": "custom",
+              "DoubanImageProxy": "https://remote.example/image",
+              "DisableYellowFilter": true,
+              "FluidSearch": false,
+              "EnableWebLive": true,
+              "EnableWebMusic": true
+            },
+            "UserConfig": {
+              "Users": [
+                {
+                  "username": "remote-owner",
+                  "role": "owner"
+                },
+                {
+                  "username": "remote-admin",
+                  "role": "admin"
+                }
+              ],
+              "Tags": [
+                {
+                  "name": "remote-tag",
+                  "enabledApis": ["remote"]
+                }
+              ]
+            },
+            "SourceConfig": [
+              {
+                "key": "remote",
+                "name": "Remote Source",
+                "api": "https://remote.example/api.php/provide/vod",
+                "detail": null,
+                "ua": null,
+                "referer": null,
+                "from": "config",
+                "disabled": false,
+                "disable_ad_filter": false
+              }
+            ],
+            "CustomCategories": [],
+            "LiveConfig": [],
+            "AdFilterConfig": {
+              "enabled": false
+            },
+            "PlayerEnhancementConfig": {
+              "AudioSpikeProtection": true,
+              "VisualEnhancement": true
+            }
+          }
+        });
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/server-config",
+                    get(|| async move {
+                        Json(json!({
+                            "StorageType": "redis",
+                            "ProfileMode": "shared-multi-user"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/config",
+                    get({
+                        let remote_admin_config_response = remote_admin_config_response.clone();
+                        move || {
+                            let remote_admin_config_response =
+                                remote_admin_config_response.clone();
+                            async move { Json(remote_admin_config_response) }
+                        }
+                    }),
+                )
+                .route(
+                    "/api/admin/profile-sync/merge",
+                    post(move |Json(payload): Json<Value>| {
+                        let captured_payloads = Arc::clone(&captured_payloads_for_route);
+                        async move {
+                            captured_payloads
+                                .lock()
+                                .expect("capture merge payloads")
+                                .push(payload.clone());
+                            Json(json!({
+                                "summary": {
+                                    "playRecordCount": 0,
+                                    "favoriteCount": 0,
+                                    "followCount": 0,
+                                    "searchHistoryCount": 0,
+                                    "skipConfigCount": 0
+                                }
+                            }))
+                        }
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let local_raw_config = json!({
+          "auth": {
+            "username": "remote-owner",
+            "password": "local-owner-secret"
+          },
+          "profile_sync": {
+            "api_base_url": upstream.base_url()
+          },
+          "api_site": {
+            "local": {
+              "api": "https://local.example/api.php/provide/vod",
+              "name": "Local Source"
+            }
+          }
+        });
+        let config_path = write_test_config(&temp_dir, local_raw_config.clone());
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "https://local.example/subscription",
+                  "AutoUpdate": false,
+                  "LastCheck": ""
+                },
+                "ConfigFile": serde_json::to_string_pretty(&local_raw_config)
+                  .expect("serialize local raw config"),
+                "SiteConfig": {
+                  "SiteName": "Local LunaTV",
+                  "Announcement": "",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false,
+                  "EnableWebMusic": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "remote-owner",
+                      "role": "owner"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [
+                  {
+                    "key": "local",
+                    "name": "Local Source",
+                    "api": "https://local.example/api.php/provide/vod",
+                    "detail": null,
+                    "ua": null,
+                    "referer": null,
+                    "from": "config",
+                    "disabled": false,
+                    "disable_ad_filter": false
+                  }
+                ],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+            username: "remote-owner".to_string(),
+            role: "owner".to_string(),
+        });
+        let app = build_router(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/profile-sync/sync-now")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "syncDomains": ["adminsettings"],
+                          "strategy": "web-first"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync sync-now request"),
+            )
+            .await
+            .expect("profile sync sync-now response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(payload.get("syncDomains"), Some(&json!(["adminsettings"])));
+
+        let captured_payloads = captured_payloads.lock().expect("captured payloads");
+        assert_eq!(captured_payloads.len(), 1);
+        assert_eq!(captured_payloads[0].get("adminConfig"), None);
+        drop(captured_payloads);
+
+        let admin_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/config")
+                    .body(Body::empty())
+                    .expect("admin config request"),
+            )
+            .await
+            .expect("admin config response");
+
+        assert_eq!(admin_response.status(), StatusCode::OK);
+        let admin_payload = read_json_body(admin_response).await;
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("SiteConfig"))
+                .and_then(|value| value.get("SiteName"))
+                .and_then(Value::as_str),
+            Some("Remote LunaTV")
+        );
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("ConfigSubscribtion"))
+                .and_then(|value| value.get("URL"))
+                .and_then(Value::as_str),
+            Some("https://remote.example/subscription")
+        );
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("SourceConfig"))
+                .and_then(Value::as_array)
+                .and_then(|value| value.first())
+                .and_then(|value| value.get("key"))
+                .and_then(Value::as_str),
+            Some("remote")
+        );
+        assert!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("UserConfig"))
+                .and_then(|value| value.get("Users"))
+                .and_then(Value::as_array)
+                .is_some_and(|users| users.iter().any(|user| {
+                    user.get("username").and_then(Value::as_str) == Some("remote-admin")
+                })),
+            "expected remote admin user to be persisted locally"
+        );
+        assert!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("ConfigFile"))
+                .and_then(Value::as_str)
+                .is_some_and(|config_file| {
+                    config_file.contains("remote-owner-secret")
+                        && config_file.contains(&upstream.base_url())
+                        && config_file.contains("adminsettings")
+                }),
+            "expected remote config file plus persisted profile sync settings"
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
     async fn profile_sync_onboarding_execute_skips_password_warning_when_no_account_is_created() {
         let upstream = spawn_mock_server(
             Router::new()
@@ -12565,7 +12869,7 @@ segment0.ts
     }
 
     #[tokio::test]
-    async fn profile_sync_onboarding_execute_sends_admin_config_snapshot_to_merge_route_when_adminsettings_selected(
+    async fn profile_sync_onboarding_execute_sends_admin_config_snapshot_to_merge_route_when_adminsettings_selected_and_localfirst(
     ) {
         let upstream = spawn_mock_server(
             Router::new()
@@ -12724,7 +13028,7 @@ segment0.ts
                           "username": "remote-owner",
                           "password": "secret",
                           "currentLocalUsername": "owner",
-                          "strategy": "web-first",
+                          "strategy": "local-first",
                           "syncDomains": ["playrecords", "adminsettings"]
                         })
                         .to_string(),
@@ -12735,6 +13039,313 @@ segment0.ts
             .expect("profile sync onboarding execute response");
 
         assert_eq!(response.status(), StatusCode::OK);
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_onboarding_execute_web_first_with_adminsettings_applies_remote_admin_config_locally(
+    ) {
+        let captured_payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let captured_payloads_for_route = Arc::clone(&captured_payloads);
+        let remote_raw_config = json!({
+          "auth": {
+            "username": "remote-owner",
+            "password": "remote-owner-secret"
+          },
+          "api_site": {
+            "remote": {
+              "api": "https://remote.example/api.php/provide/vod",
+              "name": "Remote Source"
+            }
+          }
+        });
+        let remote_admin_config_response = json!({
+          "Role": "owner",
+          "Config": {
+            "ConfigSubscribtion": {
+              "URL": "https://remote.example/subscription",
+              "AutoUpdate": true,
+              "LastCheck": "2026-07-02T00:00:00Z"
+            },
+            "ConfigFile": serde_json::to_string_pretty(&remote_raw_config)
+              .expect("serialize remote raw config"),
+            "SiteConfig": {
+              "SiteName": "Remote LunaTV",
+              "Announcement": "Remote announcement",
+              "SearchDownstreamMaxPage": 8,
+              "SiteInterfaceCacheTime": 3600,
+              "DoubanProxyType": "custom",
+              "DoubanProxy": "https://remote.example/douban",
+              "DoubanImageProxyType": "custom",
+              "DoubanImageProxy": "https://remote.example/image",
+              "DisableYellowFilter": true,
+              "FluidSearch": false,
+              "EnableWebLive": true,
+              "EnableWebMusic": true
+            },
+            "UserConfig": {
+              "Users": [
+                {
+                  "username": "remote-owner",
+                  "role": "owner"
+                },
+                {
+                  "username": "remote-admin",
+                  "role": "admin"
+                }
+              ],
+              "Tags": [
+                {
+                  "name": "remote-tag",
+                  "enabledApis": ["remote"]
+                }
+              ]
+            },
+            "SourceConfig": [
+              {
+                "key": "remote",
+                "name": "Remote Source",
+                "api": "https://remote.example/api.php/provide/vod",
+                "detail": null,
+                "ua": null,
+                "referer": null,
+                "from": "config",
+                "disabled": false,
+                "disable_ad_filter": false
+              }
+            ],
+            "CustomCategories": [],
+            "LiveConfig": [],
+            "AdFilterConfig": {
+              "enabled": false
+            },
+            "PlayerEnhancementConfig": {
+              "AudioSpikeProtection": true,
+              "VisualEnhancement": true
+            }
+          }
+        });
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/login",
+                    post(|| async move {
+                        Json(json!({
+                            "ok": true,
+                            "username": "remote-owner",
+                            "role": "owner"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/config",
+                    get({
+                        let remote_admin_config_response = remote_admin_config_response.clone();
+                        move || {
+                            let remote_admin_config_response =
+                                remote_admin_config_response.clone();
+                            async move { Json(remote_admin_config_response) }
+                        }
+                    }),
+                )
+                .route(
+                    "/api/admin/profile-sync/merge",
+                    post(move |Json(payload): Json<Value>| {
+                        let captured_payloads = Arc::clone(&captured_payloads_for_route);
+                        async move {
+                            captured_payloads
+                                .lock()
+                                .expect("capture merge payloads")
+                                .push(payload.clone());
+                            Json(json!({
+                                "summary": {
+                                    "playRecordCount": 0,
+                                    "favoriteCount": 0,
+                                    "followCount": 0,
+                                    "searchHistoryCount": 0,
+                                    "skipConfigCount": 0
+                                }
+                            }))
+                        }
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let local_raw_config = json!({
+          "auth": {
+            "username": "owner",
+            "password": "local-owner-secret"
+          },
+          "api_site": {
+            "local": {
+              "api": "https://local.example/api.php/provide/vod",
+              "name": "Local Source"
+            }
+          }
+        });
+        let config_path = write_test_config(&temp_dir, local_raw_config.clone());
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "https://local.example/subscription",
+                  "AutoUpdate": false,
+                  "LastCheck": ""
+                },
+                "ConfigFile": serde_json::to_string_pretty(&local_raw_config)
+                  .expect("serialize local raw config"),
+                "SiteConfig": {
+                  "SiteName": "Local LunaTV",
+                  "Announcement": "",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false,
+                  "EnableWebMusic": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "owner",
+                      "role": "owner"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [
+                  {
+                    "key": "local",
+                    "name": "Local Source",
+                    "api": "https://local.example/api.php/provide/vod",
+                    "detail": null,
+                    "ua": null,
+                    "referer": null,
+                    "from": "config",
+                    "disabled": false,
+                    "disable_ad_filter": false
+                  }
+                ],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/admin/profile-sync/onboarding/execute")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "remoteBaseUrl": upstream.base_url(),
+                          "username": "remote-owner",
+                          "password": "secret",
+                          "currentLocalUsername": "owner",
+                          "strategy": "web-first",
+                          "syncDomains": ["adminsettings"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync onboarding execute request"),
+            )
+            .await
+            .expect("profile sync onboarding execute response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload
+                .get("createdAccounts")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+
+        let captured_payloads = captured_payloads.lock().expect("captured payloads");
+        assert_eq!(captured_payloads.len(), 1);
+        assert_eq!(captured_payloads[0].get("adminConfig"), None);
+        drop(captured_payloads);
+
+        let admin_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/config")
+                    .body(Body::empty())
+                    .expect("admin config request"),
+            )
+            .await
+            .expect("admin config response");
+
+        assert_eq!(admin_response.status(), StatusCode::OK);
+        let admin_payload = read_json_body(admin_response).await;
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("SiteConfig"))
+                .and_then(|value| value.get("SiteName"))
+                .and_then(Value::as_str),
+            Some("Remote LunaTV")
+        );
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("ConfigSubscribtion"))
+                .and_then(|value| value.get("URL"))
+                .and_then(Value::as_str),
+            Some("https://remote.example/subscription")
+        );
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("SourceConfig"))
+                .and_then(Value::as_array)
+                .and_then(|value| value.first())
+                .and_then(|value| value.get("key"))
+                .and_then(Value::as_str),
+            Some("remote")
+        );
+        assert!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("UserConfig"))
+                .and_then(|value| value.get("Users"))
+                .and_then(Value::as_array)
+                .is_some_and(|users| users.iter().any(|user| {
+                    user.get("username").and_then(Value::as_str) == Some("remote-admin")
+                })),
+            "expected remote admin user to be persisted locally"
+        );
+        assert!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("ConfigFile"))
+                .and_then(Value::as_str)
+                .is_some_and(|config_file| {
+                    config_file.contains("remote-owner-secret")
+                        && config_file.contains(&upstream.base_url())
+                        && config_file.contains("adminsettings")
+                }),
+            "expected remote config file plus persisted profile sync settings"
+        );
 
         upstream.abort();
     }
