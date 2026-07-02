@@ -60,7 +60,6 @@ import { db } from '@/lib/db';
 import { POST } from './route';
 
 const removedSiteFlagKey = ['Enable', 'WebMusic'].join('');
-
 describe('/api/admin/profile-sync/merge', () => {
   beforeEach(() => {
     jest.clearAllMocks();

@@ -457,10 +457,9 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::{
-        PROFILE_SYNC_USER_DATA_DOMAINS, ProfileSyncClient, ProfileSyncError, ProfileSyncErrorKind,
-        ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncSessionMutation,
-        build_profile_sync_target_url, default_profile_sync_selected_domains,
-        session_from_login_response,
+        ProfileSyncClient, ProfileSyncError, ProfileSyncErrorKind, ProfileSyncForwardRequest,
+        ProfileSyncSession, ProfileSyncSessionMutation, build_profile_sync_target_url,
+        default_profile_sync_selected_domains, session_from_login_response,
     };
 
     #[test]
