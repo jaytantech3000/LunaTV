@@ -48,7 +48,10 @@ use md5::Md5;
 use moontv_download::{DesktopDownloadEngine, DesktopDownloadEngineSnapshot};
 use moontv_profile::LocalDesktopProfileStore;
 use moontv_storage::sqlite::{DesktopSqlite, SqliteDatabaseInfo};
-use moontv_sync::{ProfileSyncClient, ProfileSyncSession, ProfileSyncStatusResponse};
+use moontv_sync::{
+    PROFILE_SYNC_ADMIN_SETTINGS_DOMAIN, PROFILE_SYNC_USER_DATA_DOMAINS, ProfileSyncClient,
+    ProfileSyncSession, ProfileSyncStatusResponse, default_profile_sync_selected_domains,
+};
 use rand::Rng;
 use regex::Regex;
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
@@ -72,6 +75,7 @@ mod music_api;
 mod playback_prefetch;
 mod profile_local;
 mod profile_sync;
+mod profile_sync_onboarding;
 mod vod_proxy;
 
 pub(crate) use content_search::{search_all_sites, search_site};
@@ -107,6 +111,9 @@ use profile_sync::{
     proxy_profile_sync_playrecords, proxy_profile_sync_search_history,
     proxy_profile_sync_skip_configs,
 };
+use profile_sync_onboarding::{
+    execute_profile_sync_onboarding, post_profile_sync_sync_now, preview_profile_sync_onboarding,
+};
 use vod_proxy::{get_vod_key, get_vod_m3u8, get_vod_segment};
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -116,6 +123,7 @@ const DEFAULT_CONFIG_FILE_NAME: &str = "config.example.json";
 const DEFAULT_DATA_DIR_NAME: &str = ".lunatv-desktop";
 const DEFAULT_SQLITE_FILE_NAME: &str = "moontv-desktop.sqlite3";
 const ADMIN_PERSISTENCE_FILE_NAME: &str = "desktop-admin-state.json";
+const DEFAULT_DESKTOP_OWNER_USERNAME: &str = "admin";
 const DOWNLOAD_RUNTIME_DIR_NAME: &str = "download-runtime";
 const DOWNLOAD_RUNTIME_CACHE_BODY_DIR_NAME: &str = "cache-body";
 const DOWNLOAD_RUNTIME_CACHE_META_DIR_NAME: &str = "cache-meta";
@@ -471,6 +479,7 @@ impl AppState {
         Ok(build_service_config_from_admin(
             &persistence.config,
             &persistence.profile_sync_api_base_url,
+            &persistence.profile_sync_sync_domains,
         ))
     }
 
@@ -805,6 +814,7 @@ struct RawLiveSource {
 #[derive(Debug, Deserialize, Clone, Default)]
 struct RawProfileSyncConfig {
     api_base_url: Option<String>,
+    sync_domains: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
@@ -858,6 +868,7 @@ struct ServiceConfig {
     adult_content_filter_enabled: bool,
     vod_ad_filter_enabled: bool,
     fluid_search: bool,
+    enable_web_music: bool,
     player_audio_spike_protection: bool,
     player_audio_spike_protection_level: PlayerEnhancementLevel,
     player_audio_dynamic_protection: bool,
@@ -872,6 +883,7 @@ struct ServiceConfig {
     douban_image_proxy: Option<String>,
     enable_web_live_override: Option<bool>,
     profile_sync_api_base_url: Option<String>,
+    profile_sync_domains: Vec<String>,
     api_sites: Vec<ApiSite>,
     custom_categories: Vec<RuntimeCustomCategory>,
     live_sources: Vec<LiveSourceConfig>,
@@ -1130,6 +1142,11 @@ struct DesktopAdminPersistence {
     user_passwords: BTreeMap<String, String>,
     #[serde(default)]
     profile_sync_api_base_url: Option<String>,
+    #[serde(
+        rename = "profileSyncSyncDomains",
+        default = "default_profile_sync_selected_domains"
+    )]
+    profile_sync_sync_domains: Vec<String>,
 }
 
 impl Default for DesktopAdminPersistence {
@@ -1138,6 +1155,7 @@ impl Default for DesktopAdminPersistence {
             config: DesktopAdminConfig::default(),
             user_passwords: BTreeMap::new(),
             profile_sync_api_base_url: None,
+            profile_sync_sync_domains: default_profile_sync_selected_domains(),
         }
     }
 }
@@ -1220,6 +1238,8 @@ struct DesktopSiteConfig {
     fluid_search: bool,
     #[serde(rename = "EnableWebLive", default)]
     enable_web_live: bool,
+    #[serde(rename = "EnableWebMusic", default = "default_enable_web_music")]
+    enable_web_music: bool,
 }
 
 impl Default for DesktopSiteConfig {
@@ -1236,6 +1256,7 @@ impl Default for DesktopSiteConfig {
             disable_yellow_filter: false,
             fluid_search: default_fluid_search(),
             enable_web_live: false,
+            enable_web_music: default_enable_web_music(),
         }
     }
 }
@@ -1763,6 +1784,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/image-proxy", get(get_image_proxy))
         .route("/api/profile/bootstrap", get(get_profile_bootstrap))
         .route("/api/profile-sync/status", get(get_profile_sync_status))
+        .route(
+            "/api/profile-sync/sync-now",
+            post(post_profile_sync_sync_now),
+        )
         .route("/api/server-config", get(get_profile_sync_server_config))
         .route("/api/login", any(proxy_profile_sync_login))
         .route("/api/logout", any(proxy_profile_sync_logout))
@@ -1882,6 +1907,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/admin/config", get(get_admin_config))
         .route("/api/admin/reset", get(reset_admin_config))
         .route("/api/admin/config_file", post(update_admin_config_file))
+        .route(
+            "/api/admin/profile-sync/onboarding/preview",
+            post(preview_profile_sync_onboarding),
+        )
+        .route(
+            "/api/admin/profile-sync/onboarding/execute",
+            post(execute_profile_sync_onboarding),
+        )
         .route(
             "/api/admin/data_migration/export",
             post(export_admin_data_migration),
@@ -2013,7 +2046,7 @@ async fn get_runtime_public_config(State(state): State<AppState>) -> AppResult<R
 fn build_local_auth_status_payload(state: &AppState) -> Result<LocalAuthStatusResponse> {
     let persistence = state.load_admin_persistence()?;
     let owner_username = resolve_owner_username_for_import(&persistence.config)
-        .unwrap_or_else(|| "owner".to_string());
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
     let owner_password_configured =
         extract_owner_password_from_config_file(&persistence.config.config_file).is_some();
     let multi_user = persistence
@@ -2207,6 +2240,7 @@ async fn reset_admin_config(State(state): State<AppState>) -> AppResult<Response
     let mut reset_persistence = build_default_admin_persistence_from_raw(
         &state.config_path,
         current.profile_sync_api_base_url,
+        Some(current.profile_sync_sync_domains),
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
     reset_persistence.config.config_subscribtion = current.config.config_subscribtion;
@@ -2475,6 +2509,20 @@ async fn refresh_admin_config_subscription_if_due(state: &AppState) -> Result<()
     let config_content = fetch_admin_config_subscription_content(state, &subscription.url)
         .await
         .map_err(|error| anyhow::anyhow!(error.message))?;
+    let current_owner_username =
+        extract_owner_username_from_config_file(&persistence.config.config_file);
+    let current_owner_password =
+        extract_owner_password_from_config_file(&persistence.config.config_file);
+    let config_content = apply_desktop_runtime_overrides_to_config_file(
+        &config_content,
+        current_owner_username.as_deref(),
+        current_owner_password.as_deref(),
+        persistence.profile_sync_api_base_url.as_deref(),
+        persistence
+            .profile_sync_api_base_url
+            .as_ref()
+            .map(|_| persistence.profile_sync_sync_domains.as_slice()),
+    )?;
     persist_admin_config_file_with_subscription(
         state,
         &config_content,
@@ -2511,6 +2559,94 @@ fn validate_admin_config_file_contents(config_file: &str) -> Result<()> {
 
     serde_json::from_str::<Value>(trimmed).context("config file json is invalid")?;
     Ok(())
+}
+
+fn apply_desktop_runtime_overrides_to_config_file(
+    config_file: &str,
+    owner_username: Option<&str>,
+    owner_password: Option<&str>,
+    profile_sync_api_base_url: Option<&str>,
+    profile_sync_sync_domains: Option<&[String]>,
+) -> Result<String> {
+    let mut config_value = serde_json::from_str::<Value>(config_file.trim())
+        .context("failed to parse config file json")?;
+    let root = config_value
+        .as_object_mut()
+        .context("config file root must be an object")?;
+
+    let auth_entry = root.entry("auth".to_string()).or_insert_with(|| json!({}));
+    if !auth_entry.is_object() {
+        *auth_entry = json!({});
+    }
+    let auth = auth_entry
+        .as_object_mut()
+        .context("auth must be an object after normalization")?;
+    match owner_username
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(owner_username) => {
+            auth.insert(
+                "username".to_string(),
+                Value::String(owner_username.to_string()),
+            );
+        }
+        None => {
+            auth.remove("username");
+        }
+    }
+    match owner_password
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(owner_password) => {
+            auth.insert(
+                "password".to_string(),
+                Value::String(owner_password.to_string()),
+            );
+        }
+        None => {
+            auth.remove("password");
+        }
+    }
+
+    let profile_sync_entry = root
+        .entry("profile_sync".to_string())
+        .or_insert_with(|| json!({}));
+    if !profile_sync_entry.is_object() {
+        *profile_sync_entry = json!({});
+    }
+    let profile_sync = profile_sync_entry
+        .as_object_mut()
+        .context("profile_sync must be an object after normalization")?;
+    match profile_sync_api_base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(profile_sync_api_base_url) => {
+            profile_sync.insert(
+                "api_base_url".to_string(),
+                Value::String(profile_sync_api_base_url.to_string()),
+            );
+            if let Some(sync_domains) = profile_sync_sync_domains {
+                profile_sync.insert(
+                    "sync_domains".to_string(),
+                    Value::Array(
+                        sync_domains
+                            .iter()
+                            .map(|domain| Value::String(domain.clone()))
+                            .collect(),
+                    ),
+                );
+            }
+        }
+        None => {
+            profile_sync.remove("api_base_url");
+            profile_sync.remove("sync_domains");
+        }
+    }
+
+    serde_json::to_string_pretty(&config_value).context("failed to encode config file json")
 }
 
 fn persist_admin_config_file_with_subscription(
@@ -3191,7 +3327,7 @@ async fn update_admin_user_config(
         .iter()
         .find(|user| user.role == "owner")
         .map(|user| user.username.clone())
-        .unwrap_or_else(|| "owner".to_string());
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
     persistence.config.user_config =
         normalize_user_config(persistence.config.user_config, &owner_username);
 
@@ -3722,6 +3858,79 @@ fn default_fluid_search() -> bool {
     true
 }
 
+fn default_enable_web_music() -> bool {
+    true
+}
+
+fn normalize_profile_sync_domain(domain: &str) -> Option<String> {
+    let trimmed = domain.trim();
+    PROFILE_SYNC_USER_DATA_DOMAINS
+        .contains(&trimmed)
+        .then(|| trimmed.to_string())
+}
+
+pub(crate) fn normalize_profile_sync_selected_domains(domains: Option<Vec<String>>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    if let Some(domains) = domains {
+        for domain in domains {
+            let Some(normalized_domain) = normalize_profile_sync_domain(&domain) else {
+                continue;
+            };
+            if seen.insert(normalized_domain.clone()) {
+                normalized.push(normalized_domain);
+            }
+        }
+    }
+
+    if normalized.is_empty() {
+        default_profile_sync_selected_domains()
+    } else {
+        normalized
+    }
+}
+
+pub(crate) fn validate_profile_sync_selected_domains(
+    domains: Option<Vec<String>>,
+) -> AppResult<Vec<String>> {
+    let Some(domains) = domains else {
+        return Ok(default_profile_sync_selected_domains());
+    };
+
+    let mut normalized = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for domain in domains {
+        let trimmed = domain.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !PROFILE_SYNC_USER_DATA_DOMAINS.contains(&trimmed) {
+            return Err(AppError::bad_request(format!(
+                "不支持的同步范围: {trimmed}"
+            )));
+        }
+
+        let candidate = trimmed.to_string();
+        if seen.insert(candidate.clone()) {
+            normalized.push(candidate);
+        }
+    }
+
+    if normalized.is_empty() {
+        Ok(default_profile_sync_selected_domains())
+    } else {
+        Ok(normalized)
+    }
+}
+
+pub(crate) fn sync_domains_include_adminsettings(sync_domains: &[String]) -> bool {
+    sync_domains
+        .iter()
+        .any(|domain| domain == PROFILE_SYNC_ADMIN_SETTINGS_DOMAIN)
+}
+
 fn read_raw_service_config(path: &Path) -> Result<(String, RawServiceConfig)> {
     let contents =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -3733,6 +3942,7 @@ fn read_raw_service_config(path: &Path) -> Result<(String, RawServiceConfig)> {
 fn build_default_admin_persistence_from_raw(
     config_path: &Path,
     profile_sync_api_base_url: Option<String>,
+    profile_sync_sync_domains: Option<Vec<String>>,
 ) -> Result<DesktopAdminPersistence> {
     let (raw_contents, raw_config) = read_raw_service_config(config_path)?;
     Ok(DesktopAdminPersistence {
@@ -3740,6 +3950,9 @@ fn build_default_admin_persistence_from_raw(
         user_passwords: BTreeMap::new(),
         profile_sync_api_base_url: profile_sync_api_base_url
             .or_else(|| normalize_optional_string(raw_config.profile_sync.api_base_url)),
+        profile_sync_sync_domains: normalize_profile_sync_selected_domains(
+            profile_sync_sync_domains.or(raw_config.profile_sync.sync_domains),
+        ),
     })
 }
 
@@ -3759,6 +3972,7 @@ fn load_admin_persistence(
             config: build_default_admin_config(&raw_contents, &raw_config),
             user_passwords: BTreeMap::new(),
             profile_sync_api_base_url: None,
+            profile_sync_sync_domains: default_profile_sync_selected_domains(),
         }
     };
 
@@ -3785,7 +3999,7 @@ fn build_default_admin_config(
     raw_config: &RawServiceConfig,
 ) -> DesktopAdminConfig {
     let owner_username = normalize_optional_string(raw_config.auth.username.clone())
-        .unwrap_or_else(|| "owner".to_string());
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
     let site_config = build_default_site_config_from_raw(raw_config);
     let player_enhancement_config = build_default_player_enhancement_config_from_raw(raw_config);
 
@@ -3882,6 +4096,7 @@ fn build_default_site_config_from_raw(raw_config: &RawServiceConfig) -> DesktopS
                 .values()
                 .any(|live| !live.disabled.unwrap_or(false))
         }),
+        enable_web_music: default_enable_web_music(),
     }
 }
 
@@ -3937,7 +4152,7 @@ fn merge_admin_persistence_with_raw(
     raw_config: &RawServiceConfig,
 ) -> DesktopAdminPersistence {
     let owner_username = normalize_optional_string(raw_config.auth.username.clone())
-        .unwrap_or_else(|| "owner".to_string());
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
 
     persistence.config.config_file = raw_contents.clone();
     persistence.config.site_config = normalize_desktop_site_config(persistence.config.site_config);
@@ -3964,6 +4179,12 @@ fn merge_admin_persistence_with_raw(
 
     persistence.profile_sync_api_base_url =
         normalize_optional_string(raw_config.profile_sync.api_base_url.clone());
+    persistence.profile_sync_sync_domains = match raw_config.profile_sync.sync_domains.clone() {
+        Some(sync_domains) => normalize_profile_sync_selected_domains(Some(sync_domains)),
+        None => normalize_profile_sync_selected_domains(Some(
+            persistence.profile_sync_sync_domains.clone(),
+        )),
+    };
 
     persistence
 }
@@ -4157,6 +4378,7 @@ fn merge_live_config(
 fn build_service_config_from_admin(
     admin_config: &DesktopAdminConfig,
     profile_sync_api_base_url: &Option<String>,
+    profile_sync_domains: &[String],
 ) -> ServiceConfig {
     let audio_level = PlayerEnhancementLevel::resolve(
         admin_config
@@ -4191,6 +4413,7 @@ fn build_service_config_from_admin(
         adult_content_filter_enabled: !admin_config.site_config.disable_yellow_filter,
         vod_ad_filter_enabled: admin_config.ad_filter_config.enabled,
         fluid_search: admin_config.site_config.fluid_search,
+        enable_web_music: admin_config.site_config.enable_web_music,
         player_audio_spike_protection: audio_level.is_enabled(),
         player_audio_spike_protection_level: audio_level,
         player_audio_dynamic_protection: audio_dynamic_protection,
@@ -4211,6 +4434,9 @@ fn build_service_config_from_admin(
         )),
         enable_web_live_override: Some(admin_config.site_config.enable_web_live),
         profile_sync_api_base_url: profile_sync_api_base_url.clone(),
+        profile_sync_domains: normalize_profile_sync_selected_domains(Some(
+            profile_sync_domains.to_vec(),
+        )),
         api_sites: admin_config
             .source_config
             .iter()
@@ -4283,6 +4509,7 @@ fn normalize_desktop_site_config(site_config: DesktopSiteConfig) -> DesktopSiteC
         disable_yellow_filter: site_config.disable_yellow_filter,
         fluid_search: site_config.fluid_search,
         enable_web_live: site_config.enable_web_live,
+        enable_web_music: site_config.enable_web_music,
     }
 }
 
@@ -4548,6 +4775,7 @@ fn import_local_admin_data_migration_archive(
         config: admin_config,
         user_passwords,
         profile_sync_api_base_url: None,
+        profile_sync_sync_domains: default_profile_sync_selected_domains(),
     };
 
     state.write_raw_config(&prepared_config_file)?;
@@ -5608,7 +5836,7 @@ fn build_runtime_public_config_response(config: &ServiceConfig) -> RuntimePublic
         enable_web_live: config
             .enable_web_live_override
             .unwrap_or_else(|| config.live_sources.iter().any(|source| !source.disabled)),
-        enable_web_music: true,
+        enable_web_music: config.enable_web_music,
         player_audio_spike_protection: config.player_audio_spike_protection,
         player_audio_spike_protection_level: config.player_audio_spike_protection_level,
         player_audio_dynamic_protection: config.player_audio_dynamic_protection,
@@ -7090,9 +7318,11 @@ mod tests {
 
     use std::env;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use axum::{body::to_bytes, http::Request, response::IntoResponse};
     use futures::StreamExt;
+    use moontv_profile::{Favorite, FollowRecord, PlayRecord, SkipConfig};
     use tower::ServiceExt;
 
     fn build_test_playback_search_result(
@@ -8247,6 +8477,46 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn profile_sync_status_endpoint_exposes_configured_sync_domains() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": "not a url",
+                "sync_domains": ["playrecords", "adminsettings"]
+              },
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .body(Body::empty())
+                    .expect("profile sync status request"),
+            )
+            .await
+            .expect("profile sync status response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+
+        assert_eq!(
+            payload.get("syncDomains"),
+            Some(&json!(["playrecords", "adminsettings"]))
+        );
+    }
+
+    #[tokio::test]
     async fn admin_config_endpoint_returns_merged_desktop_state() {
         let upstream = spawn_mock_server(mock_upstream_router()).await;
         let temp_dir = TestDir::new();
@@ -8285,7 +8555,8 @@ segment0.ts
                   "DoubanImageProxy": "https://img.example.com/?url=",
                   "DisableYellowFilter": false,
                   "FluidSearch": false,
-                  "EnableWebLive": false
+                  "EnableWebLive": false,
+                  "EnableWebMusic": false
                 },
                 "UserConfig": {
                   "Users": [
@@ -8362,6 +8633,14 @@ segment0.ts
                 .and_then(|site| site.get("SiteName"))
                 .and_then(Value::as_str),
             Some("Desktop LunaTV")
+        );
+        assert_eq!(
+            payload
+                .get("Config")
+                .and_then(|config| config.get("SiteConfig"))
+                .and_then(|site| site.get("EnableWebMusic"))
+                .and_then(Value::as_bool),
+            Some(false)
         );
         assert_eq!(
             payload
@@ -8797,6 +9076,177 @@ segment0.ts
 
         let raw_config = fs::read_to_string(config_path).expect("read refreshed raw config");
         assert!(raw_config.contains("Updated LunaTV"));
+
+        upstream.abort();
+    }
+
+    #[test]
+    fn load_admin_persistence_defaults_missing_owner_username_to_admin() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "site_name": "Default LunaTV",
+              "api_site": {}
+            }),
+        );
+
+        let persistence = load_admin_persistence(
+            &config_path,
+            &temp_dir.path.join("data").join(ADMIN_PERSISTENCE_FILE_NAME),
+        )
+        .expect("load admin persistence");
+
+        assert_eq!(
+            resolve_owner_username_for_import(&persistence.config).as_deref(),
+            Some("admin")
+        );
+        assert!(
+            persistence
+                .config
+                .user_config
+                .users
+                .iter()
+                .any(|user| user.username == "admin" && user.role == "owner")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_admin_config_subscription_if_due_preserves_profile_sync_and_synced_owner() {
+        let subscription_config = json!({
+          "auth": {
+            "username": "owner"
+          },
+          "site_name": "Updated LunaTV",
+          "api_site": {
+            "remote": {
+              "api": "https://example.com/api.php/provide/vod",
+              "name": "Remote Source"
+            }
+          }
+        });
+        let encoded_subscription = bs58::encode(
+            serde_json::to_string(&subscription_config).expect("serialize subscription config"),
+        )
+        .into_string();
+        let upstream = spawn_mock_server(Router::new().route(
+            "/subscription",
+            get({
+                let encoded_subscription = encoded_subscription.clone();
+                move || {
+                    let encoded_subscription = encoded_subscription.clone();
+                    async move { encoded_subscription }
+                }
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "auth": {
+                "username": "admin",
+                "password": "admin-secret"
+              },
+              "profile_sync": {
+                "api_base_url": "https://sync.example.com",
+                "sync_domains": ["adminsettings", "favorites"]
+              },
+              "site_name": "Synced LunaTV",
+              "api_site": {}
+            }),
+        );
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "profile_sync_api_base_url": "https://sync.example.com",
+              "profileSyncSyncDomains": ["adminsettings", "favorites"],
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": format!("{}/subscription", upstream.base_url()),
+                  "AutoUpdate": true,
+                  "LastCheck": ""
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "admin",
+                      "role": "owner"
+                    },
+                    {
+                      "username": "owner",
+                      "role": "user"
+                    }
+                  ],
+                  "Tags": []
+                }
+              }
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path.clone(),
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+
+        refresh_admin_config_subscription_if_due(&state)
+            .await
+            .expect("refresh desktop config subscription");
+
+        let refreshed_raw_config = serde_json::from_str::<Value>(
+            &fs::read_to_string(&config_path).expect("read refreshed raw config"),
+        )
+        .expect("parse refreshed raw config");
+        assert_eq!(
+            refreshed_raw_config["auth"]["username"],
+            Value::String("admin".to_string())
+        );
+        assert_eq!(
+            refreshed_raw_config["auth"]["password"],
+            Value::String("admin-secret".to_string())
+        );
+        assert_eq!(
+            refreshed_raw_config["profile_sync"]["api_base_url"],
+            Value::String("https://sync.example.com".to_string())
+        );
+        assert_eq!(
+            refreshed_raw_config["profile_sync"]["sync_domains"],
+            json!(["adminsettings", "favorites"])
+        );
+
+        let persistence = state
+            .load_admin_persistence()
+            .expect("load refreshed admin persistence");
+        assert_eq!(
+            resolve_owner_username_for_import(&persistence.config).as_deref(),
+            Some("admin")
+        );
+        assert!(
+            persistence
+                .config
+                .user_config
+                .users
+                .iter()
+                .any(|user| user.username == "admin" && user.role == "owner")
+        );
+        assert!(
+            persistence
+                .config
+                .user_config
+                .users
+                .iter()
+                .any(|user| user.username == "owner" && user.role == "user")
+        );
+        assert_eq!(
+            state
+                .load_config()
+                .expect("load runtime config")
+                .profile_sync_api_base_url
+                .as_deref(),
+            Some("https://sync.example.com")
+        );
 
         upstream.abort();
     }
@@ -11575,6 +12025,1607 @@ segment0.ts
         assert_eq!(
             payload_after_401.get("reachable").and_then(Value::as_bool),
             Some(true)
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_onboarding_routes_are_registered() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        for path in [
+            "/api/admin/profile-sync/onboarding/preview",
+            "/api/admin/profile-sync/onboarding/execute",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from("{}"))
+                        .expect("profile sync onboarding request"),
+                )
+                .await
+                .expect("profile sync onboarding response");
+
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let payload = read_json_body(response).await;
+            assert_eq!(
+                payload.get("error").and_then(Value::as_str),
+                Some("缺少 Web 用户名")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn profile_sync_onboarding_execute_surfaces_merge_route_version_mismatch_cleanly() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/login",
+                    post(|| async move {
+                        Json(json!({
+                            "ok": true,
+                            "username": "admin",
+                            "role": "admin"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/config",
+                    get(|| async move {
+                        Json(json!({
+                            "Role": "admin",
+                            "Config": {
+                                "UserConfig": {
+                                    "Users": [
+                                        {
+                                            "username": "admin"
+                                        }
+                                    ]
+                                }
+                            }
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/profile-sync/merge",
+                    post(|| async move {
+                        (
+                            StatusCode::NOT_FOUND,
+                            [(CONTENT_TYPE, "text/html; charset=utf-8")],
+                            "<!DOCTYPE html><html><body>404</body></html>",
+                        )
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let raw_config = json!({
+          "auth": {
+            "username": "owner",
+            "password": "owner-secret"
+          },
+          "api_site": {}
+        });
+        let config_path = write_test_config(&temp_dir, raw_config.clone());
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "",
+                  "AutoUpdate": false,
+                  "LastCheck": ""
+                },
+                "ConfigFile": serde_json::to_string_pretty(&raw_config)
+                  .expect("serialize raw config"),
+                "SiteConfig": {
+                  "SiteName": "Desktop LunaTV",
+                  "Announcement": "",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "owner",
+                      "role": "owner"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/admin/profile-sync/onboarding/execute")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "remoteBaseUrl": upstream.base_url(),
+                          "username": "admin",
+                          "password": "secret",
+                          "currentLocalUsername": "owner",
+                          "strategy": "web-first"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync onboarding execute request"),
+            )
+            .await
+            .expect("profile sync onboarding execute response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload = read_json_body(response).await;
+        let error_text = payload
+            .get("error")
+            .and_then(Value::as_str)
+            .expect("profile sync onboarding execute error text");
+        assert!(
+            error_text.contains("远端资料迁移接口异常"),
+            "unexpected error text: {error_text}"
+        );
+        assert!(
+            error_text.contains(&format!(
+                "POST {}/api/admin/profile-sync/merge",
+                upstream.base_url()
+            )),
+            "unexpected error text: {error_text}"
+        );
+        assert!(
+            error_text.contains("404 Not Found"),
+            "unexpected error text: {error_text}"
+        );
+        assert!(
+            error_text.contains("text/html; charset=utf-8"),
+            "unexpected error text: {error_text}"
+        );
+        assert!(
+            error_text.contains("<!DOCTYPE html><html><body>404</body></html>"),
+            "unexpected error text: {error_text}"
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_sync_now_rejects_adminsettings_for_non_admin_role() {
+        let merge_call_count = Arc::new(Mutex::new(0usize));
+        let merge_call_count_for_route = Arc::clone(&merge_call_count);
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/admin/profile-sync/merge",
+            post(move || {
+                let merge_call_count = Arc::clone(&merge_call_count_for_route);
+                async move {
+                    *merge_call_count.lock().expect("merge call count") += 1;
+                    Json(json!({
+                        "summary": {
+                            "playRecordCount": 0,
+                            "favoriteCount": 0,
+                            "followCount": 0,
+                            "searchHistoryCount": 0,
+                            "skipConfigCount": 0
+                        }
+                    }))
+                }
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "auth": {
+                "username": "desktop-owner",
+                "password": "owner-secret"
+              },
+              "profile_sync": {
+                "api_base_url": upstream.base_url()
+              },
+              "api_site": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+            username: "kid".to_string(),
+            role: "user".to_string(),
+        });
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/profile-sync/sync-now")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "syncDomains": ["playrecords", "adminsettings"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync sync-now request"),
+            )
+            .await
+            .expect("profile sync sync-now response");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload.get("error").and_then(Value::as_str),
+            Some("只有 Web owner/admin 可以同步管理员设置")
+        );
+        assert_eq!(
+            *merge_call_count.lock().expect("merge call count"),
+            0,
+            "merge route should not be called for non-admin adminsettings sync"
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_sync_now_merges_only_selected_domains_and_persists_scope() {
+        let captured_payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let captured_payloads_for_route = Arc::clone(&captured_payloads);
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/server-config",
+                    get(|| async move {
+                        Json(json!({
+                            "StorageType": "redis",
+                            "ProfileMode": "shared-multi-user"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/profile-sync/merge",
+                    post(move |Json(payload): Json<Value>| {
+                        let captured_payloads = Arc::clone(&captured_payloads_for_route);
+                        async move {
+                            captured_payloads
+                                .lock()
+                                .expect("capture merge payloads")
+                                .push(payload.clone());
+                            Json(json!({
+                                "summary": {
+                                    "playRecordCount": 0,
+                                    "favoriteCount": 1,
+                                    "followCount": 0,
+                                    "searchHistoryCount": 0,
+                                    "skipConfigCount": 0
+                                }
+                            }))
+                        }
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "auth": {
+                "username": "remote-owner",
+                "password": "owner-secret"
+              },
+              "profile_sync": {
+                "api_base_url": upstream.base_url()
+              },
+              "api_site": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+            username: "remote-owner".to_string(),
+            role: "owner".to_string(),
+        });
+        state
+            .profile_store()
+            .save_play_records(
+                "remote-owner",
+                &BTreeMap::from([(
+                    "play+1".to_string(),
+                    PlayRecord {
+                        title: "Demo Play".to_string(),
+                        source_name: "demo".to_string(),
+                        year: "2026".to_string(),
+                        cover: String::new(),
+                        index: 1,
+                        total_episodes: 12,
+                        play_time: 60,
+                        total_time: 120,
+                        save_time: 1,
+                        search_title: None,
+                        playback_mode: None,
+                        offline_content_id: None,
+                        is_adult: None,
+                    },
+                )]),
+            )
+            .expect("save play records");
+        state
+            .profile_store()
+            .save_favorites(
+                "remote-owner",
+                &BTreeMap::from([(
+                    "fav+1".to_string(),
+                    Favorite {
+                        title: "Demo Favorite".to_string(),
+                        source_name: "demo".to_string(),
+                        year: "2026".to_string(),
+                        cover: String::new(),
+                        total_episodes: 12,
+                        save_time: 1,
+                        search_title: None,
+                        playback_mode: None,
+                        offline_content_id: None,
+                        is_adult: None,
+                        origin: None,
+                    },
+                )]),
+            )
+            .expect("save favorites");
+        state
+            .profile_store()
+            .save_follow_records(
+                "remote-owner",
+                &BTreeMap::from([(
+                    "follow+1".to_string(),
+                    FollowRecord {
+                        title: "Demo Follow".to_string(),
+                        source_name: "demo".to_string(),
+                        year: "2026".to_string(),
+                        cover: String::new(),
+                        search_title: None,
+                        followed_at: 1,
+                        followed_episode_count: 1,
+                        acknowledged_episode_count: 0,
+                        latest_episode_count: 1,
+                        last_checked_at: 1,
+                    },
+                )]),
+            )
+            .expect("save follow records");
+        state
+            .profile_store()
+            .save_search_history("remote-owner", &["Demo Query".to_string()])
+            .expect("save search history");
+        state
+            .profile_store()
+            .save_skip_configs(
+                "remote-owner",
+                &BTreeMap::from([(
+                    "skip+1".to_string(),
+                    SkipConfig {
+                        enable: true,
+                        intro_time: 30,
+                        outro_time: 90,
+                    },
+                )]),
+            )
+            .expect("save skip configs");
+        let app = build_router(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/profile-sync/sync-now")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "syncDomains": ["favorites"],
+                          "strategy": "web-first"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync sync-now request"),
+            )
+            .await
+            .expect("profile sync sync-now response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(payload.get("syncDomains"), Some(&json!(["favorites"])));
+
+        let captured_payloads = captured_payloads.lock().expect("captured payloads");
+        assert_eq!(captured_payloads.len(), 1);
+        assert_eq!(
+            captured_payloads[0].get("strategy").and_then(Value::as_str),
+            Some("web-first")
+        );
+        assert_eq!(
+            captured_payloads[0]
+                .get("snapshot")
+                .and_then(|value| value.get("favorites"))
+                .and_then(|value| value.get("fav+1"))
+                .and_then(|value| value.get("title"))
+                .and_then(Value::as_str),
+            Some("Demo Favorite")
+        );
+        assert_eq!(
+            captured_payloads[0]
+                .get("snapshot")
+                .and_then(|value| value.get("playRecords")),
+            Some(&json!({}))
+        );
+        assert_eq!(
+            captured_payloads[0]
+                .get("snapshot")
+                .and_then(|value| value.get("follows")),
+            Some(&json!({}))
+        );
+        assert_eq!(
+            captured_payloads[0]
+                .get("snapshot")
+                .and_then(|value| value.get("searchHistory")),
+            Some(&json!([]))
+        );
+        assert_eq!(
+            captured_payloads[0]
+                .get("snapshot")
+                .and_then(|value| value.get("skipConfigs")),
+            Some(&json!({}))
+        );
+        assert_eq!(captured_payloads[0].get("adminConfig"), None);
+        drop(captured_payloads);
+
+        let status_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .body(Body::empty())
+                    .expect("profile sync status request"),
+            )
+            .await
+            .expect("profile sync status response");
+
+        assert_eq!(status_response.status(), StatusCode::OK);
+        let status_payload = read_json_body(status_response).await;
+        assert_eq!(
+            status_payload.get("syncDomains"),
+            Some(&json!(["favorites"]))
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_sync_now_web_first_with_adminsettings_applies_remote_admin_config_locally()
+     {
+        let captured_payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let captured_payloads_for_route = Arc::clone(&captured_payloads);
+        let remote_raw_config = json!({
+          "auth": {
+            "username": "remote-owner",
+            "password": "remote-owner-secret"
+          },
+          "api_site": {
+            "remote": {
+              "api": "https://remote.example/api.php/provide/vod",
+              "name": "Remote Source"
+            }
+          }
+        });
+        let remote_admin_config_response = json!({
+          "Role": "owner",
+          "Config": {
+            "ConfigSubscribtion": {
+              "URL": "https://remote.example/subscription",
+              "AutoUpdate": true,
+              "LastCheck": "2026-07-02T00:00:00Z"
+            },
+            "ConfigFile": serde_json::to_string_pretty(&remote_raw_config)
+              .expect("serialize remote raw config"),
+            "SiteConfig": {
+              "SiteName": "Remote LunaTV",
+              "Announcement": "Remote announcement",
+              "SearchDownstreamMaxPage": 8,
+              "SiteInterfaceCacheTime": 3600,
+              "DoubanProxyType": "custom",
+              "DoubanProxy": "https://remote.example/douban",
+              "DoubanImageProxyType": "custom",
+              "DoubanImageProxy": "https://remote.example/image",
+              "DisableYellowFilter": true,
+              "FluidSearch": false,
+              "EnableWebLive": true,
+              "EnableWebMusic": true
+            },
+            "UserConfig": {
+              "Users": [
+                {
+                  "username": "remote-owner",
+                  "role": "owner"
+                },
+                {
+                  "username": "remote-admin",
+                  "role": "admin"
+                }
+              ],
+              "Tags": [
+                {
+                  "name": "remote-tag",
+                  "enabledApis": ["remote"]
+                }
+              ]
+            },
+            "SourceConfig": [
+              {
+                "key": "remote",
+                "name": "Remote Source",
+                "api": "https://remote.example/api.php/provide/vod",
+                "detail": null,
+                "ua": null,
+                "referer": null,
+                "from": "config",
+                "disabled": false,
+                "disable_ad_filter": false
+              }
+            ],
+            "CustomCategories": [],
+            "LiveConfig": [],
+            "AdFilterConfig": {
+              "enabled": false
+            },
+            "PlayerEnhancementConfig": {
+              "AudioSpikeProtection": true,
+              "VisualEnhancement": true
+            }
+          }
+        });
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/server-config",
+                    get(|| async move {
+                        Json(json!({
+                            "StorageType": "redis",
+                            "ProfileMode": "shared-multi-user"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/config",
+                    get({
+                        let remote_admin_config_response = remote_admin_config_response.clone();
+                        move || {
+                            let remote_admin_config_response = remote_admin_config_response.clone();
+                            async move { Json(remote_admin_config_response) }
+                        }
+                    }),
+                )
+                .route(
+                    "/api/admin/profile-sync/merge",
+                    post(move |Json(payload): Json<Value>| {
+                        let captured_payloads = Arc::clone(&captured_payloads_for_route);
+                        async move {
+                            captured_payloads
+                                .lock()
+                                .expect("capture merge payloads")
+                                .push(payload.clone());
+                            Json(json!({
+                                "summary": {
+                                    "playRecordCount": 0,
+                                    "favoriteCount": 0,
+                                    "followCount": 0,
+                                    "searchHistoryCount": 0,
+                                    "skipConfigCount": 0
+                                }
+                            }))
+                        }
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let local_raw_config = json!({
+          "auth": {
+            "username": "remote-owner",
+            "password": "local-owner-secret"
+          },
+          "profile_sync": {
+            "api_base_url": upstream.base_url()
+          },
+          "api_site": {
+            "local": {
+              "api": "https://local.example/api.php/provide/vod",
+              "name": "Local Source"
+            }
+          }
+        });
+        let config_path = write_test_config(&temp_dir, local_raw_config.clone());
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "https://local.example/subscription",
+                  "AutoUpdate": false,
+                  "LastCheck": ""
+                },
+                "ConfigFile": serde_json::to_string_pretty(&local_raw_config)
+                  .expect("serialize local raw config"),
+                "SiteConfig": {
+                  "SiteName": "Local LunaTV",
+                  "Announcement": "",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false,
+                  "EnableWebMusic": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "remote-owner",
+                      "role": "owner"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [
+                  {
+                    "key": "local",
+                    "name": "Local Source",
+                    "api": "https://local.example/api.php/provide/vod",
+                    "detail": null,
+                    "ua": null,
+                    "referer": null,
+                    "from": "config",
+                    "disabled": false,
+                    "disable_ad_filter": false
+                  }
+                ],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+            username: "remote-owner".to_string(),
+            role: "owner".to_string(),
+        });
+        let app = build_router(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/profile-sync/sync-now")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "syncDomains": ["adminsettings"],
+                          "strategy": "web-first"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync sync-now request"),
+            )
+            .await
+            .expect("profile sync sync-now response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(payload.get("syncDomains"), Some(&json!(["adminsettings"])));
+
+        let captured_payloads = captured_payloads.lock().expect("captured payloads");
+        assert_eq!(captured_payloads.len(), 1);
+        assert_eq!(captured_payloads[0].get("adminConfig"), None);
+        drop(captured_payloads);
+
+        let admin_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/config")
+                    .body(Body::empty())
+                    .expect("admin config request"),
+            )
+            .await
+            .expect("admin config response");
+
+        assert_eq!(admin_response.status(), StatusCode::OK);
+        let admin_payload = read_json_body(admin_response).await;
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("SiteConfig"))
+                .and_then(|value| value.get("SiteName"))
+                .and_then(Value::as_str),
+            Some("Remote LunaTV")
+        );
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("ConfigSubscribtion"))
+                .and_then(|value| value.get("URL"))
+                .and_then(Value::as_str),
+            Some("https://remote.example/subscription")
+        );
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("SourceConfig"))
+                .and_then(Value::as_array)
+                .and_then(|value| value.first())
+                .and_then(|value| value.get("key"))
+                .and_then(Value::as_str),
+            Some("remote")
+        );
+        assert!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("UserConfig"))
+                .and_then(|value| value.get("Users"))
+                .and_then(Value::as_array)
+                .is_some_and(|users| users.iter().any(|user| {
+                    user.get("username").and_then(Value::as_str) == Some("remote-admin")
+                })),
+            "expected remote admin user to be persisted locally"
+        );
+        assert!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("ConfigFile"))
+                .and_then(Value::as_str)
+                .is_some_and(|config_file| {
+                    config_file.contains("remote-owner-secret")
+                        && config_file.contains(&upstream.base_url())
+                        && config_file.contains("adminsettings")
+                }),
+            "expected remote config file plus persisted profile sync settings"
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_onboarding_execute_skips_password_warning_when_no_account_is_created() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/login",
+                    post(|| async move {
+                        Json(json!({
+                            "ok": true,
+                            "username": "remote-owner",
+                            "role": "owner"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/config",
+                    get(|| async move {
+                        Json(json!({
+                            "Role": "owner",
+                            "Config": {
+                                "UserConfig": {
+                                    "Users": [
+                                        {
+                                            "username": "remote-owner"
+                                        }
+                                    ]
+                                }
+                            }
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/profile-sync/merge",
+                    post(|| async move {
+                        Json(json!({
+                            "summary": {
+                                "playRecordCount": 0,
+                                "favoriteCount": 0,
+                                "followCount": 0,
+                                "searchHistoryCount": 0,
+                                "skipConfigCount": 0
+                            }
+                        }))
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let raw_config = json!({
+          "auth": {
+            "username": "owner",
+            "password": "owner-secret"
+          },
+          "api_site": {}
+        });
+        let config_path = write_test_config(&temp_dir, raw_config.clone());
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "",
+                  "AutoUpdate": false,
+                  "LastCheck": ""
+                },
+                "ConfigFile": serde_json::to_string_pretty(&raw_config)
+                  .expect("serialize raw config"),
+                "SiteConfig": {
+                  "SiteName": "Desktop LunaTV",
+                  "Announcement": "",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "owner",
+                      "role": "owner"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/admin/profile-sync/onboarding/execute")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "remoteBaseUrl": upstream.base_url(),
+                          "username": "remote-owner",
+                          "password": "secret",
+                          "currentLocalUsername": "owner",
+                          "strategy": "web-first"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync onboarding execute request"),
+            )
+            .await
+            .expect("profile sync onboarding execute response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload
+                .get("createdAccounts")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        let warnings = payload
+            .get("warnings")
+            .and_then(Value::as_array)
+            .expect("profile sync onboarding execute warnings");
+        let warning_texts = warnings
+            .iter()
+            .map(|warning| {
+                warning
+                    .as_str()
+                    .expect("profile sync onboarding warning text")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            warning_texts,
+            vec!["仅当前仍保留的这套离线下载可以迁移，之前已清理的旧归属无法恢复。"]
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_onboarding_execute_persists_selected_sync_domains() {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/login",
+                    post(|| async move {
+                        Json(json!({
+                            "ok": true,
+                            "username": "remote-owner",
+                            "role": "owner"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/config",
+                    get(|| async move {
+                        Json(json!({
+                            "Role": "owner",
+                            "Config": {
+                                "UserConfig": {
+                                    "Users": [
+                                        {
+                                            "username": "remote-owner"
+                                        }
+                                    ]
+                                }
+                            }
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/profile-sync/merge",
+                    post(|| async move {
+                        Json(json!({
+                            "summary": {
+                                "playRecordCount": 0,
+                                "favoriteCount": 0,
+                                "followCount": 0,
+                                "searchHistoryCount": 0,
+                                "skipConfigCount": 0
+                            }
+                        }))
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let raw_config = json!({
+          "auth": {
+            "username": "owner",
+            "password": "owner-secret"
+          },
+          "api_site": {}
+        });
+        let config_path = write_test_config(&temp_dir, raw_config.clone());
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "",
+                  "AutoUpdate": false,
+                  "LastCheck": ""
+                },
+                "ConfigFile": serde_json::to_string_pretty(&raw_config)
+                  .expect("serialize raw config"),
+                "SiteConfig": {
+                  "SiteName": "Desktop LunaTV",
+                  "Announcement": "",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "owner",
+                      "role": "owner"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/admin/profile-sync/onboarding/execute")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "remoteBaseUrl": upstream.base_url(),
+                          "username": "remote-owner",
+                          "password": "secret",
+                          "currentLocalUsername": "owner",
+                          "strategy": "web-first",
+                          "syncDomains": ["favorites"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync onboarding execute request"),
+            )
+            .await
+            .expect("profile sync onboarding execute response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let status_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .body(Body::empty())
+                    .expect("profile sync status request"),
+            )
+            .await
+            .expect("profile sync status response");
+
+        assert_eq!(status_response.status(), StatusCode::OK);
+        let status_payload = read_json_body(status_response).await;
+        assert_eq!(
+            status_payload.get("syncDomains"),
+            Some(&json!(["favorites"]))
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_onboarding_execute_sends_admin_config_snapshot_to_merge_route_when_adminsettings_selected_and_localfirst()
+     {
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/login",
+                    post(|| async move {
+                        Json(json!({
+                            "ok": true,
+                            "username": "remote-owner",
+                            "role": "owner"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/config",
+                    get(|| async move {
+                        Json(json!({
+                            "Role": "owner",
+                            "Config": {
+                                "UserConfig": {
+                                    "Users": [
+                                        {
+                                            "username": "remote-owner"
+                                        }
+                                    ]
+                                }
+                            }
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/profile-sync/merge",
+                    post(|Json(payload): Json<Value>| async move {
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("SiteConfig"))
+                                .and_then(|value| value.get("SiteName"))
+                                .and_then(Value::as_str),
+                            Some("Desktop LunaTV")
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("SiteConfig"))
+                                .and_then(|value| value.get("EnableWebMusic"))
+                                .and_then(Value::as_bool),
+                            Some(false)
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("SourceConfig"))
+                                .and_then(Value::as_array)
+                                .map(Vec::len),
+                            Some(1)
+                        );
+
+                        Json(json!({
+                            "summary": {
+                                "playRecordCount": 0,
+                                "favoriteCount": 0,
+                                "followCount": 0,
+                                "searchHistoryCount": 0,
+                                "skipConfigCount": 0
+                            }
+                        }))
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let raw_config = json!({
+          "auth": {
+            "username": "owner",
+            "password": "owner-secret"
+          },
+          "api_site": {
+            "demo": {
+              "api": "https://example.com/api.php/provide/vod",
+              "name": "Demo Source"
+            }
+          }
+        });
+        let config_path = write_test_config(&temp_dir, raw_config.clone());
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "",
+                  "AutoUpdate": false,
+                  "LastCheck": ""
+                },
+                "ConfigFile": serde_json::to_string_pretty(&raw_config)
+                  .expect("serialize raw config"),
+                "SiteConfig": {
+                  "SiteName": "Desktop LunaTV",
+                  "Announcement": "",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false,
+                  "EnableWebMusic": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "owner",
+                      "role": "owner"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [
+                  {
+                    "key": "demo",
+                    "name": "Demo Source",
+                    "api": "https://example.com/api.php/provide/vod",
+                    "detail": null,
+                    "ua": null,
+                    "referer": null,
+                    "from": "config",
+                    "disabled": false,
+                    "disable_ad_filter": false
+                  }
+                ],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/admin/profile-sync/onboarding/execute")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "remoteBaseUrl": upstream.base_url(),
+                          "username": "remote-owner",
+                          "password": "secret",
+                          "currentLocalUsername": "owner",
+                          "strategy": "local-first",
+                          "syncDomains": ["playrecords", "adminsettings"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync onboarding execute request"),
+            )
+            .await
+            .expect("profile sync onboarding execute response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_onboarding_execute_web_first_with_adminsettings_applies_remote_admin_config_locally()
+     {
+        let captured_payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let captured_payloads_for_route = Arc::clone(&captured_payloads);
+        let remote_raw_config = json!({
+          "auth": {
+            "username": "remote-owner",
+            "password": "remote-owner-secret"
+          },
+          "api_site": {
+            "remote": {
+              "api": "https://remote.example/api.php/provide/vod",
+              "name": "Remote Source"
+            }
+          }
+        });
+        let remote_admin_config_response = json!({
+          "Role": "owner",
+          "Config": {
+            "ConfigSubscribtion": {
+              "URL": "https://remote.example/subscription",
+              "AutoUpdate": true,
+              "LastCheck": "2026-07-02T00:00:00Z"
+            },
+            "ConfigFile": serde_json::to_string_pretty(&remote_raw_config)
+              .expect("serialize remote raw config"),
+            "SiteConfig": {
+              "SiteName": "Remote LunaTV",
+              "Announcement": "Remote announcement",
+              "SearchDownstreamMaxPage": 8,
+              "SiteInterfaceCacheTime": 3600,
+              "DoubanProxyType": "custom",
+              "DoubanProxy": "https://remote.example/douban",
+              "DoubanImageProxyType": "custom",
+              "DoubanImageProxy": "https://remote.example/image",
+              "DisableYellowFilter": true,
+              "FluidSearch": false,
+              "EnableWebLive": true,
+              "EnableWebMusic": true
+            },
+            "UserConfig": {
+              "Users": [
+                {
+                  "username": "remote-owner",
+                  "role": "owner"
+                },
+                {
+                  "username": "remote-admin",
+                  "role": "admin"
+                }
+              ],
+              "Tags": [
+                {
+                  "name": "remote-tag",
+                  "enabledApis": ["remote"]
+                }
+              ]
+            },
+            "SourceConfig": [
+              {
+                "key": "remote",
+                "name": "Remote Source",
+                "api": "https://remote.example/api.php/provide/vod",
+                "detail": null,
+                "ua": null,
+                "referer": null,
+                "from": "config",
+                "disabled": false,
+                "disable_ad_filter": false
+              }
+            ],
+            "CustomCategories": [],
+            "LiveConfig": [],
+            "AdFilterConfig": {
+              "enabled": false
+            },
+            "PlayerEnhancementConfig": {
+              "AudioSpikeProtection": true,
+              "VisualEnhancement": true
+            }
+          }
+        });
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/login",
+                    post(|| async move {
+                        Json(json!({
+                            "ok": true,
+                            "username": "remote-owner",
+                            "role": "owner"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/admin/config",
+                    get({
+                        let remote_admin_config_response = remote_admin_config_response.clone();
+                        move || {
+                            let remote_admin_config_response = remote_admin_config_response.clone();
+                            async move { Json(remote_admin_config_response) }
+                        }
+                    }),
+                )
+                .route(
+                    "/api/admin/profile-sync/merge",
+                    post(move |Json(payload): Json<Value>| {
+                        let captured_payloads = Arc::clone(&captured_payloads_for_route);
+                        async move {
+                            captured_payloads
+                                .lock()
+                                .expect("capture merge payloads")
+                                .push(payload.clone());
+                            Json(json!({
+                                "summary": {
+                                    "playRecordCount": 0,
+                                    "favoriteCount": 0,
+                                    "followCount": 0,
+                                    "searchHistoryCount": 0,
+                                    "skipConfigCount": 0
+                                }
+                            }))
+                        }
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let local_raw_config = json!({
+          "auth": {
+            "username": "owner",
+            "password": "local-owner-secret"
+          },
+          "api_site": {
+            "local": {
+              "api": "https://local.example/api.php/provide/vod",
+              "name": "Local Source"
+            }
+          }
+        });
+        let config_path = write_test_config(&temp_dir, local_raw_config.clone());
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": "https://local.example/subscription",
+                  "AutoUpdate": false,
+                  "LastCheck": ""
+                },
+                "ConfigFile": serde_json::to_string_pretty(&local_raw_config)
+                  .expect("serialize local raw config"),
+                "SiteConfig": {
+                  "SiteName": "Local LunaTV",
+                  "Announcement": "",
+                  "SearchDownstreamMaxPage": 5,
+                  "SiteInterfaceCacheTime": 7200,
+                  "DoubanProxyType": "custom",
+                  "DoubanProxy": "",
+                  "DoubanImageProxyType": "custom",
+                  "DoubanImageProxy": "",
+                  "DisableYellowFilter": false,
+                  "FluidSearch": true,
+                  "EnableWebLive": false,
+                  "EnableWebMusic": false
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "owner",
+                      "role": "owner"
+                    }
+                  ],
+                  "Tags": []
+                },
+                "SourceConfig": [
+                  {
+                    "key": "local",
+                    "name": "Local Source",
+                    "api": "https://local.example/api.php/provide/vod",
+                    "detail": null,
+                    "ua": null,
+                    "referer": null,
+                    "from": "config",
+                    "disabled": false,
+                    "disable_ad_filter": false
+                  }
+                ],
+                "CustomCategories": [],
+                "LiveConfig": []
+              },
+              "userPasswords": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/admin/profile-sync/onboarding/execute")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "remoteBaseUrl": upstream.base_url(),
+                          "username": "remote-owner",
+                          "password": "secret",
+                          "currentLocalUsername": "owner",
+                          "strategy": "web-first",
+                          "syncDomains": ["adminsettings"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("profile sync onboarding execute request"),
+            )
+            .await
+            .expect("profile sync onboarding execute response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload
+                .get("createdAccounts")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+
+        let captured_payloads = captured_payloads.lock().expect("captured payloads");
+        assert_eq!(captured_payloads.len(), 1);
+        assert_eq!(captured_payloads[0].get("adminConfig"), None);
+        drop(captured_payloads);
+
+        let admin_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/config")
+                    .body(Body::empty())
+                    .expect("admin config request"),
+            )
+            .await
+            .expect("admin config response");
+
+        assert_eq!(admin_response.status(), StatusCode::OK);
+        let admin_payload = read_json_body(admin_response).await;
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("SiteConfig"))
+                .and_then(|value| value.get("SiteName"))
+                .and_then(Value::as_str),
+            Some("Remote LunaTV")
+        );
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("ConfigSubscribtion"))
+                .and_then(|value| value.get("URL"))
+                .and_then(Value::as_str),
+            Some("https://remote.example/subscription")
+        );
+        assert_eq!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("SourceConfig"))
+                .and_then(Value::as_array)
+                .and_then(|value| value.first())
+                .and_then(|value| value.get("key"))
+                .and_then(Value::as_str),
+            Some("remote")
+        );
+        assert!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("UserConfig"))
+                .and_then(|value| value.get("Users"))
+                .and_then(Value::as_array)
+                .is_some_and(|users| users.iter().any(|user| {
+                    user.get("username").and_then(Value::as_str) == Some("remote-admin")
+                })),
+            "expected remote admin user to be persisted locally"
+        );
+        assert!(
+            admin_payload
+                .get("Config")
+                .and_then(|value| value.get("ConfigFile"))
+                .and_then(Value::as_str)
+                .is_some_and(|config_file| {
+                    config_file.contains("remote-owner-secret")
+                        && config_file.contains(&upstream.base_url())
+                        && config_file.contains("adminsettings")
+                }),
+            "expected remote config file plus persisted profile sync settings"
         );
 
         upstream.abort();

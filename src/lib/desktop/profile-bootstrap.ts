@@ -5,6 +5,7 @@ import { ensureDesktopAuthSession } from './auth-session';
 import {
   applyDesktopProfileSyncStatus,
   DesktopProfileSyncStatus,
+  restoreDesktopProfileSyncSession,
 } from './profile-sync';
 import {
   applyDesktopRuntimePublicConfig,
@@ -125,18 +126,44 @@ export function applyDesktopProfileBootstrap(
   return applyDesktopProfileSyncStatus(payload.profileSync);
 }
 
+async function restoreDesktopProfileSyncBootstrapIfNeeded(
+  payload: DesktopProfileBootstrapPayload
+): Promise<DesktopProfileBootstrapPayload> {
+  if (!payload.profileSync.enabled || payload.profileSync.authenticated) {
+    return payload;
+  }
+
+  const restored = await restoreDesktopProfileSyncSession();
+
+  if (!restored) {
+    return payload;
+  }
+
+  try {
+    return cacheDesktopProfileBootstrap(
+      await fetchDesktopProfileBootstrapPayload()
+    );
+  } catch {
+    return payload;
+  }
+}
+
 export async function loadDesktopProfileBootstrapState(
   options: {
     localAuthMode?: DesktopProfileBootstrapLocalAuthMode;
     preferCachedPayload?: boolean;
   } = {}
 ): Promise<LoadedDesktopProfileBootstrapState | null> {
-  const payload = await getDesktopProfileBootstrap({
+  const initialPayload = await getDesktopProfileBootstrap({
     preferCachedPayload: options.preferCachedPayload,
   });
-  if (!payload) {
+  if (!initialPayload) {
     return null;
   }
+
+  const payload = await restoreDesktopProfileSyncBootstrapIfNeeded(
+    initialPayload
+  );
 
   applyDesktopProfileBootstrap(payload);
 

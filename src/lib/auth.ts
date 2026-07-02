@@ -80,6 +80,17 @@ function parseAuthCookiePayload(rawValue: string): AuthCookiePayload | null {
   }
 }
 
+function sanitizeAuthPayloadForCookie(
+  payload: AuthCookiePayload
+): AuthCookiePayload {
+  if (payload.sessionMode !== 'desktop-profile-sync') {
+    return payload;
+  }
+
+  const { password: _password, ...cookiePayload } = payload;
+  return cookiePayload;
+}
+
 function isDesktopBrowserContext(): boolean {
   if (typeof window === 'undefined') {
     return false;
@@ -138,8 +149,36 @@ function writeAuthCookie(payload: AuthCookiePayload | null) {
 
   const expires = new Date();
   expires.setDate(expires.getDate() + 7);
-  const value = encodeURIComponent(JSON.stringify(payload));
+  const value = encodeURIComponent(
+    JSON.stringify(sanitizeAuthPayloadForCookie(payload))
+  );
   document.cookie = `auth=${value}; path=/; expires=${expires.toUTCString()}; SameSite=Lax`;
+}
+
+function mergeCookieAndDesktopStorageAuthInfo(
+  cookieAuthInfo: AuthCookiePayload | null
+): AuthCookiePayload | null {
+  const storedAuthInfo = readDesktopAuthInfoFromStorage();
+
+  if (!cookieAuthInfo) {
+    return storedAuthInfo;
+  }
+
+  if (
+    !storedAuthInfo ||
+    cookieAuthInfo.sessionMode !== 'desktop-profile-sync' ||
+    storedAuthInfo.sessionMode !== 'desktop-profile-sync' ||
+    !cookieAuthInfo.username?.trim() ||
+    cookieAuthInfo.username !== storedAuthInfo.username
+  ) {
+    return cookieAuthInfo;
+  }
+
+  return {
+    ...storedAuthInfo,
+    ...cookieAuthInfo,
+    password: cookieAuthInfo.password ?? storedAuthInfo.password,
+  };
 }
 
 function dispatchBrowserAuthUpdated() {
@@ -235,11 +274,7 @@ export function getAuthInfoFromBrowserCookie(): {
       ? parseAuthCookiePayload(authCookie)
       : null;
 
-    if (cookieAuthInfo) {
-      return cookieAuthInfo;
-    }
-
-    return readDesktopAuthInfoFromStorage();
+    return mergeCookieAndDesktopStorageAuthInfo(cookieAuthInfo);
   } catch (error) {
     return readDesktopAuthInfoFromStorage();
   }

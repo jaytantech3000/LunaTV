@@ -13,6 +13,7 @@ import {
   loginDesktopSession,
 } from '@/lib/desktop/auth-session';
 import { loadDesktopProfileBootstrapState } from '@/lib/desktop/profile-bootstrap';
+import { buildDesktopProfileSyncLoginStatusMessage } from '@/lib/desktop/profile-sync-status-copy';
 import type { DesktopAuthStatus } from '@/lib/desktop/tauri-client';
 import { getProjectPageUrl } from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
@@ -27,11 +28,11 @@ function shouldAskUsernameForProfileSync(
   profileMode?: 'single-user-local' | 'shared-multi-user' | string | null,
   storageType?: string | null
 ): boolean {
-  if (profileMode) {
-    return profileMode === 'shared-multi-user';
+  if (profileMode === 'single-user-local' || storageType === 'localstorage') {
+    return false;
   }
 
-  return Boolean(storageType && storageType !== 'localstorage');
+  return true;
 }
 
 function resolveLoginErrorMessage(
@@ -210,9 +211,7 @@ export function LoginPageClient() {
             )
           );
           setStatusMessage(
-            profileSyncStatus.reachable
-              ? '桌面版当前使用云端账号与用户数据同步。'
-              : '云端账号同步服务当前不可用，请检查远端服务地址。'
+            buildDesktopProfileSyncLoginStatusMessage(profileSyncStatus)
           );
 
           if (profileSyncStatus.authenticated) {
@@ -326,20 +325,28 @@ export function LoginPageClient() {
           });
 
           if (res.ok) {
+            const data = (await res.json().catch(() => ({}))) as {
+              username?: string;
+              role?: 'owner' | 'admin' | 'user';
+            };
+            const resolvedUsername =
+              data.username?.trim() ||
+              (shouldAskUsername ? username.trim() : undefined);
+
+            if (resolvedUsername) {
+              setAuthInfoInBrowser({
+                username: resolvedUsername,
+                role: data.role || 'user',
+                password,
+                sessionMode: 'desktop-profile-sync',
+              });
+            }
+
             const bootstrapState = await loadDesktopProfileBootstrapState({
               localAuthMode: 'none',
             });
             if (bootstrapState) {
               // Runtime config and sync state are already applied by the shared bootstrap loader.
-            } else {
-              const data = await res.json().catch(() => ({}));
-              if (data.username) {
-                setAuthInfoInBrowser({
-                  username: data.username,
-                  role: data.role || 'user',
-                  sessionMode: 'desktop-profile-sync',
-                });
-              }
             }
 
             const redirect = searchParams.get('redirect') || '/';

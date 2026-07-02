@@ -2,7 +2,10 @@ import { act } from '@testing-library/react';
 
 import { clearAuthInfoInBrowser } from '@/lib/auth';
 import { purgeOfflineDownloads } from '@/lib/download/session';
-import { isDesktopLocalProfileRuntime } from '@/lib/profile/runtime';
+import {
+  isDesktopLocalProfileRuntime,
+  resolveProfileRuntime,
+} from '@/lib/profile/runtime';
 import {
   buildProfileLoginRedirectUrl,
   fetchProfileJson,
@@ -31,6 +34,14 @@ jest.mock('@/lib/download/session', () => ({
 
 jest.mock('@/lib/profile/runtime', () => ({
   isDesktopLocalProfileRuntime: jest.fn(() => false),
+  resolveProfileRuntime: jest.fn(() => ({
+    appTarget: 'web',
+    runtimeKind: 'web-local',
+    syncEnabled: false,
+    storageType: 'localstorage',
+    profileMode: 'single-user-local',
+    usesRemoteUserData: false,
+  })),
 }));
 
 describe('profile session helpers', () => {
@@ -38,6 +49,14 @@ describe('profile session helpers', () => {
     jest.clearAllMocks();
     global.fetch = jest.fn();
     (isDesktopLocalProfileRuntime as jest.Mock).mockReturnValue(false);
+    (resolveProfileRuntime as jest.Mock).mockReturnValue({
+      appTarget: 'web',
+      runtimeKind: 'web-local',
+      syncEnabled: false,
+      storageType: 'localstorage',
+      profileMode: 'single-user-local',
+      usesRemoteUserData: false,
+    });
     Object.defineProperty(window, 'location', {
       configurable: true,
       value: {
@@ -133,6 +152,14 @@ describe('profile session helpers', () => {
 
   it('retries transient desktop local http responses before succeeding', async () => {
     (isDesktopLocalProfileRuntime as jest.Mock).mockReturnValue(true);
+    (resolveProfileRuntime as jest.Mock).mockReturnValue({
+      appTarget: 'desktop',
+      runtimeKind: 'desktop-local',
+      syncEnabled: false,
+      storageType: 'localstorage',
+      profileMode: 'single-user-local',
+      usesRemoteUserData: false,
+    });
     const setTimeoutSpy = jest.spyOn(window, 'setTimeout').mockImplementation(((
       callback: TimerHandler
     ) => {
@@ -176,6 +203,14 @@ describe('profile session helpers', () => {
 
   it('does not retry non-idempotent desktop local requests on transient http responses', async () => {
     (isDesktopLocalProfileRuntime as jest.Mock).mockReturnValue(true);
+    (resolveProfileRuntime as jest.Mock).mockReturnValue({
+      appTarget: 'desktop',
+      runtimeKind: 'desktop-local',
+      syncEnabled: false,
+      storageType: 'localstorage',
+      profileMode: 'single-user-local',
+      usesRemoteUserData: false,
+    });
     (global.fetch as jest.Mock).mockResolvedValue({
       ok: false,
       status: 503,
@@ -187,6 +222,52 @@ describe('profile session helpers', () => {
 
     expect(isProfileRequestError(error)).toBe(true);
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries transient desktop profile sync fetch failures before succeeding', async () => {
+    (isDesktopLocalProfileRuntime as jest.Mock).mockReturnValue(false);
+    (resolveProfileRuntime as jest.Mock).mockReturnValue({
+      appTarget: 'desktop',
+      runtimeKind: 'desktop-profile-sync',
+      syncEnabled: true,
+      storageType: 'redis',
+      profileMode: 'shared-multi-user',
+      usesRemoteUserData: true,
+    });
+    const setTimeoutSpy = jest.spyOn(window, 'setTimeout').mockImplementation(((
+      callback: TimerHandler
+    ) => {
+      if (typeof callback === 'function') {
+        callback();
+      }
+      return 0 as unknown as ReturnType<typeof window.setTimeout>;
+    }) as unknown as typeof window.setTimeout);
+    (global.fetch as jest.Mock)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({
+          records: [],
+        }),
+      });
+
+    const fetchPromise = fetchProfileJson<{ records: unknown[] }>('/follows');
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await expect(fetchPromise).resolves.toEqual({
+      records: [],
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 300);
+
+    setTimeoutSpy.mockRestore();
   });
 
   it('surfaces unauthorized errors without redirect when explicitly requested', async () => {

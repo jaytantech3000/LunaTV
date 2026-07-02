@@ -3,7 +3,7 @@ import { purgeOfflineDownloads } from '@/lib/download/session';
 import { buildApiUrl } from '@/lib/transport/endpoint';
 
 import { PROFILE_SESSION_API_PATHS } from './contracts';
-import { isDesktopLocalProfileRuntime } from './runtime';
+import { isDesktopLocalProfileRuntime, resolveProfileRuntime } from './runtime';
 
 const DESKTOP_LOCAL_PROFILE_FETCH_RETRY_COUNT = 10;
 const DESKTOP_LOCAL_PROFILE_FETCH_RETRY_DELAY_MS = 300;
@@ -63,8 +63,16 @@ export function buildProfileLoginRedirectUrl(
   return loginUrl.toString();
 }
 
-function isRecoverableDesktopLocalProfileRequestError(error: unknown): boolean {
-  if (!isDesktopLocalProfileRuntime()) {
+function shouldRetryDesktopProfileRequests(): boolean {
+  if (isDesktopLocalProfileRuntime()) {
+    return true;
+  }
+
+  return resolveProfileRuntime().runtimeKind === 'desktop-profile-sync';
+}
+
+function isRecoverableDesktopProfileRequestError(error: unknown): boolean {
+  if (!shouldRetryDesktopProfileRequests()) {
     return false;
   }
 
@@ -90,12 +98,12 @@ function isSafeProfileRequestMethod(method?: string | null): boolean {
   );
 }
 
-function shouldRetryDesktopLocalProfileResponse(
+function shouldRetryDesktopProfileResponse(
   response: Response,
   requestInit: RequestInit
 ): boolean {
   return (
-    isDesktopLocalProfileRuntime() &&
+    shouldRetryDesktopProfileRequests() &&
     isSafeProfileRequestMethod(requestInit.method) &&
     RETRYABLE_DESKTOP_LOCAL_PROFILE_RESPONSE_STATUSES.has(response.status)
   );
@@ -141,7 +149,7 @@ export async function fetchProfileResponse(
       response = await fetch(requestUrl, requestInit);
     } catch (error) {
       if (
-        !isRecoverableDesktopLocalProfileRequestError(error) ||
+        !isRecoverableDesktopProfileRequestError(error) ||
         attempt + 1 >= DESKTOP_LOCAL_PROFILE_FETCH_RETRY_COUNT
       ) {
         throw error;
@@ -153,7 +161,7 @@ export async function fetchProfileResponse(
 
     if (
       response &&
-      shouldRetryDesktopLocalProfileResponse(response, requestInit) &&
+      shouldRetryDesktopProfileResponse(response, requestInit) &&
       attempt + 1 < DESKTOP_LOCAL_PROFILE_FETCH_RETRY_COUNT
     ) {
       await delay(DESKTOP_LOCAL_PROFILE_FETCH_RETRY_DELAY_MS);

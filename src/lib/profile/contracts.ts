@@ -40,12 +40,19 @@ export const PROFILE_SESSION_API_PATHS = {
   logout: '/logout',
 } as const;
 
-export const PROFILE_SYNC_USER_DATA_DOMAINS = [
+export const PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS = [
   'playrecords',
   'favorites',
   'follows',
   'searchhistory',
   'skipconfigs',
+] as const;
+
+export const PROFILE_SYNC_ADMIN_SETTINGS_DOMAIN = 'adminsettings' as const;
+
+export const PROFILE_SYNC_USER_DATA_DOMAINS = [
+  ...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS,
+  PROFILE_SYNC_ADMIN_SETTINGS_DOMAIN,
 ] as const;
 
 export type ProfileSyncUserDataDomain =

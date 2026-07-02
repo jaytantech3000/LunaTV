@@ -407,7 +407,11 @@ export async function refreshFollowRecords(options?: {
   lastFollowRefreshStartedAt = now;
   const refreshPromise = (async () => {
     const snapshot = getCachedFollowRecordsSnapshot();
-    const followRecords = snapshot ?? (await getAllFollowRecords());
+    const followRecords =
+      snapshot ??
+      (await getAllFollowRecords({
+        suppressGlobalError: true,
+      }));
     const pendingEntries = Object.entries(followRecords).filter(
       ([key, follow]) =>
         Boolean(parseFollowStorageKey(key)) &&

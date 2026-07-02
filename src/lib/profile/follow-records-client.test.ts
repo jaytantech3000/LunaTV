@@ -230,4 +230,32 @@ describe('follow records client', () => {
     consoleWarnSpy.mockRestore();
     dispatchEventSpy.mockRestore();
   });
+
+  it('supports silent follow-record reads for background refresh flows', async () => {
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie('remote-owner');
+    mockedFetchRemoteProfileJson.mockRejectedValueOnce(new Error('network'));
+    const dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+    const silentGetAllFollowRecords =
+      getAllFollowRecords as unknown as (options?: {
+        suppressGlobalError?: boolean;
+      }) => Promise<Record<string, unknown>>;
+
+    await expect(
+      silentGetAllFollowRecords({
+        suppressGlobalError: true,
+      })
+    ).resolves.toEqual({});
+
+    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/follows', {
+      redirectOnUnauthorized: false,
+    });
+    expect(dispatchEventSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'globalError',
+      })
+    );
+
+    dispatchEventSpy.mockRestore();
+  });
 });

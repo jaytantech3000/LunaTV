@@ -5,13 +5,31 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const PROFILE_SYNC_USER_DATA_DOMAINS: [&str; 5] = [
+pub const PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS: [&str; 5] = [
     "playrecords",
     "favorites",
     "follows",
     "searchhistory",
     "skipconfigs",
 ];
+
+pub const PROFILE_SYNC_ADMIN_SETTINGS_DOMAIN: &str = "adminsettings";
+
+pub const PROFILE_SYNC_USER_DATA_DOMAINS: [&str; 6] = [
+    "playrecords",
+    "favorites",
+    "follows",
+    "searchhistory",
+    "skipconfigs",
+    PROFILE_SYNC_ADMIN_SETTINGS_DOMAIN,
+];
+
+pub fn default_profile_sync_selected_domains() -> Vec<String> {
+    PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -283,10 +301,16 @@ impl ProfileSyncClient {
         &self,
         remote_base_url: Option<&str>,
         session: Option<&ProfileSyncSession>,
+        sync_domains: &[String],
     ) -> ProfileSyncStatusResponse {
         let enabled = remote_base_url.is_some();
         let username = session.map(|item| item.username.clone());
         let role = session.map(|item| item.role.clone());
+        let sync_domains = if sync_domains.is_empty() {
+            default_profile_sync_selected_domains()
+        } else {
+            sync_domains.to_vec()
+        };
 
         let Some(remote_base_url) = remote_base_url else {
             return ProfileSyncStatusResponse {
@@ -299,7 +323,7 @@ impl ProfileSyncClient {
                 profile_mode: None,
                 error: None,
                 error_kind: None,
-                sync_domains: profile_sync_user_data_domains(),
+                sync_domains,
             };
         };
 
@@ -314,13 +338,15 @@ impl ProfileSyncClient {
                 profile_mode: server_config.profile_mode,
                 error: None,
                 error_kind: None,
-                sync_domains: profile_sync_user_data_domains(),
+                sync_domains,
             },
             Err(error) => ProfileSyncStatusResponse {
                 enabled,
                 reachable: matches!(
                     error.kind,
-                    ProfileSyncErrorKind::Unauthorized | ProfileSyncErrorKind::UpstreamFailure
+                    ProfileSyncErrorKind::Unauthorized
+                        | ProfileSyncErrorKind::ProtocolIncompatible
+                        | ProfileSyncErrorKind::UpstreamFailure
                 ),
                 authenticated: session.is_some()
                     && !matches!(error.kind, ProfileSyncErrorKind::Unauthorized),
@@ -330,7 +356,7 @@ impl ProfileSyncClient {
                 profile_mode: None,
                 error: Some(error.message),
                 error_kind: Some(error.kind),
-                sync_domains: profile_sync_user_data_domains(),
+                sync_domains,
             },
         }
     }
@@ -368,13 +394,6 @@ fn session_mutation_from_login_response(
     }
 
     ProfileSyncSessionMutation::Keep
-}
-
-fn profile_sync_user_data_domains() -> Vec<String> {
-    PROFILE_SYNC_USER_DATA_DOMAINS
-        .iter()
-        .map(|value| (*value).to_string())
-        .collect()
 }
 
 pub fn build_profile_sync_target_url(
@@ -438,9 +457,9 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::{
-        PROFILE_SYNC_USER_DATA_DOMAINS, ProfileSyncClient, ProfileSyncError, ProfileSyncErrorKind,
-        ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncSessionMutation,
-        build_profile_sync_target_url, session_from_login_response,
+        ProfileSyncClient, ProfileSyncError, ProfileSyncErrorKind, ProfileSyncForwardRequest,
+        ProfileSyncSession, ProfileSyncSessionMutation, build_profile_sync_target_url,
+        default_profile_sync_selected_domains, session_from_login_response,
     };
 
     #[test]
@@ -460,15 +479,24 @@ mod tests {
     #[test]
     fn profile_sync_error_http_status_matches_error_kind() {
         let cases = [
-            (ProfileSyncErrorKind::NotConfigured, StatusCode::NOT_IMPLEMENTED),
-            (ProfileSyncErrorKind::InvalidBaseUrl, StatusCode::BAD_REQUEST),
+            (
+                ProfileSyncErrorKind::NotConfigured,
+                StatusCode::NOT_IMPLEMENTED,
+            ),
+            (
+                ProfileSyncErrorKind::InvalidBaseUrl,
+                StatusCode::BAD_REQUEST,
+            ),
             (ProfileSyncErrorKind::Unreachable, StatusCode::BAD_GATEWAY),
             (ProfileSyncErrorKind::Unauthorized, StatusCode::BAD_GATEWAY),
             (
                 ProfileSyncErrorKind::ProtocolIncompatible,
                 StatusCode::BAD_GATEWAY,
             ),
-            (ProfileSyncErrorKind::UpstreamFailure, StatusCode::BAD_GATEWAY),
+            (
+                ProfileSyncErrorKind::UpstreamFailure,
+                StatusCode::BAD_GATEWAY,
+            ),
         ];
 
         for (kind, expected_status) in cases {
@@ -620,9 +648,13 @@ mod tests {
             username: "demo".to_string(),
             role: "user".to_string(),
         };
+        let sync_domains = vec![
+            "playrecords".to_string(),
+            "adminsettings".to_string(),
+        ];
 
         let payload = client
-            .build_status_response(Some(&upstream.base_url()), Some(&session))
+            .build_status_response(Some(&upstream.base_url()), Some(&session), &sync_domains)
             .await;
 
         assert!(payload.enabled);
@@ -635,11 +667,7 @@ mod tests {
         assert_eq!(payload.error, None);
         assert_eq!(payload.error_kind, None);
         assert_eq!(
-            payload.sync_domains,
-            PROFILE_SYNC_USER_DATA_DOMAINS
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect::<Vec<_>>()
+            payload.sync_domains, sync_domains
         );
 
         upstream.abort();
@@ -648,8 +676,11 @@ mod tests {
     #[tokio::test]
     async fn build_status_response_classifies_invalid_base_url() {
         let client = ProfileSyncClient::new(reqwest::Client::new());
+        let sync_domains = default_profile_sync_selected_domains();
 
-        let payload = client.build_status_response(Some("not a url"), None).await;
+        let payload = client
+            .build_status_response(Some("not a url"), None, &sync_domains)
+            .await;
 
         assert!(payload.enabled);
         assert!(!payload.reachable);
@@ -674,6 +705,7 @@ mod tests {
         ))
         .await;
         let client = ProfileSyncClient::new(reqwest::Client::new());
+        let sync_domains = default_profile_sync_selected_domains();
 
         let error = client
             .fetch_server_config(&upstream.base_url())
@@ -683,7 +715,7 @@ mod tests {
         assert_eq!(error.kind, ProfileSyncErrorKind::Unauthorized);
 
         let payload = client
-            .build_status_response(Some(&upstream.base_url()), None)
+            .build_status_response(Some(&upstream.base_url()), None, &sync_domains)
             .await;
         assert!(payload.reachable);
         assert!(!payload.authenticated);
@@ -693,6 +725,37 @@ mod tests {
                 .error
                 .as_deref()
                 .is_some_and(|value| value.contains("401"))
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn build_status_response_reports_protocol_incompatible_as_reachable_error() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/api/server-config",
+            get(|| async move { (StatusCode::OK, "not-json").into_response() }),
+        ))
+        .await;
+        let client = ProfileSyncClient::new(reqwest::Client::new());
+        let sync_domains = default_profile_sync_selected_domains();
+
+        let payload = client
+            .build_status_response(Some(&upstream.base_url()), None, &sync_domains)
+            .await;
+
+        assert!(payload.enabled);
+        assert!(payload.reachable);
+        assert!(!payload.authenticated);
+        assert_eq!(
+            payload.error_kind,
+            Some(ProfileSyncErrorKind::ProtocolIncompatible)
+        );
+        assert!(
+            payload
+                .error
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
         );
 
         upstream.abort();

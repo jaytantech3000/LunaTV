@@ -32,6 +32,10 @@ const DESKTOP_PROFILE_BOOTSTRAP_POLL_INTERVAL_MS = 200;
 
 let desktopProfileBootstrapWaitPromise: Promise<void> | null = null;
 
+interface GetAllFollowRecordsOptions {
+  suppressGlobalError?: boolean;
+}
+
 function triggerGlobalError(message: string) {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
@@ -184,9 +188,9 @@ export function getCachedFollowRecordsSnapshot(): Record<
   }
 }
 
-export async function getAllFollowRecords(): Promise<
-  Record<string, FollowRecord>
-> {
+export async function getAllFollowRecords(
+  options: GetAllFollowRecordsOptions = {}
+): Promise<Record<string, FollowRecord>> {
   if (typeof window === 'undefined') {
     return {};
   }
@@ -231,6 +235,11 @@ export async function getAllFollowRecords(): Promise<
       return freshData;
     } catch (err) {
       if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
+        return {};
+      }
+
+      if (options?.suppressGlobalError) {
+        console.warn('后台读取追更记录失败:', err);
         return {};
       }
 

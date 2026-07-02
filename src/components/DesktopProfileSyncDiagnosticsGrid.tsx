@@ -36,7 +36,7 @@ export default function DesktopProfileSyncDiagnosticsGrid({
   );
 
   return (
-    <div className='grid gap-2 sm:grid-cols-2 xl:grid-cols-3'>
+    <div className='grid gap-2 sm:grid-cols-2'>
       {diagnostics.map((item) => (
         <DesktopProfileSyncDiagnosticCell key={item.label} item={item} />
       ))}
