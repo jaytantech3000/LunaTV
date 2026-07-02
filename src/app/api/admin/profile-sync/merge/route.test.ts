@@ -248,7 +248,7 @@ describe('/api/admin/profile-sync/merge', () => {
     );
   });
 
-  it('persists the desktop admin config snapshot when provided', async () => {
+  it('ignores owner-only fields from the desktop adminsettings snapshot', async () => {
     (getAuthInfoFromCookie as jest.Mock).mockReturnValue({
       username: 'admin-user',
     });
@@ -370,6 +370,11 @@ describe('/api/admin/profile-sync/merge', () => {
     expect(response.status).toBe(200);
     expect(db.saveAdminConfig).toHaveBeenCalledWith(
       expect.objectContaining({
+        ConfigSubscribtion: {
+          URL: '',
+          AutoUpdate: false,
+          LastCheck: '',
+        },
         ConfigFile:
           '{"auth":{"username":"owner","password":"remote-owner-secret"}}',
         SiteConfig: expect.objectContaining({
@@ -381,21 +386,11 @@ describe('/api/admin/profile-sync/merge', () => {
           }),
         ]),
         UserConfig: {
-          Users: expect.arrayContaining([
-            expect.objectContaining({
-              username: 'desktop-admin',
-              role: 'admin',
-            }),
-            expect.objectContaining({
-              username: 'desktop-user',
-              role: 'user',
-            }),
-          ]),
-          Tags: expect.arrayContaining([
-            expect.objectContaining({
-              name: 'kids',
-            }),
-          ]),
+          Users: [
+            { username: 'owner', role: 'owner' },
+            { username: 'admin-user', role: 'admin', banned: false },
+            { username: 'target-user', role: 'user', banned: false },
+          ],
         },
       })
     );
