@@ -46,7 +46,7 @@ const LOCAL_SERVICE_BINARY_NAME: &str = "moontv-local-service";
 const LOCAL_SERVICE_CONFIG_FILE_NAME: &str = "desktop.config.json";
 const LOCAL_SERVICE_DB_FILE_NAME: &str = "moontv-desktop.sqlite3";
 const ADMIN_PERSISTENCE_FILE_NAME: &str = "desktop-admin-state.json";
-const DEFAULT_DESKTOP_OWNER_USERNAME: &str = "owner";
+const DEFAULT_DESKTOP_OWNER_USERNAME: &str = "admin";
 const LOCAL_SERVICE_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCAL_SERVICE_STARTUP_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const LOCAL_SERVICE_HEALTH_CONNECT_TIMEOUT: Duration = Duration::from_millis(350);
@@ -6271,7 +6271,7 @@ mod tests {
         assert!(changed);
         assert_eq!(
             config_value["auth"]["username"],
-            serde_json::Value::String(DEFAULT_DESKTOP_OWNER_USERNAME.to_string())
+            serde_json::Value::String("admin".to_string())
         );
         assert!(config_value["auth"].get("password").is_none());
     }

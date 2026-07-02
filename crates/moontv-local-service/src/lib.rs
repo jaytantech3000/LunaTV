@@ -123,6 +123,7 @@ const DEFAULT_CONFIG_FILE_NAME: &str = "config.example.json";
 const DEFAULT_DATA_DIR_NAME: &str = ".lunatv-desktop";
 const DEFAULT_SQLITE_FILE_NAME: &str = "moontv-desktop.sqlite3";
 const ADMIN_PERSISTENCE_FILE_NAME: &str = "desktop-admin-state.json";
+const DEFAULT_DESKTOP_OWNER_USERNAME: &str = "admin";
 const DOWNLOAD_RUNTIME_DIR_NAME: &str = "download-runtime";
 const DOWNLOAD_RUNTIME_CACHE_BODY_DIR_NAME: &str = "cache-body";
 const DOWNLOAD_RUNTIME_CACHE_META_DIR_NAME: &str = "cache-meta";
@@ -1783,7 +1784,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/image-proxy", get(get_image_proxy))
         .route("/api/profile/bootstrap", get(get_profile_bootstrap))
         .route("/api/profile-sync/status", get(get_profile_sync_status))
-        .route("/api/profile-sync/sync-now", post(post_profile_sync_sync_now))
+        .route(
+            "/api/profile-sync/sync-now",
+            post(post_profile_sync_sync_now),
+        )
         .route("/api/server-config", get(get_profile_sync_server_config))
         .route("/api/login", any(proxy_profile_sync_login))
         .route("/api/logout", any(proxy_profile_sync_logout))
@@ -2042,7 +2046,7 @@ async fn get_runtime_public_config(State(state): State<AppState>) -> AppResult<R
 fn build_local_auth_status_payload(state: &AppState) -> Result<LocalAuthStatusResponse> {
     let persistence = state.load_admin_persistence()?;
     let owner_username = resolve_owner_username_for_import(&persistence.config)
-        .unwrap_or_else(|| "owner".to_string());
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
     let owner_password_configured =
         extract_owner_password_from_config_file(&persistence.config.config_file).is_some();
     let multi_user = persistence
@@ -2505,6 +2509,20 @@ async fn refresh_admin_config_subscription_if_due(state: &AppState) -> Result<()
     let config_content = fetch_admin_config_subscription_content(state, &subscription.url)
         .await
         .map_err(|error| anyhow::anyhow!(error.message))?;
+    let current_owner_username =
+        extract_owner_username_from_config_file(&persistence.config.config_file);
+    let current_owner_password =
+        extract_owner_password_from_config_file(&persistence.config.config_file);
+    let config_content = apply_desktop_runtime_overrides_to_config_file(
+        &config_content,
+        current_owner_username.as_deref(),
+        current_owner_password.as_deref(),
+        persistence.profile_sync_api_base_url.as_deref(),
+        persistence
+            .profile_sync_api_base_url
+            .as_ref()
+            .map(|_| persistence.profile_sync_sync_domains.as_slice()),
+    )?;
     persist_admin_config_file_with_subscription(
         state,
         &config_content,
@@ -2541,6 +2559,94 @@ fn validate_admin_config_file_contents(config_file: &str) -> Result<()> {
 
     serde_json::from_str::<Value>(trimmed).context("config file json is invalid")?;
     Ok(())
+}
+
+fn apply_desktop_runtime_overrides_to_config_file(
+    config_file: &str,
+    owner_username: Option<&str>,
+    owner_password: Option<&str>,
+    profile_sync_api_base_url: Option<&str>,
+    profile_sync_sync_domains: Option<&[String]>,
+) -> Result<String> {
+    let mut config_value = serde_json::from_str::<Value>(config_file.trim())
+        .context("failed to parse config file json")?;
+    let root = config_value
+        .as_object_mut()
+        .context("config file root must be an object")?;
+
+    let auth_entry = root.entry("auth".to_string()).or_insert_with(|| json!({}));
+    if !auth_entry.is_object() {
+        *auth_entry = json!({});
+    }
+    let auth = auth_entry
+        .as_object_mut()
+        .context("auth must be an object after normalization")?;
+    match owner_username
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(owner_username) => {
+            auth.insert(
+                "username".to_string(),
+                Value::String(owner_username.to_string()),
+            );
+        }
+        None => {
+            auth.remove("username");
+        }
+    }
+    match owner_password
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(owner_password) => {
+            auth.insert(
+                "password".to_string(),
+                Value::String(owner_password.to_string()),
+            );
+        }
+        None => {
+            auth.remove("password");
+        }
+    }
+
+    let profile_sync_entry = root
+        .entry("profile_sync".to_string())
+        .or_insert_with(|| json!({}));
+    if !profile_sync_entry.is_object() {
+        *profile_sync_entry = json!({});
+    }
+    let profile_sync = profile_sync_entry
+        .as_object_mut()
+        .context("profile_sync must be an object after normalization")?;
+    match profile_sync_api_base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(profile_sync_api_base_url) => {
+            profile_sync.insert(
+                "api_base_url".to_string(),
+                Value::String(profile_sync_api_base_url.to_string()),
+            );
+            if let Some(sync_domains) = profile_sync_sync_domains {
+                profile_sync.insert(
+                    "sync_domains".to_string(),
+                    Value::Array(
+                        sync_domains
+                            .iter()
+                            .map(|domain| Value::String(domain.clone()))
+                            .collect(),
+                    ),
+                );
+            }
+        }
+        None => {
+            profile_sync.remove("api_base_url");
+            profile_sync.remove("sync_domains");
+        }
+    }
+
+    serde_json::to_string_pretty(&config_value).context("failed to encode config file json")
 }
 
 fn persist_admin_config_file_with_subscription(
@@ -3221,7 +3327,7 @@ async fn update_admin_user_config(
         .iter()
         .find(|user| user.role == "owner")
         .map(|user| user.username.clone())
-        .unwrap_or_else(|| "owner".to_string());
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
     persistence.config.user_config =
         normalize_user_config(persistence.config.user_config, &owner_username);
 
@@ -3801,7 +3907,9 @@ pub(crate) fn validate_profile_sync_selected_domains(
             continue;
         }
         if !PROFILE_SYNC_USER_DATA_DOMAINS.contains(&trimmed) {
-            return Err(AppError::bad_request(format!("不支持的同步范围: {trimmed}")));
+            return Err(AppError::bad_request(format!(
+                "不支持的同步范围: {trimmed}"
+            )));
         }
 
         let candidate = trimmed.to_string();
@@ -3891,7 +3999,7 @@ fn build_default_admin_config(
     raw_config: &RawServiceConfig,
 ) -> DesktopAdminConfig {
     let owner_username = normalize_optional_string(raw_config.auth.username.clone())
-        .unwrap_or_else(|| "owner".to_string());
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
     let site_config = build_default_site_config_from_raw(raw_config);
     let player_enhancement_config = build_default_player_enhancement_config_from_raw(raw_config);
 
@@ -4044,7 +4152,7 @@ fn merge_admin_persistence_with_raw(
     raw_config: &RawServiceConfig,
 ) -> DesktopAdminPersistence {
     let owner_username = normalize_optional_string(raw_config.auth.username.clone())
-        .unwrap_or_else(|| "owner".to_string());
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
 
     persistence.config.config_file = raw_contents.clone();
     persistence.config.site_config = normalize_desktop_site_config(persistence.config.site_config);
@@ -7209,8 +7317,8 @@ mod tests {
     };
 
     use std::env;
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use axum::{body::to_bytes, http::Request, response::IntoResponse};
     use futures::StreamExt;
@@ -8968,6 +9076,177 @@ segment0.ts
 
         let raw_config = fs::read_to_string(config_path).expect("read refreshed raw config");
         assert!(raw_config.contains("Updated LunaTV"));
+
+        upstream.abort();
+    }
+
+    #[test]
+    fn load_admin_persistence_defaults_missing_owner_username_to_admin() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "site_name": "Default LunaTV",
+              "api_site": {}
+            }),
+        );
+
+        let persistence = load_admin_persistence(
+            &config_path,
+            &temp_dir.path.join("data").join(ADMIN_PERSISTENCE_FILE_NAME),
+        )
+        .expect("load admin persistence");
+
+        assert_eq!(
+            resolve_owner_username_for_import(&persistence.config).as_deref(),
+            Some("admin")
+        );
+        assert!(
+            persistence
+                .config
+                .user_config
+                .users
+                .iter()
+                .any(|user| user.username == "admin" && user.role == "owner")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_admin_config_subscription_if_due_preserves_profile_sync_and_synced_owner() {
+        let subscription_config = json!({
+          "auth": {
+            "username": "owner"
+          },
+          "site_name": "Updated LunaTV",
+          "api_site": {
+            "remote": {
+              "api": "https://example.com/api.php/provide/vod",
+              "name": "Remote Source"
+            }
+          }
+        });
+        let encoded_subscription = bs58::encode(
+            serde_json::to_string(&subscription_config).expect("serialize subscription config"),
+        )
+        .into_string();
+        let upstream = spawn_mock_server(Router::new().route(
+            "/subscription",
+            get({
+                let encoded_subscription = encoded_subscription.clone();
+                move || {
+                    let encoded_subscription = encoded_subscription.clone();
+                    async move { encoded_subscription }
+                }
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "auth": {
+                "username": "admin",
+                "password": "admin-secret"
+              },
+              "profile_sync": {
+                "api_base_url": "https://sync.example.com",
+                "sync_domains": ["adminsettings", "favorites"]
+              },
+              "site_name": "Synced LunaTV",
+              "api_site": {}
+            }),
+        );
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+              "profile_sync_api_base_url": "https://sync.example.com",
+              "profileSyncSyncDomains": ["adminsettings", "favorites"],
+              "config": {
+                "ConfigSubscribtion": {
+                  "URL": format!("{}/subscription", upstream.base_url()),
+                  "AutoUpdate": true,
+                  "LastCheck": ""
+                },
+                "UserConfig": {
+                  "Users": [
+                    {
+                      "username": "admin",
+                      "role": "owner"
+                    },
+                    {
+                      "username": "owner",
+                      "role": "user"
+                    }
+                  ],
+                  "Tags": []
+                }
+              }
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path.clone(),
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+
+        refresh_admin_config_subscription_if_due(&state)
+            .await
+            .expect("refresh desktop config subscription");
+
+        let refreshed_raw_config = serde_json::from_str::<Value>(
+            &fs::read_to_string(&config_path).expect("read refreshed raw config"),
+        )
+        .expect("parse refreshed raw config");
+        assert_eq!(
+            refreshed_raw_config["auth"]["username"],
+            Value::String("admin".to_string())
+        );
+        assert_eq!(
+            refreshed_raw_config["auth"]["password"],
+            Value::String("admin-secret".to_string())
+        );
+        assert_eq!(
+            refreshed_raw_config["profile_sync"]["api_base_url"],
+            Value::String("https://sync.example.com".to_string())
+        );
+        assert_eq!(
+            refreshed_raw_config["profile_sync"]["sync_domains"],
+            json!(["adminsettings", "favorites"])
+        );
+
+        let persistence = state
+            .load_admin_persistence()
+            .expect("load refreshed admin persistence");
+        assert_eq!(
+            resolve_owner_username_for_import(&persistence.config).as_deref(),
+            Some("admin")
+        );
+        assert!(
+            persistence
+                .config
+                .user_config
+                .users
+                .iter()
+                .any(|user| user.username == "admin" && user.role == "owner")
+        );
+        assert!(
+            persistence
+                .config
+                .user_config
+                .users
+                .iter()
+                .any(|user| user.username == "owner" && user.role == "user")
+        );
+        assert_eq!(
+            state
+                .load_config()
+                .expect("load runtime config")
+                .profile_sync_api_base_url
+                .as_deref(),
+            Some("https://sync.example.com")
+        );
 
         upstream.abort();
     }
@@ -12206,9 +12485,7 @@ segment0.ts
         let captured_payloads = captured_payloads.lock().expect("captured payloads");
         assert_eq!(captured_payloads.len(), 1);
         assert_eq!(
-            captured_payloads[0]
-                .get("strategy")
-                .and_then(Value::as_str),
+            captured_payloads[0].get("strategy").and_then(Value::as_str),
             Some("web-first")
         );
         assert_eq!(
@@ -12259,14 +12536,17 @@ segment0.ts
 
         assert_eq!(status_response.status(), StatusCode::OK);
         let status_payload = read_json_body(status_response).await;
-        assert_eq!(status_payload.get("syncDomains"), Some(&json!(["favorites"])));
+        assert_eq!(
+            status_payload.get("syncDomains"),
+            Some(&json!(["favorites"]))
+        );
 
         upstream.abort();
     }
 
     #[tokio::test]
-    async fn profile_sync_sync_now_web_first_with_adminsettings_applies_remote_admin_config_locally(
-    ) {
+    async fn profile_sync_sync_now_web_first_with_adminsettings_applies_remote_admin_config_locally()
+     {
         let captured_payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
         let captured_payloads_for_route = Arc::clone(&captured_payloads);
         let remote_raw_config = json!({
@@ -12363,8 +12643,7 @@ segment0.ts
                     get({
                         let remote_admin_config_response = remote_admin_config_response.clone();
                         move || {
-                            let remote_admin_config_response =
-                                remote_admin_config_response.clone();
+                            let remote_admin_config_response = remote_admin_config_response.clone();
                             async move { Json(remote_admin_config_response) }
                         }
                     }),
@@ -12863,14 +13142,17 @@ segment0.ts
 
         assert_eq!(status_response.status(), StatusCode::OK);
         let status_payload = read_json_body(status_response).await;
-        assert_eq!(status_payload.get("syncDomains"), Some(&json!(["favorites"])));
+        assert_eq!(
+            status_payload.get("syncDomains"),
+            Some(&json!(["favorites"]))
+        );
 
         upstream.abort();
     }
 
     #[tokio::test]
-    async fn profile_sync_onboarding_execute_sends_admin_config_snapshot_to_merge_route_when_adminsettings_selected_and_localfirst(
-    ) {
+    async fn profile_sync_onboarding_execute_sends_admin_config_snapshot_to_merge_route_when_adminsettings_selected_and_localfirst()
+     {
         let upstream = spawn_mock_server(
             Router::new()
                 .route(
@@ -13044,8 +13326,8 @@ segment0.ts
     }
 
     #[tokio::test]
-    async fn profile_sync_onboarding_execute_web_first_with_adminsettings_applies_remote_admin_config_locally(
-    ) {
+    async fn profile_sync_onboarding_execute_web_first_with_adminsettings_applies_remote_admin_config_locally()
+     {
         let captured_payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
         let captured_payloads_for_route = Arc::clone(&captured_payloads);
         let remote_raw_config = json!({
@@ -13143,8 +13425,7 @@ segment0.ts
                     get({
                         let remote_admin_config_response = remote_admin_config_response.clone();
                         move || {
-                            let remote_admin_config_response =
-                                remote_admin_config_response.clone();
+                            let remote_admin_config_response = remote_admin_config_response.clone();
                             async move { Json(remote_admin_config_response) }
                         }
                     }),
