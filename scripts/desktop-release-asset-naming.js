@@ -1,81 +1,9 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
 
-const path = require('node:path');
-
-const INTERNAL_ARTIFACT_LABELS = new Map([
-  ['lunatv-desktop-macos-intel', 'macOS Intel'],
-  ['lunatv-desktop-macos-arm64', 'macOS Apple Silicon'],
-  ['lunatv-desktop-windows-x64', 'Windows x64'],
-]);
-
-const INTERNAL_ARTIFACT_ARCHITECTURES = new Map([
-  ['lunatv-desktop-macos-intel', 'x64'],
-  ['lunatv-desktop-macos-arm64', 'aarch64'],
-  ['lunatv-desktop-windows-x64', 'x64'],
-]);
-
 const NORMALIZED_RELEASE_PATTERN =
   /^LunaTV\.Desktop_(?:(.+?)_)?(macos|windows|linux)-(x64|arm64)(\.dmg(?:\.sig)?|\.app\.tar\.gz(?:\.sig)?|-setup\.exe(?:\.sig)?|\.msi(?:\.sig)?|-portable\.zip|\.AppImage|\.deb|\.rpm)$/;
 const LEGACY_RELEASE_PATTERN =
   /^LunaTV\.Desktop_(?:(.+?)_)?(aarch64|arm64|x64|x86_64)(\.dmg(?:\.sig)?|\.app\.tar\.gz(?:\.sig)?|-setup\.exe(?:\.sig)?|\.msi(?:\.sig)?|-portable\.zip|_portable\.zip|\.AppImage|\.deb|\.rpm)$/;
-
-function getInternalReleaseLabel(artifactName) {
-  if (INTERNAL_ARTIFACT_LABELS.has(artifactName)) {
-    return INTERNAL_ARTIFACT_LABELS.get(artifactName);
-  }
-
-  return artifactName.replace(/^lunatv-desktop-/, '');
-}
-
-function getInternalReleaseArchitecture(artifactName) {
-  return INTERNAL_ARTIFACT_ARCHITECTURES.get(artifactName) || null;
-}
-
-function normalizePublishedAssetName(baseName) {
-  return baseName
-    .trim()
-    .replace(/^LunaTV Desktop/, 'LunaTV.Desktop')
-    .replace(/\s+/g, '.')
-    .replace(/\.{2,}/g, '.');
-}
-
-function insertQualifierBeforeExtension(fileName, qualifier) {
-  if (!qualifier || fileName.includes(`_${qualifier}`)) {
-    return fileName;
-  }
-
-  if (fileName.endsWith('.app.tar.gz.sig')) {
-    return `${fileName.slice(
-      0,
-      -'.app.tar.gz.sig'.length
-    )}_${qualifier}.app.tar.gz.sig`;
-  }
-
-  if (fileName.endsWith('.app.tar.gz')) {
-    return `${fileName.slice(
-      0,
-      -'.app.tar.gz'.length
-    )}_${qualifier}.app.tar.gz`;
-  }
-
-  if (fileName.endsWith('.tar.gz.sig')) {
-    return `${fileName.slice(
-      0,
-      -'.tar.gz.sig'.length
-    )}_${qualifier}.tar.gz.sig`;
-  }
-
-  if (fileName.endsWith('.tar.gz')) {
-    return `${fileName.slice(0, -'.tar.gz'.length)}_${qualifier}.tar.gz`;
-  }
-
-  const extension = path.posix.extname(fileName);
-  if (!extension) {
-    return `${fileName}_${qualifier}`;
-  }
-
-  return `${fileName.slice(0, -extension.length)}_${qualifier}${extension}`;
-}
 
 function normalizeArchitecture(rawArchitecture) {
   switch (rawArchitecture) {
@@ -206,29 +134,6 @@ function buildNormalizedBareReleaseAssetName(assetName, releaseVersion) {
   };
 }
 
-function buildInternalReleaseAssetFileName({ artifactName, relativePath }) {
-  const baseName = normalizePublishedAssetName(
-    path.posix.basename(relativePath)
-  );
-  return relativePath.endsWith('.app.tar.gz')
-    ? insertQualifierBeforeExtension(
-        baseName,
-        getInternalReleaseArchitecture(artifactName)
-      )
-    : baseName;
-}
-
-function buildInternalReleaseAssetLabel({ artifactName, relativePath }) {
-  return buildReleaseAssetLabel(
-    getInternalReleaseLabel(artifactName),
-    buildInternalReleaseAssetFileName({ artifactName, relativePath })
-  );
-}
-
-function buildInternalReleaseAssetName(input) {
-  return buildInternalReleaseAssetLabel(input);
-}
-
 function buildNormalizedReleaseAssetDescriptor({ assetName, releaseVersion }) {
   const { bareName } = splitLabeledAssetName(assetName);
   if (!bareName.startsWith('LunaTV.Desktop_')) {
@@ -278,9 +183,6 @@ function buildNormalizedReleaseAssetName({ assetName, releaseVersion }) {
 }
 
 module.exports = {
-  buildInternalReleaseAssetFileName,
-  buildInternalReleaseAssetLabel,
-  buildInternalReleaseAssetName,
   buildNormalizedReleaseAssetFileName,
   buildNormalizedReleaseAssetLabel,
   buildNormalizedReleaseAssetName,

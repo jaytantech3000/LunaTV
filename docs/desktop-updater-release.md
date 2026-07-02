@@ -1,9 +1,7 @@
 # Desktop Updater Release
 
-This repository now uses two separate desktop workflows:
+This repository uses `.github/workflows/desktop-release.yml` for desktop releases.
 
-- `.github/workflows/desktop-build.yml`
-  Builds unsigned internal desktop artifacts and can optionally publish an internal prerelease.
 - `.github/workflows/desktop-release.yml`
   Listens to pushed `desktop-v*` tags, creates or updates the matching GitHub Release with `GITHUB_TOKEN`, builds signed desktop assets, and uploads `latest.json` plus updater signatures.
 

@@ -1,18 +1,6 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
 
 interface DesktopReleaseAssetNamingModule {
-  buildInternalReleaseAssetFileName(input: {
-    artifactName: string;
-    relativePath: string;
-  }): string;
-  buildInternalReleaseAssetLabel(input: {
-    artifactName: string;
-    relativePath: string;
-  }): string;
-  buildInternalReleaseAssetName(input: {
-    artifactName: string;
-    relativePath: string;
-  }): string;
   buildNormalizedReleaseAssetFileName(input: {
     assetName: string;
     releaseVersion: string;
@@ -32,43 +20,16 @@ const assetNamingModule =
   require('../../scripts/desktop-release-asset-naming.js') as DesktopReleaseAssetNamingModule;
 
 describe('desktop release asset naming', () => {
-  it('builds safe internal release filenames without platform labels', () => {
-    expect(
-      assetNamingModule.buildInternalReleaseAssetFileName({
-        artifactName: 'lunatv-desktop-macos-intel',
-        relativePath: 'dmg/LunaTV Desktop_200.0.1_x64.dmg',
-      })
-    ).toBe('LunaTV.Desktop_200.0.1_x64.dmg');
-
-    expect(
-      assetNamingModule.buildInternalReleaseAssetFileName({
-        artifactName: 'lunatv-desktop-macos-arm64',
-        relativePath: 'macos/LunaTV Desktop.app.tar.gz',
-      })
-    ).toBe('LunaTV.Desktop_aarch64.app.tar.gz');
-  });
-
-  it('adds a human-readable platform label to internal prerelease assets', () => {
-    expect(
-      assetNamingModule.buildInternalReleaseAssetLabel({
-        artifactName: 'lunatv-desktop-macos-intel',
-        relativePath: 'dmg/LunaTV Desktop_200.0.1_x64.dmg',
-      })
-    ).toBe('macOS Intel - LunaTV.Desktop_200.0.1_x64.dmg');
-
-    expect(
-      assetNamingModule.buildInternalReleaseAssetLabel({
-        artifactName: 'lunatv-desktop-macos-arm64',
-        relativePath: 'macos/LunaTV Desktop.app.tar.gz',
-      })
-    ).toBe('macOS Apple Silicon - LunaTV.Desktop_aarch64.app.tar.gz');
-
-    expect(
-      assetNamingModule.buildInternalReleaseAssetName({
-        artifactName: 'lunatv-desktop-windows-x64',
-        relativePath: 'portable/LunaTV Desktop_200.0.1_x64_portable.zip',
-      })
-    ).toBe('Windows x64 - LunaTV.Desktop_200.0.1_x64_portable.zip');
+  it('does not expose internal release naming helpers', () => {
+    expect(assetNamingModule).not.toHaveProperty(
+      'buildInternalReleaseAssetFileName'
+    );
+    expect(assetNamingModule).not.toHaveProperty(
+      'buildInternalReleaseAssetLabel'
+    );
+    expect(assetNamingModule).not.toHaveProperty(
+      'buildInternalReleaseAssetName'
+    );
   });
 
   it('builds safe normalized release filenames for updater urls', () => {
