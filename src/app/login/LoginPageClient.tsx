@@ -325,20 +325,28 @@ export function LoginPageClient() {
           });
 
           if (res.ok) {
+            const data = (await res.json().catch(() => ({}))) as {
+              username?: string;
+              role?: 'owner' | 'admin' | 'user';
+            };
+            const resolvedUsername =
+              data.username?.trim() ||
+              (shouldAskUsername ? username.trim() : undefined);
+
+            if (resolvedUsername) {
+              setAuthInfoInBrowser({
+                username: resolvedUsername,
+                role: data.role || 'user',
+                password,
+                sessionMode: 'desktop-profile-sync',
+              });
+            }
+
             const bootstrapState = await loadDesktopProfileBootstrapState({
               localAuthMode: 'none',
             });
             if (bootstrapState) {
               // Runtime config and sync state are already applied by the shared bootstrap loader.
-            } else {
-              const data = await res.json().catch(() => ({}));
-              if (data.username) {
-                setAuthInfoInBrowser({
-                  username: data.username,
-                  role: data.role || 'user',
-                  sessionMode: 'desktop-profile-sync',
-                });
-              }
             }
 
             const redirect = searchParams.get('redirect') || '/';

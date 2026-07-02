@@ -4,7 +4,10 @@ import {
   getDesktopProfileBootstrap,
   loadDesktopProfileBootstrapState,
 } from '@/lib/desktop/profile-bootstrap';
-import { applyDesktopProfileSyncStatus } from '@/lib/desktop/profile-sync';
+import {
+  applyDesktopProfileSyncStatus,
+  restoreDesktopProfileSyncSession,
+} from '@/lib/desktop/profile-sync';
 import { applyDesktopRuntimePublicConfig } from '@/lib/desktop/runtime-config';
 import { startLocalService } from '@/lib/desktop/tauri-client';
 import { getRuntimeConfig } from '@/lib/runtime-config';
@@ -24,6 +27,7 @@ jest.mock('@/lib/desktop/auth-session', () => ({
 
 jest.mock('@/lib/desktop/profile-sync', () => ({
   applyDesktopProfileSyncStatus: jest.fn(),
+  restoreDesktopProfileSyncSession: jest.fn(),
 }));
 
 jest.mock('@/lib/desktop/runtime-config', () => ({
@@ -42,10 +46,73 @@ describe('desktop profile bootstrap helpers', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (apiFetch as jest.Mock).mockReset();
+    (restoreDesktopProfileSyncSession as jest.Mock).mockReset();
     delete mutableWindow.__DESKTOP_PROFILE_BOOTSTRAP__;
     (getRuntimeConfig as jest.Mock).mockReturnValue({
       APP_TARGET: 'desktop',
     });
+  });
+
+  it('restores a saved desktop profile sync session before applying bootstrap state', async () => {
+    const initialPayload = {
+      appTarget: 'desktop',
+      runtime: {
+        siteName: 'Bootstrap LunaTV',
+        profileSyncEnabled: true,
+      },
+      profileSync: {
+        enabled: true,
+        reachable: true,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'redis',
+        profileMode: 'shared-multi-user',
+        error: null,
+        errorKind: null,
+        syncDomains: ['playrecords'],
+      },
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: true,
+        ownerPasswordConfigured: true,
+      },
+    };
+    const restoredPayload = {
+      ...initialPayload,
+      profileSync: {
+        ...initialPayload.profileSync,
+        authenticated: true,
+        username: 'cloud-owner',
+        role: 'owner',
+      },
+    };
+
+    (apiFetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue(initialPayload),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue(restoredPayload),
+      });
+    (restoreDesktopProfileSyncSession as jest.Mock).mockResolvedValue(true);
+
+    await expect(loadDesktopProfileBootstrapState()).resolves.toEqual({
+      payload: restoredPayload,
+      localAuth: restoredPayload.localAuth,
+    });
+
+    expect(restoreDesktopProfileSyncSession).toHaveBeenCalledTimes(1);
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    expect(applyDesktopProfileSyncStatus).toHaveBeenCalledWith(
+      restoredPayload.profileSync
+    );
   });
 
   it('skips bootstrap fetch outside desktop mode', async () => {

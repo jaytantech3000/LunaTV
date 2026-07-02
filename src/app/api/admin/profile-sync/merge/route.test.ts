@@ -294,8 +294,21 @@ describe('/api/admin/profile-sync/merge', () => {
             username: 'owner',
             role: 'owner',
           },
+          {
+            username: 'desktop-admin',
+            role: 'admin',
+          },
+          {
+            username: 'desktop-user',
+            role: 'user',
+          },
         ],
-        Tags: [],
+        Tags: [
+          {
+            name: 'kids',
+            enabledApis: ['demo'],
+          },
+        ],
       },
       SourceConfig: [
         {
@@ -347,6 +360,23 @@ describe('/api/admin/profile-sync/merge', () => {
             key: 'demo',
           }),
         ]),
+        UserConfig: {
+          Users: expect.arrayContaining([
+            expect.objectContaining({
+              username: 'desktop-admin',
+              role: 'admin',
+            }),
+            expect.objectContaining({
+              username: 'desktop-user',
+              role: 'user',
+            }),
+          ]),
+          Tags: expect.arrayContaining([
+            expect.objectContaining({
+              name: 'kids',
+            }),
+          ]),
+        },
       })
     );
   });

@@ -153,6 +153,30 @@ function normalizeRole(
   return 'user';
 }
 
+function getStoredDesktopProfileSyncCredentials(): {
+  username: string;
+  password: string;
+  role: 'owner' | 'admin' | 'user';
+} | null {
+  const authInfo = getAuthInfoFromBrowserCookie();
+  const username = authInfo?.username?.trim();
+  const password = authInfo?.password?.trim();
+
+  if (
+    authInfo?.sessionMode !== 'desktop-profile-sync' ||
+    !username ||
+    !password
+  ) {
+    return null;
+  }
+
+  return {
+    username,
+    password,
+    role: normalizeRole(authInfo.role),
+  };
+}
+
 export function resolveDesktopProfileSyncState(
   status: DesktopProfileSyncStatus | null | undefined
 ): DesktopProfileSyncState {
@@ -272,6 +296,51 @@ export async function syncDesktopProfileNow(
   );
 }
 
+export async function restoreDesktopProfileSyncSession(): Promise<boolean> {
+  const credentials = getStoredDesktopProfileSyncCredentials();
+
+  if (!credentials) {
+    return false;
+  }
+
+  try {
+    const response = await apiFetch('/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        username: credentials.username,
+        password: credentials.password,
+      }),
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        clearAuthInfoInBrowser();
+      }
+
+      return false;
+    }
+
+    const payload = (await response.json().catch(() => ({}))) as {
+      username?: string;
+      role?: DesktopProfileSyncStatus['role'];
+    };
+
+    setAuthInfoInBrowser({
+      username: payload.username?.trim() || credentials.username,
+      role: normalizeRole(payload.role || credentials.role),
+      password: credentials.password,
+      sessionMode: 'desktop-profile-sync',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function describeDesktopProfileSyncStatusReadError(
   error: unknown
 ): string {
@@ -313,6 +382,7 @@ export async function readDesktopProfileSyncStatusState(): Promise<DesktopProfil
 export function applyDesktopProfileSyncStatus(
   status: DesktopProfileSyncStatus
 ) {
+  const currentAuthInfo = getAuthInfoFromBrowserCookie();
   const currentConfig = getRuntimeConfig();
   const nextConfig = {
     ...currentConfig,
@@ -336,9 +406,15 @@ export function applyDesktopProfileSyncStatus(
 
   if (status.enabled) {
     if (status.authenticated && status.username?.trim()) {
+      const password =
+        currentAuthInfo?.sessionMode === 'desktop-profile-sync' &&
+        currentAuthInfo.username?.trim() === status.username.trim()
+          ? currentAuthInfo.password
+          : undefined;
       setAuthInfoInBrowser({
         username: status.username.trim(),
         role: normalizeRole(status.role),
+        password,
         sessionMode: 'desktop-profile-sync',
       });
     } else {

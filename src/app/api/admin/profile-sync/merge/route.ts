@@ -232,7 +232,7 @@ function mergeAdminPanelSnapshot(
     AdFilterConfig: snapshot.AdFilterConfig || currentConfig.AdFilterConfig,
     PlayerEnhancementConfig:
       snapshot.PlayerEnhancementConfig || currentConfig.PlayerEnhancementConfig,
-    UserConfig: currentConfig.UserConfig,
+    UserConfig: snapshot.UserConfig || currentConfig.UserConfig,
   });
 }
 
