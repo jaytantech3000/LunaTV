@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - desktop
-      - main
     paths:
       - '.github/workflows/download-site.yml'
       - 'download-site/**'

@@ -20,7 +20,7 @@ Local publishing no longer needs `gh release create` or a logged-in `gh` session
 - Build output lives in `download-site-dist/`
 - Release data is exported by `scripts/export-download-site-data.mjs`
 - The Pages branch is updated by `scripts/publish-download-site-branch.sh`
-- `.github/workflows/download-site.yml` handles first deploys and page-only updates from the `desktop` or `main` branch
+- `.github/workflows/download-site.yml` handles first deploys and page-only updates from the `desktop` branch
 - `.github/workflows/desktop-release.yml` republishes the download site after each successful desktop release
 
 ## Required GitHub Secrets
@@ -43,4 +43,4 @@ The `.tauri-updater/` directory is gitignored. The public key is already committ
 - Tauri updater endpoints use `LUNATV_RELEASE_REPOSITORY`.
 - In GitHub Actions both default to `${{ github.repository }}` through `scripts/sync-updater-config.mjs`.
 
-If you need to fetch raw files from a branch other than `main`, set `NEXT_PUBLIC_RELEASE_BRANCH`.
+If you need to fetch raw files from a branch other than `desktop`, set `NEXT_PUBLIC_RELEASE_BRANCH`.
