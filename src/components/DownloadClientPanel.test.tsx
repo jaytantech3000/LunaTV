@@ -146,6 +146,67 @@ describe('DownloadClientPanel', () => {
     ).toBeDisabled();
   });
 
+  it('keeps installer downloads enabled when only installer assets are available', async () => {
+    global.fetch = jest.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === '/api/desktop-release') {
+        return Promise.resolve(
+          jsonResponse({
+            assets: [],
+            missingAssetKeys: [
+              'mac-arm64',
+              'mac-x64',
+              'win-x64-setup',
+              'win-x64-portable',
+            ],
+            publishedAt: '2026-06-15T00:00:00.000Z',
+            releaseId: 39,
+            version: 'Desktop Internal #39',
+          })
+        );
+      }
+
+      if (url === '/api/local-service-release') {
+        return Promise.resolve(
+          jsonResponse({
+            availablePlatforms: [],
+            configuredPlatforms: ['mac-arm64', 'linux-x64'],
+            displayName:
+              'LunaTV Local Service (local-service-nova-2026-06-16.4)',
+            installerPlatforms: ['mac-arm64', 'linux-x64'],
+            publishedAt: '2026-06-16T04:00:00.000Z',
+            releaseStatus: 'release',
+            version: 'local-service-nova-2026-06-16.4',
+          })
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    }) as typeof fetch;
+
+    render(<DownloadClientPanel isOpen onClose={jest.fn()} />);
+
+    expect(
+      await screen.findByText('local-service-nova-2026-06-16.4')
+    ).toBeInTheDocument();
+
+    const appleSiliconRow = screen.getByRole('button', {
+      name: 'macOS Apple Silicon 安装包下载',
+    }).parentElement?.parentElement as HTMLElement;
+
+    expect(
+      screen.getByRole('button', { name: 'macOS Apple Silicon 安装包下载' })
+    ).toBeEnabled();
+    expect(within(appleSiliconRow).queryByText('暂未开放')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Linux x64 安装包下载' })
+    ).toBeEnabled();
+    expect(
+      screen.getByRole('button', { name: 'Linux x64 脚本下载' })
+    ).toBeDisabled();
+  });
+
   it('shows a retry path when desktop release loading fails', async () => {
     let desktopCalls = 0;
 

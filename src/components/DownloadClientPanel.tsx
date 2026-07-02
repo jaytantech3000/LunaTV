@@ -669,12 +669,14 @@ export default function DownloadClientPanel({
 
       const releasePayload = payload as LocalServiceReleasePayload;
       const availablePlatforms = new Set(releasePayload.availablePlatforms);
+      const installerPlatforms = new Set(releasePayload.installerPlatforms);
       const nextStatuses = createUnknownLocalServiceStatuses();
 
       LOCAL_SERVICE_META.forEach(({ key }) => {
-        nextStatuses[key] = availablePlatforms.has(key)
-          ? 'available'
-          : 'unavailable';
+        nextStatuses[key] =
+          availablePlatforms.has(key) || installerPlatforms.has(key)
+            ? 'available'
+            : 'unavailable';
       });
 
       setLocalServiceRelease(releasePayload);
@@ -714,6 +716,9 @@ export default function DownloadClientPanel({
   }
 
   const recommendedLocalServicePlatform = recommendedTargets.localService;
+  const localServiceBinaryPlatforms = new Set(
+    localServiceRelease?.availablePlatforms ?? []
+  );
   const localServiceInstallerPlatforms = new Set(
     localServiceRelease?.installerPlatforms ?? []
   );
@@ -1076,8 +1081,8 @@ export default function DownloadClientPanel({
 
             <div className='space-y-3'>
               {LOCAL_SERVICE_META.map((meta) => {
-                const status = localServiceStatuses[meta.key];
-                const isUnavailable = status === 'unavailable';
+                const isPrimaryUnavailable =
+                  localServiceStatuses[meta.key] === 'unavailable';
                 const isRecommended =
                   recommendedTargets.localService === meta.key;
                 const downloadConfig = getLocalServiceDownloadConfig(
@@ -1085,6 +1090,9 @@ export default function DownloadClientPanel({
                   localServiceInstallerPlatforms
                 );
                 const secondaryAction = downloadConfig.secondaryAction;
+                const isSecondaryUnavailable =
+                  Boolean(secondaryAction) &&
+                  !localServiceBinaryPlatforms.has(meta.key);
 
                 return (
                   <div
@@ -1105,7 +1113,7 @@ export default function DownloadClientPanel({
                             当前设备
                           </span>
                         )}
-                        {isUnavailable && (
+                        {isPrimaryUnavailable && (
                           <span className='rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-300'>
                             暂未开放
                           </span>
@@ -1119,13 +1127,13 @@ export default function DownloadClientPanel({
                       <button
                         aria-label={`${meta.label} ${downloadConfig.primaryAction.ariaLabelSuffix}`}
                         className={`inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                          isUnavailable
+                          isPrimaryUnavailable
                             ? 'cursor-not-allowed bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
                             : 'bg-emerald-600 text-white hover:bg-emerald-700'
                         }`}
-                        disabled={isUnavailable}
+                        disabled={isPrimaryUnavailable}
                         onClick={() =>
-                          !isUnavailable &&
+                          !isPrimaryUnavailable &&
                           handleDownload(downloadConfig.primaryAction.href)
                         }
                         type='button'
@@ -1137,13 +1145,13 @@ export default function DownloadClientPanel({
                         <button
                           aria-label={`${meta.label} ${secondaryAction.ariaLabelSuffix}`}
                           className={`inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
-                            isUnavailable
+                            isSecondaryUnavailable
                               ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-500 dark:border-gray-800 dark:bg-gray-900/30 dark:text-gray-500'
                               : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-200 dark:hover:bg-gray-800/60'
                           }`}
-                          disabled={isUnavailable}
+                          disabled={isSecondaryUnavailable}
                           onClick={() =>
-                            !isUnavailable &&
+                            !isSecondaryUnavailable &&
                             handleDownload(secondaryAction.href)
                           }
                           type='button'
