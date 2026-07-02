@@ -4293,6 +4293,207 @@ fn merge_live_config(
     merged
 }
 
+fn build_admin_settings_sync_snapshot(config: &DesktopAdminConfig) -> DesktopAdminConfig {
+    DesktopAdminConfig {
+        site_config: normalize_desktop_site_config(config.site_config.clone()),
+        source_config: config.source_config.clone(),
+        custom_categories: config.custom_categories.clone(),
+        live_config: config.live_config.clone(),
+        ad_filter_config: config.ad_filter_config.clone(),
+        player_enhancement_config: config.player_enhancement_config.clone(),
+        ..DesktopAdminConfig::default()
+    }
+}
+
+fn apply_admin_settings_to_config_file(
+    base_config_file: &str,
+    admin_config: &DesktopAdminConfig,
+) -> Result<String> {
+    let admin_settings = build_admin_settings_sync_snapshot(admin_config);
+    let mut config_value = serde_json::from_str::<Value>(base_config_file.trim())
+        .context("failed to parse base config file json")?;
+    let root = config_value
+        .as_object_mut()
+        .context("config file root must be an object")?;
+
+    root.insert(
+        "cache_time".to_string(),
+        Value::Number(admin_settings.site_config.site_interface_cache_time.into()),
+    );
+    root.insert(
+        "search_downstream_max_page".to_string(),
+        Value::Number((admin_settings.site_config.search_downstream_max_page as u64).into()),
+    );
+    root.insert(
+        "disable_yellow_filter".to_string(),
+        Value::Bool(admin_settings.site_config.disable_yellow_filter),
+    );
+    root.insert(
+        "site_name".to_string(),
+        Value::String(admin_settings.site_config.site_name),
+    );
+    root.insert(
+        "announcement".to_string(),
+        Value::String(admin_settings.site_config.announcement),
+    );
+    root.insert(
+        "douban_proxy_type".to_string(),
+        Value::String(admin_settings.site_config.douban_proxy_type),
+    );
+    root.insert(
+        "douban_proxy".to_string(),
+        Value::String(admin_settings.site_config.douban_proxy),
+    );
+    root.insert(
+        "douban_image_proxy_type".to_string(),
+        Value::String(admin_settings.site_config.douban_image_proxy_type),
+    );
+    root.insert(
+        "douban_image_proxy".to_string(),
+        Value::String(admin_settings.site_config.douban_image_proxy),
+    );
+    root.insert(
+        "enable_web_live".to_string(),
+        Value::Bool(admin_settings.site_config.enable_web_live),
+    );
+
+    let player_enhancements_entry = root
+        .entry("player_enhancements".to_string())
+        .or_insert_with(|| json!({}));
+    if !player_enhancements_entry.is_object() {
+        *player_enhancements_entry = json!({});
+    }
+    let player_enhancements = player_enhancements_entry
+        .as_object_mut()
+        .context("player_enhancements must be an object after normalization")?;
+    player_enhancements.insert(
+        "audio_spike_protection".to_string(),
+        Value::Bool(
+            admin_settings
+                .player_enhancement_config
+                .audio_spike_protection,
+        ),
+    );
+    match admin_settings
+        .player_enhancement_config
+        .audio_spike_protection_level
+    {
+        Some(level) => {
+            player_enhancements.insert(
+                "audio_spike_protection_level".to_string(),
+                serde_json::to_value(level)
+                    .context("failed to serialize audio spike protection level")?,
+            );
+        }
+        None => {
+            player_enhancements.remove("audio_spike_protection_level");
+        }
+    }
+    match admin_settings
+        .player_enhancement_config
+        .audio_dynamic_protection
+    {
+        Some(value) => {
+            player_enhancements.insert("audio_dynamic_protection".to_string(), Value::Bool(value));
+        }
+        None => {
+            player_enhancements.remove("audio_dynamic_protection");
+        }
+    }
+    match admin_settings.player_enhancement_config.audio_fixed_ceiling {
+        Some(value) => {
+            player_enhancements.insert("audio_fixed_ceiling".to_string(), Value::Bool(value));
+        }
+        None => {
+            player_enhancements.remove("audio_fixed_ceiling");
+        }
+    }
+    player_enhancements.insert(
+        "visual_enhancement".to_string(),
+        Value::Bool(admin_settings.player_enhancement_config.visual_enhancement),
+    );
+    match admin_settings
+        .player_enhancement_config
+        .visual_enhancement_level
+    {
+        Some(level) => {
+            player_enhancements.insert(
+                "visual_enhancement_level".to_string(),
+                serde_json::to_value(level)
+                    .context("failed to serialize visual enhancement level")?,
+            );
+        }
+        None => {
+            player_enhancements.remove("visual_enhancement_level");
+        }
+    }
+
+    root.insert(
+        "api_site".to_string(),
+        Value::Object(
+            admin_settings
+                .source_config
+                .into_iter()
+                .map(|source| {
+                    (
+                        source.key,
+                        json!({
+                            "api": source.api,
+                            "name": source.name,
+                            "detail": source.detail,
+                            "ua": source.ua,
+                            "referer": source.referer,
+                            "disabled": source.disabled,
+                            "disable_ad_filter": source.disable_ad_filter
+                        }),
+                    )
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "custom_category".to_string(),
+        Value::Array(
+            admin_settings
+                .custom_categories
+                .into_iter()
+                .map(|category| {
+                    json!({
+                        "name": category.name,
+                        "type": category.category_type,
+                        "query": category.query,
+                        "disabled": category.disabled
+                    })
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "lives".to_string(),
+        Value::Object(
+            admin_settings
+                .live_config
+                .into_iter()
+                .map(|live| {
+                    (
+                        live.key,
+                        json!({
+                            "name": live.name,
+                            "url": live.url,
+                            "ua": live.ua,
+                            "epg": live.epg,
+                            "disabled": live.disabled
+                        }),
+                    )
+                })
+                .collect(),
+        ),
+    );
+
+    serde_json::to_string_pretty(&config_value)
+        .context("failed to encode config file with admin settings")
+}
+
 fn build_service_config_from_admin(
     admin_config: &DesktopAdminConfig,
     profile_sync_api_base_url: &Option<String>,
@@ -9773,7 +9974,6 @@ segment0.ts
         assert!(owner_snapshot.skip_configs.is_empty());
     }
 
-
     #[tokio::test]
     async fn profile_playrecords_route_proxies_profile_sync_mode() {
         let upstream = spawn_mock_server(Router::new().route(
@@ -10809,7 +11009,7 @@ segment0.ts
                 .and_then(|value| value.get("ConfigSubscribtion"))
                 .and_then(|value| value.get("URL"))
                 .and_then(Value::as_str),
-            Some("https://remote.example/subscription")
+            Some("https://local.example/subscription")
         );
         assert_eq!(
             admin_payload
@@ -10827,10 +11027,10 @@ segment0.ts
                 .and_then(|value| value.get("UserConfig"))
                 .and_then(|value| value.get("Users"))
                 .and_then(Value::as_array)
-                .is_some_and(|users| users.iter().any(|user| {
-                    user.get("username").and_then(Value::as_str) == Some("remote-admin")
+                .is_some_and(|users| users.iter().all(|user| {
+                    user.get("username").and_then(Value::as_str) != Some("remote-admin")
                 })),
-            "expected remote admin user to be persisted locally"
+            "expected local user config to stay intact"
         );
         assert!(
             admin_payload
@@ -10838,11 +11038,12 @@ segment0.ts
                 .and_then(|value| value.get("ConfigFile"))
                 .and_then(Value::as_str)
                 .is_some_and(|config_file| {
-                    config_file.contains("remote-owner-secret")
+                    config_file.contains("local-owner-secret")
                         && config_file.contains(&upstream.base_url())
                         && config_file.contains("adminsettings")
+                        && !config_file.contains("remote-owner-secret")
                 }),
-            "expected remote config file plus persisted profile sync settings"
+            "expected local auth plus persisted profile sync settings in config file"
         );
 
         upstream.abort();
@@ -11201,6 +11402,18 @@ segment0.ts
                                 .and_then(Value::as_array)
                                 .map(Vec::len),
                             Some(1)
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("ConfigFile")),
+                            None
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("UserConfig")),
+                            None
                         );
 
                         Json(json!({
@@ -11582,7 +11795,7 @@ segment0.ts
                 .and_then(|value| value.get("ConfigSubscribtion"))
                 .and_then(|value| value.get("URL"))
                 .and_then(Value::as_str),
-            Some("https://remote.example/subscription")
+            Some("https://local.example/subscription")
         );
         assert_eq!(
             admin_payload
@@ -11600,10 +11813,10 @@ segment0.ts
                 .and_then(|value| value.get("UserConfig"))
                 .and_then(|value| value.get("Users"))
                 .and_then(Value::as_array)
-                .is_some_and(|users| users.iter().any(|user| {
-                    user.get("username").and_then(Value::as_str) == Some("remote-admin")
+                .is_some_and(|users| users.iter().all(|user| {
+                    user.get("username").and_then(Value::as_str) != Some("remote-admin")
                 })),
-            "expected remote admin user to be persisted locally"
+            "expected local user config to stay intact"
         );
         assert!(
             admin_payload
@@ -11611,11 +11824,12 @@ segment0.ts
                 .and_then(|value| value.get("ConfigFile"))
                 .and_then(Value::as_str)
                 .is_some_and(|config_file| {
-                    config_file.contains("remote-owner-secret")
+                    config_file.contains("local-owner-secret")
                         && config_file.contains(&upstream.base_url())
                         && config_file.contains("adminsettings")
+                        && !config_file.contains("remote-owner-secret")
                 }),
-            "expected remote config file plus persisted profile sync settings"
+            "expected local auth plus persisted profile sync settings in config file"
         );
 
         upstream.abort();
