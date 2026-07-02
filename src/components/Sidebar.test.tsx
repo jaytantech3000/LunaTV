@@ -48,6 +48,8 @@ jest.mock('./NavigationFeedbackProvider', () => ({
 import Sidebar from './Sidebar';
 import { SiteProvider } from './SiteProvider';
 
+const removedRuntimeKey = ['ENABLE', 'WEB', 'MUSIC'].join('_');
+
 describe('Sidebar', () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -100,9 +102,9 @@ describe('Sidebar', () => {
     expect(await screen.findByText('追更')).toBeInTheDocument();
   });
 
-  it('shows the music entry when web music is enabled', async () => {
+  it('does not show the legacy music entry even if runtime config still carries the old flag', async () => {
     window.RUNTIME_CONFIG = {
-      ENABLE_WEB_MUSIC: true,
+      [removedRuntimeKey]: true,
     };
 
     render(
@@ -111,6 +113,6 @@ describe('Sidebar', () => {
       </SiteProvider>
     );
 
-    expect(await screen.findByText('音乐')).toBeInTheDocument();
+    expect(screen.queryByText('音乐')).not.toBeInTheDocument();
   });
 });

@@ -9,6 +9,16 @@ jest.mock('@/lib/db', () => ({
 import { AdminConfig } from './admin.types';
 import { configSelfCheck } from './config';
 
+const removedSiteFlagKey = ['Enable', 'WebMusic'].join('');
+
+function expectSiteConfigWithoutLegacyMusicFlag(
+  siteConfig: AdminConfig['SiteConfig']
+) {
+  expect(siteConfig as unknown as Record<string, unknown>).not.toHaveProperty(
+    removedSiteFlagKey
+  );
+}
+
 function buildAdminConfig(overrides: Partial<AdminConfig> = {}): AdminConfig {
   return {
     ConfigSubscribtion: {
@@ -29,7 +39,6 @@ function buildAdminConfig(overrides: Partial<AdminConfig> = {}): AdminConfig {
       DisableYellowFilter: false,
       FluidSearch: true,
       EnableWebLive: false,
-      EnableWebMusic: true,
     },
     UserConfig: {
       Users: [],
@@ -123,29 +132,30 @@ describe('configSelfCheck player enhancement migration', () => {
     });
   });
 
-  it('defaults web music to enabled when the persisted switch is missing', () => {
-    const adminConfig = buildAdminConfig({
-      SiteConfig: {
-        ...buildAdminConfig().SiteConfig,
-        EnableWebMusic: undefined as unknown as boolean,
-      },
-    });
+  it('strips the legacy web music flag when persisted config still includes it', () => {
+    const result = configSelfCheck(
+      buildAdminConfig({
+        SiteConfig: {
+          ...buildAdminConfig().SiteConfig,
+          [removedSiteFlagKey]: true,
+        } as AdminConfig['SiteConfig'],
+      })
+    );
 
-    const result = configSelfCheck(adminConfig);
-
-    expect(result.SiteConfig.EnableWebMusic).toBe(true);
+    expectSiteConfigWithoutLegacyMusicFlag(result.SiteConfig);
   });
 
-  it('keeps an explicit web music disable intact', () => {
+  it('does not backfill the legacy web music flag when persisted config omits it', () => {
+    const legacyFreeSiteConfig = {
+      ...buildAdminConfig().SiteConfig,
+    } as unknown as Record<string, unknown>;
+
     const adminConfig = buildAdminConfig({
-      SiteConfig: {
-        ...buildAdminConfig().SiteConfig,
-        EnableWebMusic: false,
-      },
+      SiteConfig: legacyFreeSiteConfig as unknown as AdminConfig['SiteConfig'],
     });
 
     const result = configSelfCheck(adminConfig);
 
-    expect(result.SiteConfig.EnableWebMusic).toBe(false);
+    expectSiteConfigWithoutLegacyMusicFlag(result.SiteConfig);
   });
 });

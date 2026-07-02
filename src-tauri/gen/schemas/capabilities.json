@@ -1,1 +1,25 @@
-{"default":{"identifier":"default","description":"Default capability for the LunaTV desktop shell","local":true,"windows":["main"],"permissions":["core:default","process:allow-restart","updater:allow-check","updater:allow-download","updater:allow-install","core:window:allow-is-fullscreen","core:window:allow-set-fullscreen","core:window:allow-set-simple-fullscreen"]}}
+{
+  "default": {
+    "identifier": "default",
+    "description": "Default capability for the LunaTV desktop shell",
+    "local": true,
+    "windows": ["main"],
+    "permissions": [
+      "core:path:default",
+      "core:event:default",
+      "core:window:default",
+      "core:webview:default",
+      "core:app:default",
+      "core:image:default",
+      "core:resources:default",
+      "core:menu:default",
+      "process:allow-restart",
+      "updater:allow-check",
+      "updater:allow-download",
+      "updater:allow-install",
+      "core:window:allow-is-fullscreen",
+      "core:window:allow-set-fullscreen",
+      "core:window:allow-set-simple-fullscreen"
+    ]
+  }
+}

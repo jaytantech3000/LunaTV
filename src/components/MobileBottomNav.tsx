@@ -5,7 +5,6 @@
 import {
   Cat,
   Clover,
-  Disc3,
   Download,
   Film,
   Home,
@@ -96,15 +95,6 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
           href: '/douban?type=show',
         },
       ];
-
-      if (runtimeConfig?.ENABLE_WEB_MUSIC) {
-        nextItems.push({
-          icon: Disc3,
-          label: '音乐',
-          href: '/music',
-        });
-      }
-
       if (runtimeConfig?.ENABLE_WEB_LIVE) {
         nextItems.push({
           icon: Radio,

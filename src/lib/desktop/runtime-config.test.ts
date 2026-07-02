@@ -2,6 +2,9 @@ import { AppRuntimeConfig } from '@/lib/runtime-config';
 
 import { mergeDesktopRuntimePublicConfig } from './runtime-config';
 
+const removedRuntimeKey = ['ENABLE', 'WEB', 'MUSIC'].join('_');
+const removedPayloadKey = ['enable', 'WebMusic'].join('');
+
 describe('mergeDesktopRuntimePublicConfig', () => {
   function buildRuntimeConfig(
     overrides: Partial<AppRuntimeConfig> = {}
@@ -18,21 +21,22 @@ describe('mergeDesktopRuntimePublicConfig', () => {
     };
   }
 
-  it('defaults desktop music to enabled when both current and payload omit the switch', () => {
+  it('strips the legacy music flag from current desktop runtime config', () => {
     expect(
-      mergeDesktopRuntimePublicConfig(buildRuntimeConfig(), {})
-    ).toMatchObject({
-      ENABLE_WEB_MUSIC: true,
-    });
+      mergeDesktopRuntimePublicConfig(
+        buildRuntimeConfig({
+          [removedRuntimeKey]: true,
+        } as unknown as Partial<AppRuntimeConfig>),
+        {}
+      )
+    ).not.toHaveProperty(removedRuntimeKey);
   });
 
-  it('respects an explicit desktop music disable from the payload', () => {
+  it('ignores the legacy desktop music flag from runtime payloads', () => {
     expect(
       mergeDesktopRuntimePublicConfig(buildRuntimeConfig(), {
-        enableWebMusic: false,
-      })
-    ).toMatchObject({
-      ENABLE_WEB_MUSIC: false,
-    });
+        [removedPayloadKey]: false,
+      } as never)
+    ).not.toHaveProperty(removedRuntimeKey);
   });
 });

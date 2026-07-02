@@ -4,10 +4,7 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, header::COOKIE},
     response::Response,
 };
-use moontv_profile::{
-    Favorite, FollowRecord, MusicFavoriteRecord, MusicPlayRecord, MusicRecentTrackRecord,
-    PlayRecord, SkipConfig,
-};
+use moontv_profile::{Favorite, FollowRecord, PlayRecord, SkipConfig};
 use serde::Deserialize;
 use serde_json::json;
 use url::form_urlencoded;
@@ -18,8 +15,6 @@ use crate::{
 };
 
 const SEARCH_HISTORY_LIMIT: usize = 20;
-const MUSIC_RECENT_TRACKS_LIMIT: usize = 16;
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopAuthCookiePayload {
@@ -54,23 +49,6 @@ struct SaveSearchHistoryPayload {
 struct SaveSkipConfigPayload {
     key: String,
     config: SkipConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct SaveMusicFavoritePayload {
-    key: String,
-    favorite: MusicFavoriteRecord,
-}
-
-#[derive(Debug, Deserialize)]
-struct SaveMusicRecentTrackPayload {
-    track: MusicRecentTrackRecord,
-}
-
-#[derive(Debug, Deserialize)]
-struct SaveMusicPlayRecordPayload {
-    key: String,
-    record: MusicPlayRecord,
 }
 
 pub(crate) async fn handle_profile_playrecords(
@@ -394,186 +372,6 @@ pub(crate) async fn handle_profile_skip_configs(
     }
 }
 
-pub(crate) async fn handle_music_profile_favorites(
-    state: &AppState,
-    request: Request,
-) -> AppResult<Response> {
-    let username = resolve_local_profile_username(state, request.headers())?;
-    let store = state.profile_store();
-
-    match *request.method() {
-        Method::GET => {
-            let favorites = store
-                .load_music_favorites(&username)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            if let Some(key) = request_query_param(&request, "key") {
-                no_store_json_response(&favorites.get(&key).cloned())
-            } else {
-                no_store_json_response(&favorites)
-            }
-        }
-        Method::POST => {
-            let payload = parse_request_json::<SaveMusicFavoritePayload>(request).await?;
-            let key = require_composite_key(&payload.key, "Invalid key format")?;
-            validate_music_favorite(&payload.favorite)?;
-            let mut favorites = store
-                .load_music_favorites(&username)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            let mut favorite = payload.favorite;
-            if favorite.saved_at <= 0 {
-                favorite.saved_at = current_timestamp_ms() as i64;
-            }
-            favorites.insert(key, favorite);
-            store
-                .save_music_favorites(&username, &favorites)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            success_response()
-        }
-        Method::DELETE => {
-            let key = request_query_param(&request, "key");
-            if let Some(key) = key {
-                let mut favorites = store
-                    .load_music_favorites(&username)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-                favorites.remove(&key);
-                store
-                    .save_music_favorites(&username, &favorites)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-            } else {
-                store
-                    .clear_music_favorites(&username)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-            }
-
-            success_response()
-        }
-        _ => Err(AppError::new(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "Method not allowed",
-        )),
-    }
-}
-
-pub(crate) async fn handle_music_profile_recent_tracks(
-    state: &AppState,
-    request: Request,
-) -> AppResult<Response> {
-    let username = resolve_local_profile_username(state, request.headers())?;
-    let store = state.profile_store();
-
-    match *request.method() {
-        Method::GET => {
-            let tracks = store
-                .load_music_recent_tracks(&username)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            no_store_json_response(&tracks)
-        }
-        Method::POST => {
-            let payload = parse_request_json::<SaveMusicRecentTrackPayload>(request).await?;
-            validate_music_recent_track(&payload.track)?;
-            let mut tracks = store
-                .load_music_recent_tracks(&username)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            let mut next_track = payload.track;
-            if next_track.played_at <= 0 {
-                next_track.played_at = current_timestamp_ms() as i64;
-            }
-            let next_key = format!("{}+{}", next_track.source, next_track.track_id);
-            tracks.retain(|track| format!("{}+{}", track.source, track.track_id) != next_key);
-            tracks.insert(0, next_track);
-            tracks.truncate(MUSIC_RECENT_TRACKS_LIMIT);
-            store
-                .save_music_recent_tracks(&username, &tracks)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            success_response()
-        }
-        Method::DELETE => {
-            let key = request_query_param(&request, "key");
-            if let Some(key) = key {
-                let mut tracks = store
-                    .load_music_recent_tracks(&username)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-                tracks.retain(|track| format!("{}+{}", track.source, track.track_id) != key);
-                store
-                    .save_music_recent_tracks(&username, &tracks)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-            } else {
-                store
-                    .clear_music_recent_tracks(&username)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-            }
-
-            success_response()
-        }
-        _ => Err(AppError::new(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "Method not allowed",
-        )),
-    }
-}
-
-pub(crate) async fn handle_music_profile_play_records(
-    state: &AppState,
-    request: Request,
-) -> AppResult<Response> {
-    let username = resolve_local_profile_username(state, request.headers())?;
-    let store = state.profile_store();
-
-    match *request.method() {
-        Method::GET => {
-            let records = store
-                .load_music_play_records(&username)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            if let Some(key) = request_query_param(&request, "key") {
-                no_store_json_response(&records.get(&key).cloned())
-            } else {
-                no_store_json_response(&records)
-            }
-        }
-        Method::POST => {
-            let payload = parse_request_json::<SaveMusicPlayRecordPayload>(request).await?;
-            let key = require_composite_key(&payload.key, "Invalid key format")?;
-            validate_music_play_record(&payload.record)?;
-            let mut records = store
-                .load_music_play_records(&username)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            let mut record = payload.record;
-            if record.played_at <= 0 {
-                record.played_at = current_timestamp_ms() as i64;
-            }
-            record.play_time_sec = record.play_time_sec.max(0);
-            record.duration_sec = record.duration_sec.max(0);
-            records.insert(key, record);
-            store
-                .save_music_play_records(&username, &records)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            success_response()
-        }
-        Method::DELETE => {
-            let key = request_query_param(&request, "key");
-            if let Some(key) = key {
-                let mut records = store
-                    .load_music_play_records(&username)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-                records.remove(&key);
-                store
-                    .save_music_play_records(&username, &records)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-            } else {
-                store
-                    .clear_music_play_records(&username)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-            }
-
-            success_response()
-        }
-        _ => Err(AppError::new(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "Method not allowed",
-        )),
-    }
-}
-
 fn resolve_local_profile_username(state: &AppState, headers: &HeaderMap) -> AppResult<String> {
     if let Some(payload) = extract_auth_cookie_payload(headers) {
         if payload.session_mode.as_deref() == Some("desktop-profile-sync") {
@@ -713,52 +511,6 @@ fn validate_favorite(favorite: &Favorite) -> AppResult<()> {
 fn validate_follow_record(follow: &FollowRecord) -> AppResult<()> {
     if !has_text(&follow.title) || follow.followed_episode_count < 1 {
         return Err(AppError::bad_request("Invalid follow data"));
-    }
-
-    Ok(())
-}
-
-fn validate_music_queue_identity(
-    track_id: &str,
-    source: &str,
-    title: &str,
-    artists_text: &str,
-) -> AppResult<()> {
-    if !has_text(track_id) || !has_text(source) || !has_text(title) || !has_text(artists_text) {
-        return Err(AppError::bad_request("Invalid music track data"));
-    }
-
-    Ok(())
-}
-
-fn validate_music_favorite(record: &MusicFavoriteRecord) -> AppResult<()> {
-    validate_music_queue_identity(
-        &record.track_id,
-        &record.source,
-        &record.title,
-        &record.artists_text,
-    )
-}
-
-fn validate_music_recent_track(record: &MusicRecentTrackRecord) -> AppResult<()> {
-    validate_music_queue_identity(
-        &record.track_id,
-        &record.source,
-        &record.title,
-        &record.artists_text,
-    )
-}
-
-fn validate_music_play_record(record: &MusicPlayRecord) -> AppResult<()> {
-    validate_music_queue_identity(
-        &record.track_id,
-        &record.source,
-        &record.title,
-        &record.artists_text,
-    )?;
-
-    if record.play_time_sec < 0 || record.duration_sec < 0 {
-        return Err(AppError::bad_request("Invalid music play record data"));
     }
 
     Ok(())

@@ -38,19 +38,6 @@ export function isAdminPanelEnabled(): boolean {
   return !(process.env.NEXT_PUBLIC_API_BASE_URL || '').trim();
 }
 
-function isWebMusicEnabled(): boolean {
-  const explicitFlag = process.env.NEXT_PUBLIC_ENABLE_WEB_MUSIC;
-  if (explicitFlag === 'true') {
-    return true;
-  }
-
-  if (explicitFlag === 'false') {
-    return false;
-  }
-
-  return true;
-}
-
 export async function resolveSitePresentation(
   config?: AdminConfig
 ): Promise<SitePresentation> {
@@ -118,7 +105,6 @@ export async function buildPublicRuntimeConfig(
     CUSTOM_CATEGORIES: [],
     FLUID_SEARCH: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
     ENABLE_WEB_LIVE: false,
-    ENABLE_WEB_MUSIC: isWebMusicEnabled(),
     API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || '',
     MEDIA_PROXY_BASE_URL:
       process.env.NEXT_PUBLIC_MEDIA_PROXY_BASE_URL ||
@@ -176,10 +162,6 @@ export async function buildPublicRuntimeConfig(
     })),
     FLUID_SEARCH: nextConfig.SiteConfig.FluidSearch,
     ENABLE_WEB_LIVE: nextConfig.SiteConfig.EnableWebLive ?? false,
-    ENABLE_WEB_MUSIC:
-      nextConfig.SiteConfig.EnableWebMusic ??
-      baseRuntimeConfig.ENABLE_WEB_MUSIC ??
-      true,
     PLAYER_AUDIO_SPIKE_PROTECTION: audioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: audioSpikeProtectionLevel,
     PLAYER_AUDIO_DYNAMIC_PROTECTION: audioDynamicProtection,

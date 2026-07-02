@@ -1,10 +1,5 @@
 import type { DesktopReleaseHistoryItem } from '@/lib/desktop-release-history';
 import { getRuntimeConfig } from '@/lib/runtime-config';
-import type {
-  MusicDownloadRecord,
-  MusicPlaybackQuality,
-  MusicTrackEntity,
-} from '@/features/music/domain/entities';
 
 export interface DesktopLocalServiceStatus {
   running: boolean;
@@ -87,30 +82,6 @@ export type DesktopReleaseInstallEvent =
   | {
       event: 'Installing';
     };
-
-export type DesktopMusicTrayCommand =
-  | 'open-music'
-  | 'toggle-play'
-  | 'play-next'
-  | 'play-previous';
-
-export interface DesktopMusicTrayState {
-  title: string | null;
-  artistText: string | null;
-  source: string | null;
-  playState: 'idle' | 'playing' | 'paused';
-  queueLength: number;
-}
-
-export interface DesktopMusicTrackDownloadRequest {
-  track: MusicTrackEntity;
-  quality: MusicPlaybackQuality;
-  downloadUrl: string;
-}
-
-export interface DesktopMusicDownloadPlaybackPath {
-  filePath: string | null;
-}
 
 declare global {
   interface Window {
@@ -359,75 +330,4 @@ export function openDesktopExternalUrl(url: string): Promise<void> {
   return invokeDesktopCommand<void>('open_external_url', {
     url,
   });
-}
-
-function isDesktopMusicTrayCommand(
-  value: unknown
-): value is DesktopMusicTrayCommand {
-  return (
-    value === 'open-music' ||
-    value === 'toggle-play' ||
-    value === 'play-next' ||
-    value === 'play-previous'
-  );
-}
-
-export function updateDesktopMusicTrayState(
-  state: DesktopMusicTrayState
-): Promise<void> {
-  return invokeDesktopCommand<void>('update_music_tray_state', {
-    state,
-  });
-}
-
-export async function listenDesktopMusicTrayCommands(
-  listener: (command: DesktopMusicTrayCommand) => void
-): Promise<() => void> {
-  ensureDesktopTarget();
-
-  if (!isDesktopTauriRuntimeAvailable()) {
-    throw new Error(
-      'Desktop IPC is unavailable in browser preview. Run inside the Tauri shell.'
-    );
-  }
-
-  const { listen } = await import('@tauri-apps/api/event');
-
-  return listen<{ command?: unknown }>('music-tray-command', (event) => {
-    const command = event.payload?.command;
-
-    if (!isDesktopMusicTrayCommand(command)) {
-      return;
-    }
-
-    listener(command);
-  });
-}
-
-export function listDesktopMusicDownloads(): Promise<MusicDownloadRecord[]> {
-  return invokeDesktopCommand<MusicDownloadRecord[]>('list_music_downloads');
-}
-
-export function downloadDesktopMusicTrack(
-  payload: DesktopMusicTrackDownloadRequest
-): Promise<MusicDownloadRecord> {
-  return invokeDesktopCommand<MusicDownloadRecord>('download_music_track', {
-    payload,
-  });
-}
-
-export function deleteDesktopMusicDownload(downloadId: string): Promise<void> {
-  return invokeDesktopCommand<void>('delete_music_download', {
-    downloadId,
-  });
-}
-
-export function resolveDesktopMusicDownloadPlayback(params: {
-  source: MusicTrackEntity['source'];
-  trackId: string;
-}): Promise<DesktopMusicDownloadPlaybackPath> {
-  return invokeDesktopCommand<DesktopMusicDownloadPlaybackPath>(
-    'resolve_music_download_playback',
-    params
-  );
 }

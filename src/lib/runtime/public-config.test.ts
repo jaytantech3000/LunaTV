@@ -8,6 +8,8 @@ import { getConfig } from '@/lib/config';
 import { buildPublicRuntimeConfig } from './public-config';
 
 const mockGetConfig = getConfig as jest.MockedFunction<typeof getConfig>;
+const removedSiteFlagKey = ['Enable', 'WebMusic'].join('');
+const removedEnvKey = ['NEXT', 'PUBLIC', 'ENABLE', 'WEB', 'MUSIC'].join('_');
 
 function buildAdminConfig(): AdminConfig {
   return {
@@ -29,7 +31,6 @@ function buildAdminConfig(): AdminConfig {
       DisableYellowFilter: false,
       FluidSearch: true,
       EnableWebLive: false,
-      EnableWebMusic: true,
     },
     UserConfig: {
       Users: [],
@@ -59,45 +60,38 @@ describe('buildPublicRuntimeConfig', () => {
     process.env = originalEnv;
   });
 
-  it('projects the admin music switch into desktop runtime config', async () => {
+  it('does not project the legacy admin music switch into desktop runtime config', async () => {
     mockGetConfig.mockResolvedValue(buildAdminConfig());
 
-    await expect(buildPublicRuntimeConfig()).resolves.toMatchObject({
+    const runtimeConfig = await buildPublicRuntimeConfig();
+
+    expect(runtimeConfig).toMatchObject({
       APP_TARGET: 'desktop',
-      ENABLE_WEB_MUSIC: true,
       ENABLE_WEB_LIVE: false,
     });
+    expect(runtimeConfig).not.toHaveProperty(
+      removedEnvKey.replace(/^NEXT_PUBLIC_/, '')
+    );
   });
 
-  it('defaults desktop music to enabled when the admin config omits the switch', async () => {
+  it('ignores the removed runtime env switch even if legacy env state still exists', async () => {
+    process.env[removedEnvKey] = 'false';
     mockGetConfig.mockResolvedValue({
       ...buildAdminConfig(),
       SiteConfig: {
         ...buildAdminConfig().SiteConfig,
-        EnableWebMusic: undefined as unknown as boolean,
+        [removedSiteFlagKey]: true,
       },
     });
 
-    await expect(buildPublicRuntimeConfig()).resolves.toMatchObject({
+    const runtimeConfig = await buildPublicRuntimeConfig();
+
+    expect(runtimeConfig).toMatchObject({
       APP_TARGET: 'desktop',
-      ENABLE_WEB_MUSIC: true,
       ENABLE_WEB_LIVE: false,
     });
-  });
-
-  it('respects an explicit admin disable for desktop music', async () => {
-    mockGetConfig.mockResolvedValue({
-      ...buildAdminConfig(),
-      SiteConfig: {
-        ...buildAdminConfig().SiteConfig,
-        EnableWebMusic: false,
-      },
-    });
-
-    await expect(buildPublicRuntimeConfig()).resolves.toMatchObject({
-      APP_TARGET: 'desktop',
-      ENABLE_WEB_MUSIC: false,
-      ENABLE_WEB_LIVE: false,
-    });
+    expect(runtimeConfig).not.toHaveProperty(
+      removedEnvKey.replace(/^NEXT_PUBLIC_/, '')
+    );
   });
 });

@@ -453,7 +453,6 @@ async function getInitConfig(
         process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
       FluidSearch: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
       EnableWebLive: false,
-      EnableWebMusic: true,
     },
     UserConfig: {
       Users: [],
@@ -620,13 +619,40 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
         process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
       FluidSearch: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
       EnableWebLive: false,
-      EnableWebMusic: true,
     };
   } else {
-    adminConfig.SiteConfig.EnableWebLive =
-      adminConfig.SiteConfig.EnableWebLive ?? false;
-    adminConfig.SiteConfig.EnableWebMusic =
-      adminConfig.SiteConfig.EnableWebMusic ?? true;
+    const siteConfig = adminConfig.SiteConfig;
+
+    adminConfig.SiteConfig = {
+      SiteName:
+        siteConfig.SiteName || process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTV',
+      Announcement:
+        siteConfig.Announcement ||
+        process.env.ANNOUNCEMENT ||
+        '本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。',
+      SearchDownstreamMaxPage:
+        siteConfig.SearchDownstreamMaxPage ||
+        Number(process.env.NEXT_PUBLIC_SEARCH_MAX_PAGE) ||
+        5,
+      SiteInterfaceCacheTime: siteConfig.SiteInterfaceCacheTime || 7200,
+      DoubanProxyType:
+        siteConfig.DoubanProxyType ||
+        process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE ||
+        'cmliussss-cdn-tencent',
+      DoubanProxy:
+        siteConfig.DoubanProxy || process.env.NEXT_PUBLIC_DOUBAN_PROXY || '',
+      DoubanImageProxyType:
+        siteConfig.DoubanImageProxyType ||
+        process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE ||
+        'cmliussss-cdn-tencent',
+      DoubanImageProxy:
+        siteConfig.DoubanImageProxy ||
+        process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY ||
+        '',
+      DisableYellowFilter: siteConfig.DisableYellowFilter ?? false,
+      FluidSearch: siteConfig.FluidSearch ?? true,
+      EnableWebLive: siteConfig.EnableWebLive ?? false,
+    };
   }
   if (
     !adminConfig.AdFilterConfig ||

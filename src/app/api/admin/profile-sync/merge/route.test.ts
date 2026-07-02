@@ -3,7 +3,28 @@ jest.mock('@/lib/auth', () => ({
 }));
 
 jest.mock('@/lib/config', () => ({
-  configSelfCheck: jest.fn((config) => config),
+  configSelfCheck: jest.fn((config) => {
+    if (!config?.SiteConfig) {
+      return config;
+    }
+
+    return {
+      ...config,
+      SiteConfig: {
+        SiteName: config.SiteConfig.SiteName,
+        Announcement: config.SiteConfig.Announcement,
+        SearchDownstreamMaxPage: config.SiteConfig.SearchDownstreamMaxPage,
+        SiteInterfaceCacheTime: config.SiteConfig.SiteInterfaceCacheTime,
+        DoubanProxyType: config.SiteConfig.DoubanProxyType,
+        DoubanProxy: config.SiteConfig.DoubanProxy,
+        DoubanImageProxyType: config.SiteConfig.DoubanImageProxyType,
+        DoubanImageProxy: config.SiteConfig.DoubanImageProxy,
+        DisableYellowFilter: config.SiteConfig.DisableYellowFilter,
+        FluidSearch: config.SiteConfig.FluidSearch,
+        EnableWebLive: config.SiteConfig.EnableWebLive,
+      },
+    };
+  }),
   getConfig: jest.fn(),
   setCachedConfig: jest.fn(),
 }));
@@ -37,6 +58,8 @@ import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 
 import { POST } from './route';
+
+const removedSiteFlagKey = ['Enable', 'WebMusic'].join('');
 
 describe('/api/admin/profile-sync/merge', () => {
   beforeEach(() => {
@@ -85,7 +108,6 @@ describe('/api/admin/profile-sync/merge', () => {
         DisableYellowFilter: false,
         FluidSearch: true,
         EnableWebLive: false,
-        EnableWebMusic: true,
       },
       UserConfig: {
         Users: [
@@ -251,7 +273,6 @@ describe('/api/admin/profile-sync/merge', () => {
         DisableYellowFilter: false,
         FluidSearch: true,
         EnableWebLive: false,
-        EnableWebMusic: true,
       },
       UserConfig: {
         Users: [
@@ -286,7 +307,7 @@ describe('/api/admin/profile-sync/merge', () => {
         DisableYellowFilter: false,
         FluidSearch: true,
         EnableWebLive: false,
-        EnableWebMusic: true,
+        [removedSiteFlagKey]: true,
       },
       UserConfig: {
         Users: [
@@ -379,5 +400,8 @@ describe('/api/admin/profile-sync/merge', () => {
         },
       })
     );
+    expect(
+      (db.saveAdminConfig as jest.Mock).mock.calls[0][0].SiteConfig
+    ).not.toHaveProperty(removedSiteFlagKey);
   });
 });

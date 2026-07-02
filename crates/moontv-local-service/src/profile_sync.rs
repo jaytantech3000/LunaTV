@@ -224,18 +224,6 @@ define_profile_user_data_proxy!(
     handle_profile_search_history
 );
 define_profile_user_data_proxy!(proxy_profile_sync_skip_configs, handle_profile_skip_configs);
-define_profile_user_data_proxy!(
-    proxy_profile_sync_music_favorites,
-    handle_music_profile_favorites
-);
-define_profile_user_data_proxy!(
-    proxy_profile_sync_music_recent_tracks,
-    handle_music_profile_recent_tracks
-);
-define_profile_user_data_proxy!(
-    proxy_profile_sync_music_play_records,
-    handle_music_profile_play_records
-);
 
 pub(crate) fn response_from_forward_response(
     upstream_response: ProfileSyncForwardResponse,

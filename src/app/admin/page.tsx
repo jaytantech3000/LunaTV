@@ -301,7 +301,6 @@ interface SiteConfig {
   DisableYellowFilter: boolean;
   FluidSearch: boolean;
   EnableWebLive: boolean;
-  EnableWebMusic: boolean;
 }
 
 // 视频源数据类型
@@ -4394,7 +4393,6 @@ const SiteConfigComponent = ({
     DisableYellowFilter: false,
     FluidSearch: true,
     EnableWebLive: false,
-    EnableWebMusic: true,
   });
   const [adFilterEnabled, setAdFilterEnabled] = useState(true);
   const [adFilterSaving, setAdFilterSaving] = useState(false);
@@ -4462,7 +4460,6 @@ const SiteConfigComponent = ({
         DisableYellowFilter: config.SiteConfig.DisableYellowFilter ?? false,
         FluidSearch: config.SiteConfig.FluidSearch ?? true,
         EnableWebLive: config.SiteConfig.EnableWebLive ?? false,
-        EnableWebMusic: config.SiteConfig.EnableWebMusic ?? true,
       });
       setAdFilterEnabled(config.AdFilterConfig?.enabled ?? true);
     }
@@ -5015,41 +5012,6 @@ const SiteConfigComponent = ({
         </div>
         <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
           网页直播性能较差，会导致服务器内存泄露。
-        </p>
-      </div>
-
-      <div>
-        <div className='flex items-center justify-between'>
-          <label className='mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300'>
-            启用网页音乐
-          </label>
-          <button
-            type='button'
-            onClick={() =>
-              setSiteSettings((prev) => ({
-                ...prev,
-                EnableWebMusic: !prev.EnableWebMusic,
-              }))
-            }
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${
-              siteSettings.EnableWebMusic
-                ? buttonStyles.toggleOn
-                : buttonStyles.toggleOff
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full ${
-                buttonStyles.toggleThumb
-              } transition-transform ${
-                siteSettings.EnableWebMusic
-                  ? buttonStyles.toggleThumbOn
-                  : buttonStyles.toggleThumbOff
-              }`}
-            />
-          </button>
-        </div>
-        <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-          开启后会在侧边栏和移动导航显示音乐模块入口。
         </p>
       </div>
 

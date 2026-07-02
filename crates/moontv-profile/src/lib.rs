@@ -8,18 +8,12 @@ pub type PlayRecordMap = BTreeMap<String, PlayRecord>;
 pub type FavoriteMap = BTreeMap<String, Favorite>;
 pub type FollowRecordMap = BTreeMap<String, FollowRecord>;
 pub type SkipConfigMap = BTreeMap<String, SkipConfig>;
-pub type MusicFavoriteMap = BTreeMap<String, MusicFavoriteRecord>;
-pub type MusicPlayRecordMap = BTreeMap<String, MusicPlayRecord>;
-pub type MusicRecentTrackList = Vec<MusicRecentTrackRecord>;
 
 const PLAY_RECORDS_DOMAIN_KEY: &str = "playrecords";
 const FAVORITES_DOMAIN_KEY: &str = "favorites";
 const FOLLOW_RECORDS_DOMAIN_KEY: &str = "follows";
 const SEARCH_HISTORY_DOMAIN_KEY: &str = "searchhistory";
 const SKIP_CONFIGS_DOMAIN_KEY: &str = "skipconfigs";
-const MUSIC_FAVORITES_DOMAIN_KEY: &str = "music_favorites";
-const MUSIC_RECENT_TRACKS_DOMAIN_KEY: &str = "music_recent_tracks";
-const MUSIC_PLAY_RECORDS_DOMAIN_KEY: &str = "music_play_records";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlayRecord {
@@ -72,64 +66,6 @@ pub struct SkipConfig {
     pub enable: bool,
     pub intro_time: i64,
     pub outro_time: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MusicFavoriteRecord {
-    pub track_id: String,
-    pub source: String,
-    pub title: String,
-    pub artists_text: String,
-    #[serde(default)]
-    pub cover: Option<String>,
-    #[serde(default)]
-    pub duration_ms: Option<i64>,
-    #[serde(default)]
-    pub album_title: Option<String>,
-    #[serde(default)]
-    pub subtitle: Option<String>,
-    pub saved_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MusicRecentTrackRecord {
-    pub track_id: String,
-    pub source: String,
-    pub title: String,
-    pub artists_text: String,
-    #[serde(default)]
-    pub cover: Option<String>,
-    #[serde(default)]
-    pub duration_ms: Option<i64>,
-    #[serde(default)]
-    pub album_title: Option<String>,
-    #[serde(default)]
-    pub subtitle: Option<String>,
-    pub played_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MusicPlayRecord {
-    pub track_id: String,
-    pub source: String,
-    pub title: String,
-    pub artists_text: String,
-    #[serde(default)]
-    pub cover: Option<String>,
-    #[serde(default)]
-    pub duration_ms: Option<i64>,
-    #[serde(default)]
-    pub album_title: Option<String>,
-    #[serde(default)]
-    pub subtitle: Option<String>,
-    pub played_at: i64,
-    pub play_time_sec: i64,
-    pub duration_sec: i64,
-    #[serde(default)]
-    pub completed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -236,50 +172,6 @@ impl LocalDesktopProfileStore {
         self.clear_domain(username, SKIP_CONFIGS_DOMAIN_KEY)
     }
 
-    pub fn load_music_favorites(&self, username: &str) -> Result<MusicFavoriteMap> {
-        self.load_domain(username, MUSIC_FAVORITES_DOMAIN_KEY)
-    }
-
-    pub fn save_music_favorites(&self, username: &str, favorites: &MusicFavoriteMap) -> Result<()> {
-        self.save_domain(username, MUSIC_FAVORITES_DOMAIN_KEY, favorites)
-    }
-
-    pub fn clear_music_favorites(&self, username: &str) -> Result<bool> {
-        self.clear_domain(username, MUSIC_FAVORITES_DOMAIN_KEY)
-    }
-
-    pub fn load_music_recent_tracks(&self, username: &str) -> Result<MusicRecentTrackList> {
-        self.load_domain(username, MUSIC_RECENT_TRACKS_DOMAIN_KEY)
-    }
-
-    pub fn save_music_recent_tracks(
-        &self,
-        username: &str,
-        tracks: &MusicRecentTrackList,
-    ) -> Result<()> {
-        self.save_domain(username, MUSIC_RECENT_TRACKS_DOMAIN_KEY, tracks)
-    }
-
-    pub fn clear_music_recent_tracks(&self, username: &str) -> Result<bool> {
-        self.clear_domain(username, MUSIC_RECENT_TRACKS_DOMAIN_KEY)
-    }
-
-    pub fn load_music_play_records(&self, username: &str) -> Result<MusicPlayRecordMap> {
-        self.load_domain(username, MUSIC_PLAY_RECORDS_DOMAIN_KEY)
-    }
-
-    pub fn save_music_play_records(
-        &self,
-        username: &str,
-        records: &MusicPlayRecordMap,
-    ) -> Result<()> {
-        self.save_domain(username, MUSIC_PLAY_RECORDS_DOMAIN_KEY, records)
-    }
-
-    pub fn clear_music_play_records(&self, username: &str) -> Result<bool> {
-        self.clear_domain(username, MUSIC_PLAY_RECORDS_DOMAIN_KEY)
-    }
-
     fn load_domain<T>(&self, username: &str, domain: &str) -> Result<T>
     where
         T: DeserializeOwned + Default,
@@ -318,9 +210,7 @@ mod tests {
 
     use super::{
         Favorite, FavoriteMap, FollowRecord, FollowRecordMap, LocalDesktopProfileStore,
-        MusicFavoriteMap, MusicFavoriteRecord, MusicPlayRecord, MusicPlayRecordMap,
-        MusicRecentTrackList, MusicRecentTrackRecord, PlayRecord, PlayRecordMap, SkipConfig,
-        SkipConfigMap,
+        PlayRecord, PlayRecordMap, SkipConfig, SkipConfigMap,
     };
     use moontv_storage::sqlite::DesktopSqlite;
 
@@ -416,64 +306,6 @@ mod tests {
                 )]),
             )
             .expect("save skip configs");
-        store
-            .save_music_favorites(
-                "alice",
-                &MusicFavoriteMap::from([(
-                    "netease+track-1".to_string(),
-                    MusicFavoriteRecord {
-                        track_id: "track-1".to_string(),
-                        source: "netease".to_string(),
-                        title: "Neon Flight".to_string(),
-                        artists_text: "Luna Drive".to_string(),
-                        cover: Some("cover.jpg".to_string()),
-                        duration_ms: Some(188000),
-                        album_title: Some("Midnight Circuits".to_string()),
-                        subtitle: Some("夜色电子".to_string()),
-                        saved_at: 21,
-                    },
-                )]),
-            )
-            .expect("save music favorites");
-        store
-            .save_music_recent_tracks(
-                "alice",
-                &MusicRecentTrackList::from([MusicRecentTrackRecord {
-                    track_id: "track-1".to_string(),
-                    source: "netease".to_string(),
-                    title: "Neon Flight".to_string(),
-                    artists_text: "Luna Drive".to_string(),
-                    cover: Some("cover.jpg".to_string()),
-                    duration_ms: Some(188000),
-                    album_title: Some("Midnight Circuits".to_string()),
-                    subtitle: Some("夜色电子".to_string()),
-                    played_at: 22,
-                }]),
-            )
-            .expect("save music recent tracks");
-        store
-            .save_music_play_records(
-                "alice",
-                &MusicPlayRecordMap::from([(
-                    "netease+track-1".to_string(),
-                    MusicPlayRecord {
-                        track_id: "track-1".to_string(),
-                        source: "netease".to_string(),
-                        title: "Neon Flight".to_string(),
-                        artists_text: "Luna Drive".to_string(),
-                        cover: Some("cover.jpg".to_string()),
-                        duration_ms: Some(188000),
-                        album_title: Some("Midnight Circuits".to_string()),
-                        subtitle: Some("夜色电子".to_string()),
-                        played_at: 23,
-                        play_time_sec: 42,
-                        duration_sec: 188,
-                        completed: false,
-                    },
-                )]),
-            )
-            .expect("save music play records");
-
         let snapshot = store.load_snapshot("alice").expect("load snapshot");
 
         assert_eq!(snapshot.play_records.len(), 1);
@@ -484,27 +316,6 @@ mod tests {
             vec!["demo::movie".to_string(), "demo::series".to_string()]
         );
         assert_eq!(snapshot.skip_configs.len(), 1);
-        assert_eq!(
-            store
-                .load_music_favorites("alice")
-                .expect("load music favorites")
-                .len(),
-            1
-        );
-        assert_eq!(
-            store
-                .load_music_recent_tracks("alice")
-                .expect("load music recent tracks")
-                .len(),
-            1
-        );
-        assert_eq!(
-            store
-                .load_music_play_records("alice")
-                .expect("load music play records")
-                .len(),
-            1
-        );
     }
 
     #[test]

@@ -21,7 +21,6 @@ export interface DesktopRuntimePublicConfigPayload {
   disableYellowFilter?: boolean;
   fluidSearch?: boolean;
   enableWebLive?: boolean;
-  enableWebMusic?: boolean;
   playerAudioSpikeProtection?: boolean;
   playerAudioDynamicProtection?: boolean;
   playerAudioFixedCeiling?: boolean;
@@ -69,52 +68,81 @@ function normalizeCustomCategories(
     }));
 }
 
+function sanitizeRuntimeConfig(config: AppRuntimeConfig): AppRuntimeConfig {
+  return {
+    APP_TARGET: config.APP_TARGET,
+    STORAGE_TYPE: config.STORAGE_TYPE,
+    PROFILE_MODE: config.PROFILE_MODE,
+    DESKTOP_RELEASE_PROXY_BASE_URL: config.DESKTOP_RELEASE_PROXY_BASE_URL,
+    DOUBAN_PROXY_TYPE: config.DOUBAN_PROXY_TYPE,
+    DOUBAN_PROXY: config.DOUBAN_PROXY,
+    DOUBAN_IMAGE_PROXY_TYPE: config.DOUBAN_IMAGE_PROXY_TYPE,
+    DOUBAN_IMAGE_PROXY: config.DOUBAN_IMAGE_PROXY,
+    DISABLE_YELLOW_FILTER: config.DISABLE_YELLOW_FILTER,
+    CUSTOM_CATEGORIES: config.CUSTOM_CATEGORIES,
+    FLUID_SEARCH: config.FLUID_SEARCH,
+    ENABLE_WEB_LIVE: config.ENABLE_WEB_LIVE,
+    API_BASE_URL: config.API_BASE_URL,
+    MEDIA_PROXY_BASE_URL: config.MEDIA_PROXY_BASE_URL,
+    ENABLE_ADMIN_PANEL: config.ENABLE_ADMIN_PANEL,
+    PLAYER_AUDIO_SPIKE_PROTECTION: config.PLAYER_AUDIO_SPIKE_PROTECTION,
+    PLAYER_AUDIO_DYNAMIC_PROTECTION: config.PLAYER_AUDIO_DYNAMIC_PROTECTION,
+    PLAYER_AUDIO_FIXED_CEILING: config.PLAYER_AUDIO_FIXED_CEILING,
+    PLAYER_VISUAL_ENHANCEMENT: config.PLAYER_VISUAL_ENHANCEMENT,
+    PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL:
+      config.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL,
+    PLAYER_VISUAL_ENHANCEMENT_LEVEL: config.PLAYER_VISUAL_ENHANCEMENT_LEVEL,
+    PROFILE_SYNC_ENABLED: config.PROFILE_SYNC_ENABLED,
+    PROFILE_SYNC_STORAGE_TYPE: config.PROFILE_SYNC_STORAGE_TYPE,
+    PROFILE_SYNC_PROFILE_MODE: config.PROFILE_SYNC_PROFILE_MODE,
+  };
+}
+
 export function mergeDesktopRuntimePublicConfig(
   currentConfig: AppRuntimeConfig,
   payload: DesktopRuntimePublicConfigPayload
 ): AppRuntimeConfig {
+  const runtimeConfig = sanitizeRuntimeConfig(currentConfig);
   const audioSpikeProtectionLevel = normalizeAudioSpikeProtectionLevel(
     payload.playerAudioSpikeProtectionLevel ??
       payload.playerAudioSpikeProtection ??
-      currentConfig.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL ??
-      currentConfig.PLAYER_AUDIO_SPIKE_PROTECTION,
+      runtimeConfig.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL ??
+      runtimeConfig.PLAYER_AUDIO_SPIKE_PROTECTION,
     'off'
   );
   const visualEnhancementLevel = normalizeVisualEnhancementLevel(
     payload.playerVisualEnhancementLevel ??
       payload.playerVisualEnhancement ??
-      currentConfig.PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
-      currentConfig.PLAYER_VISUAL_ENHANCEMENT,
+      runtimeConfig.PLAYER_VISUAL_ENHANCEMENT_LEVEL ??
+      runtimeConfig.PLAYER_VISUAL_ENHANCEMENT,
     'off'
   );
   const audioDynamicProtection = normalizeBooleanSetting(
     payload.playerAudioDynamicProtection ??
-      currentConfig.PLAYER_AUDIO_DYNAMIC_PROTECTION,
+      runtimeConfig.PLAYER_AUDIO_DYNAMIC_PROTECTION,
     audioSpikeProtectionLevel !== 'off'
   );
   const audioFixedCeiling = normalizeBooleanSetting(
-    payload.playerAudioFixedCeiling ?? currentConfig.PLAYER_AUDIO_FIXED_CEILING,
+    payload.playerAudioFixedCeiling ?? runtimeConfig.PLAYER_AUDIO_FIXED_CEILING,
     audioSpikeProtectionLevel !== 'off'
   );
 
   return {
-    ...currentConfig,
+    ...runtimeConfig,
     DOUBAN_PROXY_TYPE:
-      payload.doubanProxyType ?? currentConfig.DOUBAN_PROXY_TYPE,
-    DOUBAN_PROXY: payload.doubanProxy ?? currentConfig.DOUBAN_PROXY,
+      payload.doubanProxyType ?? runtimeConfig.DOUBAN_PROXY_TYPE,
+    DOUBAN_PROXY: payload.doubanProxy ?? runtimeConfig.DOUBAN_PROXY,
     DOUBAN_IMAGE_PROXY_TYPE:
-      payload.doubanImageProxyType ?? currentConfig.DOUBAN_IMAGE_PROXY_TYPE,
+      payload.doubanImageProxyType ?? runtimeConfig.DOUBAN_IMAGE_PROXY_TYPE,
     DOUBAN_IMAGE_PROXY:
-      payload.doubanImageProxy ?? currentConfig.DOUBAN_IMAGE_PROXY,
+      payload.doubanImageProxy ?? runtimeConfig.DOUBAN_IMAGE_PROXY,
     DISABLE_YELLOW_FILTER:
       payload.disableYellowFilter ??
-      currentConfig.DISABLE_YELLOW_FILTER ??
+      runtimeConfig.DISABLE_YELLOW_FILTER ??
       false,
-    FLUID_SEARCH: payload.fluidSearch ?? currentConfig.FLUID_SEARCH ?? true,
+    FLUID_SEARCH: payload.fluidSearch ?? runtimeConfig.FLUID_SEARCH ?? true,
     ENABLE_WEB_LIVE:
-      payload.enableWebLive ?? currentConfig.ENABLE_WEB_LIVE ?? false,
-    ENABLE_WEB_MUSIC:
-      payload.enableWebMusic ?? currentConfig.ENABLE_WEB_MUSIC ?? true,
+      payload.enableWebLive ?? runtimeConfig.ENABLE_WEB_LIVE ?? false,
     PLAYER_AUDIO_SPIKE_PROTECTION: audioSpikeProtectionLevel !== 'off',
     PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: audioSpikeProtectionLevel,
     PLAYER_AUDIO_DYNAMIC_PROTECTION: audioDynamicProtection,
@@ -122,11 +150,11 @@ export function mergeDesktopRuntimePublicConfig(
     PLAYER_VISUAL_ENHANCEMENT: visualEnhancementLevel !== 'off',
     PLAYER_VISUAL_ENHANCEMENT_LEVEL: visualEnhancementLevel,
     PROFILE_SYNC_ENABLED:
-      payload.profileSyncEnabled ?? currentConfig.PROFILE_SYNC_ENABLED ?? false,
+      payload.profileSyncEnabled ?? runtimeConfig.PROFILE_SYNC_ENABLED ?? false,
     CUSTOM_CATEGORIES:
       payload.customCategories !== undefined
         ? normalizeCustomCategories(payload.customCategories)
-        : currentConfig.CUSTOM_CATEGORIES || [],
+        : runtimeConfig.CUSTOM_CATEGORIES || [],
   };
 }
 

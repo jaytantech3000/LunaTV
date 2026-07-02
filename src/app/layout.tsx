@@ -13,8 +13,6 @@ import {
 import DesktopRuntimeSync from '@/components/DesktopRuntimeSync';
 import DesktopUpdateBootstrap from '@/components/DesktopUpdateBootstrap';
 
-import MusicPlayerRoot from '@/features/music/components/MusicPlayerRoot';
-
 import { GlobalErrorIndicator } from '../components/GlobalErrorIndicator';
 import { SiteProvider } from '../components/SiteProvider';
 import { ThemeProvider } from '../components/ThemeProvider';
@@ -54,6 +52,34 @@ function buildDesktopRuntimeBootstrapScript() {
           ? payload.profileSync
           : {};
       var current = window.RUNTIME_CONFIG || {};
+      var baseConfig = {
+        APP_TARGET: current.APP_TARGET,
+        STORAGE_TYPE: current.STORAGE_TYPE,
+        PROFILE_MODE: current.PROFILE_MODE,
+        DESKTOP_RELEASE_PROXY_BASE_URL: current.DESKTOP_RELEASE_PROXY_BASE_URL,
+        DOUBAN_PROXY_TYPE: current.DOUBAN_PROXY_TYPE,
+        DOUBAN_PROXY: current.DOUBAN_PROXY,
+        DOUBAN_IMAGE_PROXY_TYPE: current.DOUBAN_IMAGE_PROXY_TYPE,
+        DOUBAN_IMAGE_PROXY: current.DOUBAN_IMAGE_PROXY,
+        DISABLE_YELLOW_FILTER: current.DISABLE_YELLOW_FILTER,
+        CUSTOM_CATEGORIES: current.CUSTOM_CATEGORIES,
+        FLUID_SEARCH: current.FLUID_SEARCH,
+        ENABLE_WEB_LIVE: current.ENABLE_WEB_LIVE,
+        API_BASE_URL: current.API_BASE_URL,
+        MEDIA_PROXY_BASE_URL: current.MEDIA_PROXY_BASE_URL,
+        ENABLE_ADMIN_PANEL: current.ENABLE_ADMIN_PANEL,
+        PLAYER_AUDIO_SPIKE_PROTECTION: current.PLAYER_AUDIO_SPIKE_PROTECTION,
+        PLAYER_AUDIO_DYNAMIC_PROTECTION: current.PLAYER_AUDIO_DYNAMIC_PROTECTION,
+        PLAYER_AUDIO_FIXED_CEILING: current.PLAYER_AUDIO_FIXED_CEILING,
+        PLAYER_VISUAL_ENHANCEMENT: current.PLAYER_VISUAL_ENHANCEMENT,
+        PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL:
+          current.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL,
+        PLAYER_VISUAL_ENHANCEMENT_LEVEL:
+          current.PLAYER_VISUAL_ENHANCEMENT_LEVEL,
+        PROFILE_SYNC_ENABLED: current.PROFILE_SYNC_ENABLED,
+        PROFILE_SYNC_STORAGE_TYPE: current.PROFILE_SYNC_STORAGE_TYPE,
+        PROFILE_SYNC_PROFILE_MODE: current.PROFILE_SYNC_PROFILE_MODE,
+      };
       var currentAudioLevel =
         current.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL !== undefined &&
         current.PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL !== null
@@ -99,7 +125,7 @@ function buildDesktopRuntimeBootstrapScript() {
         coalesce(runtime.profileSyncEnabled, coalesce(current.PROFILE_SYNC_ENABLED, false))
       );
 
-      window.RUNTIME_CONFIG = Object.assign({}, current, {
+      window.RUNTIME_CONFIG = Object.assign(baseConfig, {
         DOUBAN_PROXY_TYPE: coalesce(
           runtime.doubanProxyType,
           current.DOUBAN_PROXY_TYPE
@@ -121,10 +147,6 @@ function buildDesktopRuntimeBootstrapScript() {
         ENABLE_WEB_LIVE: coalesce(
           runtime.enableWebLive,
           coalesce(current.ENABLE_WEB_LIVE, false)
-        ),
-        ENABLE_WEB_MUSIC: coalesce(
-          runtime.enableWebMusic,
-          coalesce(current.ENABLE_WEB_MUSIC, true)
         ),
         PLAYER_AUDIO_SPIKE_PROTECTION: nextAudioLevel !== 'off',
         PLAYER_AUDIO_SPIKE_PROTECTION_LEVEL: nextAudioLevel,
@@ -263,7 +285,6 @@ export default async function RootLayout({
             adultContentFilterEnabled={!runtimeConfig.DISABLE_YELLOW_FILTER}
           >
             {children}
-            <MusicPlayerRoot />
             <GlobalErrorIndicator />
           </SiteProvider>
         </ThemeProvider>

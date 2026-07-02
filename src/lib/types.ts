@@ -1,12 +1,3 @@
-import type { SavedMusicCollectionRecord } from '@/features/music/services/music-collection-profile-records';
-import type { MusicPlaybackSession } from '@/features/music/services/music-playback-session-records';
-import type { MusicPreferences } from '@/features/music/services/music-preferences-records';
-import type {
-  MusicFavoriteRecord,
-  MusicPlayRecord,
-  MusicRecentTrackRecord,
-} from '@/features/music/services/music-profile-records';
-
 import { AdminConfig } from './admin.types';
 
 // 播放记录数据结构
@@ -57,83 +48,6 @@ export interface FollowRecord {
 
 // 存储接口
 export interface IStorage {
-  // 音乐播放记录相关
-  getMusicPlayRecord(
-    userName: string,
-    key: string
-  ): Promise<MusicPlayRecord | null>;
-  setMusicPlayRecord(
-    userName: string,
-    key: string,
-    record: MusicPlayRecord
-  ): Promise<void>;
-  getAllMusicPlayRecords(
-    userName: string
-  ): Promise<{ [key: string]: MusicPlayRecord }>;
-  deleteMusicPlayRecord(userName: string, key: string): Promise<void>;
-  deleteAllMusicPlayRecords(userName: string): Promise<void>;
-
-  // 音乐收藏相关
-  getMusicFavorite(
-    userName: string,
-    key: string
-  ): Promise<MusicFavoriteRecord | null>;
-  setMusicFavorite(
-    userName: string,
-    key: string,
-    favorite: MusicFavoriteRecord
-  ): Promise<void>;
-  getAllMusicFavorites(
-    userName: string
-  ): Promise<{ [key: string]: MusicFavoriteRecord }>;
-  deleteMusicFavorite(userName: string, key: string): Promise<void>;
-  deleteAllMusicFavorites(userName: string): Promise<void>;
-
-  // 音乐最近播放相关
-  getMusicRecentTracks(userName: string): Promise<MusicRecentTrackRecord[]>;
-  setMusicRecentTracks(
-    userName: string,
-    records: MusicRecentTrackRecord[]
-  ): Promise<void>;
-  deleteAllMusicRecentTracks(userName: string): Promise<void>;
-
-  // 音乐搜索历史相关
-  getMusicSearchHistory(userName: string): Promise<string[]>;
-  addMusicSearchHistory(userName: string, query: string): Promise<void>;
-  deleteMusicSearchHistory(userName: string, query?: string): Promise<void>;
-
-  // 音乐偏好相关
-  getMusicPreferences(userName: string): Promise<MusicPreferences | null>;
-  setMusicPreferences(
-    userName: string,
-    preferences: MusicPreferences
-  ): Promise<void>;
-
-  // 音乐播放现场快照相关
-  getMusicPlaybackSession(
-    userName: string
-  ): Promise<MusicPlaybackSession | null>;
-  setMusicPlaybackSession(
-    userName: string,
-    session: MusicPlaybackSession
-  ): Promise<void>;
-
-  // 音乐已保存合集相关
-  getMusicCollection(
-    userName: string,
-    key: string
-  ): Promise<SavedMusicCollectionRecord | null>;
-  setMusicCollection(
-    userName: string,
-    key: string,
-    record: SavedMusicCollectionRecord
-  ): Promise<void>;
-  getAllMusicCollections(
-    userName: string
-  ): Promise<{ [key: string]: SavedMusicCollectionRecord }>;
-  deleteMusicCollection(userName: string, key: string): Promise<void>;
-  deleteAllMusicCollections(userName: string): Promise<void>;
-
   // 播放记录相关
   getPlayRecord(userName: string, key: string): Promise<PlayRecord | null>;
   setPlayRecord(
