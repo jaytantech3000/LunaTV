@@ -141,26 +141,38 @@ While sync is disabled, users may adjust the scope first. It becomes effective w
 
 ## Scope of Admin Settings
 
-`Admin Settings` syncs the editable business configuration snapshot (业务配置快照) from the admin page, not the full local desktop config.
+`Admin Settings` syncs only the editable business configuration snapshot (业务配置快照) from the admin page. It must not sync the full `AdminConfig`, and it must not copy the remote raw `ConfigFile` back into desktop state.
 
 Included:
 
-- Site settings (站点设置)
-- Ad filter settings (广告过滤)
-- Custom sources (自定义视频源)
-- Category config (分类配置)
-- Live config (直播配置)
-- User config (用户配置)
+- `SiteConfig`
+- `AdFilterConfig`
+- `SourceConfig`
+- `CustomCategories`
+- `LiveConfig`
+- `PlayerEnhancementConfig`
 
 Excluded:
 
-- `profile_sync.api_base_url`
+- `ConfigFile`
+- `ConfigSubscribtion`
+- `UserConfig`
+- `userPasswords`
+- `profile_sync.*`
 - Local service runtime state
 - Diagnostics data
 - Reset actions
 - Desktop-only connection or runtime parameters
 
-The design uses a controlled sync domain (受控同步域) so local environment config cannot be pushed upstream by mistake.
+When desktop applies remote admin settings in `web-first`, it must rebuild a sanitized (去身份化) local `ConfigFile` from the structured business fields while preserving local `auth.*` and `profile_sync.*`.
+
+### Invariants
+
+- The default admin username stays `admin`
+- `owner` means a role only; it is no longer a username
+- Neither profile sync nor local backup import may rewrite the device-local identity layer (身份层)
+
+The design uses a controlled sync domain (受控同步域) so local environment config or identity-layer data cannot be pushed upstream by mistake.
 
 ## Backend Design
 
@@ -188,13 +200,22 @@ Endpoint behavior:
 2. Validate all sync domains
 3. If `adminsettings` is included, require remote role `owner/admin`
 4. Load local user-data snapshots
-5. Sync only the selected domains
-6. If `adminsettings` is included, attach the admin-config snapshot
-7. Return updated sync status and the latest operation result
+5. If `adminsettings` is included, build a business-only snapshot from the allowed fields
+6. Sync only the selected domains
+7. In `web-first`, if `adminsettings` is included, fetch the remote business snapshot and rebuild a sanitized local `ConfigFile`
+8. Return updated sync status and the latest operation result
 
 ### 3. Onboarding Integration
 
 After onboarding succeeds, the current scope selection must be persisted immediately so the first enabled session does not require one extra manual sync click.
+
+If onboarding includes `adminsettings`, it must reuse the same controlled business-snapshot builder instead of uploading the full local `adminConfig`.
+
+### 4. Redacted Admin Config Reads
+
+- `GET /api/admin/config` may keep the full payload for `owner`
+- For `admin`, return only the business fields needed by `adminsettings`; do not return `ConfigFile` or other owner-only sensitive fields
+- `web-first` and onboarding flows must rely only on this redacted (脱敏) business snapshot
 
 ## Frontend Responsibilities
 
@@ -276,18 +297,24 @@ Owns:
 - `adminsettings` is allowed only for `owner/admin`
 - Normal-user submission of `adminsettings` is rejected
 - Manual sync processes only selected domains
-- Local connection config is never synced upstream
+- `ConfigFile`, `UserConfig`, and `userPasswords` are never synced upstream
+- `web-first` rebuilds a sanitized local `ConfigFile` while preserving local `auth.*` and `profile_sync.*`
+- `/api/admin/config` returns a redacted business snapshot for `admin`
 
 ## Risks and Constraints
 
 - The repo does not currently expose a ready-made frontend API for updating `syncDomains`; this round needs a new endpoint and returned status shape.
-- Current onboarding attaches the admin-config snapshot only during the first primary-account migration. Long-term optional syncing requires promoting it into an explicit sync domain.
+- Current onboarding attaches the admin-config snapshot only during the first primary-account migration. Long-term optional syncing requires promoting it into an explicit sync domain and switching to a controlled allowlist of fields.
+- Desktop currently backfills `SourceConfig`, `CustomCategories`, `LiveConfig`, and player-enhancement state from raw `config.json`; without rebuilding a sanitized local `ConfigFile`, old identity data can flow back in and overwrite the intended sync result.
+- `UserConfig.Tags` is coupled to `Users` and source-permission behavior. Keeping it inside `adminsettings` would indirectly rewrite user permissions and reintroduce account conflicts.
 - After diagnostics are removed, error copy must stay short but precise, or users lose their troubleshooting path.
 
 ## Recommended Implementation Order
 
 1. Define the `adminsettings` sync domain and backend validation
-2. Add the `sync-now` endpoint
-3. Add the sync-scope card
-4. Refactor the top row into two compact cards
-5. Remove diagnostics and finish frontend/backend tests
+2. Add admin business-snapshot filtering and sanitized local `ConfigFile` rebuilding
+3. Add the `sync-now` endpoint
+4. Add redacted `/api/admin/config` responses for `admin`
+5. Add the sync-scope card
+6. Refactor the top row into two compact cards
+7. Remove diagnostics and finish frontend/backend tests

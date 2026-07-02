@@ -140,26 +140,38 @@
 
 ## 管理员设置的同步边界
 
-`管理员设置` 同步的是管理员页可编辑的业务配置快照，不是整份本地桌面配置。
+`管理员设置` 同步的是管理员页可编辑的业务配置快照，不是整份 `AdminConfig`，也不是远端原始 `ConfigFile`。
 
 包含：
 
-- 站点设置
-- 广告过滤
-- 自定义视频源
-- 分类配置
-- 直播配置
-- 用户配置
+- `SiteConfig`
+- `AdFilterConfig`
+- `SourceConfig`
+- `CustomCategories`
+- `LiveConfig`
+- `PlayerEnhancementConfig`
 
 不包含：
 
-- `profile_sync.api_base_url`
+- `ConfigFile`
+- `ConfigSubscribtion`
+- `UserConfig`
+- `userPasswords`
+- `profile_sync.*`
 - 本地服务运行时状态
 - 诊断数据
 - 重置动作
 - 仅桌面本地生效的连接或运行参数
 
-设计原则是使用受控同步域，避免把本地环境配置误同步到远端。
+桌面端在 `web-first` 应用远端管理员设置时，不直接落远端原始 `ConfigFile`。本地服务根据结构化业务配置重建一份“去身份化”的 `ConfigFile`，同时保留本地 `auth.*` 与 `profile_sync.*`。
+
+核心不变式：
+
+- 默认管理员用户名固定为 `admin`
+- `owner` 只表示角色，不再表示帐号名
+- 任何 profile sync 或本地备份导入都不得改写设备本地身份层
+
+设计原则是使用受控同步域，避免把本地环境配置或身份层误同步到远端。
 
 ## 后端设计
 
@@ -187,13 +199,22 @@
 2. 校验同步域是否合法
 3. 若包含 `adminsettings`，要求当前远端角色为 `owner/admin`
 4. 读取本地用户数据快照
-5. 按所选域同步到远端
-6. 若包含 `adminsettings`，附带管理员配置快照
-7. 返回新的同步状态与最近一次执行结果
+5. 若包含 `adminsettings`，只构造允许字段组成的业务配置快照
+6. 按所选域同步到远端
+7. 若 `web-first` 且包含 `adminsettings`，拉取远端业务配置快照并在本地重建去身份化 `ConfigFile`
+8. 返回新的同步状态与最近一次执行结果
 
 ### 3. onboarding 对接
 
 开启同步成功后需要立刻持久化当前范围选择，避免首次开启后还需要再点一次“同步”。
+
+onboarding 若包含 `adminsettings`，也必须复用同一份受控业务快照构造逻辑，不能再上传整份本地 `adminConfig`。
+
+### 4. 管理员配置读取脱敏
+
+- `GET /api/admin/config` 对 `owner` 可保留完整配置
+- 对 `admin` 只返回 `adminsettings` 所需的业务字段，不返回 `ConfigFile` 等 owner-only 敏感字段
+- `web-first` 与 onboarding 的管理员设置读取逻辑必须只依赖这份脱敏后的业务快照
 
 ## 前端职责拆分
 
@@ -275,18 +296,24 @@
 - `adminsettings` 仅允许 `owner/admin`
 - 普通用户提交 `adminsettings` 会被拒绝
 - 手动同步只处理所选域
-- 不会把本地连接配置同步到远端
+- 不会把 `ConfigFile`、`UserConfig`、`userPasswords` 同步到远端
+- `web-first` 会在本地重建去身份化 `ConfigFile`，并保留本地 `auth.*` 与 `profile_sync.*`
+- `/api/admin/config` 对 `admin` 返回脱敏后的业务配置快照
 
 ## 风险与约束
 
 - 当前仓库还没有“更新 syncDomains”的现成前端接口，本次需要新增接口与状态返回结构。
-- 现有 onboarding 里只在首次主帐号迁移时附带管理员配置快照；改成长期可选同步后，后端必须把它提升为显式同步域。
+- 现有 onboarding 里只在首次主帐号迁移时附带管理员配置快照；改成长期可选同步后，后端必须把它提升为显式同步域，并改为受控字段白名单。
+- 当前桌面端会用原始 `config.json` 回灌 `SourceConfig`、`CustomCategories`、`LiveConfig` 与播放器增强配置；如果不本地重建去身份化 `ConfigFile`，同步结果会被旧身份配置再次污染。
+- `UserConfig.Tags` 与 `Users`/采集源权限联动；把它们继续放进 `adminsettings` 会间接改写用户权限并重引入帐号冲突。
 - 删除诊断区后，错误文案必须足够短且足够准，否则用户会失去排障入口。
 
 ## 推荐实施顺序
 
 1. 定义 `adminsettings` 同步域与后端校验
-2. 增加 `sync-now` 接口
-3. 新增同步范围卡
-4. 改造顶部双卡布局
-5. 删除诊断区并补齐前后端测试
+2. 增加管理员业务快照过滤与本地去身份化 `ConfigFile` 重建
+3. 增加 `sync-now` 接口
+4. 为 `admin` 角色的 `/api/admin/config` 增加脱敏返回
+5. 新增同步范围卡
+6. 改造顶部双卡布局
+7. 删除诊断区并补齐前后端测试
