@@ -867,6 +867,7 @@ struct ServiceConfig {
     adult_content_filter_enabled: bool,
     vod_ad_filter_enabled: bool,
     fluid_search: bool,
+    enable_web_music: bool,
     player_audio_spike_protection: bool,
     player_audio_spike_protection_level: PlayerEnhancementLevel,
     player_audio_dynamic_protection: bool,
@@ -1236,6 +1237,8 @@ struct DesktopSiteConfig {
     fluid_search: bool,
     #[serde(rename = "EnableWebLive", default)]
     enable_web_live: bool,
+    #[serde(rename = "EnableWebMusic", default = "default_enable_web_music")]
+    enable_web_music: bool,
 }
 
 impl Default for DesktopSiteConfig {
@@ -1252,6 +1255,7 @@ impl Default for DesktopSiteConfig {
             disable_yellow_filter: false,
             fluid_search: default_fluid_search(),
             enable_web_live: false,
+            enable_web_music: default_enable_web_music(),
         }
     }
 }
@@ -3748,6 +3752,10 @@ fn default_fluid_search() -> bool {
     true
 }
 
+fn default_enable_web_music() -> bool {
+    true
+}
+
 fn normalize_profile_sync_domain(domain: &str) -> Option<String> {
     let trimmed = domain.trim();
     PROFILE_SYNC_USER_DATA_DOMAINS
@@ -3980,6 +3988,7 @@ fn build_default_site_config_from_raw(raw_config: &RawServiceConfig) -> DesktopS
                 .values()
                 .any(|live| !live.disabled.unwrap_or(false))
         }),
+        enable_web_music: default_enable_web_music(),
     }
 }
 
@@ -4296,6 +4305,7 @@ fn build_service_config_from_admin(
         adult_content_filter_enabled: !admin_config.site_config.disable_yellow_filter,
         vod_ad_filter_enabled: admin_config.ad_filter_config.enabled,
         fluid_search: admin_config.site_config.fluid_search,
+        enable_web_music: admin_config.site_config.enable_web_music,
         player_audio_spike_protection: audio_level.is_enabled(),
         player_audio_spike_protection_level: audio_level,
         player_audio_dynamic_protection: audio_dynamic_protection,
@@ -4391,6 +4401,7 @@ fn normalize_desktop_site_config(site_config: DesktopSiteConfig) -> DesktopSiteC
         disable_yellow_filter: site_config.disable_yellow_filter,
         fluid_search: site_config.fluid_search,
         enable_web_live: site_config.enable_web_live,
+        enable_web_music: site_config.enable_web_music,
     }
 }
 
@@ -5717,7 +5728,7 @@ fn build_runtime_public_config_response(config: &ServiceConfig) -> RuntimePublic
         enable_web_live: config
             .enable_web_live_override
             .unwrap_or_else(|| config.live_sources.iter().any(|source| !source.disabled)),
-        enable_web_music: true,
+        enable_web_music: config.enable_web_music,
         player_audio_spike_protection: config.player_audio_spike_protection,
         player_audio_spike_protection_level: config.player_audio_spike_protection_level,
         player_audio_dynamic_protection: config.player_audio_dynamic_protection,
@@ -8436,7 +8447,8 @@ segment0.ts
                   "DoubanImageProxy": "https://img.example.com/?url=",
                   "DisableYellowFilter": false,
                   "FluidSearch": false,
-                  "EnableWebLive": false
+                  "EnableWebLive": false,
+                  "EnableWebMusic": false
                 },
                 "UserConfig": {
                   "Users": [
@@ -8513,6 +8525,14 @@ segment0.ts
                 .and_then(|site| site.get("SiteName"))
                 .and_then(Value::as_str),
             Some("Desktop LunaTV")
+        );
+        assert_eq!(
+            payload
+                .get("Config")
+                .and_then(|config| config.get("SiteConfig"))
+                .and_then(|site| site.get("EnableWebMusic"))
+                .and_then(Value::as_bool),
+            Some(false)
         );
         assert_eq!(
             payload
@@ -12590,6 +12610,14 @@ segment0.ts
                         assert_eq!(
                             payload
                                 .get("adminConfig")
+                                .and_then(|value| value.get("SiteConfig"))
+                                .and_then(|value| value.get("EnableWebMusic"))
+                                .and_then(Value::as_bool),
+                            Some(false)
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
                                 .and_then(|value| value.get("SourceConfig"))
                                 .and_then(Value::as_array)
                                 .map(Vec::len),
@@ -12645,7 +12673,8 @@ segment0.ts
                   "DoubanImageProxy": "",
                   "DisableYellowFilter": false,
                   "FluidSearch": true,
-                  "EnableWebLive": false
+                  "EnableWebLive": false,
+                  "EnableWebMusic": false
                 },
                 "UserConfig": {
                   "Users": [
