@@ -64,7 +64,7 @@ describe('/api/admin/profile-sync/merge', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.NEXT_PUBLIC_STORAGE_TYPE = 'redis';
-    process.env.USERNAME = 'owner';
+    process.env.USERNAME = 'admin';
   });
 
   it('rejects unauthenticated requests', async () => {
@@ -94,7 +94,7 @@ describe('/api/admin/profile-sync/merge', () => {
         LastCheck: '',
       },
       ConfigFile:
-        '{"auth":{"username":"owner","password":"remote-owner-secret"}}',
+        '{"auth":{"username":"admin","password":"remote-owner-secret"}}',
       SiteConfig: {
         SiteName: 'Remote LunaTV',
         Announcement: '',
@@ -110,7 +110,7 @@ describe('/api/admin/profile-sync/merge', () => {
       },
       UserConfig: {
         Users: [
-          { username: 'owner', role: 'owner' },
+          { username: 'admin', role: 'owner' },
           { username: 'admin-user', role: 'admin', banned: false },
           { username: 'target-user', role: 'user', banned: false },
         ],
@@ -259,7 +259,7 @@ describe('/api/admin/profile-sync/merge', () => {
         LastCheck: '',
       },
       ConfigFile:
-        '{"auth":{"username":"owner","password":"remote-owner-secret"}}',
+        '{"auth":{"username":"admin","password":"remote-owner-secret"}}',
       SiteConfig: {
         SiteName: 'Remote LunaTV',
         Announcement: '',
@@ -275,7 +275,7 @@ describe('/api/admin/profile-sync/merge', () => {
       },
       UserConfig: {
         Users: [
-          { username: 'owner', role: 'owner' },
+          { username: 'admin', role: 'owner' },
           { username: 'admin-user', role: 'admin', banned: false },
           { username: 'target-user', role: 'user', banned: false },
         ],
@@ -293,7 +293,7 @@ describe('/api/admin/profile-sync/merge', () => {
         AutoUpdate: false,
         LastCheck: '',
       },
-      ConfigFile: '{"auth":{"username":"owner","password":"owner-secret"}}',
+      ConfigFile: '{"auth":{"username":"admin","password":"owner-secret"}}',
       SiteConfig: {
         SiteName: 'Desktop LunaTV',
         Announcement: '同步公告',
@@ -311,7 +311,7 @@ describe('/api/admin/profile-sync/merge', () => {
       UserConfig: {
         Users: [
           {
-            username: 'owner',
+            username: 'admin',
             role: 'owner',
           },
           {
@@ -376,7 +376,7 @@ describe('/api/admin/profile-sync/merge', () => {
           LastCheck: '',
         },
         ConfigFile:
-          '{"auth":{"username":"owner","password":"remote-owner-secret"}}',
+          '{"auth":{"username":"admin","password":"remote-owner-secret"}}',
         SiteConfig: expect.objectContaining({
           SiteName: 'Desktop LunaTV',
         }),
@@ -387,7 +387,7 @@ describe('/api/admin/profile-sync/merge', () => {
         ]),
         UserConfig: {
           Users: [
-            { username: 'owner', role: 'owner' },
+            { username: 'admin', role: 'owner' },
             { username: 'admin-user', role: 'admin', banned: false },
             { username: 'target-user', role: 'user', banned: false },
           ],

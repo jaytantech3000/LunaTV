@@ -4790,40 +4790,14 @@ fn should_proxy_admin_data_migration(state: &AppState) -> Result<bool> {
 
 fn build_local_admin_data_migration_archive(state: &AppState) -> Result<AdminDataMigrationArchive> {
     let persistence = state.load_admin_persistence()?;
-    let owner_username = resolve_owner_username_for_import(&persistence.config);
-    let owner_password = extract_owner_password_from_config_file(&persistence.config.config_file);
-    let mut user_data = BTreeMap::new();
-
-    for user in &persistence.config.user_config.users {
-        let password = if Some(user.username.as_str()) == owner_username.as_deref() {
-            owner_password.clone()
-        } else {
-            persistence.user_passwords.get(&user.username).cloned()
-        };
-        user_data.insert(
-            user.username.clone(),
-            AdminDataMigrationUserData {
-                password,
-                ..AdminDataMigrationUserData::default()
-            },
-        );
-    }
-
-    for (username, password) in &persistence.user_passwords {
-        user_data
-            .entry(username.clone())
-            .or_insert_with(|| AdminDataMigrationUserData {
-                password: Some(password.clone()),
-                ..AdminDataMigrationUserData::default()
-            });
-    }
+    let admin_config = build_admin_settings_sync_snapshot(&persistence.config);
 
     Ok(AdminDataMigrationArchive {
         timestamp: current_iso_timestamp(),
         server_version: env!("CARGO_PKG_VERSION").to_string(),
         data: AdminDataMigrationArchiveData {
-            admin_config: persistence.config,
-            user_data,
+            admin_config,
+            user_data: BTreeMap::new(),
             desktop_metadata: Some(AdminDataMigrationDesktopMetadata {
                 scope: "desktop-local".to_string(),
                 note: DESKTOP_LOCAL_DATA_MIGRATION_NOTE.to_string(),
@@ -4838,61 +4812,44 @@ fn import_local_admin_data_migration_archive(
     state: &AppState,
     archive: &AdminDataMigrationArchive,
 ) -> Result<()> {
-    let mut admin_config = archive.data.admin_config.clone();
-    let configured_owner = extract_owner_username_from_config_file(&admin_config.config_file);
-    let mut has_owner = admin_config
-        .user_config
-        .users
-        .iter()
-        .any(|user| user.role == "owner");
-
-    for username in archive.data.user_data.keys() {
-        if admin_config
-            .user_config
-            .users
-            .iter()
-            .any(|user| user.username == *username)
-        {
-            continue;
-        }
-
-        let role = if !has_owner && configured_owner.as_deref() == Some(username.as_str()) {
-            has_owner = true;
-            "owner"
-        } else {
-            "user"
-        };
-
-        admin_config.user_config.users.push(DesktopUserConfigItem {
-            username: username.clone(),
-            role: role.to_string(),
-            banned: false,
-            enabled_apis: Vec::new(),
-            tags: Vec::new(),
-        });
-    }
-
-    let prepared_config_file =
-        prepare_imported_admin_config_file(&admin_config, &archive.data.user_data)?;
-    admin_config.config_file = prepared_config_file.clone();
-    let owner_username = resolve_owner_username_for_import(&admin_config);
-    let mut user_passwords = BTreeMap::new();
-
-    for (username, user_data) in &archive.data.user_data {
-        if Some(username.as_str()) == owner_username.as_deref() {
-            continue;
-        }
-
-        if let Some(password) = normalize_owned_string(user_data.password.clone()) {
-            user_passwords.insert(username.clone(), password);
-        }
-    }
+    let current_persistence = state.load_admin_persistence()?;
+    let imported_admin_settings = build_admin_settings_sync_snapshot(&archive.data.admin_config);
+    let current_owner_username =
+        extract_owner_username_from_config_file(&current_persistence.config.config_file);
+    let current_owner_password =
+        extract_owner_password_from_config_file(&current_persistence.config.config_file);
+    let prepared_config_file = apply_admin_settings_to_config_file(
+        &current_persistence.config.config_file,
+        &imported_admin_settings,
+    )
+    .and_then(|config_file| {
+        apply_desktop_runtime_overrides_to_config_file(
+            &config_file,
+            current_owner_username.as_deref(),
+            current_owner_password.as_deref(),
+            current_persistence.profile_sync_api_base_url.as_deref(),
+            current_persistence
+                .profile_sync_api_base_url
+                .as_ref()
+                .map(|_| current_persistence.profile_sync_sync_domains.as_slice()),
+        )
+    })?;
 
     let imported_persistence = DesktopAdminPersistence {
-        config: admin_config,
-        user_passwords,
-        profile_sync_api_base_url: None,
-        profile_sync_sync_domains: default_profile_sync_selected_domains(),
+        config: DesktopAdminConfig {
+            config_subscribtion: current_persistence.config.config_subscribtion,
+            config_file: prepared_config_file.clone(),
+            user_config: current_persistence.config.user_config,
+            site_config: imported_admin_settings.site_config,
+            source_config: imported_admin_settings.source_config,
+            custom_categories: imported_admin_settings.custom_categories,
+            live_config: imported_admin_settings.live_config,
+            ad_filter_config: imported_admin_settings.ad_filter_config,
+            player_enhancement_config: imported_admin_settings.player_enhancement_config,
+        },
+        user_passwords: current_persistence.user_passwords,
+        profile_sync_api_base_url: current_persistence.profile_sync_api_base_url,
+        profile_sync_sync_domains: current_persistence.profile_sync_sync_domains,
     };
 
     state.write_raw_config(&prepared_config_file)?;
@@ -4904,55 +4861,6 @@ fn import_local_admin_data_migration_archive(
 
     Ok(())
 }
-
-fn prepare_imported_admin_config_file(
-    admin_config: &DesktopAdminConfig,
-    user_data: &BTreeMap<String, AdminDataMigrationUserData>,
-) -> Result<String> {
-    validate_admin_config_file_contents(&admin_config.config_file)?;
-    let mut config_value = serde_json::from_str::<Value>(admin_config.config_file.trim())
-        .context("failed to parse imported config file")?;
-    let owner_username = resolve_owner_username_for_import(admin_config);
-    let owner_password = owner_username
-        .as_ref()
-        .and_then(|username| user_data.get(username))
-        .and_then(|entry| normalize_owned_string(entry.password.clone()));
-    let root = config_value
-        .as_object_mut()
-        .context("imported config file root must be an object")?;
-    let auth_value = root.entry("auth".to_string()).or_insert_with(|| json!({}));
-    if !auth_value.is_object() {
-        *auth_value = json!({});
-    }
-
-    let auth = auth_value
-        .as_object_mut()
-        .expect("auth should be an object after normalization");
-    let has_username = auth
-        .get("username")
-        .and_then(Value::as_str)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    if !has_username {
-        if let Some(username) = owner_username {
-            auth.insert("username".to_string(), Value::String(username));
-        }
-    }
-
-    let has_password = auth
-        .get("password")
-        .and_then(Value::as_str)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    if !has_password {
-        if let Some(password) = owner_password {
-            auth.insert("password".to_string(), Value::String(password));
-        }
-    }
-
-    serde_json::to_string_pretty(&config_value).context("failed to serialize imported config file")
-}
-
 fn resolve_owner_username_for_import(admin_config: &DesktopAdminConfig) -> Option<String> {
     admin_config
         .user_config
@@ -8711,7 +8619,7 @@ segment0.ts
     }
 
     #[tokio::test]
-    async fn admin_data_migration_export_route_returns_local_backup() {
+    async fn admin_data_migration_export_route_omits_local_identity_payloads() {
         let temp_dir = TestDir::new();
         let config_path = write_test_config(
             &temp_dir,
@@ -8826,22 +8734,9 @@ segment0.ts
             archive.data.admin_config.site_config.site_name,
             "Desktop LunaTV"
         );
-        assert_eq!(
-            archive
-                .data
-                .user_data
-                .get("desktop-owner")
-                .and_then(|entry| entry.password.as_deref()),
-            Some("owner-secret")
-        );
-        assert_eq!(
-            archive
-                .data
-                .user_data
-                .get("kid")
-                .and_then(|entry| entry.password.as_deref()),
-            Some("123456")
-        );
+        assert!(archive.data.user_data.is_empty());
+        assert!(archive.data.admin_config.user_config.users.is_empty());
+        assert_eq!(archive.data.admin_config.config_file, "");
         assert_eq!(
             archive
                 .data
@@ -8853,7 +8748,7 @@ segment0.ts
     }
 
     #[tokio::test]
-    async fn admin_data_migration_import_route_restores_local_admin_state() {
+    async fn admin_data_migration_import_route_preserves_local_identity_layer() {
         let temp_dir = TestDir::new();
         let config_path = write_test_config(
             &temp_dir,
@@ -8991,20 +8886,21 @@ segment0.ts
             .expect("load imported admin persistence");
         assert_eq!(persistence.config.site_config.site_name, "Imported LunaTV");
         assert_eq!(
-            persistence.user_passwords.get("kid").map(String::as_str),
-            Some("kid-secret")
+            resolve_owner_username_for_import(&persistence.config).as_deref(),
+            Some("old-owner")
         );
         assert_eq!(
             extract_owner_password_from_config_file(&persistence.config.config_file).as_deref(),
-            Some("owner-secret")
+            Some("old-secret")
         );
+        assert_eq!(persistence.user_passwords.get("kid"), None);
         assert!(
             persistence
                 .config
                 .user_config
                 .users
                 .iter()
-                .any(|user| user.username == "new-owner" && user.role == "owner")
+                .all(|user| user.username != "new-owner")
         );
     }
 
