@@ -1,7 +1,7 @@
 {
   "cache_time": 7200,
   "auth": {
-    "username": "owner",
+    "username": "admin",
     "password": ""
   },
   "profile_sync": {
