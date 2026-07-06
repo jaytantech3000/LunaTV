@@ -4293,6 +4293,207 @@ fn merge_live_config(
     merged
 }
 
+fn build_admin_settings_sync_snapshot(config: &DesktopAdminConfig) -> DesktopAdminConfig {
+    DesktopAdminConfig {
+        site_config: normalize_desktop_site_config(config.site_config.clone()),
+        source_config: config.source_config.clone(),
+        custom_categories: config.custom_categories.clone(),
+        live_config: config.live_config.clone(),
+        ad_filter_config: config.ad_filter_config.clone(),
+        player_enhancement_config: config.player_enhancement_config.clone(),
+        ..DesktopAdminConfig::default()
+    }
+}
+
+fn apply_admin_settings_to_config_file(
+    base_config_file: &str,
+    admin_config: &DesktopAdminConfig,
+) -> Result<String> {
+    let admin_settings = build_admin_settings_sync_snapshot(admin_config);
+    let mut config_value = serde_json::from_str::<Value>(base_config_file.trim())
+        .context("failed to parse base config file json")?;
+    let root = config_value
+        .as_object_mut()
+        .context("config file root must be an object")?;
+
+    root.insert(
+        "cache_time".to_string(),
+        Value::Number(admin_settings.site_config.site_interface_cache_time.into()),
+    );
+    root.insert(
+        "search_downstream_max_page".to_string(),
+        Value::Number((admin_settings.site_config.search_downstream_max_page as u64).into()),
+    );
+    root.insert(
+        "disable_yellow_filter".to_string(),
+        Value::Bool(admin_settings.site_config.disable_yellow_filter),
+    );
+    root.insert(
+        "site_name".to_string(),
+        Value::String(admin_settings.site_config.site_name),
+    );
+    root.insert(
+        "announcement".to_string(),
+        Value::String(admin_settings.site_config.announcement),
+    );
+    root.insert(
+        "douban_proxy_type".to_string(),
+        Value::String(admin_settings.site_config.douban_proxy_type),
+    );
+    root.insert(
+        "douban_proxy".to_string(),
+        Value::String(admin_settings.site_config.douban_proxy),
+    );
+    root.insert(
+        "douban_image_proxy_type".to_string(),
+        Value::String(admin_settings.site_config.douban_image_proxy_type),
+    );
+    root.insert(
+        "douban_image_proxy".to_string(),
+        Value::String(admin_settings.site_config.douban_image_proxy),
+    );
+    root.insert(
+        "enable_web_live".to_string(),
+        Value::Bool(admin_settings.site_config.enable_web_live),
+    );
+
+    let player_enhancements_entry = root
+        .entry("player_enhancements".to_string())
+        .or_insert_with(|| json!({}));
+    if !player_enhancements_entry.is_object() {
+        *player_enhancements_entry = json!({});
+    }
+    let player_enhancements = player_enhancements_entry
+        .as_object_mut()
+        .context("player_enhancements must be an object after normalization")?;
+    player_enhancements.insert(
+        "audio_spike_protection".to_string(),
+        Value::Bool(
+            admin_settings
+                .player_enhancement_config
+                .audio_spike_protection,
+        ),
+    );
+    match admin_settings
+        .player_enhancement_config
+        .audio_spike_protection_level
+    {
+        Some(level) => {
+            player_enhancements.insert(
+                "audio_spike_protection_level".to_string(),
+                serde_json::to_value(level)
+                    .context("failed to serialize audio spike protection level")?,
+            );
+        }
+        None => {
+            player_enhancements.remove("audio_spike_protection_level");
+        }
+    }
+    match admin_settings
+        .player_enhancement_config
+        .audio_dynamic_protection
+    {
+        Some(value) => {
+            player_enhancements.insert("audio_dynamic_protection".to_string(), Value::Bool(value));
+        }
+        None => {
+            player_enhancements.remove("audio_dynamic_protection");
+        }
+    }
+    match admin_settings.player_enhancement_config.audio_fixed_ceiling {
+        Some(value) => {
+            player_enhancements.insert("audio_fixed_ceiling".to_string(), Value::Bool(value));
+        }
+        None => {
+            player_enhancements.remove("audio_fixed_ceiling");
+        }
+    }
+    player_enhancements.insert(
+        "visual_enhancement".to_string(),
+        Value::Bool(admin_settings.player_enhancement_config.visual_enhancement),
+    );
+    match admin_settings
+        .player_enhancement_config
+        .visual_enhancement_level
+    {
+        Some(level) => {
+            player_enhancements.insert(
+                "visual_enhancement_level".to_string(),
+                serde_json::to_value(level)
+                    .context("failed to serialize visual enhancement level")?,
+            );
+        }
+        None => {
+            player_enhancements.remove("visual_enhancement_level");
+        }
+    }
+
+    root.insert(
+        "api_site".to_string(),
+        Value::Object(
+            admin_settings
+                .source_config
+                .into_iter()
+                .map(|source| {
+                    (
+                        source.key,
+                        json!({
+                            "api": source.api,
+                            "name": source.name,
+                            "detail": source.detail,
+                            "ua": source.ua,
+                            "referer": source.referer,
+                            "disabled": source.disabled,
+                            "disable_ad_filter": source.disable_ad_filter
+                        }),
+                    )
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "custom_category".to_string(),
+        Value::Array(
+            admin_settings
+                .custom_categories
+                .into_iter()
+                .map(|category| {
+                    json!({
+                        "name": category.name,
+                        "type": category.category_type,
+                        "query": category.query,
+                        "disabled": category.disabled
+                    })
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "lives".to_string(),
+        Value::Object(
+            admin_settings
+                .live_config
+                .into_iter()
+                .map(|live| {
+                    (
+                        live.key,
+                        json!({
+                            "name": live.name,
+                            "url": live.url,
+                            "ua": live.ua,
+                            "epg": live.epg,
+                            "disabled": live.disabled
+                        }),
+                    )
+                })
+                .collect(),
+        ),
+    );
+
+    serde_json::to_string_pretty(&config_value)
+        .context("failed to encode config file with admin settings")
+}
+
 fn build_service_config_from_admin(
     admin_config: &DesktopAdminConfig,
     profile_sync_api_base_url: &Option<String>,
@@ -4589,40 +4790,14 @@ fn should_proxy_admin_data_migration(state: &AppState) -> Result<bool> {
 
 fn build_local_admin_data_migration_archive(state: &AppState) -> Result<AdminDataMigrationArchive> {
     let persistence = state.load_admin_persistence()?;
-    let owner_username = resolve_owner_username_for_import(&persistence.config);
-    let owner_password = extract_owner_password_from_config_file(&persistence.config.config_file);
-    let mut user_data = BTreeMap::new();
-
-    for user in &persistence.config.user_config.users {
-        let password = if Some(user.username.as_str()) == owner_username.as_deref() {
-            owner_password.clone()
-        } else {
-            persistence.user_passwords.get(&user.username).cloned()
-        };
-        user_data.insert(
-            user.username.clone(),
-            AdminDataMigrationUserData {
-                password,
-                ..AdminDataMigrationUserData::default()
-            },
-        );
-    }
-
-    for (username, password) in &persistence.user_passwords {
-        user_data
-            .entry(username.clone())
-            .or_insert_with(|| AdminDataMigrationUserData {
-                password: Some(password.clone()),
-                ..AdminDataMigrationUserData::default()
-            });
-    }
+    let admin_config = build_admin_settings_sync_snapshot(&persistence.config);
 
     Ok(AdminDataMigrationArchive {
         timestamp: current_iso_timestamp(),
         server_version: env!("CARGO_PKG_VERSION").to_string(),
         data: AdminDataMigrationArchiveData {
-            admin_config: persistence.config,
-            user_data,
+            admin_config,
+            user_data: BTreeMap::new(),
             desktop_metadata: Some(AdminDataMigrationDesktopMetadata {
                 scope: "desktop-local".to_string(),
                 note: DESKTOP_LOCAL_DATA_MIGRATION_NOTE.to_string(),
@@ -4637,61 +4812,44 @@ fn import_local_admin_data_migration_archive(
     state: &AppState,
     archive: &AdminDataMigrationArchive,
 ) -> Result<()> {
-    let mut admin_config = archive.data.admin_config.clone();
-    let configured_owner = extract_owner_username_from_config_file(&admin_config.config_file);
-    let mut has_owner = admin_config
-        .user_config
-        .users
-        .iter()
-        .any(|user| user.role == "owner");
-
-    for username in archive.data.user_data.keys() {
-        if admin_config
-            .user_config
-            .users
-            .iter()
-            .any(|user| user.username == *username)
-        {
-            continue;
-        }
-
-        let role = if !has_owner && configured_owner.as_deref() == Some(username.as_str()) {
-            has_owner = true;
-            "owner"
-        } else {
-            "user"
-        };
-
-        admin_config.user_config.users.push(DesktopUserConfigItem {
-            username: username.clone(),
-            role: role.to_string(),
-            banned: false,
-            enabled_apis: Vec::new(),
-            tags: Vec::new(),
-        });
-    }
-
-    let prepared_config_file =
-        prepare_imported_admin_config_file(&admin_config, &archive.data.user_data)?;
-    admin_config.config_file = prepared_config_file.clone();
-    let owner_username = resolve_owner_username_for_import(&admin_config);
-    let mut user_passwords = BTreeMap::new();
-
-    for (username, user_data) in &archive.data.user_data {
-        if Some(username.as_str()) == owner_username.as_deref() {
-            continue;
-        }
-
-        if let Some(password) = normalize_owned_string(user_data.password.clone()) {
-            user_passwords.insert(username.clone(), password);
-        }
-    }
+    let current_persistence = state.load_admin_persistence()?;
+    let imported_admin_settings = build_admin_settings_sync_snapshot(&archive.data.admin_config);
+    let current_owner_username =
+        extract_owner_username_from_config_file(&current_persistence.config.config_file);
+    let current_owner_password =
+        extract_owner_password_from_config_file(&current_persistence.config.config_file);
+    let prepared_config_file = apply_admin_settings_to_config_file(
+        &current_persistence.config.config_file,
+        &imported_admin_settings,
+    )
+    .and_then(|config_file| {
+        apply_desktop_runtime_overrides_to_config_file(
+            &config_file,
+            current_owner_username.as_deref(),
+            current_owner_password.as_deref(),
+            current_persistence.profile_sync_api_base_url.as_deref(),
+            current_persistence
+                .profile_sync_api_base_url
+                .as_ref()
+                .map(|_| current_persistence.profile_sync_sync_domains.as_slice()),
+        )
+    })?;
 
     let imported_persistence = DesktopAdminPersistence {
-        config: admin_config,
-        user_passwords,
-        profile_sync_api_base_url: None,
-        profile_sync_sync_domains: default_profile_sync_selected_domains(),
+        config: DesktopAdminConfig {
+            config_subscribtion: current_persistence.config.config_subscribtion,
+            config_file: prepared_config_file.clone(),
+            user_config: current_persistence.config.user_config,
+            site_config: imported_admin_settings.site_config,
+            source_config: imported_admin_settings.source_config,
+            custom_categories: imported_admin_settings.custom_categories,
+            live_config: imported_admin_settings.live_config,
+            ad_filter_config: imported_admin_settings.ad_filter_config,
+            player_enhancement_config: imported_admin_settings.player_enhancement_config,
+        },
+        user_passwords: current_persistence.user_passwords,
+        profile_sync_api_base_url: current_persistence.profile_sync_api_base_url,
+        profile_sync_sync_domains: current_persistence.profile_sync_sync_domains,
     };
 
     state.write_raw_config(&prepared_config_file)?;
@@ -4703,55 +4861,6 @@ fn import_local_admin_data_migration_archive(
 
     Ok(())
 }
-
-fn prepare_imported_admin_config_file(
-    admin_config: &DesktopAdminConfig,
-    user_data: &BTreeMap<String, AdminDataMigrationUserData>,
-) -> Result<String> {
-    validate_admin_config_file_contents(&admin_config.config_file)?;
-    let mut config_value = serde_json::from_str::<Value>(admin_config.config_file.trim())
-        .context("failed to parse imported config file")?;
-    let owner_username = resolve_owner_username_for_import(admin_config);
-    let owner_password = owner_username
-        .as_ref()
-        .and_then(|username| user_data.get(username))
-        .and_then(|entry| normalize_owned_string(entry.password.clone()));
-    let root = config_value
-        .as_object_mut()
-        .context("imported config file root must be an object")?;
-    let auth_value = root.entry("auth".to_string()).or_insert_with(|| json!({}));
-    if !auth_value.is_object() {
-        *auth_value = json!({});
-    }
-
-    let auth = auth_value
-        .as_object_mut()
-        .expect("auth should be an object after normalization");
-    let has_username = auth
-        .get("username")
-        .and_then(Value::as_str)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    if !has_username {
-        if let Some(username) = owner_username {
-            auth.insert("username".to_string(), Value::String(username));
-        }
-    }
-
-    let has_password = auth
-        .get("password")
-        .and_then(Value::as_str)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    if !has_password {
-        if let Some(password) = owner_password {
-            auth.insert("password".to_string(), Value::String(password));
-        }
-    }
-
-    serde_json::to_string_pretty(&config_value).context("failed to serialize imported config file")
-}
-
 fn resolve_owner_username_for_import(admin_config: &DesktopAdminConfig) -> Option<String> {
     admin_config
         .user_config
@@ -8510,7 +8619,7 @@ segment0.ts
     }
 
     #[tokio::test]
-    async fn admin_data_migration_export_route_returns_local_backup() {
+    async fn admin_data_migration_export_route_omits_local_identity_payloads() {
         let temp_dir = TestDir::new();
         let config_path = write_test_config(
             &temp_dir,
@@ -8625,22 +8734,9 @@ segment0.ts
             archive.data.admin_config.site_config.site_name,
             "Desktop LunaTV"
         );
-        assert_eq!(
-            archive
-                .data
-                .user_data
-                .get("desktop-owner")
-                .and_then(|entry| entry.password.as_deref()),
-            Some("owner-secret")
-        );
-        assert_eq!(
-            archive
-                .data
-                .user_data
-                .get("kid")
-                .and_then(|entry| entry.password.as_deref()),
-            Some("123456")
-        );
+        assert!(archive.data.user_data.is_empty());
+        assert!(archive.data.admin_config.user_config.users.is_empty());
+        assert_eq!(archive.data.admin_config.config_file, "");
         assert_eq!(
             archive
                 .data
@@ -8652,7 +8748,7 @@ segment0.ts
     }
 
     #[tokio::test]
-    async fn admin_data_migration_import_route_restores_local_admin_state() {
+    async fn admin_data_migration_import_route_preserves_local_identity_layer() {
         let temp_dir = TestDir::new();
         let config_path = write_test_config(
             &temp_dir,
@@ -8790,20 +8886,21 @@ segment0.ts
             .expect("load imported admin persistence");
         assert_eq!(persistence.config.site_config.site_name, "Imported LunaTV");
         assert_eq!(
-            persistence.user_passwords.get("kid").map(String::as_str),
-            Some("kid-secret")
+            resolve_owner_username_for_import(&persistence.config).as_deref(),
+            Some("old-owner")
         );
         assert_eq!(
             extract_owner_password_from_config_file(&persistence.config.config_file).as_deref(),
-            Some("owner-secret")
+            Some("old-secret")
         );
+        assert_eq!(persistence.user_passwords.get("kid"), None);
         assert!(
             persistence
                 .config
                 .user_config
                 .users
                 .iter()
-                .any(|user| user.username == "new-owner" && user.role == "owner")
+                .all(|user| user.username != "new-owner")
         );
     }
 
@@ -9772,7 +9869,6 @@ segment0.ts
         assert!(owner_snapshot.search_history.is_empty());
         assert!(owner_snapshot.skip_configs.is_empty());
     }
-
 
     #[tokio::test]
     async fn profile_playrecords_route_proxies_profile_sync_mode() {
@@ -10809,7 +10905,7 @@ segment0.ts
                 .and_then(|value| value.get("ConfigSubscribtion"))
                 .and_then(|value| value.get("URL"))
                 .and_then(Value::as_str),
-            Some("https://remote.example/subscription")
+            Some("https://local.example/subscription")
         );
         assert_eq!(
             admin_payload
@@ -10827,10 +10923,10 @@ segment0.ts
                 .and_then(|value| value.get("UserConfig"))
                 .and_then(|value| value.get("Users"))
                 .and_then(Value::as_array)
-                .is_some_and(|users| users.iter().any(|user| {
-                    user.get("username").and_then(Value::as_str) == Some("remote-admin")
+                .is_some_and(|users| users.iter().all(|user| {
+                    user.get("username").and_then(Value::as_str) != Some("remote-admin")
                 })),
-            "expected remote admin user to be persisted locally"
+            "expected local user config to stay intact"
         );
         assert!(
             admin_payload
@@ -10838,11 +10934,12 @@ segment0.ts
                 .and_then(|value| value.get("ConfigFile"))
                 .and_then(Value::as_str)
                 .is_some_and(|config_file| {
-                    config_file.contains("remote-owner-secret")
+                    config_file.contains("local-owner-secret")
                         && config_file.contains(&upstream.base_url())
                         && config_file.contains("adminsettings")
+                        && !config_file.contains("remote-owner-secret")
                 }),
-            "expected remote config file plus persisted profile sync settings"
+            "expected local auth plus persisted profile sync settings in config file"
         );
 
         upstream.abort();
@@ -11201,6 +11298,18 @@ segment0.ts
                                 .and_then(Value::as_array)
                                 .map(Vec::len),
                             Some(1)
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("ConfigFile")),
+                            None
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("UserConfig")),
+                            None
                         );
 
                         Json(json!({
@@ -11582,7 +11691,7 @@ segment0.ts
                 .and_then(|value| value.get("ConfigSubscribtion"))
                 .and_then(|value| value.get("URL"))
                 .and_then(Value::as_str),
-            Some("https://remote.example/subscription")
+            Some("https://local.example/subscription")
         );
         assert_eq!(
             admin_payload
@@ -11600,10 +11709,10 @@ segment0.ts
                 .and_then(|value| value.get("UserConfig"))
                 .and_then(|value| value.get("Users"))
                 .and_then(Value::as_array)
-                .is_some_and(|users| users.iter().any(|user| {
-                    user.get("username").and_then(Value::as_str) == Some("remote-admin")
+                .is_some_and(|users| users.iter().all(|user| {
+                    user.get("username").and_then(Value::as_str) != Some("remote-admin")
                 })),
-            "expected remote admin user to be persisted locally"
+            "expected local user config to stay intact"
         );
         assert!(
             admin_payload
@@ -11611,11 +11720,12 @@ segment0.ts
                 .and_then(|value| value.get("ConfigFile"))
                 .and_then(Value::as_str)
                 .is_some_and(|config_file| {
-                    config_file.contains("remote-owner-secret")
+                    config_file.contains("local-owner-secret")
                         && config_file.contains(&upstream.base_url())
                         && config_file.contains("adminsettings")
+                        && !config_file.contains("remote-owner-secret")
                 }),
-            "expected remote config file plus persisted profile sync settings"
+            "expected local auth plus persisted profile sync settings in config file"
         );
 
         upstream.abort();

@@ -6,6 +6,7 @@ import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 
 export const runtime = 'nodejs';
+const LOCALSTORAGE_FALLBACK_OWNER_USERNAME = 'admin';
 
 const STORAGE_TYPE =
   (process.env.NEXT_PUBLIC_STORAGE_TYPE as
@@ -101,7 +102,8 @@ export async function POST(req: NextRequest) {
       if (!envPassword) {
         const response = NextResponse.json({
           ok: true,
-          username: process.env.USERNAME || 'owner',
+          username:
+            process.env.USERNAME || LOCALSTORAGE_FALLBACK_OWNER_USERNAME,
           role: 'owner',
         });
 
@@ -129,7 +131,7 @@ export async function POST(req: NextRequest) {
       }
 
       return buildAuthenticatedResponse(
-        process.env.USERNAME || 'owner',
+        process.env.USERNAME || LOCALSTORAGE_FALLBACK_OWNER_USERNAME,
         password,
         'owner',
         true

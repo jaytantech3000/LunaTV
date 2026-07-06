@@ -3,6 +3,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import type { AdminConfig } from '@/lib/admin.types';
+import {
+  type AdminSettingsSyncSnapshot,
+  applyAdminSettingsSyncSnapshot,
+} from '@/lib/admin-settings-sync';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { configSelfCheck, getConfig, setCachedConfig } from '@/lib/config';
 import { db } from '@/lib/db';
@@ -20,7 +24,7 @@ interface DesktopProfileSyncMergeRequestBody {
   targetUsername?: string;
   strategy?: DesktopProfileMergeStrategy;
   snapshot?: DesktopProfileSnapshot;
-  adminConfig?: AdminConfig;
+  adminConfig?: AdminSettingsSyncSnapshot;
 }
 
 function isSupportedStorageType(): boolean {
@@ -194,46 +198,48 @@ function normalizeSnapshot(
   return snapshot;
 }
 
-function normalizeAdminConfigSnapshot(
+function normalizeAdminSettingsSyncSnapshot(
   adminConfig: DesktopProfileSyncMergeRequestBody['adminConfig']
-): AdminConfig | null {
+): AdminSettingsSyncSnapshot | null {
   if (!adminConfig || !isObjectRecord(adminConfig)) {
     return null;
   }
 
-  return adminConfig;
+  if (
+    !isObjectRecord(adminConfig.SiteConfig) ||
+    !Array.isArray(adminConfig.SourceConfig) ||
+    !Array.isArray(adminConfig.CustomCategories) ||
+    !Array.isArray(adminConfig.LiveConfig)
+  ) {
+    return null;
+  }
+
+  if (
+    (adminConfig.AdFilterConfig !== undefined &&
+      !isObjectRecord(adminConfig.AdFilterConfig)) ||
+    (adminConfig.PlayerEnhancementConfig !== undefined &&
+      !isObjectRecord(adminConfig.PlayerEnhancementConfig))
+  ) {
+    return null;
+  }
+
+  return {
+    SiteConfig: adminConfig.SiteConfig,
+    SourceConfig: adminConfig.SourceConfig,
+    CustomCategories: adminConfig.CustomCategories,
+    LiveConfig: adminConfig.LiveConfig,
+    AdFilterConfig: adminConfig.AdFilterConfig,
+    PlayerEnhancementConfig: adminConfig.PlayerEnhancementConfig,
+  };
 }
 
 function mergeAdminPanelSnapshot(
   currentConfig: AdminConfig,
-  snapshot: AdminConfig,
-  operatorRole: 'owner' | 'admin'
+  snapshot: AdminSettingsSyncSnapshot
 ): AdminConfig {
-  return configSelfCheck({
-    ...currentConfig,
-    ConfigSubscribtion:
-      operatorRole === 'owner'
-        ? snapshot.ConfigSubscribtion || currentConfig.ConfigSubscribtion
-        : currentConfig.ConfigSubscribtion,
-    ConfigFile:
-      operatorRole === 'owner'
-        ? snapshot.ConfigFile || currentConfig.ConfigFile
-        : currentConfig.ConfigFile,
-    SiteConfig: snapshot.SiteConfig || currentConfig.SiteConfig,
-    SourceConfig: Array.isArray(snapshot.SourceConfig)
-      ? snapshot.SourceConfig
-      : currentConfig.SourceConfig,
-    CustomCategories: Array.isArray(snapshot.CustomCategories)
-      ? snapshot.CustomCategories
-      : currentConfig.CustomCategories,
-    LiveConfig: Array.isArray(snapshot.LiveConfig)
-      ? snapshot.LiveConfig
-      : currentConfig.LiveConfig,
-    AdFilterConfig: snapshot.AdFilterConfig || currentConfig.AdFilterConfig,
-    PlayerEnhancementConfig:
-      snapshot.PlayerEnhancementConfig || currentConfig.PlayerEnhancementConfig,
-    UserConfig: snapshot.UserConfig || currentConfig.UserConfig,
-  });
+  return configSelfCheck(
+    applyAdminSettingsSyncSnapshot(currentConfig, snapshot)
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -262,7 +268,9 @@ export async function POST(request: NextRequest) {
     const targetUsername = body.targetUsername?.trim();
     const strategy = body.strategy;
     const localSnapshot = normalizeSnapshot(body.snapshot);
-    const adminConfigSnapshot = normalizeAdminConfigSnapshot(body.adminConfig);
+    const adminConfigSnapshot = normalizeAdminSettingsSyncSnapshot(
+      body.adminConfig
+    );
 
     if (!targetUsername) {
       return NextResponse.json({ error: '缺少目标用户名' }, { status: 400 });
@@ -305,8 +313,7 @@ export async function POST(request: NextRequest) {
     if (adminConfigSnapshot) {
       const mergedAdminConfig = mergeAdminPanelSnapshot(
         config,
-        adminConfigSnapshot,
-        operatorRole
+        adminConfigSnapshot
       );
       await db.saveAdminConfig(mergedAdminConfig);
       await setCachedConfig(mergedAdminConfig);

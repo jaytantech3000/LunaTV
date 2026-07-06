@@ -6,27 +6,26 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
+    Json,
     extract::State,
     http::{Method, StatusCode},
     response::Response,
-    Json,
 };
 use moontv_profile::LocalProfileSnapshot;
 use moontv_sync::{
-    build_profile_sync_target_url, ProfileSyncError, ProfileSyncForwardRequest, ProfileSyncSession,
-    ProfileSyncSessionMutation, ProfileSyncStatusResponse,
+    ProfileSyncError, ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncSessionMutation,
+    ProfileSyncStatusResponse, build_profile_sync_target_url,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::{
-    DesktopAdminConfig,
-    download_runtime::DesktopDownloadResourceIndexRecord, no_store_json_response,
-    normalize_owned_string, persist_admin_config_file_with_subscription,
+    AppError, AppResult, AppState, DesktopAdminConfig, apply_admin_settings_to_config_file,
+    build_admin_settings_sync_snapshot, download_runtime::DesktopDownloadResourceIndexRecord,
+    no_store_json_response, normalize_owned_string, persist_admin_config_file_with_subscription,
     profile_sync::build_profile_sync_status_payload, read_json_file, require_owned_string,
-    sync_domains_include_adminsettings, validate_profile_sync_selected_domains, AppError,
-    AppResult, AppState,
+    sync_domains_include_adminsettings, validate_profile_sync_selected_domains,
 };
 
 const DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL: &str = "https://luna.hkcu.qzz.io";
@@ -447,8 +446,7 @@ pub(crate) async fn execute_profile_sync_onboarding(
     if should_sync_adminsettings && strategy == DesktopProfileSyncConflictStrategy::WebFirst {
         let remote_admin_config = fetch_remote_admin_config(&state, &remote_base_url).await?;
         ensure_remote_admin_role(&remote_admin_config.role)?;
-        let remote_admin_config =
-            decode_remote_admin_config_snapshot(remote_admin_config.config)?;
+        let remote_admin_config = decode_remote_admin_config_snapshot(remote_admin_config.config)?;
         apply_remote_admin_config_to_local_state(
             &state,
             &remote_base_url,
@@ -1067,7 +1065,16 @@ fn load_local_admin_config_snapshot(state: &AppState) -> AppResult<Value> {
         .load_admin_persistence()
         .map_err(|error| AppError::internal(error.to_string()))?;
 
-    serde_json::to_value(&persistence.config).map_err(|error| AppError::internal(error.to_string()))
+    let mut snapshot =
+        serde_json::to_value(build_admin_settings_sync_snapshot(&persistence.config))
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    let snapshot_object = snapshot
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("admin settings snapshot must be an object"))?;
+    snapshot_object.remove("ConfigSubscribtion");
+    snapshot_object.remove("ConfigFile");
+    snapshot_object.remove("UserConfig");
+    Ok(Value::Object(snapshot_object.clone()))
 }
 
 fn inspect_download_preview(
@@ -1234,20 +1241,36 @@ fn apply_remote_admin_config_to_local_state(
     state: &AppState,
     remote_base_url: &str,
     sync_domains: &[String],
-    mut remote_admin_config: DesktopAdminConfig,
+    remote_admin_config: DesktopAdminConfig,
 ) -> AppResult<()> {
     let mut persistence = state
         .load_admin_persistence()
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let next_config_file = apply_profile_sync_settings_to_config_file(
-        &remote_admin_config.config_file,
-        Some(remote_base_url),
-        Some(sync_domains),
+    let remote_admin_settings = build_admin_settings_sync_snapshot(&remote_admin_config);
+    let next_config_file = apply_admin_settings_to_config_file(
+        &persistence.config.config_file,
+        &remote_admin_settings,
     )
+    .and_then(|config_file| {
+        apply_profile_sync_settings_to_config_file(
+            &config_file,
+            Some(remote_base_url),
+            Some(sync_domains),
+        )
+    })
     .map_err(|error| AppError::internal(error.to_string()))?;
 
-    remote_admin_config.config_file = next_config_file.clone();
-    persistence.config = remote_admin_config;
+    persistence.config = DesktopAdminConfig {
+        config_subscribtion: persistence.config.config_subscribtion,
+        config_file: next_config_file.clone(),
+        user_config: persistence.config.user_config,
+        site_config: remote_admin_settings.site_config,
+        source_config: remote_admin_settings.source_config,
+        custom_categories: remote_admin_settings.custom_categories,
+        live_config: remote_admin_settings.live_config,
+        ad_filter_config: remote_admin_settings.ad_filter_config,
+        player_enhancement_config: remote_admin_settings.player_enhancement_config,
+    };
     persistence.profile_sync_api_base_url = Some(remote_base_url.to_string());
     persistence.profile_sync_sync_domains = sync_domains.to_vec();
 
@@ -1305,11 +1328,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        apply_profile_sync_api_base_url_to_config_file, plan_profile_sync_onboarding,
-        preview_onboarding_warnings, rebind_download_store_snapshot_owner,
         DesktopProfileSyncConflictStrategy, DesktopProfileSyncLocalAccountSummary,
         DesktopProfileSyncOnboardingPlan, DesktopProfileSyncOnboardingPlanItem,
-        DesktopProfileSyncRemoteAccountState,
+        DesktopProfileSyncRemoteAccountState, apply_profile_sync_api_base_url_to_config_file,
+        plan_profile_sync_onboarding, preview_onboarding_warnings,
+        rebind_download_store_snapshot_owner,
     };
 
     #[test]
