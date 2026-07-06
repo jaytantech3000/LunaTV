@@ -12,6 +12,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
+import { setAuthInfoInBrowser } from '@/lib/auth';
 import {
   type DesktopProfileSyncConflictStrategy,
   type DesktopProfileSyncManualSyncResponse,
@@ -45,6 +46,16 @@ const RUNTIME_REFRESH_COMPLETED_RESET_DELAY_MS = 1500;
 
 type RuntimeRefreshProgressPhase = 'refreshing' | 'completed';
 type SyncStrategyDialogMode = 'sync-now' | 'enable-sync';
+
+function normalizeProfileSyncRole(
+  role?: string | null
+): 'owner' | 'admin' | 'user' {
+  if (role === 'owner' || role === 'admin') {
+    return role;
+  }
+
+  return 'user';
+}
 
 function getErrorMessage(error: unknown): string {
   if (typeof error === 'string' && error.trim()) {
@@ -519,6 +530,12 @@ export default function DesktopProfileSyncOnboardingCard({
         tone: 'success',
         message: '同步已开启',
       });
+      setAuthInfoInBrowser({
+        username: nextResult.currentRemoteUsername.trim() || username.trim(),
+        role: normalizeProfileSyncRole(nextResult.currentRemoteRole),
+        password,
+        sessionMode: 'desktop-profile-sync',
+      });
       armDesktopDownloadOwnershipHandoff({
         previousOwnerUsername:
           nextResult.downloadRebind.previousOwnerUsername ?? undefined,
@@ -575,6 +592,9 @@ export default function DesktopProfileSyncOnboardingCard({
             }
       );
       onSyncSuccess?.(nextStatus);
+      if (!lastSyncError) {
+        requestDesktopRuntimeRefresh();
+      }
     } catch (error) {
       setSyncFeedback({
         tone: 'error',

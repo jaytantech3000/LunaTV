@@ -6,6 +6,7 @@ import {
   waitFor,
 } from '@testing-library/react';
 
+import { setAuthInfoInBrowser } from '@/lib/auth';
 import {
   executeDesktopProfileSyncOnboarding,
   previewDesktopProfileSyncOnboarding,
@@ -20,6 +21,10 @@ jest.mock('@/lib/desktop/profile-sync', () => ({
   executeDesktopProfileSyncOnboarding: jest.fn(),
   previewDesktopProfileSyncOnboarding: jest.fn(),
   syncDesktopProfileNow: jest.fn(),
+}));
+
+jest.mock('@/lib/auth', () => ({
+  setAuthInfoInBrowser: jest.fn(),
 }));
 
 jest.mock('@/lib/desktop/runtime-config', () => ({
@@ -41,6 +46,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
   const mockArmDesktopDownloadOwnershipHandoff = jest.mocked(
     armDesktopDownloadOwnershipHandoff
   );
+  const mockSetAuthInfoInBrowser = jest.mocked(setAuthInfoInBrowser);
   const mockRequestDesktopRuntimeRefresh = jest.mocked(
     requestDesktopRuntimeRefresh
   );
@@ -269,6 +275,12 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       previousOwnerUsername: 'local-owner',
       nextOwnerUsername: 'remote-owner',
     });
+    expect(mockSetAuthInfoInBrowser).toHaveBeenCalledWith({
+      username: 'remote-owner',
+      role: 'owner',
+      password: 'secret',
+      sessionMode: 'desktop-profile-sync',
+    });
     expect(mockRequestDesktopRuntimeRefresh).toHaveBeenCalledTimes(1);
     expect(await screen.findByText('已切换到 Web 帐号')).toBeInTheDocument();
     expect(screen.getByText('本次自动创建的帐号')).toBeInTheDocument();
@@ -344,6 +356,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       });
     });
 
+    expect(mockRequestDesktopRuntimeRefresh).toHaveBeenCalledTimes(1);
     expect(await screen.findByText('同步成功')).toBeInTheDocument();
   });
 
