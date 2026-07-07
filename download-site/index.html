@@ -2,10 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LunaTV Download Desk</title>
     <meta
       name="description"
@@ -29,21 +26,32 @@
             target="_blank"
             rel="noreferrer"
           ></a>
-          <div class="locale-switch" aria-label="Language switch">
+          <div class="hero__controls">
             <button
-              class="locale-switch__button"
+              class="theme-toggle"
               type="button"
-              data-locale-button="zh-CN"
+              data-theme-toggle
+              aria-label="Toggle theme"
+              aria-pressed="false"
             >
-              中文
+              <span class="theme-toggle__icon" aria-hidden="true"></span>
             </button>
-            <button
-              class="locale-switch__button"
-              type="button"
-              data-locale-button="en"
-            >
-              EN
-            </button>
+            <div class="locale-switch" aria-label="Language switch">
+              <button
+                class="locale-switch__button"
+                type="button"
+                data-locale-button="zh-CN"
+              >
+                中文
+              </button>
+              <button
+                class="locale-switch__button"
+                type="button"
+                data-locale-button="en"
+              >
+                EN
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -68,10 +76,7 @@
               <p data-copy="prereleaseSectionDescription"></p>
             </div>
           </div>
-          <div
-            class="release-section__list"
-            data-slot="prerelease-list"
-          ></div>
+          <div class="release-section__list" data-slot="prerelease-list"></div>
         </section>
       </main>
 

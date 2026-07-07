@@ -10,6 +10,8 @@
   typeof window !== 'undefined' ? window : globalThis,
   function createApi(globalObject) {
     const LOCALE_STORAGE_KEY = 'lunatv-download-site:locale';
+    const THEME_STORAGE_KEY = 'lunatv-download-site:theme';
+    const SYSTEM_DARK_THEME_QUERY = '(prefers-color-scheme: dark)';
     const DATA_URL = './data/releases.json';
 
     const COPY = {
@@ -44,6 +46,8 @@
         changeCompareOnlyHint:
           '当前 release 只记录了 compare 链接，可通过“完整对比”查看本次提交详情。',
         footerLabel: '最后同步',
+        switchToDarkTheme: '切换到暗夜主题',
+        switchToLightTheme: '切换到浅色主题',
       },
       en: {
         eyebrow: 'LunaTV Desktop Download Site',
@@ -77,6 +81,8 @@
         changeCompareOnlyHint:
           'This release only includes a compare link. Use “Full compare” to inspect the commit details.',
         footerLabel: 'Last synced',
+        switchToDarkTheme: 'Switch to dark theme',
+        switchToLightTheme: 'Switch to light theme',
       },
     };
 
@@ -110,6 +116,204 @@
       } catch (_) {
         return;
       }
+    }
+
+    function readStoredTheme() {
+      try {
+        const theme = globalObject.localStorage?.getItem(THEME_STORAGE_KEY);
+        return theme === 'dark' || theme === 'light' ? theme : null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function persistTheme(theme) {
+      try {
+        globalObject.localStorage?.setItem(THEME_STORAGE_KEY, theme);
+      } catch (_) {
+        return;
+      }
+    }
+
+    function resolveSystemTheme() {
+      if (typeof globalObject.matchMedia !== 'function') {
+        return 'light';
+      }
+
+      return globalObject.matchMedia(SYSTEM_DARK_THEME_QUERY).matches
+        ? 'dark'
+        : 'light';
+    }
+
+    function createVisitorPlatform(os, arch) {
+      return {
+        os: os || 'unknown',
+        arch: arch || 'unknown',
+      };
+    }
+
+    function resolveVisitorOs(platformDetails) {
+      const normalizedPlatformDetails = String(
+        platformDetails || ''
+      ).toLowerCase();
+      if (
+        !normalizedPlatformDetails ||
+        /(iphone|ipad|android)/.test(normalizedPlatformDetails)
+      ) {
+        return 'unknown';
+      }
+
+      if (/(mac|darwin|os x)/.test(normalizedPlatformDetails)) {
+        return 'macos';
+      }
+
+      if (/\bwin(?:32|64)?\b|\bwindows\b/.test(normalizedPlatformDetails)) {
+        return 'windows';
+      }
+
+      if (/(linux|x11)/.test(normalizedPlatformDetails)) {
+        return 'linux';
+      }
+
+      return 'unknown';
+    }
+
+    function resolveVisitorArchitecture(architectureDetails, bitness, os) {
+      const normalizedArchitectureDetails = String(
+        architectureDetails || ''
+      ).toLowerCase();
+      const normalizedBitness = String(bitness || '').toLowerCase();
+
+      if (/arm64|aarch64/.test(normalizedArchitectureDetails)) {
+        return 'arm64';
+      }
+
+      if (/\barm\b/.test(normalizedArchitectureDetails)) {
+        return normalizedBitness === '64' ? 'arm64' : 'arm';
+      }
+
+      if (/x86_64|amd64/.test(normalizedArchitectureDetails)) {
+        return 'x64';
+      }
+
+      if (
+        /\bx64\b/.test(normalizedArchitectureDetails) ||
+        (/\bx86\b/.test(normalizedArchitectureDetails) &&
+          normalizedBitness === '64')
+      ) {
+        return 'x64';
+      }
+
+      if (
+        os !== 'macos' &&
+        /(intel|wow64|win64)/.test(normalizedArchitectureDetails)
+      ) {
+        return 'x64';
+      }
+
+      return 'unknown';
+    }
+
+    function resolveVisitorPlatform(highEntropyValues) {
+      const primaryPlatformDetails = [
+        highEntropyValues?.platform,
+        globalObject.navigator?.userAgentData?.platform,
+        globalObject.navigator?.platform,
+      ].filter(Boolean);
+      const fallbackPlatformDetails = [
+        globalObject.navigator?.userAgent,
+      ].filter(Boolean);
+      let os = resolveVisitorOs(primaryPlatformDetails.join(' '));
+      if (os === 'unknown') {
+        os = resolveVisitorOs(fallbackPlatformDetails.join(' '));
+      }
+
+      const primaryArchitectureDetails = [
+        highEntropyValues?.architecture,
+        globalObject.navigator?.userAgentData?.architecture,
+        highEntropyValues?.model,
+      ].filter(Boolean);
+      const fallbackArchitectureDetails = [
+        globalObject.navigator?.platform,
+        globalObject.navigator?.userAgent,
+      ].filter(Boolean);
+      let arch = resolveVisitorArchitecture(
+        primaryArchitectureDetails.join(' '),
+        highEntropyValues?.bitness,
+        os
+      );
+      if (arch === 'unknown') {
+        arch = resolveVisitorArchitecture(
+          fallbackArchitectureDetails.join(' '),
+          highEntropyValues?.bitness,
+          os
+        );
+      }
+
+      return createVisitorPlatform(os, arch);
+    }
+
+    function visitorPlatformsEqual(leftPlatform, rightPlatform) {
+      return (
+        leftPlatform?.os === rightPlatform?.os &&
+        leftPlatform?.arch === rightPlatform?.arch
+      );
+    }
+
+    function assetMatchesArchitecture(haystack, platform) {
+      if (!platform || platform.arch === 'unknown') {
+        return platform?.os !== 'macos';
+      }
+
+      if (platform.arch === 'arm64') {
+        return /(^|[^a-z0-9])arm64([^a-z0-9]|$)|aarch64|apple silicon/.test(
+          haystack
+        );
+      }
+
+      if (platform.arch === 'x64') {
+        return /(^|[^a-z0-9])x64([^a-z0-9]|$)|x86_64|amd64|intel/.test(
+          haystack
+        );
+      }
+
+      return false;
+    }
+
+    function assetMatchesPlatform(asset, platform) {
+      if (!asset || !platform || platform.os === 'unknown') {
+        return false;
+      }
+
+      const fileName = String(asset.fileName || '').toLowerCase();
+      const platformLabel = String(asset.platformLabel || '').toLowerCase();
+      const haystack = `${platformLabel} ${fileName}`;
+
+      if (platform.os === 'windows') {
+        return (
+          /windows|\.exe|\.msi|setup/.test(haystack) &&
+          assetMatchesArchitecture(haystack, platform)
+        );
+      }
+
+      if (platform.os === 'macos') {
+        return (
+          /macos|osx|darwin|\.dmg|\.pkg|\.app\.tar\.gz/.test(haystack) &&
+          assetMatchesArchitecture(haystack, platform)
+        );
+      }
+
+      if (platform.os === 'linux') {
+        return (
+          (/linux|\.appimage|\.deb|\.rpm/.test(haystack) ||
+            (/\.tar\.gz/.test(fileName) &&
+              !/\.app\.tar\.gz/.test(fileName) &&
+              !/macos|osx|darwin/.test(haystack))) &&
+          assetMatchesArchitecture(haystack, platform)
+        );
+      }
+
+      return false;
     }
 
     function formatPublishedAt(value, locale) {
@@ -333,8 +537,14 @@
       );
     }
 
-    function createAssetItem(documentRef, asset, locale) {
+    function createAssetItem(documentRef, asset, locale, visitorPlatform) {
       const item = createElement(documentRef, 'li', 'asset-item');
+      const matchesVisitorPlatform = assetMatchesPlatform(
+        asset,
+        visitorPlatform
+      );
+      item.dataset.platformMatch = matchesVisitorPlatform ? 'true' : 'false';
+
       const meta = createElement(documentRef, 'div', 'asset-item__meta');
       const platform = createElement(
         documentRef,
@@ -342,6 +552,9 @@
         'asset-item__platform',
         asset.platformLabel
       );
+      platform.dataset.platformMatch = matchesVisitorPlatform
+        ? 'true'
+        : 'false';
       const fileName = createElement(
         documentRef,
         'span',
@@ -366,6 +579,7 @@
       link.href = asset.downloadUrl;
       link.target = '_blank';
       link.rel = 'noreferrer';
+      link.dataset.platformMatch = matchesVisitorPlatform ? 'true' : 'false';
       actions.append(size, link);
 
       item.append(meta, actions);
@@ -384,7 +598,7 @@
       });
     }
 
-    function createReleaseCard(documentRef, release, locale) {
+    function createReleaseCard(documentRef, release, locale, visitorPlatform) {
       const details = createElement(documentRef, 'details', 'release-card');
       const summary = createElement(
         documentRef,
@@ -479,7 +693,9 @@
       );
       const downloadsList = createElement(documentRef, 'ul', 'asset-list');
       release.assets.forEach((asset) => {
-        downloadsList.appendChild(createAssetItem(documentRef, asset, locale));
+        downloadsList.appendChild(
+          createAssetItem(documentRef, asset, locale, visitorPlatform)
+        );
       });
       downloadsPanel.append(downloadsHeading, downloadsList);
 
@@ -518,6 +734,7 @@
       slot,
       releases,
       locale,
+      visitorPlatform,
       emptyKey
     ) {
       slot.innerHTML = '';
@@ -535,19 +752,30 @@
       }
 
       releases.forEach((release) => {
-        slot.appendChild(createReleaseCard(documentRef, release, locale));
+        slot.appendChild(
+          createReleaseCard(documentRef, release, locale, visitorPlatform)
+        );
       });
     }
 
     function createDownloadSiteApp(documentRef) {
+      const storedTheme = readStoredTheme();
       const state = {
         locale: readStoredLocale(),
+        theme: storedTheme || resolveSystemTheme(),
+        themeSource: storedTheme ? 'user' : 'system',
+        visitorPlatform: resolveVisitorPlatform(),
         payload: {
           generatedAt: null,
           repository: 'jaytantech3000/LunaTV',
           releases: [],
         },
       };
+
+      function applyTheme() {
+        documentRef.documentElement.dataset.theme = state.theme;
+        documentRef.documentElement.style.colorScheme = state.theme;
+      }
 
       function applyCopy() {
         documentRef.documentElement.lang = state.locale;
@@ -583,6 +811,57 @@
             state.locale
           );
         }
+
+        const themeToggle = documentRef.querySelector('[data-theme-toggle]');
+        if (themeToggle) {
+          const nextThemeLabel =
+            state.theme === 'dark'
+              ? getCopy(state.locale, 'switchToLightTheme')
+              : getCopy(state.locale, 'switchToDarkTheme');
+          themeToggle.setAttribute('aria-label', nextThemeLabel);
+          themeToggle.setAttribute('title', nextThemeLabel);
+          themeToggle.setAttribute(
+            'aria-pressed',
+            state.theme === 'dark' ? 'true' : 'false'
+          );
+          themeToggle.setAttribute('data-theme-mode', state.theme);
+        }
+      }
+
+      async function hydrateVisitorPlatform() {
+        const userAgentData = globalObject.navigator?.userAgentData;
+        if (
+          !userAgentData ||
+          typeof userAgentData.getHighEntropyValues !== 'function'
+        ) {
+          return;
+        }
+
+        try {
+          const highEntropyValues = await userAgentData.getHighEntropyValues([
+            'architecture',
+            'bitness',
+            'model',
+            'platform',
+          ]);
+          const nextVisitorPlatform = resolveVisitorPlatform(highEntropyValues);
+          if (
+            visitorPlatformsEqual(state.visitorPlatform, nextVisitorPlatform)
+          ) {
+            return;
+          }
+
+          state.visitorPlatform = nextVisitorPlatform;
+
+          if (state.payload.releases.length > 0) {
+            render(state.payload);
+            return;
+          }
+
+          applyCopy();
+        } catch (_) {
+          return;
+        }
       }
 
       function render(payload) {
@@ -606,6 +885,7 @@
             releaseSlot,
             grouped.release,
             state.locale,
+            state.visitorPlatform,
             'emptyReleaseSection'
           );
         }
@@ -616,6 +896,7 @@
             prereleaseSlot,
             grouped.prerelease,
             state.locale,
+            state.visitorPlatform,
             'emptyPrereleaseSection'
           );
         }
@@ -625,6 +906,18 @@
           repoLink.href = `https://github.com/${state.payload.repository}/releases`;
         }
 
+        applyCopy();
+      }
+
+      function setTheme(nextTheme, source) {
+        state.theme = nextTheme === 'dark' ? 'dark' : 'light';
+        state.themeSource = source === 'system' ? 'system' : 'user';
+
+        if (state.themeSource === 'user') {
+          persistTheme(state.theme);
+        }
+
+        applyTheme();
         applyCopy();
       }
 
@@ -695,11 +988,40 @@
         });
       });
 
+      const themeToggle = documentRef.querySelector('[data-theme-toggle]');
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          setTheme(state.theme === 'dark' ? 'light' : 'dark', 'user');
+        });
+      }
+
+      if (typeof globalObject.matchMedia === 'function') {
+        const colorSchemeMediaQuery = globalObject.matchMedia(
+          SYSTEM_DARK_THEME_QUERY
+        );
+        const applySystemTheme = (event) => {
+          if (state.themeSource !== 'system') {
+            return;
+          }
+
+          setTheme(event.matches ? 'dark' : 'light', 'system');
+        };
+
+        if (typeof colorSchemeMediaQuery.addEventListener === 'function') {
+          colorSchemeMediaQuery.addEventListener('change', applySystemTheme);
+        } else if (typeof colorSchemeMediaQuery.addListener === 'function') {
+          colorSchemeMediaQuery.addListener(applySystemTheme);
+        }
+      }
+
+      hydrateVisitorPlatform();
+      applyTheme();
       applyCopy();
 
       return {
         render,
         setLocale,
+        setTheme,
         load,
       };
     }

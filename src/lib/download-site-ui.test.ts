@@ -43,8 +43,65 @@ const downloadSiteAppModule =
   require('../../download-site/assets/app.js') as DownloadSiteAppModule;
 
 describe('download site app', () => {
+  const originalMatchMedia = window.matchMedia;
+  const originalNavigatorPlatform = window.navigator.platform;
+  const originalNavigatorUserAgentData = window.navigator.userAgentData;
+
+  async function flushAsyncWork() {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  function renderDownloadSiteShell() {
+    document.body.innerHTML = `
+      <div id="download-site-app">
+        <a data-role="repo-link"></a>
+        <button
+          type="button"
+          data-theme-toggle
+          aria-label="Toggle theme"
+        ></button>
+        <button type="button" data-locale-button="zh-CN"></button>
+        <button type="button" data-locale-button="en"></button>
+        <div data-copy="releaseSectionTitle"></div>
+        <div data-copy="prereleaseSectionTitle"></div>
+        <div data-slot="release-list"></div>
+        <div data-slot="prerelease-list"></div>
+        <time data-role="generated-at"></time>
+      </div>
+    `;
+  }
+
   beforeEach(() => {
     window.localStorage.clear();
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
+    Object.defineProperty(window.navigator, 'platform', {
+      configurable: true,
+      value: originalNavigatorPlatform,
+    });
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      configurable: true,
+      value: originalNavigatorUserAgentData,
+    });
+  });
+
+  afterAll(() => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
+    Object.defineProperty(window.navigator, 'platform', {
+      configurable: true,
+      value: originalNavigatorPlatform,
+    });
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      configurable: true,
+      value: originalNavigatorUserAgentData,
+    });
   });
 
   it('renders release groups and switches UI locale', () => {
@@ -222,5 +279,208 @@ describe('download site app', () => {
     expect(
       document.querySelector('.release-card__change-compare')?.textContent
     ).toBe('完整对比');
+  });
+
+  it('follows dark system preference on first render and toggles theme persistently', () => {
+    renderDownloadSiteShell();
+
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: jest.fn().mockImplementation((query: string) => ({
+        matches: query === '(prefers-color-scheme: dark)',
+        media: query,
+        addEventListener: jest.fn(),
+        removeEventListener: jest.fn(),
+      })),
+    });
+
+    downloadSiteAppModule.createDownloadSiteApp(document);
+
+    expect(document.documentElement.dataset.theme).toBe('dark');
+
+    const toggle = document.querySelector(
+      '[data-theme-toggle]'
+    ) as HTMLButtonElement | null;
+    toggle?.click();
+
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(window.localStorage.getItem('lunatv-download-site:theme')).toBe(
+      'light'
+    );
+  });
+
+  it('highlights the matching Windows asset for Windows visitors', () => {
+    renderDownloadSiteShell();
+
+    Object.defineProperty(window.navigator, 'platform', {
+      configurable: true,
+      value: 'Win32',
+    });
+
+    const app = downloadSiteAppModule.createDownloadSiteApp(document);
+
+    app.render({
+      releases: [
+        {
+          tagName: 'desktop-v200.0.1',
+          version: '200.0.1',
+          name: 'LunaTV Desktop 200.0.1',
+          prerelease: false,
+          publishedAt: '2026-06-27T01:00:00Z',
+          htmlUrl: 'https://example.com/release',
+          notes: 'stable notes',
+          changeSummary: null,
+          assets: [
+            {
+              fileName: 'LunaTV.Desktop_200.0.1_windows-x64-setup.exe',
+              platformLabel: 'Windows x64',
+              downloadUrl: 'https://example.com/stable.exe',
+              size: 101,
+            },
+            {
+              fileName: 'LunaTV.Desktop_200.0.1_macos-arm64.dmg',
+              platformLabel: 'macOS Apple Silicon',
+              downloadUrl: 'https://example.com/stable.dmg',
+              size: 202,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      document.querySelector('.asset-item[data-platform-match="true"]')
+    ).toHaveTextContent('Windows x64');
+    expect(
+      document.querySelector('.asset-item__link[data-platform-match="true"]')
+    ).toHaveTextContent('Download');
+    expect(
+      document.querySelector('.asset-item[data-platform-match="true"]')
+    ).not.toHaveTextContent('macOS Apple Silicon');
+  });
+
+  it('highlights only Apple Silicon assets for arm64 macOS visitors', async () => {
+    renderDownloadSiteShell();
+    const getHighEntropyValuesMock = jest.fn().mockResolvedValue({
+      architecture: 'arm',
+      bitness: '64',
+    });
+
+    Object.defineProperty(window.navigator, 'platform', {
+      configurable: true,
+      value: 'MacIntel',
+    });
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      configurable: true,
+      value: {
+        platform: 'macOS',
+        getHighEntropyValues: getHighEntropyValuesMock,
+      },
+    });
+
+    const app = downloadSiteAppModule.createDownloadSiteApp(document);
+
+    app.render({
+      releases: [
+        {
+          tagName: 'desktop-v200.0.1-beta.38',
+          version: '200.0.1-beta.38',
+          name: 'LunaTV Desktop 200.0.1 Beta 38',
+          prerelease: true,
+          publishedAt: '2026-07-06T01:00:00Z',
+          htmlUrl: 'https://example.com/release',
+          notes: 'beta notes',
+          changeSummary: null,
+          assets: [
+            {
+              fileName: 'LunaTV.Desktop_200.0.1-beta.38_macos-arm64.dmg',
+              platformLabel: 'macOS Apple Silicon',
+              downloadUrl: 'https://example.com/apple.dmg',
+              size: 100,
+            },
+            {
+              fileName: 'LunaTV.Desktop_200.0.1-beta.38_macos-x64.dmg',
+              platformLabel: 'macOS Intel',
+              downloadUrl: 'https://example.com/intel.dmg',
+              size: 101,
+            },
+          ],
+        },
+      ],
+    });
+
+    await flushAsyncWork();
+    expect(getHighEntropyValuesMock).toHaveBeenCalled();
+
+    const matchedAssets = Array.from(
+      document.querySelectorAll('.asset-item[data-platform-match="true"]')
+    ).map((element) => element.textContent || '');
+
+    expect(matchedAssets).toHaveLength(1);
+    expect(matchedAssets[0]).toContain('macOS Apple Silicon');
+    expect(matchedAssets[0]).not.toContain('macOS Intel');
+  });
+
+  it('highlights only Intel assets for x64 macOS visitors', async () => {
+    renderDownloadSiteShell();
+    const getHighEntropyValuesMock = jest.fn().mockResolvedValue({
+      architecture: 'x86',
+      bitness: '64',
+    });
+
+    Object.defineProperty(window.navigator, 'platform', {
+      configurable: true,
+      value: 'MacIntel',
+    });
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      configurable: true,
+      value: {
+        platform: 'macOS',
+        getHighEntropyValues: getHighEntropyValuesMock,
+      },
+    });
+
+    const app = downloadSiteAppModule.createDownloadSiteApp(document);
+
+    app.render({
+      releases: [
+        {
+          tagName: 'desktop-v200.0.1-beta.38',
+          version: '200.0.1-beta.38',
+          name: 'LunaTV Desktop 200.0.1 Beta 38',
+          prerelease: true,
+          publishedAt: '2026-07-06T01:00:00Z',
+          htmlUrl: 'https://example.com/release',
+          notes: 'beta notes',
+          changeSummary: null,
+          assets: [
+            {
+              fileName: 'LunaTV.Desktop_200.0.1-beta.38_macos-arm64.dmg',
+              platformLabel: 'macOS Apple Silicon',
+              downloadUrl: 'https://example.com/apple.dmg',
+              size: 100,
+            },
+            {
+              fileName: 'LunaTV.Desktop_200.0.1-beta.38_macos-x64.dmg',
+              platformLabel: 'macOS Intel',
+              downloadUrl: 'https://example.com/intel.dmg',
+              size: 101,
+            },
+          ],
+        },
+      ],
+    });
+
+    await flushAsyncWork();
+    expect(getHighEntropyValuesMock).toHaveBeenCalled();
+
+    const matchedAssets = Array.from(
+      document.querySelectorAll('.asset-item[data-platform-match="true"]')
+    ).map((element) => element.textContent || '');
+
+    expect(matchedAssets).toHaveLength(1);
+    expect(matchedAssets[0]).toContain('macOS Intel');
+    expect(matchedAssets[0]).not.toContain('macOS Apple Silicon');
   });
 });
