@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-06T14:07:23.197Z",
+  "generatedAt": "2026-07-07T01:56:18.274Z",
   "repository": "jaytantech3000/LunaTV",
   "releases": [
     {
@@ -3732,16 +3732,24 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v100.1.3-prerelease.1...desktop-v200.0.0-beta.1",
-          "added": [],
+          "added": [
+            "desktop: adopt 200.x release line"
+          ],
           "changed": [],
-          "fixed": [],
+          "fixed": [
+            "ci: serialize updater manifest publishing"
+          ],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v100.1.3-prerelease.1...desktop-v200.0.0-beta.1",
-          "added": [],
+          "added": [
+            "桌面端：adopt 200.x 发布 line"
+          ],
           "changed": [],
-          "fixed": [],
+          "fixed": [
+            "ci：serialize updater manifest publishing"
+          ],
           "other": []
         }
       },

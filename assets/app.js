@@ -10,6 +10,8 @@
   typeof window !== 'undefined' ? window : globalThis,
   function createApi(globalObject) {
     const LOCALE_STORAGE_KEY = 'lunatv-download-site:locale';
+    const THEME_STORAGE_KEY = 'lunatv-download-site:theme';
+    const SYSTEM_DARK_THEME_QUERY = '(prefers-color-scheme: dark)';
     const DATA_URL = './data/releases.json';
 
     const COPY = {
@@ -44,6 +46,8 @@
         changeCompareOnlyHint:
           '当前 release 只记录了 compare 链接，可通过“完整对比”查看本次提交详情。',
         footerLabel: '最后同步',
+        switchToDarkTheme: '切换到暗夜主题',
+        switchToLightTheme: '切换到浅色主题',
       },
       en: {
         eyebrow: 'LunaTV Desktop Download Site',
@@ -77,6 +81,8 @@
         changeCompareOnlyHint:
           'This release only includes a compare link. Use “Full compare” to inspect the commit details.',
         footerLabel: 'Last synced',
+        switchToDarkTheme: 'Switch to dark theme',
+        switchToLightTheme: 'Switch to light theme',
       },
     };
 
@@ -110,6 +116,91 @@
       } catch (_) {
         return;
       }
+    }
+
+    function readStoredTheme() {
+      try {
+        const theme = globalObject.localStorage?.getItem(THEME_STORAGE_KEY);
+        return theme === 'dark' || theme === 'light' ? theme : null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function persistTheme(theme) {
+      try {
+        globalObject.localStorage?.setItem(THEME_STORAGE_KEY, theme);
+      } catch (_) {
+        return;
+      }
+    }
+
+    function resolveSystemTheme() {
+      if (typeof globalObject.matchMedia !== 'function') {
+        return 'light';
+      }
+
+      return globalObject.matchMedia(SYSTEM_DARK_THEME_QUERY).matches
+        ? 'dark'
+        : 'light';
+    }
+
+    function resolveVisitorPlatform() {
+      const platformDetails = [
+        globalObject.navigator?.userAgentData?.platform,
+        globalObject.navigator?.platform,
+        globalObject.navigator?.userAgent,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      if (!platformDetails || /(iphone|ipad|android)/.test(platformDetails)) {
+        return 'unknown';
+      }
+
+      if (/(win)/.test(platformDetails)) {
+        return 'windows';
+      }
+
+      if (/(mac|darwin|os x)/.test(platformDetails)) {
+        return 'macos';
+      }
+
+      if (/(linux|x11)/.test(platformDetails)) {
+        return 'linux';
+      }
+
+      return 'unknown';
+    }
+
+    function assetMatchesPlatform(asset, platform) {
+      if (!asset || platform === 'unknown') {
+        return false;
+      }
+
+      const fileName = String(asset.fileName || '').toLowerCase();
+      const platformLabel = String(asset.platformLabel || '').toLowerCase();
+      const haystack = `${platformLabel} ${fileName}`;
+
+      if (platform === 'windows') {
+        return /windows|\.exe|\.msi|setup/.test(haystack);
+      }
+
+      if (platform === 'macos') {
+        return /macos|osx|darwin|\.dmg|\.pkg|\.app\.tar\.gz/.test(haystack);
+      }
+
+      if (platform === 'linux') {
+        return (
+          /linux|\.appimage|\.deb|\.rpm/.test(haystack) ||
+          (/\.tar\.gz/.test(fileName) &&
+            !/\.app\.tar\.gz/.test(fileName) &&
+            !/macos|osx|darwin/.test(haystack))
+        );
+      }
+
+      return false;
     }
 
     function formatPublishedAt(value, locale) {
@@ -333,8 +424,14 @@
       );
     }
 
-    function createAssetItem(documentRef, asset, locale) {
+    function createAssetItem(documentRef, asset, locale, visitorPlatform) {
       const item = createElement(documentRef, 'li', 'asset-item');
+      const matchesVisitorPlatform = assetMatchesPlatform(
+        asset,
+        visitorPlatform
+      );
+      item.dataset.platformMatch = matchesVisitorPlatform ? 'true' : 'false';
+
       const meta = createElement(documentRef, 'div', 'asset-item__meta');
       const platform = createElement(
         documentRef,
@@ -342,6 +439,9 @@
         'asset-item__platform',
         asset.platformLabel
       );
+      platform.dataset.platformMatch = matchesVisitorPlatform
+        ? 'true'
+        : 'false';
       const fileName = createElement(
         documentRef,
         'span',
@@ -366,6 +466,7 @@
       link.href = asset.downloadUrl;
       link.target = '_blank';
       link.rel = 'noreferrer';
+      link.dataset.platformMatch = matchesVisitorPlatform ? 'true' : 'false';
       actions.append(size, link);
 
       item.append(meta, actions);
@@ -384,7 +485,7 @@
       });
     }
 
-    function createReleaseCard(documentRef, release, locale) {
+    function createReleaseCard(documentRef, release, locale, visitorPlatform) {
       const details = createElement(documentRef, 'details', 'release-card');
       const summary = createElement(
         documentRef,
@@ -479,7 +580,9 @@
       );
       const downloadsList = createElement(documentRef, 'ul', 'asset-list');
       release.assets.forEach((asset) => {
-        downloadsList.appendChild(createAssetItem(documentRef, asset, locale));
+        downloadsList.appendChild(
+          createAssetItem(documentRef, asset, locale, visitorPlatform)
+        );
       });
       downloadsPanel.append(downloadsHeading, downloadsList);
 
@@ -518,6 +621,7 @@
       slot,
       releases,
       locale,
+      visitorPlatform,
       emptyKey
     ) {
       slot.innerHTML = '';
@@ -535,19 +639,30 @@
       }
 
       releases.forEach((release) => {
-        slot.appendChild(createReleaseCard(documentRef, release, locale));
+        slot.appendChild(
+          createReleaseCard(documentRef, release, locale, visitorPlatform)
+        );
       });
     }
 
     function createDownloadSiteApp(documentRef) {
+      const storedTheme = readStoredTheme();
       const state = {
         locale: readStoredLocale(),
+        theme: storedTheme || resolveSystemTheme(),
+        themeSource: storedTheme ? 'user' : 'system',
+        visitorPlatform: resolveVisitorPlatform(),
         payload: {
           generatedAt: null,
           repository: 'jaytantech3000/LunaTV',
           releases: [],
         },
       };
+
+      function applyTheme() {
+        documentRef.documentElement.dataset.theme = state.theme;
+        documentRef.documentElement.style.colorScheme = state.theme;
+      }
 
       function applyCopy() {
         documentRef.documentElement.lang = state.locale;
@@ -583,6 +698,21 @@
             state.locale
           );
         }
+
+        const themeToggle = documentRef.querySelector('[data-theme-toggle]');
+        if (themeToggle) {
+          const nextThemeLabel =
+            state.theme === 'dark'
+              ? getCopy(state.locale, 'switchToLightTheme')
+              : getCopy(state.locale, 'switchToDarkTheme');
+          themeToggle.setAttribute('aria-label', nextThemeLabel);
+          themeToggle.setAttribute('title', nextThemeLabel);
+          themeToggle.setAttribute(
+            'aria-pressed',
+            state.theme === 'dark' ? 'true' : 'false'
+          );
+          themeToggle.setAttribute('data-theme-mode', state.theme);
+        }
       }
 
       function render(payload) {
@@ -606,6 +736,7 @@
             releaseSlot,
             grouped.release,
             state.locale,
+            state.visitorPlatform,
             'emptyReleaseSection'
           );
         }
@@ -616,6 +747,7 @@
             prereleaseSlot,
             grouped.prerelease,
             state.locale,
+            state.visitorPlatform,
             'emptyPrereleaseSection'
           );
         }
@@ -625,6 +757,18 @@
           repoLink.href = `https://github.com/${state.payload.repository}/releases`;
         }
 
+        applyCopy();
+      }
+
+      function setTheme(nextTheme, source) {
+        state.theme = nextTheme === 'dark' ? 'dark' : 'light';
+        state.themeSource = source === 'system' ? 'system' : 'user';
+
+        if (state.themeSource === 'user') {
+          persistTheme(state.theme);
+        }
+
+        applyTheme();
         applyCopy();
       }
 
@@ -695,11 +839,39 @@
         });
       });
 
+      const themeToggle = documentRef.querySelector('[data-theme-toggle]');
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          setTheme(state.theme === 'dark' ? 'light' : 'dark', 'user');
+        });
+      }
+
+      if (typeof globalObject.matchMedia === 'function') {
+        const colorSchemeMediaQuery = globalObject.matchMedia(
+          SYSTEM_DARK_THEME_QUERY
+        );
+        const applySystemTheme = (event) => {
+          if (state.themeSource !== 'system') {
+            return;
+          }
+
+          setTheme(event.matches ? 'dark' : 'light', 'system');
+        };
+
+        if (typeof colorSchemeMediaQuery.addEventListener === 'function') {
+          colorSchemeMediaQuery.addEventListener('change', applySystemTheme);
+        } else if (typeof colorSchemeMediaQuery.addListener === 'function') {
+          colorSchemeMediaQuery.addListener(applySystemTheme);
+        }
+      }
+
+      applyTheme();
       applyCopy();
 
       return {
         render,
         setLocale,
+        setTheme,
         load,
       };
     }
