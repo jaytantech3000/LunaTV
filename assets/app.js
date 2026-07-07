@@ -145,37 +145,143 @@
         : 'light';
     }
 
-    function resolveVisitorPlatform() {
-      const platformDetails = [
-        globalObject.navigator?.userAgentData?.platform,
-        globalObject.navigator?.platform,
-        globalObject.navigator?.userAgent,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
+    function createVisitorPlatform(os, arch) {
+      return {
+        os: os || 'unknown',
+        arch: arch || 'unknown',
+      };
+    }
 
-      if (!platformDetails || /(iphone|ipad|android)/.test(platformDetails)) {
+    function resolveVisitorOs(platformDetails) {
+      const normalizedPlatformDetails = String(
+        platformDetails || ''
+      ).toLowerCase();
+      if (
+        !normalizedPlatformDetails ||
+        /(iphone|ipad|android)/.test(normalizedPlatformDetails)
+      ) {
         return 'unknown';
       }
 
-      if (/(win)/.test(platformDetails)) {
-        return 'windows';
-      }
-
-      if (/(mac|darwin|os x)/.test(platformDetails)) {
+      if (/(mac|darwin|os x)/.test(normalizedPlatformDetails)) {
         return 'macos';
       }
 
-      if (/(linux|x11)/.test(platformDetails)) {
+      if (/\bwin(?:32|64)?\b|\bwindows\b/.test(normalizedPlatformDetails)) {
+        return 'windows';
+      }
+
+      if (/(linux|x11)/.test(normalizedPlatformDetails)) {
         return 'linux';
       }
 
       return 'unknown';
     }
 
+    function resolveVisitorArchitecture(architectureDetails, bitness, os) {
+      const normalizedArchitectureDetails = String(
+        architectureDetails || ''
+      ).toLowerCase();
+      const normalizedBitness = String(bitness || '').toLowerCase();
+
+      if (/arm64|aarch64/.test(normalizedArchitectureDetails)) {
+        return 'arm64';
+      }
+
+      if (/\barm\b/.test(normalizedArchitectureDetails)) {
+        return normalizedBitness === '64' ? 'arm64' : 'arm';
+      }
+
+      if (/x86_64|amd64/.test(normalizedArchitectureDetails)) {
+        return 'x64';
+      }
+
+      if (
+        /\bx64\b/.test(normalizedArchitectureDetails) ||
+        (/\bx86\b/.test(normalizedArchitectureDetails) &&
+          normalizedBitness === '64')
+      ) {
+        return 'x64';
+      }
+
+      if (
+        os !== 'macos' &&
+        /(intel|wow64|win64)/.test(normalizedArchitectureDetails)
+      ) {
+        return 'x64';
+      }
+
+      return 'unknown';
+    }
+
+    function resolveVisitorPlatform(highEntropyValues) {
+      const primaryPlatformDetails = [
+        highEntropyValues?.platform,
+        globalObject.navigator?.userAgentData?.platform,
+        globalObject.navigator?.platform,
+      ].filter(Boolean);
+      const fallbackPlatformDetails = [
+        globalObject.navigator?.userAgent,
+      ].filter(Boolean);
+      let os = resolveVisitorOs(primaryPlatformDetails.join(' '));
+      if (os === 'unknown') {
+        os = resolveVisitorOs(fallbackPlatformDetails.join(' '));
+      }
+
+      const primaryArchitectureDetails = [
+        highEntropyValues?.architecture,
+        globalObject.navigator?.userAgentData?.architecture,
+        highEntropyValues?.model,
+      ].filter(Boolean);
+      const fallbackArchitectureDetails = [
+        globalObject.navigator?.platform,
+        globalObject.navigator?.userAgent,
+      ].filter(Boolean);
+      let arch = resolveVisitorArchitecture(
+        primaryArchitectureDetails.join(' '),
+        highEntropyValues?.bitness,
+        os
+      );
+      if (arch === 'unknown') {
+        arch = resolveVisitorArchitecture(
+          fallbackArchitectureDetails.join(' '),
+          highEntropyValues?.bitness,
+          os
+        );
+      }
+
+      return createVisitorPlatform(os, arch);
+    }
+
+    function visitorPlatformsEqual(leftPlatform, rightPlatform) {
+      return (
+        leftPlatform?.os === rightPlatform?.os &&
+        leftPlatform?.arch === rightPlatform?.arch
+      );
+    }
+
+    function assetMatchesArchitecture(haystack, platform) {
+      if (!platform || platform.arch === 'unknown') {
+        return platform?.os !== 'macos';
+      }
+
+      if (platform.arch === 'arm64') {
+        return /(^|[^a-z0-9])arm64([^a-z0-9]|$)|aarch64|apple silicon/.test(
+          haystack
+        );
+      }
+
+      if (platform.arch === 'x64') {
+        return /(^|[^a-z0-9])x64([^a-z0-9]|$)|x86_64|amd64|intel/.test(
+          haystack
+        );
+      }
+
+      return false;
+    }
+
     function assetMatchesPlatform(asset, platform) {
-      if (!asset || platform === 'unknown') {
+      if (!asset || !platform || platform.os === 'unknown') {
         return false;
       }
 
@@ -183,20 +289,27 @@
       const platformLabel = String(asset.platformLabel || '').toLowerCase();
       const haystack = `${platformLabel} ${fileName}`;
 
-      if (platform === 'windows') {
-        return /windows|\.exe|\.msi|setup/.test(haystack);
-      }
-
-      if (platform === 'macos') {
-        return /macos|osx|darwin|\.dmg|\.pkg|\.app\.tar\.gz/.test(haystack);
-      }
-
-      if (platform === 'linux') {
+      if (platform.os === 'windows') {
         return (
-          /linux|\.appimage|\.deb|\.rpm/.test(haystack) ||
-          (/\.tar\.gz/.test(fileName) &&
-            !/\.app\.tar\.gz/.test(fileName) &&
-            !/macos|osx|darwin/.test(haystack))
+          /windows|\.exe|\.msi|setup/.test(haystack) &&
+          assetMatchesArchitecture(haystack, platform)
+        );
+      }
+
+      if (platform.os === 'macos') {
+        return (
+          /macos|osx|darwin|\.dmg|\.pkg|\.app\.tar\.gz/.test(haystack) &&
+          assetMatchesArchitecture(haystack, platform)
+        );
+      }
+
+      if (platform.os === 'linux') {
+        return (
+          (/linux|\.appimage|\.deb|\.rpm/.test(haystack) ||
+            (/\.tar\.gz/.test(fileName) &&
+              !/\.app\.tar\.gz/.test(fileName) &&
+              !/macos|osx|darwin/.test(haystack))) &&
+          assetMatchesArchitecture(haystack, platform)
         );
       }
 
@@ -715,6 +828,42 @@
         }
       }
 
+      async function hydrateVisitorPlatform() {
+        const userAgentData = globalObject.navigator?.userAgentData;
+        if (
+          !userAgentData ||
+          typeof userAgentData.getHighEntropyValues !== 'function'
+        ) {
+          return;
+        }
+
+        try {
+          const highEntropyValues = await userAgentData.getHighEntropyValues([
+            'architecture',
+            'bitness',
+            'model',
+            'platform',
+          ]);
+          const nextVisitorPlatform = resolveVisitorPlatform(highEntropyValues);
+          if (
+            visitorPlatformsEqual(state.visitorPlatform, nextVisitorPlatform)
+          ) {
+            return;
+          }
+
+          state.visitorPlatform = nextVisitorPlatform;
+
+          if (state.payload.releases.length > 0) {
+            render(state.payload);
+            return;
+          }
+
+          applyCopy();
+        } catch (_) {
+          return;
+        }
+      }
+
       function render(payload) {
         state.payload = {
           generatedAt: payload.generatedAt || null,
@@ -865,6 +1014,7 @@
         }
       }
 
+      hydrateVisitorPlatform();
       applyTheme();
       applyCopy();
 
