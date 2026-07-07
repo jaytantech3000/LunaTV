@@ -359,6 +359,42 @@ describe('desktop profile sync helpers', () => {
     expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
   });
 
+  it('keeps stored profile sync credentials during transient unauthenticated bootstrap fallback', () => {
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
+      username: 'cloud-owner',
+      role: 'owner',
+      password: 'secret',
+      sessionMode: 'desktop-profile-sync',
+    });
+
+    const result = applyDesktopProfileSyncStatus(
+      {
+        enabled: true,
+        reachable: true,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'redis',
+        profileMode: 'shared-multi-user',
+        error: null,
+        errorKind: null,
+        syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
+      },
+      {
+        preserveStoredCredentials: true,
+      }
+    );
+
+    expect(result).toEqual({
+      APP_TARGET: 'desktop',
+      PROFILE_SYNC_ENABLED: true,
+      PROFILE_SYNC_STORAGE_TYPE: 'redis',
+      PROFILE_SYNC_PROFILE_MODE: 'shared-multi-user',
+    });
+    expect(clearAuthInfoInBrowser).not.toHaveBeenCalled();
+    expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
+  });
+
   it('clears stale desktop profile sync auth when remote sync is disabled', () => {
     (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
       username: 'kid',

@@ -1,3 +1,4 @@
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { ensureDesktopAuthSession } from '@/lib/desktop/auth-session';
 import {
   applyDesktopProfileBootstrap,
@@ -23,6 +24,10 @@ jest.mock('@/lib/transport/api-client', () => ({
 
 jest.mock('@/lib/desktop/auth-session', () => ({
   ensureDesktopAuthSession: jest.fn(),
+}));
+
+jest.mock('@/lib/auth', () => ({
+  getAuthInfoFromBrowserCookie: jest.fn(),
 }));
 
 jest.mock('@/lib/desktop/profile-sync', () => ({
@@ -52,6 +57,7 @@ describe('desktop profile bootstrap helpers', () => {
     (getRuntimeConfig as jest.Mock).mockReturnValue({
       APP_TARGET: 'desktop',
     });
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue(null);
   });
 
   it('restores a saved desktop profile sync session before applying bootstrap state', async () => {
@@ -112,6 +118,114 @@ describe('desktop profile bootstrap helpers', () => {
     expect(apiFetch).toHaveBeenCalledTimes(2);
     expect(applyDesktopProfileSyncStatus).toHaveBeenCalledWith(
       restoredPayload.profileSync
+    );
+  });
+
+  it('preserves stored credentials when silent restore succeeds but bootstrap refresh falls back to the cached payload', async () => {
+    const initialPayload = {
+      appTarget: 'desktop',
+      runtime: {
+        siteName: 'Bootstrap LunaTV',
+        profileSyncEnabled: true,
+      },
+      profileSync: {
+        enabled: true,
+        reachable: true,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'redis',
+        profileMode: 'shared-multi-user',
+        error: null,
+        errorKind: null,
+        syncDomains: ['playrecords'],
+      },
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: true,
+        ownerPasswordConfigured: true,
+      },
+    };
+
+    (apiFetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue(initialPayload),
+      })
+      .mockRejectedValueOnce(new Error('refresh failed'));
+    (restoreDesktopProfileSyncSession as jest.Mock).mockResolvedValue(true);
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
+      username: 'cloud-owner',
+      role: 'owner',
+      password: 'secret',
+      sessionMode: 'desktop-profile-sync',
+    });
+
+    await expect(loadDesktopProfileBootstrapState()).resolves.toEqual({
+      payload: initialPayload,
+      localAuth: initialPayload.localAuth,
+    });
+
+    expect(applyDesktopProfileSyncStatus).toHaveBeenCalledWith(
+      initialPayload.profileSync,
+      {
+        preserveStoredCredentials: true,
+      }
+    );
+  });
+
+  it('preserves stored credentials when silent restore fails without clearing them', async () => {
+    const initialPayload = {
+      appTarget: 'desktop',
+      runtime: {
+        siteName: 'Bootstrap LunaTV',
+        profileSyncEnabled: true,
+      },
+      profileSync: {
+        enabled: true,
+        reachable: true,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'redis',
+        profileMode: 'shared-multi-user',
+        error: null,
+        errorKind: null,
+        syncDomains: ['playrecords'],
+      },
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: true,
+        ownerPasswordConfigured: true,
+      },
+    };
+
+    (apiFetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue(initialPayload),
+    });
+    (restoreDesktopProfileSyncSession as jest.Mock).mockResolvedValue(false);
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
+      username: 'cloud-owner',
+      role: 'owner',
+      password: 'secret',
+      sessionMode: 'desktop-profile-sync',
+    });
+
+    await expect(loadDesktopProfileBootstrapState()).resolves.toEqual({
+      payload: initialPayload,
+      localAuth: initialPayload.localAuth,
+    });
+
+    expect(applyDesktopProfileSyncStatus).toHaveBeenCalledWith(
+      initialPayload.profileSync,
+      {
+        preserveStoredCredentials: true,
+      }
     );
   });
 

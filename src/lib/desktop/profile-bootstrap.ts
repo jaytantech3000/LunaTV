@@ -1,8 +1,10 @@
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { AppRuntimeConfig, getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 
 import { ensureDesktopAuthSession } from './auth-session';
 import {
+  type ApplyDesktopProfileSyncStatusOptions,
   applyDesktopProfileSyncStatus,
   DesktopProfileSyncStatus,
   restoreDesktopProfileSyncSession,
@@ -86,6 +88,15 @@ function cacheDesktopProfileBootstrap(
   return payload;
 }
 
+function hasStoredDesktopProfileSyncCredentials(): boolean {
+  const authInfo = getAuthInfoFromBrowserCookie();
+  return Boolean(
+    authInfo?.sessionMode === 'desktop-profile-sync' &&
+      authInfo.username?.trim() &&
+      authInfo.password?.trim()
+  );
+}
+
 export async function getDesktopProfileBootstrap(
   options: {
     preferCachedPayload?: boolean;
@@ -119,32 +130,62 @@ export async function getDesktopProfileBootstrap(
 }
 
 export function applyDesktopProfileBootstrap(
-  payload: DesktopProfileBootstrapPayload
+  payload: DesktopProfileBootstrapPayload,
+  options: ApplyDesktopProfileSyncStatusOptions = {}
 ): AppRuntimeConfig {
   cacheDesktopProfileBootstrap(payload);
   applyDesktopRuntimePublicConfig(payload.runtime);
+  if (options.preserveStoredCredentials) {
+    return applyDesktopProfileSyncStatus(payload.profileSync, options);
+  }
+
   return applyDesktopProfileSyncStatus(payload.profileSync);
 }
 
 async function restoreDesktopProfileSyncBootstrapIfNeeded(
   payload: DesktopProfileBootstrapPayload
-): Promise<DesktopProfileBootstrapPayload> {
+): Promise<{
+  payload: DesktopProfileBootstrapPayload;
+  profileSyncOptions: ApplyDesktopProfileSyncStatusOptions;
+}> {
   if (!payload.profileSync.enabled || payload.profileSync.authenticated) {
-    return payload;
+    return {
+      payload,
+      profileSyncOptions: {},
+    };
   }
 
   const restored = await restoreDesktopProfileSyncSession();
+  const shouldPreserveStoredCredentials =
+    hasStoredDesktopProfileSyncCredentials();
 
   if (!restored) {
-    return payload;
+    return {
+      payload,
+      profileSyncOptions: shouldPreserveStoredCredentials
+        ? {
+            preserveStoredCredentials: true,
+          }
+        : {},
+    };
   }
 
   try {
-    return cacheDesktopProfileBootstrap(
-      await fetchDesktopProfileBootstrapPayload()
-    );
+    return {
+      payload: cacheDesktopProfileBootstrap(
+        await fetchDesktopProfileBootstrapPayload()
+      ),
+      profileSyncOptions: {},
+    };
   } catch {
-    return payload;
+    return {
+      payload,
+      profileSyncOptions: shouldPreserveStoredCredentials
+        ? {
+            preserveStoredCredentials: true,
+          }
+        : {},
+    };
   }
 }
 
@@ -161,11 +202,10 @@ export async function loadDesktopProfileBootstrapState(
     return null;
   }
 
-  const payload = await restoreDesktopProfileSyncBootstrapIfNeeded(
-    initialPayload
-  );
+  const { payload, profileSyncOptions } =
+    await restoreDesktopProfileSyncBootstrapIfNeeded(initialPayload);
 
-  applyDesktopProfileBootstrap(payload);
+  applyDesktopProfileBootstrap(payload, profileSyncOptions);
 
   if (payload.profileSync.enabled || options.localAuthMode === 'none') {
     return {

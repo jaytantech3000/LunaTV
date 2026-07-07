@@ -143,6 +143,10 @@ export type DesktopProfileSyncState =
   | 'connected'
   | 'ready';
 
+export interface ApplyDesktopProfileSyncStatusOptions {
+  preserveStoredCredentials?: boolean;
+}
+
 function normalizeRole(
   role?: DesktopProfileSyncStatus['role']
 ): 'owner' | 'admin' | 'user' {
@@ -151,6 +155,16 @@ function normalizeRole(
   }
 
   return 'user';
+}
+
+function hasStoredDesktopProfileSyncCredentials(
+  authInfo: ReturnType<typeof getAuthInfoFromBrowserCookie>
+): boolean {
+  return Boolean(
+    authInfo?.sessionMode === 'desktop-profile-sync' &&
+      authInfo.username?.trim() &&
+      authInfo.password?.trim()
+  );
 }
 
 function getStoredDesktopProfileSyncCredentials(): {
@@ -380,7 +394,8 @@ export async function readDesktopProfileSyncStatusState(): Promise<DesktopProfil
 }
 
 export function applyDesktopProfileSyncStatus(
-  status: DesktopProfileSyncStatus
+  status: DesktopProfileSyncStatus,
+  options: ApplyDesktopProfileSyncStatusOptions = {}
 ) {
   const currentAuthInfo = getAuthInfoFromBrowserCookie();
   const currentConfig = getRuntimeConfig();
@@ -417,7 +432,13 @@ export function applyDesktopProfileSyncStatus(
         password,
         sessionMode: 'desktop-profile-sync',
       });
-    } else {
+    } else if (
+      !(
+        options.preserveStoredCredentials === true &&
+        hasStoredDesktopProfileSyncCredentials(currentAuthInfo) &&
+        status.errorKind !== 'unauthorized'
+      )
+    ) {
       clearAuthInfoInBrowser();
     }
   } else if (
