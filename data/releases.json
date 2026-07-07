@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-07T01:56:18.274Z",
+  "generatedAt": "2026-07-07T02:12:10.615Z",
   "repository": "jaytantech3000/LunaTV",
   "releases": [
     {
@@ -3548,18 +3548,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.3...desktop-v200.0.0-beta.4",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: stabilize updater download flow"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.3...desktop-v200.0.0-beta.4",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：stabilize updater download flow"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3608,18 +3604,14 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.2...desktop-v200.0.0-beta.3",
-          "added": [
-            "desktop: quiet updater install"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.2...desktop-v200.0.0-beta.3",
-          "added": [
-            "桌面端：quiet updater install"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
@@ -3670,18 +3662,14 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.1...desktop-v200.0.0-beta.2",
-          "added": [
-            "desktop: add bilingual changelog panel"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.1...desktop-v200.0.0-beta.2",
-          "added": [
-            "桌面端：增加中英文 changelog panel"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
