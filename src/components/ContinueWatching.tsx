@@ -52,7 +52,6 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
     setLoading(false);
   }, []);
 
-  // 处理播放记录数据更新的函数
   const updatePlayRecords = (allRecords: Record<string, PlayRecord>) => {
     setPlayRecords(mapPlayRecords(allRecords));
   };
@@ -65,7 +64,6 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
           setLoading(true);
         }
 
-        // 从缓存或API获取所有播放记录
         const allRecords = await getAllPlayRecords();
         updatePlayRecords(allRecords);
       } catch (error) {
@@ -76,9 +74,8 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
       }
     };
 
-    fetchPlayRecords();
+    void fetchPlayRecords();
 
-    // 监听播放记录更新事件
     const unsubscribe = subscribeToDataUpdates(
       'playRecordsUpdated',
       (newRecords: Record<string, PlayRecord>) => {
@@ -106,32 +103,30 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
     [adultContentFilterEnabled, library, playRecords]
   );
 
-  // 如果没有播放记录，则不渲染组件
   if (!loading && visiblePlayRecords.length === 0) {
     return null;
   }
 
-  // 计算播放进度百分比
   const getProgress = (record: PlayRecord) => {
-    if (record.total_time === 0) return 0;
+    if (record.total_time === 0) {
+      return 0;
+    }
+
     return (record.play_time / record.total_time) * 100;
   };
 
-  // 从 key 中解析 source 和 id
   const parseKey = (key: string) => {
     const [source, id] = key.split('+');
     return { source, id };
   };
 
   return (
-    <section className={`mb-8 ${className || ''}`}>
-      <div className='mb-4 flex items-center justify-between'>
-        <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
-          继续观看
-        </h2>
-        {!loading && visiblePlayRecords.length > 0 && (
+    <section className={`mb-10 ${className || ''}`}>
+      <div className='mb-5 flex items-center justify-between'>
+        <h2 className='luna-section-title'>继续观看</h2>
+        {!loading && visiblePlayRecords.length > 0 ? (
           <button
-            className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+            className='luna-section-action'
             onClick={async () => {
               await clearAllPlayRecords();
               setPlayRecords([]);
@@ -139,30 +134,29 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
           >
             清空
           </button>
-        )}
+        ) : null}
       </div>
       <ScrollableRow>
         {loading
-          ? // 加载状态显示灰色占位数据
-            Array.from({ length: 6 }).map((_, index) => (
+          ? Array.from({ length: 6 }).map((_, index) => (
               <div
                 key={index}
-                className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                className='min-w-[96px] w-24 sm:min-w-[11rem] sm:w-[11rem]'
               >
-                <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
-                  <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
+                <div className='luna-skeleton-card relative aspect-[2/3] w-full animate-pulse'>
+                  <div className='absolute inset-0 bg-white/10 dark:bg-white/5' />
                 </div>
-                <div className='mt-2 h-4 bg-gray-200 rounded animate-pulse dark:bg-gray-800'></div>
-                <div className='mt-1 h-3 bg-gray-200 rounded animate-pulse dark:bg-gray-800'></div>
+                <div className='luna-skeleton-line mt-3 h-4 animate-pulse' />
+                <div className='luna-skeleton-line mt-2 h-3 w-3/4 animate-pulse' />
               </div>
             ))
-          : // 显示真实数据
-            visiblePlayRecords.map((record) => {
+          : visiblePlayRecords.map((record) => {
               const { source, id } = parseKey(record.key);
+
               return (
                 <div
                   key={record.key}
-                  className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'
+                  className='min-w-[96px] w-24 sm:min-w-[11rem] sm:w-[11rem]'
                 >
                   <VideoCard
                     id={id}
@@ -180,7 +174,7 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
                     from='playrecord'
                     onDelete={() =>
                       setPlayRecords((prev) =>
-                        prev.filter((r) => r.key !== record.key)
+                        prev.filter((item) => item.key !== record.key)
                       )
                     }
                     type={record.total_episodes > 1 ? 'tv' : ''}

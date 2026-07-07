@@ -14,8 +14,168 @@
 }
 
 :root {
-  --foreground-rgb: 255, 255, 255;
+  --foreground-rgb: 44, 49, 47;
   --music-player-safe-offset: 0px;
+  --luna-shell-bg: linear-gradient(180deg, #dbe0d6 0%, #d5d3bf 100%);
+  --luna-canvas-base: radial-gradient(
+      circle at 18% 18%,
+      rgba(250, 249, 240, 0.46),
+      transparent 26%
+    ),
+    radial-gradient(
+      circle at 80% 12%,
+      rgba(251, 252, 245, 0.32),
+      transparent 30%
+    ),
+    linear-gradient(180deg, #9faea8 0%, #bec9c1 28%, #d9ddd3 58%, #d6cca8 100%);
+  --luna-sky-glow: rgba(249, 251, 245, 0.46);
+  --luna-sky-glow-secondary: rgba(241, 247, 243, 0.18);
+  --luna-fog-color: rgba(253, 249, 238, 0.62);
+  --luna-terrain-primary: radial-gradient(
+      ellipse at 35% 25%,
+      rgba(195, 185, 136, 0.92),
+      transparent 54%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(172, 170, 132, 0.14),
+      rgba(171, 157, 106, 0.42)
+    );
+  --luna-terrain-secondary: radial-gradient(
+      ellipse at 45% 40%,
+      rgba(160, 174, 117, 0.86),
+      transparent 58%
+    ),
+    linear-gradient(180deg, rgba(169, 178, 132, 0.1), rgba(146, 151, 85, 0.52));
+  --luna-sidebar-fill: linear-gradient(
+    180deg,
+    rgba(191, 196, 180, 0.46),
+    rgba(184, 178, 153, 0.28)
+  );
+  --luna-sidebar-border: rgba(255, 251, 243, 0.34);
+  --luna-sidebar-shadow: 0 18px 52px rgba(93, 96, 78, 0.22);
+  --luna-nav-text: rgba(255, 252, 245, 0.92);
+  --luna-nav-muted: rgba(255, 250, 240, 0.78);
+  --luna-nav-active-bg: rgba(255, 251, 243, 0.3);
+  --luna-nav-active-border: rgba(255, 255, 255, 0.2);
+  --luna-seg-fill: rgba(243, 242, 236, 0.38);
+  --luna-seg-pill: rgba(255, 253, 247, 0.8);
+  --luna-seg-text: rgba(138, 137, 129, 0.95);
+  --luna-seg-text-active: rgba(113, 114, 106, 1);
+  --luna-heading: rgba(255, 251, 243, 0.98);
+  --luna-heading-muted: rgba(255, 249, 240, 0.82);
+  --luna-copy-strong: rgba(72, 77, 72, 0.92);
+  --luna-copy-muted: rgba(102, 106, 105, 0.88);
+  --luna-control-fill: rgba(255, 252, 247, 0.04);
+  --luna-control-border: rgba(255, 249, 240, 0.18);
+  --luna-control-color: rgba(255, 252, 247, 0.95);
+  --luna-popover-fill: linear-gradient(
+    180deg,
+    rgba(247, 245, 237, 0.88),
+    rgba(228, 223, 203, 0.78)
+  );
+  --luna-popover-border: rgba(255, 249, 239, 0.3);
+  --luna-popover-shadow: 0 24px 48px rgba(56, 58, 49, 0.18);
+  --luna-card-fill: linear-gradient(
+    180deg,
+    rgba(247, 245, 237, 0.18),
+    rgba(228, 223, 203, 0.16)
+  );
+  --luna-card-border: rgba(255, 249, 239, 0.28);
+  --luna-card-shadow: 0 18px 40px rgba(34, 36, 30, 0.14);
+  --luna-card-text: rgba(255, 250, 242, 0.96);
+  --luna-card-muted: rgba(255, 249, 242, 0.74);
+  --luna-meta-fill: rgba(255, 250, 242, 0.12);
+  --luna-meta-border: rgba(255, 252, 245, 0.16);
+  --luna-meta-text: rgba(255, 250, 242, 0.92);
+  --luna-overlay-start: rgba(19, 22, 18, 0.02);
+  --luna-overlay-end: rgba(21, 24, 21, 0.6);
+  --luna-accent: #45d08a;
+  --luna-accent-soft: rgba(74, 214, 138, 0.28);
+  --luna-score-from: #ee7fbe;
+  --luna-score-to: #cf5aa3;
+  --luna-rail-track: rgba(255, 255, 255, 0.42);
+  --luna-rail-thumb: rgba(255, 255, 255, 0.72);
+  --luna-rail-fill: rgba(143, 146, 126, 0.22);
+  --luna-rail-border: rgba(255, 255, 255, 0.22);
+}
+
+html.dark {
+  --foreground-rgb: 233, 241, 255;
+  --luna-shell-bg: linear-gradient(180deg, #020611 0%, #050b16 100%);
+  --luna-canvas-base: radial-gradient(
+      circle at 65% 8%,
+      rgba(83, 110, 193, 0.22),
+      transparent 26%
+    ),
+    radial-gradient(circle at 16% 26%, rgba(12, 106, 171, 0.2), transparent 24%),
+    linear-gradient(180deg, #010a18 0%, #020d23 28%, #06132d 63%, #081123 100%);
+  --luna-sky-glow: rgba(19, 104, 255, 0.2);
+  --luna-sky-glow-secondary: rgba(44, 158, 214, 0.18);
+  --luna-fog-color: rgba(10, 21, 53, 0.56);
+  --luna-terrain-primary: radial-gradient(
+      ellipse at 40% 40%,
+      rgba(4, 21, 70, 0.96),
+      transparent 56%
+    ),
+    linear-gradient(180deg, rgba(5, 24, 80, 0.14), rgba(4, 12, 36, 0.56));
+  --luna-terrain-secondary: radial-gradient(
+      ellipse at 45% 40%,
+      rgba(11, 34, 96, 0.9),
+      transparent 58%
+    ),
+    linear-gradient(180deg, rgba(6, 24, 72, 0.06), rgba(4, 15, 44, 0.6));
+  --luna-sidebar-fill: linear-gradient(
+    180deg,
+    rgba(2, 16, 52, 0.52),
+    rgba(1, 9, 30, 0.36)
+  );
+  --luna-sidebar-border: rgba(145, 187, 255, 0.16);
+  --luna-sidebar-shadow: 0 18px 54px rgba(0, 4, 14, 0.5);
+  --luna-nav-text: rgba(234, 241, 255, 0.94);
+  --luna-nav-muted: rgba(186, 202, 236, 0.8);
+  --luna-nav-active-bg: rgba(74, 145, 218, 0.16);
+  --luna-nav-active-border: rgba(99, 193, 255, 0.18);
+  --luna-seg-fill: rgba(126, 144, 207, 0.18);
+  --luna-seg-pill: rgba(192, 204, 244, 0.16);
+  --luna-seg-text: rgba(205, 214, 245, 0.74);
+  --luna-seg-text-active: rgba(250, 252, 255, 0.94);
+  --luna-heading: rgba(241, 247, 255, 0.98);
+  --luna-heading-muted: rgba(214, 226, 255, 0.82);
+  --luna-copy-strong: rgba(235, 242, 255, 0.94);
+  --luna-copy-muted: rgba(184, 196, 224, 0.86);
+  --luna-control-fill: rgba(8, 21, 55, 0.14);
+  --luna-control-border: rgba(162, 195, 255, 0.12);
+  --luna-control-color: rgba(233, 241, 255, 0.9);
+  --luna-popover-fill: linear-gradient(
+    180deg,
+    rgba(10, 20, 46, 0.92),
+    rgba(8, 15, 34, 0.88)
+  );
+  --luna-popover-border: rgba(160, 194, 255, 0.16);
+  --luna-popover-shadow: 0 24px 48px rgba(0, 4, 14, 0.48);
+  --luna-card-fill: linear-gradient(
+    180deg,
+    rgba(49, 73, 140, 0.18),
+    rgba(11, 22, 49, 0.36)
+  );
+  --luna-card-border: rgba(160, 194, 255, 0.16);
+  --luna-card-shadow: 0 18px 42px rgba(0, 6, 22, 0.36);
+  --luna-card-text: rgba(239, 245, 255, 0.96);
+  --luna-card-muted: rgba(212, 222, 246, 0.78);
+  --luna-meta-fill: rgba(11, 27, 61, 0.52);
+  --luna-meta-border: rgba(162, 195, 255, 0.16);
+  --luna-meta-text: rgba(227, 241, 255, 0.92);
+  --luna-overlay-start: rgba(5, 13, 31, 0.04);
+  --luna-overlay-end: rgba(4, 11, 29, 0.74);
+  --luna-accent: #27d482;
+  --luna-accent-soft: rgba(39, 212, 130, 0.32);
+  --luna-score-from: #d56dc0;
+  --luna-score-to: #a950a8;
+  --luna-rail-track: rgba(130, 161, 230, 0.46);
+  --luna-rail-thumb: rgba(200, 225, 255, 0.7);
+  --luna-rail-fill: rgba(32, 49, 93, 0.44);
+  --luna-rail-border: rgba(159, 196, 255, 0.18);
 }
 
 html,
@@ -28,19 +188,380 @@ body {
 
 body {
   color: rgb(var(--foreground-rgb));
+  background: var(--luna-shell-bg);
+  background-attachment: fixed;
+  transition: background 220ms ease, color 220ms ease;
 }
 
-html:not(.dark) body {
-  background: linear-gradient(
-    180deg,
-    #e6f3fb 0%,
-    #eaf3f7 18%,
-    #f7f7f3 38%,
-    #e9ecef 60%,
-    #dbe3ea 80%,
-    #d3dde6 100%
-  );
-  background-attachment: fixed;
+@layer components {
+  .luna-desktop-shell {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    background: var(--luna-shell-bg);
+  }
+
+  .luna-backdrop-sky,
+  .luna-backdrop-glow,
+  .luna-backdrop-glow-secondary,
+  .luna-backdrop-mist,
+  .luna-backdrop-hill-primary,
+  .luna-backdrop-hill-secondary,
+  .luna-backdrop-noise {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    transition: background 220ms ease, opacity 220ms ease, transform 220ms ease;
+  }
+
+  .luna-backdrop-sky {
+    background: var(--luna-canvas-base);
+  }
+
+  .luna-backdrop-glow {
+    background: radial-gradient(
+      circle at 72% 11%,
+      var(--luna-sky-glow),
+      transparent 34%
+    );
+  }
+
+  .luna-backdrop-glow-secondary {
+    background: radial-gradient(
+        circle at 56% 6%,
+        var(--luna-sky-glow-secondary),
+        transparent 32%
+      ),
+      radial-gradient(
+        circle at 84% 28%,
+        rgba(255, 255, 255, 0.06),
+        transparent 24%
+      );
+  }
+
+  .luna-backdrop-mist {
+    inset: auto 8vw 11vh 18vw;
+    height: 34vh;
+    background: radial-gradient(
+      ellipse at center,
+      var(--luna-fog-color),
+      transparent 74%
+    );
+    filter: blur(14px);
+  }
+
+  .luna-backdrop-hill-primary {
+    inset: auto -10vw -12vh 8vw;
+    height: 42vh;
+    border-radius: 52% 48% 0 0;
+    background: var(--luna-terrain-primary);
+    filter: blur(8px);
+    transform: rotate(-1deg);
+  }
+
+  .luna-backdrop-hill-secondary {
+    inset: auto 10vw -16vh 28vw;
+    height: 34vh;
+    border-radius: 56% 44% 0 0;
+    background: var(--luna-terrain-secondary);
+    filter: blur(10px);
+  }
+
+  .luna-backdrop-noise {
+    background-image: linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.04),
+        transparent 22%
+      ),
+      repeating-linear-gradient(
+        90deg,
+        transparent 0,
+        transparent 102px,
+        rgba(255, 255, 255, 0.01) 102px,
+        rgba(255, 255, 255, 0.01) 134px
+      );
+    opacity: 0.74;
+    mix-blend-mode: soft-light;
+  }
+
+  html.dark .luna-backdrop-noise {
+    opacity: 1;
+    background-image: radial-gradient(
+        circle at 50% 30%,
+        rgba(120, 187, 255, 0.05),
+        transparent 34%
+      ),
+      repeating-linear-gradient(
+        90deg,
+        transparent 0,
+        transparent 92px,
+        rgba(39, 113, 255, 0.11) 92px,
+        rgba(39, 113, 255, 0.11) 128px,
+        transparent 128px,
+        transparent 220px
+      );
+  }
+
+  .luna-toolbar-button {
+    display: inline-flex;
+    height: 2.625rem;
+    width: 2.625rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--luna-control-border);
+    border-radius: 999px;
+    background: var(--luna-control-fill);
+    color: var(--luna-control-color);
+    box-shadow: 0 16px 34px rgba(0, 0, 0, 0.08);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transition: transform 180ms ease, background 180ms ease, color 180ms ease,
+      border-color 180ms ease, box-shadow 180ms ease;
+  }
+
+  .luna-toolbar-button:hover {
+    transform: translateY(-1px);
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 18px 38px rgba(0, 0, 0, 0.12);
+  }
+
+  html.dark .luna-toolbar-button:hover {
+    background: rgba(105, 152, 221, 0.12);
+  }
+
+  .luna-popover {
+    border: 1px solid var(--luna-popover-border);
+    background: var(--luna-popover-fill);
+    box-shadow: var(--luna-popover-shadow);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+  }
+
+  .luna-sidebar-shell {
+    border: 1px solid var(--luna-sidebar-border);
+    background: var(--luna-sidebar-fill);
+    box-shadow: var(--luna-sidebar-shadow);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+  }
+
+  .luna-sidebar-wordmark {
+    color: var(--luna-heading);
+    font-family: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia,
+      serif;
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.045em;
+    text-shadow: 0 10px 28px rgba(0, 0, 0, 0.08);
+  }
+
+  html.dark .luna-sidebar-wordmark {
+    color: #58d8b3;
+  }
+
+  .luna-sidebar-toggle {
+    display: inline-flex;
+    height: 2.125rem;
+    width: 2.125rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.875rem;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--luna-nav-text);
+    transition: background 180ms ease, border-color 180ms ease,
+      transform 180ms ease;
+  }
+
+  .luna-sidebar-toggle:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .luna-sidebar-link {
+    display: flex;
+    min-height: 2.875rem;
+    align-items: center;
+    gap: 0.875rem;
+    border: 1px solid transparent;
+    border-radius: 1.125rem;
+    color: var(--luna-nav-muted);
+    transition: background 180ms ease, border-color 180ms ease, color 180ms ease,
+      transform 180ms ease;
+  }
+
+  .luna-sidebar-link:hover {
+    color: var(--luna-nav-text);
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .luna-sidebar-link[data-active='true'] {
+    color: var(--luna-nav-text);
+    background: var(--luna-nav-active-bg);
+    border-color: var(--luna-nav-active-border);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  }
+
+  .luna-sidebar-link[data-active='true'] .luna-sidebar-icon,
+  .luna-sidebar-link:hover .luna-sidebar-icon {
+    color: currentColor;
+    opacity: 1;
+  }
+
+  .luna-sidebar-icon {
+    color: currentColor;
+    opacity: 0.88;
+    transition: opacity 180ms ease, color 180ms ease;
+  }
+
+  .luna-section-title {
+    color: var(--luna-heading);
+    font-size: clamp(1.3rem, 1.1rem + 0.55vw, 1.75rem);
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    text-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  }
+
+  .luna-section-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--luna-heading-muted);
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    transition: opacity 180ms ease, transform 180ms ease;
+  }
+
+  .luna-section-action:hover {
+    opacity: 0.92;
+    transform: translateX(1px);
+  }
+
+  .luna-skeleton-card {
+    overflow: hidden;
+    border: 1px solid var(--luna-card-border);
+    border-radius: 1.5rem;
+    background: var(--luna-card-fill);
+    box-shadow: var(--luna-card-shadow);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+  }
+
+  .luna-skeleton-line {
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  html.dark .luna-skeleton-line {
+    background: rgba(160, 194, 255, 0.12);
+  }
+
+  .luna-empty-state {
+    border: 1px dashed var(--luna-card-border);
+    border-radius: 2rem;
+    background: var(--luna-card-fill);
+    color: var(--luna-heading-muted);
+    box-shadow: var(--luna-card-shadow);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+  }
+
+  .luna-card-shell {
+    border: 1px solid var(--luna-card-border);
+    background: var(--luna-card-fill);
+    box-shadow: var(--luna-card-shadow);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+  }
+
+  .luna-card-poster {
+    border: 1px solid var(--luna-card-border);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 18px 36px rgba(0, 0, 0, 0.16);
+  }
+
+  .luna-card-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--luna-control-border);
+    border-radius: 999px;
+    background: rgba(7, 13, 25, 0.18);
+    color: var(--luna-card-text);
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    transition: transform 180ms ease, background 180ms ease, color 180ms ease,
+      border-color 180ms ease;
+  }
+
+  .luna-card-action:hover {
+    transform: translateY(-1px);
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .luna-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.75rem;
+    padding: 0 0.75rem;
+    border: 1px solid var(--luna-meta-border);
+    border-radius: 0.875rem;
+    background: var(--luna-meta-fill);
+    color: var(--luna-meta-text);
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+
+  .luna-progress-track {
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  html.dark .luna-progress-track {
+    background: rgba(120, 151, 220, 0.16);
+  }
+
+  .luna-progress-fill {
+    background: linear-gradient(
+      90deg,
+      var(--luna-accent) 0%,
+      rgba(152, 255, 211, 0.8) 100%
+    );
+    box-shadow: 0 0 16px var(--luna-accent-soft);
+  }
+
+  .luna-scroll-track {
+    background: linear-gradient(
+      180deg,
+      transparent 0%,
+      var(--luna-rail-track) 16%,
+      transparent 100%
+    );
+  }
+
+  .luna-scroll-thumb {
+    background: linear-gradient(
+      180deg,
+      var(--luna-accent) 0%,
+      var(--luna-rail-thumb) 100%
+    );
+    box-shadow: 0 0 18px var(--luna-accent-soft);
+  }
+
+  .luna-scroll-arrow {
+    border: 1px solid var(--luna-rail-border);
+    background: var(--luna-rail-fill);
+    color: var(--luna-heading);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
 }
 
 /* 自定义滚动条样式 */

@@ -79,7 +79,7 @@ export default function GlobalRatingFilterControl() {
   };
 
   if (!hasHydrated) {
-    return <div className='h-10 w-10' />;
+    return <div className='h-[2.625rem] w-[2.625rem]' />;
   }
 
   return (
@@ -87,10 +87,8 @@ export default function GlobalRatingFilterControl() {
       <button
         type='button'
         onClick={() => setIsOpen((previousValue) => !previousValue)}
-        className={`relative flex h-10 w-10 items-center justify-center rounded-full p-2 transition-colors ${
-          enabled
-            ? 'bg-green-500/15 text-green-600 hover:bg-green-500/20 dark:bg-green-500/10 dark:text-green-400 dark:hover:bg-green-500/20'
-            : 'text-gray-600 hover:bg-gray-200/50 dark:text-gray-300 dark:hover:bg-gray-700/50'
+        className={`luna-toolbar-button relative ${
+          enabled ? 'text-[var(--luna-accent)]' : ''
         }`}
         aria-label='打开评分过滤器'
         aria-expanded={isOpen}
@@ -102,32 +100,32 @@ export default function GlobalRatingFilterControl() {
       </button>
 
       {isOpen ? (
-        <div className='absolute right-0 top-full z-[1200] mt-2 w-72 rounded-2xl border border-gray-200/70 bg-white/95 p-4 shadow-xl backdrop-blur-xl dark:border-gray-700/70 dark:bg-gray-900/95'>
+        <div className='luna-popover absolute right-0 top-full z-[1200] mt-3 w-72 rounded-[1.75rem] p-4 text-[var(--luna-copy-strong)]'>
           <div className='flex items-start justify-between gap-3'>
             <div>
-              <p className='text-sm font-semibold text-gray-900 dark:text-gray-100'>
+              <p className='text-sm font-semibold text-[var(--luna-copy-strong)]'>
                 评分过滤
               </p>
-              <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+              <p className='mt-1 text-xs text-[var(--luna-copy-muted)]'>
                 低于指定分数的已评分内容将被隐藏
               </p>
             </div>
             <button
               type='button'
               onClick={() => setIsOpen(false)}
-              className='rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300'
+              className='luna-toolbar-button h-8 w-8 p-1 text-[var(--luna-copy-muted)]'
               aria-label='关闭评分过滤器'
             >
               <X className='h-4 w-4' />
             </button>
           </div>
 
-          <div className='mt-4 flex items-center justify-between rounded-2xl bg-gray-50 px-3 py-3 dark:bg-gray-800/70'>
+          <div className='mt-4 flex items-center justify-between rounded-[1.25rem] border border-[var(--luna-card-border)] bg-[var(--luna-card-fill)] px-3 py-3'>
             <div>
-              <p className='text-sm font-medium text-gray-800 dark:text-gray-100'>
+              <p className='text-sm font-medium text-[var(--luna-copy-strong)]'>
                 启用过滤
               </p>
-              <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+              <p className='mt-1 text-xs text-[var(--luna-copy-muted)]'>
                 当前阈值 {formatRating(minimumRating)}
               </p>
             </div>
@@ -138,13 +136,13 @@ export default function GlobalRatingFilterControl() {
                 checked={enabled}
                 onChange={(event) => setEnabled(event.target.checked)}
               />
-              <span className='h-6 w-11 rounded-full bg-gray-300 transition-colors peer-checked:bg-green-500 dark:bg-gray-600' />
+              <span className='h-6 w-11 rounded-full bg-white/30 transition-colors peer-checked:bg-[var(--luna-accent)] dark:bg-white/10' />
               <span className='absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform peer-checked:translate-x-5' />
             </label>
           </div>
 
           <div className='mt-4 space-y-3'>
-            <div className='flex items-center justify-between text-xs text-gray-500 dark:text-gray-400'>
+            <div className='flex items-center justify-between text-xs text-[var(--luna-copy-muted)]'>
               <span>最低评分</span>
               <span>{formatRating(minimumRating)}</span>
             </div>
@@ -159,7 +157,7 @@ export default function GlobalRatingFilterControl() {
                 setMinimumRating(Number.parseFloat(event.target.value))
               }
               disabled={!enabled}
-              className='h-2 w-full cursor-pointer appearance-none rounded-full bg-gray-200 accent-green-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-700'
+              className='h-2 w-full cursor-pointer appearance-none rounded-full bg-white/20 accent-[var(--luna-accent)] disabled:cursor-not-allowed disabled:opacity-50'
             />
 
             <div className='flex items-center gap-2'>
@@ -178,13 +176,13 @@ export default function GlobalRatingFilterControl() {
                     applyDraftRating();
                   }
                 }}
-                className='h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700 outline-none transition-colors focus:border-green-400 focus:ring-2 focus:ring-green-400/30 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:disabled:bg-gray-800'
+                className='h-10 w-full rounded-[1rem] border border-[var(--luna-card-border)] bg-white/50 px-3 text-sm text-[var(--luna-copy-strong)] outline-none transition-colors focus:border-[var(--luna-accent)] focus:ring-2 focus:ring-[var(--luna-accent-soft)] disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-[var(--luna-copy-muted)] dark:bg-black/20'
               />
               <button
                 type='button'
                 onClick={applyDraftRating}
                 disabled={!enabled}
-                className='h-10 shrink-0 rounded-xl bg-green-500 px-3 text-sm font-medium text-white transition-colors hover:bg-green-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-gray-700'
+                className='h-10 shrink-0 rounded-[1rem] bg-[var(--luna-accent)] px-3 text-sm font-medium text-white transition-colors hover:opacity-95 disabled:cursor-not-allowed disabled:bg-white/20'
               >
                 应用
               </button>
@@ -202,8 +200,8 @@ export default function GlobalRatingFilterControl() {
                   disabled={!enabled}
                   className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                     minimumRating === presetRating
-                      ? 'bg-green-500 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
+                      ? 'bg-[var(--luna-accent)] text-white'
+                      : 'bg-white/20 text-[var(--luna-copy-muted)] hover:bg-white/30'
                   } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   {formatRating(presetRating)}
@@ -211,7 +209,7 @@ export default function GlobalRatingFilterControl() {
               ))}
             </div>
 
-            <p className='text-xs leading-5 text-gray-500 dark:text-gray-400'>
+            <p className='text-xs leading-5 text-[var(--luna-copy-muted)]'>
               未评分内容会保留显示，只过滤已存在评分的卡片。
             </p>
           </div>

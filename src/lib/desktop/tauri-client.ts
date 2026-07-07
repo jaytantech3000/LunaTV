@@ -1,6 +1,8 @@
 import type { DesktopReleaseHistoryItem } from '@/lib/desktop-release-history';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
+import { loadTauriCoreModule } from './tauri-runtime';
+
 export interface DesktopLocalServiceStatus {
   running: boolean;
   port: number;
@@ -116,7 +118,7 @@ async function invokeDesktopCommand<T>(
     );
   }
 
-  const { invoke } = await import('@tauri-apps/api/core');
+  const { invoke } = await loadTauriCoreModule();
   return invoke<T>(command, args);
 }
 
@@ -240,7 +242,7 @@ export async function installDesktopRelease(
     );
   }
 
-  const { Channel, invoke } = await import('@tauri-apps/api/core');
+  const { Channel, invoke } = await loadTauriCoreModule();
   const channel = new Channel<DesktopReleaseInstallEvent>();
 
   if (onEvent) {
@@ -267,7 +269,7 @@ export async function downloadDesktopRelease(
     );
   }
 
-  const { Channel, invoke } = await import('@tauri-apps/api/core');
+  const { Channel, invoke } = await loadTauriCoreModule();
   const channel = new Channel<DesktopReleaseInstallEvent>();
 
   if (onEvent) {
@@ -293,7 +295,7 @@ export async function downloadLatestDesktopUpdate(
     );
   }
 
-  const { Channel, invoke } = await import('@tauri-apps/api/core');
+  const { Channel, invoke } = await loadTauriCoreModule();
   const channel = new Channel<DesktopReleaseInstallEvent>();
 
   if (onEvent) {

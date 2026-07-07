@@ -1,6 +1,8 @@
 import { isDesktopTauriRuntimeAvailable } from '@/lib/desktop/tauri-client';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
+import { loadTauriWindowModule } from './tauri-runtime';
+
 type FullscreenDocument = Document & {
   webkitExitFullscreen?: () => Promise<void> | void;
   webkitFullscreenElement?: Element | null;
@@ -49,7 +51,7 @@ async function getDesktopWindowHandle() {
     return null;
   }
 
-  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  const { getCurrentWindow } = await loadTauriWindowModule();
   return getCurrentWindow();
 }
 

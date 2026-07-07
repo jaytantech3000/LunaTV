@@ -24,61 +24,73 @@ const CapsuleSwitch: React.FC<CapsuleSwitchProps> = ({
 
   const activeIndex = options.findIndex((opt) => opt.value === active);
 
-  // 更新指示器位置
   const updateIndicatorPosition = () => {
     if (
-      activeIndex >= 0 &&
-      buttonRefs.current[activeIndex] &&
-      containerRef.current
+      activeIndex < 0 ||
+      !buttonRefs.current[activeIndex] ||
+      !containerRef.current
     ) {
-      const button = buttonRefs.current[activeIndex];
-      const container = containerRef.current;
-      if (button && container) {
-        const buttonRect = button.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
-
-        if (buttonRect.width > 0) {
-          setIndicatorStyle({
-            left: buttonRect.left - containerRect.left,
-            width: buttonRect.width,
-          });
-        }
-      }
+      return;
     }
+
+    const button = buttonRefs.current[activeIndex];
+    const container = containerRef.current;
+    if (!button || !container) {
+      return;
+    }
+
+    const buttonRect = button.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    if (buttonRect.width <= 0) {
+      return;
+    }
+
+    setIndicatorStyle({
+      left: buttonRect.left - containerRect.left,
+      width: buttonRect.width,
+    });
   };
 
-  // 组件挂载时立即计算初始位置
   useEffect(() => {
-    const timeoutId = setTimeout(updateIndicatorPosition, 0);
-    return () => clearTimeout(timeoutId);
-  }, []);
+    const timeoutId = window.setTimeout(updateIndicatorPosition, 0);
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && containerRef.current
+        ? new ResizeObserver(updateIndicatorPosition)
+        : null;
 
-  // 监听选中项变化
-  useEffect(() => {
-    const timeoutId = setTimeout(updateIndicatorPosition, 0);
-    return () => clearTimeout(timeoutId);
-  }, [activeIndex]);
+    if (resizeObserver && containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
+    window.addEventListener('resize', updateIndicatorPosition);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener('resize', updateIndicatorPosition);
+      resizeObserver?.disconnect();
+    };
+  }, [activeIndex, options.length]);
 
   return (
     <div
       ref={containerRef}
-      className={`relative inline-flex bg-gray-300/80 rounded-full p-1 dark:bg-gray-700 ${
+      className={`relative inline-flex rounded-full border border-white/10 bg-[var(--luna-seg-fill)] p-1.5 shadow-[0_18px_38px_rgba(0,0,0,0.12)] backdrop-blur-2xl ${
         className || ''
       }`}
     >
-      {/* 滑动的白色背景指示器 */}
-      {indicatorStyle.width > 0 && (
+      {indicatorStyle.width > 0 ? (
         <div
-          className='absolute top-1 bottom-1 bg-white dark:bg-gray-500 rounded-full shadow-sm transition-all duration-300 ease-out'
+          className='absolute bottom-1.5 top-1.5 rounded-full bg-[var(--luna-seg-pill)] shadow-[inset_0_1px_0_rgba(255,255,255,0.26),0_10px_22px_rgba(0,0,0,0.08)] transition-all duration-200 ease-out'
           style={{
             left: `${indicatorStyle.left}px`,
             width: `${indicatorStyle.width}px`,
           }}
         />
-      )}
+      ) : null}
 
       {options.map((opt, index) => {
         const isActive = active === opt.value;
+
         return (
           <button
             key={opt.value}
@@ -86,10 +98,10 @@ const CapsuleSwitch: React.FC<CapsuleSwitchProps> = ({
               buttonRefs.current[index] = el;
             }}
             onClick={() => onChange(opt.value)}
-            className={`relative z-10 w-16 px-3 py-1 text-xs sm:w-20 sm:py-2 sm:text-sm rounded-full font-medium transition-all duration-200 cursor-pointer ${
+            className={`relative z-10 min-w-[4.75rem] rounded-full px-5 py-2.5 text-sm font-semibold tracking-[0.01em] transition-colors duration-200 sm:min-w-[5.5rem] ${
               isActive
-                ? 'text-gray-900 dark:text-gray-100'
-                : 'text-gray-700 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100'
+                ? 'text-[var(--luna-seg-text-active)]'
+                : 'text-[var(--luna-seg-text)] hover:text-[var(--luna-seg-text-active)]'
             }`}
           >
             {opt.label}

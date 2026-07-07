@@ -1,0 +1,34 @@
+export interface TauriChannel<T> {
+  onmessage?: ((message: T) => void) | null;
+}
+
+export interface TauriCoreModule {
+  Channel: new <T>() => TauriChannel<T>;
+  invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+}
+
+export interface TauriWindowHandle {
+  isFullscreen: () => Promise<boolean>;
+  onResized: (listener: () => void) => Promise<() => void>;
+  setFullscreen: (fullscreen: boolean) => Promise<void>;
+  setSimpleFullscreen: (fullscreen: boolean) => Promise<void>;
+}
+
+export interface TauriWindowModule {
+  getCurrentWindow: () => TauriWindowHandle;
+}
+
+const importTauriModule = new Function(
+  'modulePath',
+  'return import(modulePath);'
+) as (modulePath: string) => Promise<unknown>;
+
+export async function loadTauriCoreModule(): Promise<TauriCoreModule> {
+  return importTauriModule('@tauri-apps/api/core') as Promise<TauriCoreModule>;
+}
+
+export async function loadTauriWindowModule(): Promise<TauriWindowModule> {
+  return importTauriModule(
+    '@tauri-apps/api/window'
+  ) as Promise<TauriWindowModule>;
+}

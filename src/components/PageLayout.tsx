@@ -16,20 +16,33 @@ interface PageLayoutProps {
 }
 
 const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
+  const showBackButton = ['/play', '/live'].includes(activePath);
+
   return (
     <NavigationFeedbackProvider>
-      <div className='w-full min-h-screen'>
+      <div className='luna-desktop-shell w-full min-h-screen overflow-x-hidden'>
         <DownloadSessionSync />
         <DesktopDownloadStoreSync />
         <FollowUpdatesSync />
 
         {/* 移动端头部 */}
-        <MobileHeader
-          showBackButton={['/play', '/live'].includes(activePath)}
-        />
+        <MobileHeader showBackButton={showBackButton} />
+
+        <div
+          aria-hidden='true'
+          className='pointer-events-none absolute inset-0 hidden md:block'
+        >
+          <div className='luna-backdrop-sky' />
+          <div className='luna-backdrop-glow' />
+          <div className='luna-backdrop-glow-secondary' />
+          <div className='luna-backdrop-mist' />
+          <div className='luna-backdrop-hill-primary' />
+          <div className='luna-backdrop-hill-secondary' />
+          <div className='luna-backdrop-noise' />
+        </div>
 
         {/* 主要布局容器 */}
-        <div className='flex md:grid md:grid-cols-[auto_1fr] w-full min-h-screen md:min-h-auto'>
+        <div className='relative z-10 flex w-full md:grid md:min-h-screen md:grid-cols-[auto_1fr]'>
           {/* 侧边栏 - 桌面端显示，移动端隐藏 */}
           <div className='hidden md:block'>
             <Sidebar activePath={activePath} />
@@ -37,16 +50,19 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
 
           {/* 主内容区域 */}
           <div className='min-w-0 flex-1 transition-all duration-300'>
-            <div className='hidden md:flex items-center justify-between px-4 pt-2 sm:px-6 lg:px-8'>
-              <div className='flex min-h-10 items-center'>
-                {['/play', '/live'].includes(activePath) ? (
+            <div className='hidden md:flex items-center justify-between px-7 pt-6 lg:px-10'>
+              <div className='flex min-h-[2.625rem] items-center'>
+                {showBackButton ? (
                   <BackButton />
                 ) : (
-                  <div aria-hidden='true' className='h-10 w-10' />
+                  <div
+                    aria-hidden='true'
+                    className='h-[2.625rem] w-[2.625rem]'
+                  />
                 )}
               </div>
 
-              <div className='flex items-center gap-2'>
+              <div className='flex items-center gap-3'>
                 <ThemeToggle />
                 <GlobalRatingFilterControl />
                 <UserMenu />
@@ -55,7 +71,7 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
 
             {/* 主内容 */}
             <main
-              className='flex-1 md:min-h-0 mb-14 mt-12 md:mb-0 md:mt-0'
+              className='relative flex-1 mb-14 mt-12 md:mt-0 md:min-h-0'
               style={{
                 paddingBottom:
                   'calc(3.5rem + var(--music-player-safe-offset, 0px) + env(safe-area-inset-bottom))',

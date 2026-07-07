@@ -1215,14 +1215,21 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       effectivePlaybackMode === 'offline'
         ? 'border-emerald-500/60 text-emerald-600 dark:border-emerald-400/60 dark:text-emerald-300'
         : 'border-sky-500/50 text-sky-600 dark:border-sky-400/50 dark:text-sky-300';
+    const usesGlassShell = from === 'playrecord' || from === 'favorite';
+    const cardShellClassName = usesGlassShell
+      ? 'luna-card-shell rounded-[1.65rem] p-2 pb-4'
+      : '';
+    const posterRadiusClassName = usesGlassShell
+      ? 'rounded-[1.2rem]'
+      : 'rounded-[1.35rem]';
 
     return (
       <>
         <div
-          className={`group relative w-full rounded-lg bg-transparent cursor-pointer transition-all duration-300 ease-in-out ${
+          className={`group relative w-full cursor-pointer transition-all duration-200 ease-out ${cardShellClassName} ${
             isNavigating
-              ? 'scale-[1.02] z-[500]'
-              : 'hover:scale-[1.05] hover:z-[500] active:scale-[1.01]'
+              ? 'z-[500] -translate-y-0.5'
+              : 'hover:z-[500] hover:-translate-y-1 active:translate-y-0'
           }`}
           aria-busy={isNavigating}
           onClick={handleClick}
@@ -1261,9 +1268,9 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         >
           {/* 海报容器 */}
           <div
-            className={`relative aspect-[2/3] overflow-hidden rounded-lg ${
+            className={`luna-card-poster relative aspect-[2/3] overflow-hidden ${posterRadiusClassName} ${
               origin === 'live'
-                ? 'ring-1 ring-gray-300/80 dark:ring-gray-600/80'
+                ? 'ring-1 ring-white/20 dark:ring-sky-200/15'
                 : ''
             }`}
             style={
@@ -1318,6 +1325,8 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               }}
             />
 
+            <div className='pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.08),transparent_18%),linear-gradient(180deg,transparent_58%,rgba(0,0,0,0.18)_100%)]' />
+
             {isNavigating && (
               <div className='absolute inset-0 z-20 flex items-center justify-center bg-black/45 backdrop-blur-[1px]'>
                 <div className='inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-black/75 px-3 py-2 text-xs font-medium text-white shadow-xl shadow-black/30'>
@@ -1329,10 +1338,10 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
 
             {/* 悬浮遮罩 */}
             <div
-              className={`absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent transition-opacity duration-300 ease-in-out ${
+              className={`absolute inset-0 bg-[linear-gradient(180deg,var(--luna-overlay-start)_0%,transparent_34%,var(--luna-overlay-end)_100%)] transition-opacity duration-200 ease-out ${
                 isNavigating
                   ? 'opacity-100'
-                  : 'opacity-0 group-hover:opacity-100'
+                  : 'opacity-70 group-hover:opacity-100'
               }`}
               style={
                 {
@@ -1351,7 +1360,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
             {config.showPlayButton && (
               <div
                 data-button='true'
-                className='absolute inset-0 flex items-center justify-center opacity-0 transition-all duration-300 ease-in-out delay-75 group-hover:opacity-100 group-hover:scale-100'
+                className='absolute inset-0 flex items-center justify-center opacity-0 transition-all duration-200 ease-out delay-75 group-hover:opacity-100'
                 style={
                   {
                     WebkitUserSelect: 'none',
@@ -1364,22 +1373,24 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                   return false;
                 }}
               >
-                <PlayCircleIcon
-                  size={50}
-                  strokeWidth={0.8}
-                  className='text-white fill-transparent transition-all duration-300 ease-out hover:fill-green-500 hover:scale-[1.1]'
-                  style={
-                    {
-                      WebkitUserSelect: 'none',
-                      userSelect: 'none',
-                      WebkitTouchCallout: 'none',
-                    } as React.CSSProperties
-                  }
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    return false;
-                  }}
-                />
+                <div className='luna-card-action flex h-14 w-14 items-center justify-center rounded-full'>
+                  <PlayCircleIcon
+                    size={34}
+                    strokeWidth={1.05}
+                    className='fill-transparent text-[var(--luna-card-text)] transition-transform duration-200 ease-out group-hover:scale-[1.03]'
+                    style={
+                      {
+                        WebkitUserSelect: 'none',
+                        userSelect: 'none',
+                        WebkitTouchCallout: 'none',
+                      } as React.CSSProperties
+                    }
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      return false;
+                    }}
+                  />
+                </div>
               </div>
             )}
 
@@ -1387,7 +1398,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
             {(config.showHeart || config.showCheckCircle) && (
               <div
                 data-button='true'
-                className='absolute bottom-3 right-3 flex gap-3 opacity-0 translate-y-2 transition-all duration-300 ease-in-out sm:group-hover:opacity-100 sm:group-hover:translate-y-0'
+                className='absolute bottom-3 right-3 flex gap-2 opacity-0 translate-y-2 transition-all duration-200 ease-out sm:group-hover:translate-y-0 sm:group-hover:opacity-100'
                 style={
                   {
                     WebkitUserSelect: 'none',
@@ -1401,44 +1412,34 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                 }}
               >
                 {config.showCheckCircle && (
-                  <Trash2
+                  <button
+                    type='button'
                     onClick={handleDeleteRecord}
-                    size={20}
-                    className='text-white transition-all duration-300 ease-out hover:stroke-red-500 hover:scale-[1.1]'
-                    style={
-                      {
-                        WebkitUserSelect: 'none',
-                        userSelect: 'none',
-                        WebkitTouchCallout: 'none',
-                      } as React.CSSProperties
-                    }
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      return false;
-                    }}
-                  />
+                    className='luna-card-action flex h-8 w-8 items-center justify-center rounded-full'
+                    aria-label='删除记录'
+                  >
+                    <Trash2
+                      size={16}
+                      className='text-[var(--luna-card-text)]'
+                    />
+                  </button>
                 )}
                 {config.showHeart && from !== 'search' && (
-                  <Heart
+                  <button
+                    type='button'
                     onClick={handleToggleFavorite}
-                    size={20}
-                    className={`transition-all duration-300 ease-out ${
-                      favorited
-                        ? 'fill-red-600 stroke-red-600'
-                        : 'fill-transparent stroke-white hover:stroke-red-400'
-                    } hover:scale-[1.1]`}
-                    style={
-                      {
-                        WebkitUserSelect: 'none',
-                        userSelect: 'none',
-                        WebkitTouchCallout: 'none',
-                      } as React.CSSProperties
-                    }
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      return false;
-                    }}
-                  />
+                    className='luna-card-action flex h-8 w-8 items-center justify-center rounded-full'
+                    aria-label={favorited ? '取消收藏' : '添加收藏'}
+                  >
+                    <Heart
+                      size={16}
+                      className={`transition-colors duration-200 ${
+                        favorited
+                          ? 'fill-rose-500 stroke-rose-500'
+                          : 'fill-transparent text-[var(--luna-card-text)] hover:text-rose-300'
+                      }`}
+                    />
+                  </button>
                 )}
               </div>
             )}
@@ -1449,7 +1450,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               actualYear !== 'unknown' &&
               actualYear.trim() !== '' && (
                 <div
-                  className='absolute top-2 bg-black/50 text-white text-xs font-medium px-2 py-1 rounded backdrop-blur-sm shadow-sm transition-all duration-300 ease-out group-hover:opacity-90 left-2'
+                  className='luna-chip absolute left-2 top-2 min-h-0 px-2.5 py-1 text-[0.68rem] font-semibold'
                   style={
                     {
                       WebkitUserSelect: 'none',
@@ -1469,7 +1470,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
             {/* 徽章 */}
             {showRatingBadge && (
               <div
-                className='absolute top-2 right-2 bg-pink-500 text-white text-xs font-bold min-w-[1.75rem] h-7 px-1.5 rounded-full flex items-center justify-center shadow-md transition-all duration-300 ease-out group-hover:scale-110'
+                className='absolute right-2 top-2 flex h-7 min-w-[1.85rem] items-center justify-center rounded-full bg-[linear-gradient(180deg,var(--luna-score-from)_0%,var(--luna-score-to)_100%)] px-1.5 text-xs font-bold text-white shadow-[0_10px_18px_rgba(0,0,0,0.22)] transition-transform duration-200 ease-out group-hover:scale-[1.04]'
                 style={
                   {
                     WebkitUserSelect: 'none',
@@ -1490,7 +1491,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               <div
                 className={`absolute right-2 ${
                   showRatingBadge ? 'top-10' : 'top-2'
-                } bg-green-500 text-white text-xs font-semibold px-2 py-1 rounded-md shadow-md transition-all duration-300 ease-out group-hover:scale-110`}
+                } rounded-[0.7rem] bg-[var(--luna-accent)] px-2 py-1 text-xs font-semibold text-white shadow-[0_10px_18px_var(--luna-accent-soft)] transition-transform duration-200 ease-out group-hover:scale-[1.04]`}
                 style={
                   {
                     WebkitUserSelect: 'none',
@@ -1511,7 +1512,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
 
             {hasFollowNewEpisodes && (
               <div
-                className={`absolute right-2 ${followBadgeTopClass} rounded-md border border-amber-300/70 bg-amber-500 px-2 py-1 text-[11px] font-bold tracking-[0.08em] text-white shadow-md transition-all duration-300 ease-out group-hover:scale-110`}
+                className={`absolute right-2 ${followBadgeTopClass} rounded-[0.7rem] border border-amber-300/60 bg-amber-500/95 px-2 py-1 text-[11px] font-bold tracking-[0.08em] text-white shadow-md transition-transform duration-200 ease-out group-hover:scale-[1.04]`}
                 style={
                   {
                     WebkitUserSelect: 'none',
@@ -1541,7 +1542,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                   target='_blank'
                   rel='noopener noreferrer'
                   onClick={(e) => e.stopPropagation()}
-                  className='absolute top-2 left-2 opacity-0 -translate-x-2 transition-all duration-300 ease-in-out delay-100 sm:group-hover:opacity-100 sm:group-hover:translate-x-0'
+                  className='absolute left-2 top-2 opacity-0 -translate-x-2 transition-all duration-200 ease-out delay-100 sm:group-hover:translate-x-0 sm:group-hover:opacity-100'
                   style={
                     {
                       WebkitUserSelect: 'none',
@@ -1555,7 +1556,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                   }}
                 >
                   <div
-                    className='bg-green-500 text-white text-xs font-bold w-7 h-7 rounded-full flex items-center justify-center shadow-md hover:bg-green-600 hover:scale-[1.1] transition-all duration-300 ease-out'
+                    className='luna-card-action flex h-8 w-8 items-center justify-center rounded-full text-[var(--luna-card-text)]'
                     style={
                       {
                         WebkitUserSelect: 'none',
@@ -1617,7 +1618,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                       }
                     >
                       <div
-                        className='bg-gray-700 text-white text-xs font-bold w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center shadow-md hover:bg-gray-600 hover:scale-[1.1] transition-all duration-300 ease-out cursor-pointer'
+                        className='luna-card-action flex h-7 w-7 cursor-pointer items-center justify-center rounded-full text-xs font-bold text-[var(--luna-card-text)] sm:h-8 sm:w-8'
                         style={
                           {
                             WebkitUserSelect: 'none',
@@ -1682,7 +1683,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                             }}
                           >
                             <div
-                              className='bg-gray-800/90 backdrop-blur-sm text-white text-xs sm:text-xs rounded-lg shadow-xl border border-white/10 p-1.5 sm:p-2 min-w-[100px] sm:min-w-[120px] max-w-[140px] sm:max-w-[200px] overflow-hidden'
+                              className='luna-popover min-w-[100px] max-w-[140px] overflow-hidden rounded-[1rem] border border-[var(--luna-popover-border)] p-1.5 text-xs text-[var(--luna-card-text)] shadow-xl sm:min-w-[120px] sm:max-w-[200px] sm:p-2'
                               style={
                                 {
                                   WebkitUserSelect: 'none',
@@ -1702,7 +1703,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                                     key={index}
                                     className='flex items-center gap-1 sm:gap-1.5'
                                   >
-                                    <div className='w-0.5 h-0.5 sm:w-1 sm:h-1 bg-blue-400 rounded-full flex-shrink-0'></div>
+                                    <div className='h-0.5 w-0.5 flex-shrink-0 rounded-full bg-[var(--luna-accent)] sm:h-1 sm:w-1'></div>
                                     <span
                                       className='truncate text-[10px] sm:text-xs leading-tight'
                                       title={sourceName}
@@ -1715,8 +1716,8 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
 
                               {/* 显示更多提示 */}
                               {hasMore && (
-                                <div className='mt-1 sm:mt-2 pt-1 sm:pt-1.5 border-t border-gray-700/50'>
-                                  <div className='flex items-center justify-center text-gray-400'>
+                                <div className='mt-1 border-t border-white/10 pt-1 sm:mt-2 sm:pt-1.5'>
+                                  <div className='flex items-center justify-center text-[var(--luna-card-muted)]'>
                                     <span className='text-[10px] sm:text-xs font-medium'>
                                       +{remainingCount} 播放源
                                     </span>
@@ -1725,7 +1726,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                               )}
 
                               {/* 小箭头 */}
-                              <div className='absolute top-full right-2 sm:right-3 w-0 h-0 border-l-[4px] border-r-[4px] border-t-[4px] sm:border-l-[6px] sm:border-r-[6px] sm:border-t-[6px] border-transparent border-t-gray-800/90'></div>
+                              <div className='absolute right-2 top-full h-0 w-0 border-l-[4px] border-r-[4px] border-t-[4px] border-transparent border-t-white/10 sm:right-3 sm:border-l-[6px] sm:border-r-[6px] sm:border-t-[6px]'></div>
                             </div>
                           </div>
                         );
@@ -1739,7 +1740,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           {/* 进度条 */}
           {config.showProgress && progress !== undefined && (
             <div
-              className='mt-1 h-1 w-full bg-gray-200 rounded-full overflow-hidden'
+              className='luna-progress-track mt-3 h-[5px] w-full'
               style={
                 {
                   WebkitUserSelect: 'none',
@@ -1753,7 +1754,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               }}
             >
               <div
-                className='h-full bg-green-500 transition-all duration-500 ease-out'
+                className='luna-progress-fill h-full transition-all duration-500 ease-out'
                 style={
                   {
                     width: `${progress}%`,
@@ -1772,7 +1773,9 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
 
           {/* 标题与来源 */}
           <div
-            className='mt-2 text-center'
+            className={`mt-3 px-1 ${
+              usesGlassShell ? 'text-left' : 'text-left'
+            }`}
             style={
               {
                 WebkitUserSelect: 'none',
@@ -1796,7 +1799,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               }
             >
               <span
-                className='block text-sm font-semibold truncate text-gray-900 dark:text-gray-100 transition-colors duration-300 ease-in-out group-hover:text-green-600 dark:group-hover:text-green-400 peer'
+                className='peer block truncate text-[0.98rem] font-semibold text-[var(--luna-card-text)] transition-colors duration-200 ease-out group-hover:text-white'
                 style={
                   {
                     WebkitUserSelect: 'none',
@@ -1813,7 +1816,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               </span>
               {/* 自定义 tooltip */}
               <div
-                className='absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-1 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 invisible peer-hover:opacity-100 peer-hover:visible transition-all duration-200 ease-out delay-100 whitespace-nowrap pointer-events-none'
+                className='luna-popover pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-[0.9rem] px-3 py-1 text-xs text-[var(--luna-card-text)] opacity-0 invisible transition-all duration-200 ease-out delay-100 peer-hover:visible peer-hover:opacity-100'
                 style={
                   {
                     WebkitUserSelect: 'none',
@@ -1828,7 +1831,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               >
                 {actualTitle}
                 <div
-                  className='absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800'
+                  className='absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-l-4 border-r-4 border-t-4 border-transparent border-t-white/10'
                   style={
                     {
                       WebkitUserSelect: 'none',
@@ -1842,7 +1845,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
             {config.showSourceName &&
               (source_name || shouldShowPlaybackModeBadge) && (
                 <span
-                  className='mt-1 flex flex-wrap items-center justify-center gap-1 text-xs text-gray-500 dark:text-gray-400'
+                  className='mt-2 flex flex-wrap items-center justify-start gap-2 text-xs text-[var(--luna-card-muted)]'
                   style={
                     {
                       WebkitUserSelect: 'none',
@@ -1857,7 +1860,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                 >
                   {source_name && (
                     <span
-                      className='inline-block border rounded px-2 py-0.5 border-gray-500/60 dark:border-gray-400/60 transition-all duration-300 ease-in-out group-hover:border-green-500/60 group-hover:text-green-600 dark:group-hover:text-green-400'
+                      className='luna-chip'
                       style={
                         {
                           WebkitUserSelect: 'none',
@@ -1881,7 +1884,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                   )}
                   {shouldShowPlaybackModeBadge && (
                     <span
-                      className={`inline-block rounded border px-2 py-0.5 transition-all duration-300 ease-in-out ${playbackModeClassName}`}
+                      className={`luna-chip ${playbackModeClassName}`}
                       style={
                         {
                           WebkitUserSelect: 'none',

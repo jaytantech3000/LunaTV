@@ -16,30 +16,24 @@ export default function ScrollableRow({
   const [isHovered, setIsHovered] = useState(false);
 
   const checkScroll = () => {
-    if (containerRef.current) {
-      const { scrollWidth, clientWidth, scrollLeft } = containerRef.current;
-
-      // 计算是否需要左右滚动按钮
-      const threshold = 1; // 容差值，避免浮点误差
-      const canScrollRight =
-        scrollWidth - (scrollLeft + clientWidth) > threshold;
-      const canScrollLeft = scrollLeft > threshold;
-
-      setShowRightScroll(canScrollRight);
-      setShowLeftScroll(canScrollLeft);
+    if (!containerRef.current) {
+      return;
     }
+
+    const { scrollWidth, clientWidth, scrollLeft } = containerRef.current;
+    const threshold = 1;
+    const canScrollRight = scrollWidth - (scrollLeft + clientWidth) > threshold;
+    const canScrollLeft = scrollLeft > threshold;
+
+    setShowRightScroll(canScrollRight);
+    setShowLeftScroll(canScrollLeft);
   };
 
   useEffect(() => {
-    // 多次延迟检查，确保内容已完全渲染
     checkScroll();
-
-    // 监听窗口大小变化
     window.addEventListener('resize', checkScroll);
 
-    // 创建一个 ResizeObserver 来监听容器大小变化
     const resizeObserver = new ResizeObserver(() => {
-      // 延迟执行检查
       checkScroll();
     });
 
@@ -51,43 +45,47 @@ export default function ScrollableRow({
       window.removeEventListener('resize', checkScroll);
       resizeObserver.disconnect();
     };
-  }, [children]); // 依赖 children，当子组件变化时重新检查
+  }, [children]);
 
-  // 添加一个额外的效果来监听子组件的变化
   useEffect(() => {
-    if (containerRef.current) {
-      // 监听 DOM 变化
-      const observer = new MutationObserver(() => {
-        setTimeout(checkScroll, 100);
-      });
-
-      observer.observe(containerRef.current, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['style', 'class'],
-      });
-
-      return () => observer.disconnect();
+    if (!containerRef.current) {
+      return;
     }
+
+    const observer = new MutationObserver(() => {
+      window.setTimeout(checkScroll, 100);
+    });
+
+    observer.observe(containerRef.current, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    });
+
+    return () => observer.disconnect();
   }, []);
 
   const handleScrollRightClick = () => {
-    if (containerRef.current) {
-      containerRef.current.scrollBy({
-        left: scrollDistance,
-        behavior: 'smooth',
-      });
+    if (!containerRef.current) {
+      return;
     }
+
+    containerRef.current.scrollBy({
+      left: scrollDistance,
+      behavior: 'smooth',
+    });
   };
 
   const handleScrollLeftClick = () => {
-    if (containerRef.current) {
-      containerRef.current.scrollBy({
-        left: -scrollDistance,
-        behavior: 'smooth',
-      });
+    if (!containerRef.current) {
+      return;
     }
+
+    containerRef.current.scrollBy({
+      left: -scrollDistance,
+      behavior: 'smooth',
+    });
   };
 
   return (
@@ -95,75 +93,53 @@ export default function ScrollableRow({
       className='relative'
       onMouseEnter={() => {
         setIsHovered(true);
-        // 当鼠标进入时重新检查一次
         checkScroll();
       }}
       onMouseLeave={() => setIsHovered(false)}
     >
       <div
         ref={containerRef}
-        className='flex space-x-6 overflow-x-auto scrollbar-hide py-1 sm:py-2 pb-12 sm:pb-14 px-4 sm:px-6'
+        className='flex gap-5 overflow-x-auto px-1 py-2 pb-8 scrollbar-hide sm:gap-[1.15rem] sm:pb-10'
         onScroll={checkScroll}
       >
         {children}
       </div>
-      {showLeftScroll && (
-        <div
-          className={`hidden sm:flex absolute left-0 top-0 bottom-0 w-16 items-center justify-center z-[600] transition-opacity duration-200 ${
-            isHovered ? 'opacity-100' : 'opacity-0'
-          }`}
-          style={{
-            background: 'transparent',
-            pointerEvents: 'none', // 允许点击穿透
-          }}
-        >
-          <div
-            className='absolute inset-0 flex items-center justify-center'
-            style={{
-              top: '40%',
-              bottom: '60%',
-              left: '-4.5rem',
-              pointerEvents: 'auto',
-            }}
-          >
-            <button
-              onClick={handleScrollLeftClick}
-              className='w-12 h-12 bg-white/95 rounded-full shadow-lg flex items-center justify-center hover:bg-white border border-gray-200 transition-transform hover:scale-105 dark:bg-gray-800/90 dark:hover:bg-gray-700 dark:border-gray-600'
-            >
-              <ChevronLeft className='w-6 h-6 text-gray-600 dark:text-gray-300' />
-            </button>
-          </div>
-        </div>
-      )}
 
-      {showRightScroll && (
+      {showLeftScroll ? (
         <div
-          className={`hidden sm:flex absolute right-0 top-0 bottom-0 w-16 items-center justify-center z-[600] transition-opacity duration-200 ${
+          className={`pointer-events-none absolute inset-y-0 left-0 z-[600] hidden w-14 items-center justify-center transition-opacity duration-200 sm:flex ${
             isHovered ? 'opacity-100' : 'opacity-0'
           }`}
-          style={{
-            background: 'transparent',
-            pointerEvents: 'none', // 允许点击穿透
-          }}
         >
-          <div
-            className='absolute inset-0 flex items-center justify-center'
-            style={{
-              top: '40%',
-              bottom: '60%',
-              right: '-4.5rem',
-              pointerEvents: 'auto',
-            }}
+          <button
+            onClick={handleScrollLeftClick}
+            className='luna-scroll-arrow pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-200 hover:-translate-x-0.5'
+            aria-label='向左滚动'
           >
-            <button
-              onClick={handleScrollRightClick}
-              className='w-12 h-12 bg-white/95 rounded-full shadow-lg flex items-center justify-center hover:bg-white border border-gray-200 transition-transform hover:scale-105 dark:bg-gray-800/90 dark:hover:bg-gray-700 dark:border-gray-600'
-            >
-              <ChevronRight className='w-6 h-6 text-gray-600 dark:text-gray-300' />
-            </button>
-          </div>
+            <ChevronLeft className='h-5 w-5' />
+          </button>
         </div>
-      )}
+      ) : null}
+
+      {showRightScroll ? (
+        <div
+          className={`pointer-events-none absolute inset-y-0 right-0 z-[600] hidden w-16 items-center justify-center transition-opacity duration-200 sm:flex ${
+            isHovered ? 'opacity-100' : 'opacity-0'
+          }`}
+        >
+          <div className='absolute bottom-4 top-4 right-5 w-4'>
+            <div className='luna-scroll-track absolute bottom-0 left-1/2 top-0 w-[3px] -translate-x-1/2 rounded-full opacity-70' />
+            <div className='luna-scroll-thumb absolute left-1/2 top-[18%] h-[32%] w-[3px] -translate-x-1/2 rounded-full' />
+          </div>
+          <button
+            onClick={handleScrollRightClick}
+            className='luna-scroll-arrow pointer-events-auto relative right-0.5 flex h-12 w-12 items-center justify-center rounded-full transition-transform duration-200 hover:translate-x-0.5'
+            aria-label='向右滚动'
+          >
+            <ChevronRight className='h-5 w-5' />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
