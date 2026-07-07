@@ -3,7 +3,7 @@
 'use client';
 
 import { AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { startTransition, useEffect, useState } from 'react';
 import { flushSync } from 'react-dom';
 
@@ -111,7 +111,6 @@ function VersionDisplay() {
 
 export function LoginPageClient() {
   const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
   const redirectPath = resolveRedirectPath(searchParams);
   const [password, setPassword] = useState('');
@@ -135,7 +134,7 @@ export function LoginPageClient() {
   }, []);
 
   useEffect(() => {
-    if (!isRedirecting || pathname !== '/login') {
+    if (!isRedirecting) {
       return;
     }
 
@@ -152,7 +151,7 @@ export function LoginPageClient() {
       window.clearTimeout(hardRedirectTimeoutId);
       window.clearTimeout(errorTimeoutId);
     };
-  }, [isRedirecting, pathname, redirectPath]);
+  }, [isRedirecting, redirectPath]);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();

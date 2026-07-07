@@ -151,7 +151,44 @@ describe('LoginPageClient', () => {
     }
   });
 
-  it('cancels redirect fallback timers once navigation leaves the login page', async () => {
+  it('cancels redirect fallback timers once the login screen unmounts', async () => {
+    jest.useFakeTimers();
+
+    try {
+      const { unmount } = render(<LoginPageClient />);
+
+      fireEvent.change(screen.getByLabelText('密码'), {
+        target: { value: 'demo-password' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '登录' }));
+
+      await act(async () => {
+        document.cookie = `auth=${encodeURIComponent(
+          JSON.stringify({ role: 'owner', username: 'owner' })
+        )}; path=/`;
+        resolveLoginResponse?.(new Response(null, { status: 200 }));
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(20);
+      });
+
+      unmount();
+
+      await act(async () => {
+        jest.advanceTimersByTime(9000);
+      });
+
+      expect(replaceWithDocumentNavigation).not.toHaveBeenCalled();
+      expect(
+        screen.queryByText('页面跳转超时，请刷新后重试')
+      ).not.toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps the hard-redirect fallback armed until the login screen unmounts', async () => {
     jest.useFakeTimers();
 
     try {
@@ -173,17 +210,14 @@ describe('LoginPageClient', () => {
         jest.advanceTimersByTime(20);
       });
 
-      mockPathname = '/downloads';
+      mockPathname = '/';
       rerender(<LoginPageClient />);
 
       await act(async () => {
-        jest.advanceTimersByTime(9000);
+        jest.advanceTimersByTime(1500);
       });
 
-      expect(replaceWithDocumentNavigation).not.toHaveBeenCalled();
-      expect(
-        screen.queryByText('页面跳转超时，请刷新后重试')
-      ).not.toBeInTheDocument();
+      expect(replaceWithDocumentNavigation).toHaveBeenCalledWith('/downloads');
     } finally {
       jest.useRealTimers();
     }
