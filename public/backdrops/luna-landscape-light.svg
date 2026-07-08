@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" fill="none">
+  <defs>
+    <linearGradient id="light-far" x1="800" y1="360" x2="800" y2="760" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C4CDC0" stop-opacity=".18"/>
+      <stop offset=".5" stop-color="#9AA692" stop-opacity=".62"/>
+      <stop offset="1" stop-color="#899277" stop-opacity=".82"/>
+    </linearGradient>
+    <linearGradient id="light-mid" x1="780" y1="470" x2="780" y2="860" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A9B49B" stop-opacity=".18"/>
+      <stop offset=".36" stop-color="#A0A67F" stop-opacity=".54"/>
+      <stop offset="1" stop-color="#8D8C5F" stop-opacity=".9"/>
+    </linearGradient>
+    <linearGradient id="light-front" x1="800" y1="600" x2="800" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D9D6AF" stop-opacity=".18"/>
+      <stop offset=".45" stop-color="#B6B17C" stop-opacity=".66"/>
+      <stop offset="1" stop-color="#8E8C57" stop-opacity=".98"/>
+    </linearGradient>
+    <linearGradient id="light-fog" x1="800" y1="480" x2="800" y2="840" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF8EA" stop-opacity=".62"/>
+      <stop offset=".45" stop-color="#F5EFD8" stop-opacity=".24"/>
+      <stop offset="1" stop-color="#FFF8EA" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="light-sunwash" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1110 580) rotate(90) scale(208 398)">
+      <stop stop-color="#F4E7B9" stop-opacity=".64"/>
+      <stop offset=".55" stop-color="#F0E6BF" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#F0E6BF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur-xxl" x="-80" y="280" width="1760" height="700" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <filter id="blur-xl" x="-60" y="360" width="1720" height="620" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+    <filter id="blur-md" x="-50" y="420" width="1700" height="560" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <filter id="light-grain" x="0" y="0" width="1600" height="900" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="8" result="noise"/>
+      <feColorMatrix in="noise" type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="table" tableValues="0 0 0 .06"/>
+      </feComponentTransfer>
+    </filter>
+  </defs>
+
+  <g filter="url(#blur-xxl)" opacity=".82">
+    <path d="M-80 612C40 524 124 486 208 482C300 477 338 524 432 530C540 537 608 440 720 434C828 428 900 492 1014 500C1124 507 1192 456 1310 465C1410 472 1494 544 1680 566V950H-80V612Z" fill="url(#light-far)"/>
+    <path d="M-40 634C94 600 194 550 302 560C390 568 438 622 534 623C650 625 724 535 838 530C948 525 1022 603 1140 610C1238 616 1328 578 1464 592C1532 599 1586 623 1640 658V950H-40V634Z" fill="#BBC4B5" fill-opacity=".42"/>
+  </g>
+
+  <g filter="url(#blur-xl)" opacity=".96">
+    <path d="M-60 700C72 616 174 596 270 602C390 609 450 685 562 692C684 699 738 596 858 590C980 583 1050 650 1168 662C1284 673 1368 630 1494 646C1556 654 1610 674 1660 712V950H-60V700Z" fill="url(#light-mid)"/>
+    <path d="M-30 734C68 694 142 668 236 672C328 677 380 730 466 738C590 751 662 670 792 664C920 658 1000 734 1120 744C1240 754 1318 714 1428 718C1502 721 1560 742 1630 782V950H-30V734Z" fill="#97A06B" fill-opacity=".34"/>
+  </g>
+
+  <g filter="url(#blur-md)" opacity=".92">
+    <path d="M-30 780C84 726 162 712 254 716C356 720 424 768 530 778C658 790 744 732 874 724C1016 716 1098 782 1240 792C1358 801 1460 762 1578 770C1586 771 1594 772 1600 772V950H-30V780Z" fill="url(#light-front)"/>
+    <path d="M12 832C148 798 246 782 370 786C516 790 612 844 770 846C914 849 1018 802 1150 810C1286 818 1392 850 1578 832V950H12V832Z" fill="#D2CEA5" fill-opacity=".44"/>
+  </g>
+
+  <path d="M0 690C72 670 116 618 176 626C216 632 238 666 270 668C322 672 348 616 398 618C444 620 470 676 524 682C580 688 612 632 664 630C718 628 750 686 806 692C858 697 888 646 940 644C1006 641 1042 714 1100 718C1150 721 1180 664 1234 664C1290 664 1334 722 1388 722C1442 722 1470 686 1522 688C1560 690 1586 712 1600 724V834H0V690Z" fill="#798361" fill-opacity=".26"/>
+
+  <path d="M0 540H1600V900H0V540Z" fill="url(#light-fog)" opacity=".84"/>
+  <ellipse cx="1128" cy="612" rx="356" ry="176" fill="url(#light-sunwash)" opacity=".74"/>
+  <ellipse cx="846" cy="652" rx="540" ry="122" fill="#FFF8EC" fill-opacity=".2" filter="url(#blur-xxl)"/>
+  <ellipse cx="504" cy="714" rx="392" ry="116" fill="#F4F0D6" fill-opacity=".18" filter="url(#blur-xl)"/>
+  <g opacity=".2">
+    <ellipse cx="218" cy="618" rx="184" ry="86" fill="#D2D9C9" filter="url(#blur-xl)"/>
+    <ellipse cx="1348" cy="728" rx="230" ry="96" fill="#C5CEB5" filter="url(#blur-xl)"/>
+  </g>
+
+  <rect width="1600" height="900" fill="#fff" filter="url(#light-grain)"/>
+</svg>

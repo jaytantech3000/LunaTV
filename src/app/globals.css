@@ -66,7 +66,7 @@
   --luna-heading-muted: rgba(255, 249, 240, 0.82);
   --luna-copy-strong: rgba(72, 77, 72, 0.92);
   --luna-copy-muted: rgba(102, 106, 105, 0.88);
-  --luna-control-fill: rgba(255, 252, 247, 0.04);
+  --luna-control-fill: rgba(255, 252, 247, 0.12);
   --luna-control-border: rgba(255, 249, 240, 0.18);
   --luna-control-color: rgba(255, 252, 247, 0.95);
   --luna-popover-fill: linear-gradient(
@@ -78,15 +78,15 @@
   --luna-popover-shadow: 0 24px 48px rgba(56, 58, 49, 0.18);
   --luna-card-fill: linear-gradient(
     180deg,
-    rgba(247, 245, 237, 0.18),
-    rgba(228, 223, 203, 0.16)
+    rgba(246, 243, 231, 0.3),
+    rgba(220, 213, 188, 0.22)
   );
-  --luna-card-border: rgba(255, 249, 239, 0.28);
-  --luna-card-shadow: 0 18px 40px rgba(34, 36, 30, 0.14);
+  --luna-card-border: rgba(255, 250, 242, 0.34);
+  --luna-card-shadow: 0 18px 36px rgba(73, 70, 51, 0.16);
   --luna-card-text: rgba(255, 250, 242, 0.96);
   --luna-card-muted: rgba(255, 249, 242, 0.74);
-  --luna-meta-fill: rgba(255, 250, 242, 0.12);
-  --luna-meta-border: rgba(255, 252, 245, 0.16);
+  --luna-meta-fill: rgba(255, 252, 245, 0.14);
+  --luna-meta-border: rgba(255, 252, 245, 0.18);
   --luna-meta-text: rgba(255, 250, 242, 0.92);
   --luna-overlay-start: rgba(19, 22, 18, 0.02);
   --luna-overlay-end: rgba(21, 24, 21, 0.6);
@@ -94,7 +94,7 @@
   --luna-accent-soft: rgba(74, 214, 138, 0.28);
   --luna-score-from: #ee7fbe;
   --luna-score-to: #cf5aa3;
-  --luna-rail-track: rgba(255, 255, 255, 0.42);
+  --luna-rail-track: rgba(255, 255, 255, 0.36);
   --luna-rail-thumb: rgba(255, 255, 255, 0.72);
   --luna-rail-fill: rgba(143, 146, 126, 0.22);
   --luna-rail-border: rgba(255, 255, 255, 0.22);
@@ -102,50 +102,60 @@
 
 html.dark {
   --foreground-rgb: 233, 241, 255;
-  --luna-shell-bg: linear-gradient(180deg, #020611 0%, #050b16 100%);
-  --luna-canvas-base: radial-gradient(
-      circle at 65% 8%,
-      rgba(83, 110, 193, 0.22),
-      transparent 26%
+  --luna-shell-bg: linear-gradient(
+      180deg,
+      rgba(2, 6, 16, 0.18) 0%,
+      rgba(2, 6, 16, 0.34) 100%
     ),
-    radial-gradient(circle at 16% 26%, rgba(12, 106, 171, 0.2), transparent 24%),
-    linear-gradient(180deg, #010a18 0%, #020d23 28%, #06132d 63%, #081123 100%);
-  --luna-sky-glow: rgba(19, 104, 255, 0.2);
-  --luna-sky-glow-secondary: rgba(44, 158, 214, 0.18);
-  --luna-fog-color: rgba(10, 21, 53, 0.56);
+    url('/backdrops/luna-dark-valley.png') center / cover no-repeat fixed,
+    linear-gradient(180deg, #020611 0%, #050b16 100%);
+  --luna-canvas-base: radial-gradient(
+      circle at 52% 2%,
+      rgba(101, 123, 182, 0.08),
+      transparent 28%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(2, 7, 19, 0.34) 0%,
+      rgba(3, 9, 21, 0.16) 34%,
+      rgba(3, 8, 18, 0.06) 100%
+    );
+  --luna-sky-glow: rgba(54, 92, 175, 0.06);
+  --luna-sky-glow-secondary: rgba(105, 151, 237, 0.04);
+  --luna-fog-color: rgba(18, 30, 63, 0.42);
   --luna-terrain-primary: radial-gradient(
       ellipse at 40% 40%,
-      rgba(4, 21, 70, 0.96),
+      rgba(5, 20, 56, 0.9),
       transparent 56%
     ),
-    linear-gradient(180deg, rgba(5, 24, 80, 0.14), rgba(4, 12, 36, 0.56));
+    linear-gradient(180deg, rgba(5, 24, 80, 0.08), rgba(4, 12, 36, 0.44));
   --luna-terrain-secondary: radial-gradient(
       ellipse at 45% 40%,
-      rgba(11, 34, 96, 0.9),
+      rgba(12, 31, 82, 0.82),
       transparent 58%
     ),
-    linear-gradient(180deg, rgba(6, 24, 72, 0.06), rgba(4, 15, 44, 0.6));
+    linear-gradient(180deg, rgba(6, 24, 72, 0.04), rgba(4, 15, 44, 0.48));
   --luna-sidebar-fill: linear-gradient(
     180deg,
-    rgba(2, 16, 52, 0.52),
-    rgba(1, 9, 30, 0.36)
+    rgba(3, 16, 47, 0.42),
+    rgba(1, 8, 27, 0.22)
   );
-  --luna-sidebar-border: rgba(145, 187, 255, 0.16);
-  --luna-sidebar-shadow: 0 18px 54px rgba(0, 4, 14, 0.5);
-  --luna-nav-text: rgba(234, 241, 255, 0.94);
-  --luna-nav-muted: rgba(186, 202, 236, 0.8);
-  --luna-nav-active-bg: rgba(74, 145, 218, 0.16);
-  --luna-nav-active-border: rgba(99, 193, 255, 0.18);
-  --luna-seg-fill: rgba(126, 144, 207, 0.18);
-  --luna-seg-pill: rgba(192, 204, 244, 0.16);
-  --luna-seg-text: rgba(205, 214, 245, 0.74);
-  --luna-seg-text-active: rgba(250, 252, 255, 0.94);
+  --luna-sidebar-border: rgba(154, 198, 255, 0.11);
+  --luna-sidebar-shadow: 0 22px 52px rgba(0, 4, 14, 0.38);
+  --luna-nav-text: rgba(234, 241, 255, 0.92);
+  --luna-nav-muted: rgba(186, 202, 236, 0.74);
+  --luna-nav-active-bg: rgba(86, 146, 214, 0.1);
+  --luna-nav-active-border: rgba(167, 208, 255, 0.11);
+  --luna-seg-fill: rgba(126, 144, 207, 0.14);
+  --luna-seg-pill: rgba(192, 204, 244, 0.14);
+  --luna-seg-text: rgba(205, 214, 245, 0.68);
+  --luna-seg-text-active: rgba(245, 249, 255, 0.92);
   --luna-heading: rgba(241, 247, 255, 0.98);
   --luna-heading-muted: rgba(214, 226, 255, 0.82);
   --luna-copy-strong: rgba(235, 242, 255, 0.94);
   --luna-copy-muted: rgba(184, 196, 224, 0.86);
   --luna-control-fill: rgba(8, 21, 55, 0.14);
-  --luna-control-border: rgba(162, 195, 255, 0.12);
+  --luna-control-border: rgba(162, 195, 255, 0.08);
   --luna-control-color: rgba(233, 241, 255, 0.9);
   --luna-popover-fill: linear-gradient(
     180deg,
@@ -156,15 +166,15 @@ html.dark {
   --luna-popover-shadow: 0 24px 48px rgba(0, 4, 14, 0.48);
   --luna-card-fill: linear-gradient(
     180deg,
-    rgba(49, 73, 140, 0.18),
-    rgba(11, 22, 49, 0.36)
+    rgba(70, 95, 157, 0.16),
+    rgba(9, 18, 42, 0.38)
   );
-  --luna-card-border: rgba(160, 194, 255, 0.16);
-  --luna-card-shadow: 0 18px 42px rgba(0, 6, 22, 0.36);
+  --luna-card-border: rgba(160, 194, 255, 0.11);
+  --luna-card-shadow: 0 18px 34px rgba(0, 6, 22, 0.32);
   --luna-card-text: rgba(239, 245, 255, 0.96);
   --luna-card-muted: rgba(212, 222, 246, 0.78);
-  --luna-meta-fill: rgba(11, 27, 61, 0.52);
-  --luna-meta-border: rgba(162, 195, 255, 0.16);
+  --luna-meta-fill: rgba(10, 22, 49, 0.46);
+  --luna-meta-border: rgba(162, 195, 255, 0.12);
   --luna-meta-text: rgba(227, 241, 255, 0.92);
   --luna-overlay-start: rgba(5, 13, 31, 0.04);
   --luna-overlay-end: rgba(4, 11, 29, 0.74);
@@ -172,10 +182,10 @@ html.dark {
   --luna-accent-soft: rgba(39, 212, 130, 0.32);
   --luna-score-from: #d56dc0;
   --luna-score-to: #a950a8;
-  --luna-rail-track: rgba(130, 161, 230, 0.46);
-  --luna-rail-thumb: rgba(200, 225, 255, 0.7);
-  --luna-rail-fill: rgba(32, 49, 93, 0.44);
-  --luna-rail-border: rgba(159, 196, 255, 0.18);
+  --luna-rail-track: rgba(166, 186, 235, 0.2);
+  --luna-rail-thumb: rgba(211, 223, 248, 0.72);
+  --luna-rail-fill: rgba(18, 25, 46, 0.82);
+  --luna-rail-border: rgba(169, 196, 255, 0.12);
 }
 
 html,
@@ -204,6 +214,9 @@ body {
   .luna-backdrop-sky,
   .luna-backdrop-glow,
   .luna-backdrop-glow-secondary,
+  .luna-backdrop-landscape,
+  .luna-backdrop-foreground,
+  .luna-backdrop-landscape-haze,
   .luna-backdrop-mist,
   .luna-backdrop-hill-primary,
   .luna-backdrop-hill-secondary,
@@ -220,34 +233,133 @@ body {
 
   .luna-backdrop-glow {
     background: radial-gradient(
-      circle at 72% 11%,
+      circle at 68% 10%,
       var(--luna-sky-glow),
-      transparent 34%
+      transparent 40%
     );
   }
 
   .luna-backdrop-glow-secondary {
     background: radial-gradient(
-        circle at 56% 6%,
+        circle at 58% 7%,
         var(--luna-sky-glow-secondary),
-        transparent 32%
+        transparent 36%
       ),
       radial-gradient(
-        circle at 84% 28%,
-        rgba(255, 255, 255, 0.06),
-        transparent 24%
+        circle at 84% 24%,
+        rgba(255, 255, 255, 0.035),
+        transparent 22%
       );
   }
 
+  .luna-backdrop-landscape {
+    background-image: url('/backdrops/luna-landscape-light.svg');
+    background-repeat: no-repeat;
+    background-position: center bottom;
+    background-size: cover;
+    opacity: 0.98;
+    transform: scale(1.02);
+  }
+
+  html.dark .luna-backdrop-landscape {
+    background-image: linear-gradient(
+        180deg,
+        rgba(4, 8, 20, 0.1) 0%,
+        rgba(4, 8, 20, 0.05) 38%,
+        rgba(3, 6, 15, 0.22) 100%
+      ),
+      url('/backdrops/luna-dark-valley.png');
+    background-repeat: no-repeat, no-repeat;
+    background-position: center top, center 68%;
+    background-size: 100% 100%, cover;
+    opacity: 0.98;
+    filter: brightness(0.78) saturate(0.95);
+    transform: scale(1.015);
+  }
+
+  .luna-backdrop-foreground {
+    inset: auto -4vw -14vh -8vw;
+    height: 44vh;
+    background-repeat: no-repeat;
+    background-position: center bottom;
+    background-size: 132% auto;
+    opacity: 0;
+  }
+
+  html.dark .luna-backdrop-foreground {
+    inset: auto -8vw -4vh -10vw;
+    height: 54vh;
+    background-image: url('/backdrops/luna-dark-valley.png');
+    opacity: 0.64;
+    transform: translateY(0) scale(1.045);
+    filter: blur(8px) brightness(0.3) saturate(0.74);
+    mask-image: linear-gradient(
+      180deg,
+      transparent 8%,
+      rgba(0, 0, 0, 0.4) 34%,
+      #000 72%
+    );
+    -webkit-mask-image: linear-gradient(
+      180deg,
+      transparent 8%,
+      rgba(0, 0, 0, 0.4) 34%,
+      #000 72%
+    );
+    mix-blend-mode: multiply;
+  }
+
   .luna-backdrop-mist {
-    inset: auto 8vw 11vh 18vw;
-    height: 34vh;
+    inset: auto 7vw 12vh 16vw;
+    height: 30vh;
     background: radial-gradient(
       ellipse at center,
       var(--luna-fog-color),
       transparent 74%
     );
-    filter: blur(14px);
+    filter: blur(18px);
+  }
+
+  html.dark .luna-backdrop-mist {
+    inset: auto 15vw 12vh 18vw;
+    height: 22vh;
+    background: radial-gradient(
+      ellipse at center,
+      rgba(118, 152, 214, 0.035),
+      transparent 72%
+    );
+    filter: blur(18px);
+  }
+
+  .luna-backdrop-landscape-haze {
+    inset: auto 0 -2vh 0;
+    height: 48vh;
+    background: radial-gradient(
+        ellipse at 68% 68%,
+        rgba(255, 248, 230, 0.18),
+        transparent 36%
+      ),
+      linear-gradient(
+        180deg,
+        transparent 0%,
+        rgba(255, 248, 229, 0.08) 48%,
+        rgba(255, 246, 229, 0.2) 100%
+      );
+    filter: blur(22px);
+  }
+
+  html.dark .luna-backdrop-landscape-haze {
+    background: radial-gradient(
+        ellipse at 56% 64%,
+        rgba(79, 115, 188, 0.038),
+        transparent 26%
+      ),
+      linear-gradient(
+        180deg,
+        transparent 0%,
+        rgba(5, 12, 28, 0.005) 58%,
+        rgba(4, 8, 20, 0.042) 100%
+      );
+    filter: blur(15px);
   }
 
   .luna-backdrop-hill-primary {
@@ -268,37 +380,32 @@ body {
   }
 
   .luna-backdrop-noise {
-    background-image: linear-gradient(
-        180deg,
-        rgba(255, 255, 255, 0.04),
-        transparent 22%
+    background-image: radial-gradient(
+        circle at 20% 12%,
+        rgba(255, 255, 255, 0.2),
+        transparent 24%
       ),
-      repeating-linear-gradient(
-        90deg,
-        transparent 0,
-        transparent 102px,
-        rgba(255, 255, 255, 0.01) 102px,
-        rgba(255, 255, 255, 0.01) 134px
-      );
-    opacity: 0.74;
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 26%);
+    opacity: 0.32;
     mix-blend-mode: soft-light;
   }
 
   html.dark .luna-backdrop-noise {
-    opacity: 1;
+    opacity: 0.12;
     background-image: radial-gradient(
-        circle at 50% 30%,
-        rgba(120, 187, 255, 0.05),
-        transparent 34%
+        circle at 18% 12%,
+        rgba(255, 255, 255, 0.08),
+        transparent 0.55%
       ),
-      repeating-linear-gradient(
-        90deg,
-        transparent 0,
-        transparent 92px,
-        rgba(39, 113, 255, 0.11) 92px,
-        rgba(39, 113, 255, 0.11) 128px,
-        transparent 128px,
-        transparent 220px
+      radial-gradient(
+        circle at 82% 10%,
+        rgba(255, 255, 255, 0.06),
+        transparent 0.5%
+      ),
+      radial-gradient(
+        circle at 48% 17%,
+        rgba(146, 188, 255, 0.06),
+        transparent 0.7%
       );
   }
 
@@ -329,6 +436,29 @@ body {
     background: rgba(105, 152, 221, 0.12);
   }
 
+  .luna-toolbar-button--ghost {
+    height: 2.06rem;
+    width: 2.06rem;
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .luna-toolbar-button--ghost:hover {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    opacity: 1;
+  }
+
+  .luna-toolbar-button--ghost svg {
+    height: 1.18rem;
+    width: 1.18rem;
+    stroke-width: 1.62;
+  }
+
   .luna-popover {
     border: 1px solid var(--luna-popover-border);
     background: var(--luna-popover-fill);
@@ -338,6 +468,8 @@ body {
   }
 
   .luna-sidebar-shell {
+    position: relative;
+    overflow: hidden;
     border: 1px solid var(--luna-sidebar-border);
     background: var(--luna-sidebar-fill);
     box-shadow: var(--luna-sidebar-shadow);
@@ -345,14 +477,33 @@ body {
     -webkit-backdrop-filter: blur(28px);
   }
 
+  .luna-sidebar-shell::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background:
+      radial-gradient(
+        circle at 14% 10%,
+        rgba(133, 183, 255, 0.12),
+        transparent 30%
+      ),
+      linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.05),
+        transparent 22%
+      );
+    pointer-events: none;
+  }
+
   .luna-sidebar-wordmark {
     color: var(--luna-heading);
     font-family: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia,
       serif;
-    font-size: 2rem;
+    font-size: 1.95rem;
     font-weight: 700;
-    letter-spacing: -0.045em;
-    text-shadow: 0 10px 28px rgba(0, 0, 0, 0.08);
+    letter-spacing: -0.05em;
+    text-shadow: 0 10px 24px rgba(0, 0, 0, 0.06);
   }
 
   html.dark .luna-sidebar-wordmark {
@@ -361,11 +512,11 @@ body {
 
   .luna-sidebar-toggle {
     display: inline-flex;
-    height: 2.125rem;
-    width: 2.125rem;
+    height: 2rem;
+    width: 2rem;
     align-items: center;
     justify-content: center;
-    border-radius: 0.875rem;
+    border-radius: 0.8rem;
     border: 1px solid transparent;
     background: transparent;
     color: var(--luna-nav-text);
@@ -374,17 +525,17 @@ body {
   }
 
   .luna-sidebar-toggle:hover {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.055);
+    border-color: rgba(182, 212, 255, 0.08);
   }
 
   .luna-sidebar-link {
     display: flex;
-    min-height: 2.875rem;
+    min-height: 2.78rem;
     align-items: center;
-    gap: 0.875rem;
+    gap: 0.8rem;
     border: 1px solid transparent;
-    border-radius: 1.125rem;
+    border-radius: 1.06rem;
     color: var(--luna-nav-muted);
     transition: background 180ms ease, border-color 180ms ease, color 180ms ease,
       transform 180ms ease;
@@ -392,14 +543,18 @@ body {
 
   .luna-sidebar-link:hover {
     color: var(--luna-nav-text);
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.04);
   }
 
   .luna-sidebar-link[data-active='true'] {
     color: var(--luna-nav-text);
-    background: var(--luna-nav-active-bg);
+    background: linear-gradient(
+      180deg,
+      rgba(88, 145, 214, 0.12),
+      var(--luna-nav-active-bg)
+    );
     border-color: var(--luna-nav-active-border);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   }
 
   .luna-sidebar-link[data-active='true'] .luna-sidebar-icon,
@@ -416,10 +571,10 @@ body {
 
   .luna-section-title {
     color: var(--luna-heading);
-    font-size: clamp(1.3rem, 1.1rem + 0.55vw, 1.75rem);
-    font-weight: 700;
-    letter-spacing: -0.025em;
-    text-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+    font-size: clamp(1.24rem, 1.06rem + 0.48vw, 1.62rem);
+    font-weight: 680;
+    letter-spacing: -0.03em;
+    text-shadow: 0 10px 24px rgba(0, 0, 0, 0.1);
   }
 
   .luna-section-action {
@@ -427,7 +582,7 @@ body {
     align-items: center;
     gap: 0.25rem;
     color: var(--luna-heading-muted);
-    font-size: 0.95rem;
+    font-size: 0.9rem;
     font-weight: 600;
     letter-spacing: 0.01em;
     transition: opacity 180ms ease, transform 180ms ease;
@@ -468,17 +623,280 @@ body {
   }
 
   .luna-card-shell {
+    position: relative;
     border: 1px solid var(--luna-card-border);
     background: var(--luna-card-fill);
     box-shadow: var(--luna-card-shadow);
-    backdrop-filter: blur(28px);
-    -webkit-backdrop-filter: blur(28px);
+    overflow: hidden;
+    backdrop-filter: blur(22px);
+    -webkit-backdrop-filter: blur(22px);
+  }
+
+  .luna-card-shell::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    border: 1px solid rgba(255, 255, 255, 0.03);
+    pointer-events: none;
+    opacity: 0.44;
   }
 
   .luna-card-poster {
-    border: 1px solid var(--luna-card-border);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      0 18px 36px rgba(0, 0, 0, 0.16);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      0 12px 24px rgba(0, 0, 0, 0.16);
+  }
+
+  .luna-library-card-shell {
+    background: linear-gradient(
+      180deg,
+      rgba(247, 245, 237, 0.14),
+      rgba(228, 223, 203, 0.08)
+    );
+    box-shadow: 0 14px 28px rgba(58, 54, 38, 0.1);
+  }
+
+  html.dark .luna-library-card-shell {
+    border-color: rgba(139, 177, 246, 0.034);
+    background: linear-gradient(
+      180deg,
+      rgba(55, 82, 142, 0.088) 0%,
+      rgba(9, 18, 42, 0.17) 38%,
+      rgba(6, 12, 29, 0.27) 100%
+    );
+    box-shadow: 0 10px 18px rgba(0, 4, 16, 0.11);
+  }
+
+  html.dark .luna-library-card-shell::after {
+    border-color: rgba(255, 255, 255, 0.02);
+    opacity: 0.24;
+  }
+
+  .luna-library-card-poster {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      0 10px 18px rgba(0, 0, 0, 0.14);
+  }
+
+  html.dark .luna-library-card-poster {
+    border-color: rgba(168, 197, 249, 0.05);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.038),
+      0 6px 14px rgba(0, 0, 0, 0.13);
+  }
+
+  .luna-library-card-footer {
+    position: relative;
+  }
+
+  html.dark .luna-library-card-footer {
+    background: linear-gradient(
+      180deg,
+      rgba(10, 18, 41, 0) 0%,
+      rgba(7, 14, 34, 0.018) 28%,
+      rgba(5, 11, 28, 0.06) 100%
+    );
+    border-radius: 0 0 1rem 1rem;
+  }
+
+  .luna-playrecord-card-shell {
+    background: linear-gradient(
+      180deg,
+      rgba(239, 243, 250, 0.12) 0%,
+      rgba(219, 226, 241, 0.08) 38%,
+      rgba(191, 202, 226, 0.1) 100%
+    );
+    box-shadow: 0 16px 30px rgba(43, 54, 82, 0.12);
+  }
+
+  html.dark .luna-playrecord-card-shell {
+    border-color: rgba(168, 196, 248, 0.08);
+    background: linear-gradient(
+      180deg,
+      rgba(48, 78, 139, 0.12) 0%,
+      rgba(9, 18, 43, 0.24) 40%,
+      rgba(6, 12, 29, 0.34) 100%
+    );
+    box-shadow:
+      0 16px 28px rgba(0, 5, 18, 0.18),
+      inset 0 1px 0 rgba(228, 238, 255, 0.02);
+  }
+
+  html.dark .luna-playrecord-card-shell::after {
+    border-color: rgba(255, 255, 255, 0.018);
+    opacity: 0.26;
+  }
+
+  .luna-playrecord-card-poster {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      0 10px 18px rgba(0, 0, 0, 0.14);
+  }
+
+  html.dark .luna-playrecord-card-poster {
+    border-color: rgba(171, 201, 255, 0.05);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04),
+      0 9px 18px rgba(0, 0, 0, 0.16);
+  }
+
+  .luna-playrecord-card-footer {
+    position: relative;
+  }
+
+  html.dark .luna-playrecord-card-footer {
+    background: linear-gradient(
+      180deg,
+      rgba(13, 24, 54, 0) 0%,
+      rgba(8, 17, 41, 0.04) 24%,
+      rgba(5, 12, 31, 0.16) 100%
+    );
+    border-radius: 0 0 1.02rem 1.02rem;
+  }
+
+  .luna-playrecord-card-sheen {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.1) 0%,
+      rgba(255, 255, 255, 0.04) 18%,
+      rgba(255, 255, 255, 0) 38%
+    );
+  }
+
+  .luna-playrecord-card-overlay {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(10, 18, 40, 0.03) 28%,
+      rgba(7, 14, 33, 0.42) 72%,
+      rgba(6, 12, 29, 0.8) 100%
+    );
+  }
+
+  html.dark .luna-playrecord-card-overlay {
+    background:
+      linear-gradient(
+        180deg,
+        rgba(10, 18, 40, 0) 0%,
+        rgba(8, 15, 35, 0.08) 34%,
+        rgba(5, 11, 28, 0.54) 74%,
+        rgba(4, 9, 23, 0.9) 100%
+      ),
+      radial-gradient(
+        ellipse at 50% 82%,
+        rgba(126, 169, 245, 0.08),
+        transparent 42%
+      );
+  }
+
+  .luna-history-card-shell {
+    background: linear-gradient(
+      180deg,
+      rgba(246, 243, 227, 0.2) 0%,
+      rgba(225, 219, 194, 0.16) 28%,
+      rgba(192, 184, 151, 0.22) 100%
+    );
+    box-shadow: 0 18px 28px rgba(79, 68, 40, 0.1);
+  }
+
+  html.dark .luna-history-card-shell {
+    border-color: rgba(255, 247, 224, 0.09);
+    background: linear-gradient(
+      180deg,
+      rgba(149, 139, 111, 0.18) 0%,
+      rgba(98, 90, 72, 0.24) 36%,
+      rgba(48, 43, 35, 0.42) 100%
+    );
+    box-shadow:
+      0 22px 36px rgba(0, 0, 0, 0.18),
+      inset 0 1px 0 rgba(255, 248, 230, 0.05);
+  }
+
+  html.dark .luna-history-card-shell::after {
+    border-color: rgba(255, 247, 224, 0.08);
+    opacity: 0.26;
+  }
+
+  .luna-history-card-poster {
+    background: rgba(255, 248, 230, 0.12);
+  }
+
+  html.dark .luna-history-card-poster {
+    border-color: rgba(255, 243, 214, 0.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    background: rgba(255, 248, 230, 0.03);
+  }
+
+  .luna-history-card-poster-media {
+    object-position: 50% 24%;
+    transform: scale(1.14);
+    transform-origin: 50% 20%;
+    filter: saturate(0.68) brightness(1.04) contrast(0.84) sepia(0.08);
+  }
+
+  html.dark .luna-history-card-poster-media {
+    filter: saturate(0.58) brightness(1.04) contrast(0.74) sepia(0.14);
+  }
+
+  .luna-history-card-sheen {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 249, 226, 0.18) 0%,
+      rgba(255, 247, 220, 0.08) 22%,
+      rgba(255, 255, 255, 0) 40%
+    );
+  }
+
+  .luna-history-card-overlay {
+    background:
+      radial-gradient(
+        ellipse at 50% 78%,
+        rgba(235, 222, 171, 0.2) 0%,
+        rgba(235, 222, 171, 0.05) 28%,
+        transparent 52%
+      ),
+      linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 246, 213, 0.02) 24%,
+        rgba(92, 79, 49, 0.14) 70%,
+        rgba(56, 48, 32, 0.44) 100%
+      );
+  }
+
+  html.dark .luna-history-card-overlay {
+    background:
+      radial-gradient(
+        ellipse at 50% 76%,
+        rgba(232, 221, 176, 0.18) 0%,
+        rgba(232, 221, 176, 0.04) 24%,
+        transparent 46%
+      ),
+      linear-gradient(
+        180deg,
+        rgba(20, 18, 15, 0) 0%,
+        rgba(20, 18, 15, 0.03) 30%,
+        rgba(31, 27, 22, 0.34) 72%,
+        rgba(35, 30, 25, 0.74) 100%
+      );
+  }
+
+  .luna-history-card-footer {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 248, 229, 0.02) 0%,
+      rgba(221, 213, 180, 0.12) 30%,
+      rgba(189, 179, 146, 0.24) 100%
+    );
+    border-radius: 0 0 1.18rem 1.18rem;
+  }
+
+  html.dark .luna-history-card-footer {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 246, 214, 0) 0%,
+      rgba(146, 136, 108, 0.08) 18%,
+      rgba(64, 57, 47, 0.26) 58%,
+      rgba(39, 35, 29, 0.34) 100%
+    );
+    border-radius: 0 0 1.18rem 1.18rem;
   }
 
   .luna-card-action {
@@ -505,36 +923,70 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 1.75rem;
-    padding: 0 0.75rem;
+    min-height: 1.46rem;
+    padding: 0 0.56rem;
     border: 1px solid var(--luna-meta-border);
-    border-radius: 0.875rem;
+    border-radius: 0.72rem;
     background: var(--luna-meta-fill);
     color: var(--luna-meta-text);
-    font-size: 0.75rem;
+    font-size: 0.64rem;
     font-weight: 600;
     line-height: 1;
+    letter-spacing: 0.01em;
     backdrop-filter: blur(18px);
     -webkit-backdrop-filter: blur(18px);
+  }
+
+  .luna-chip--history {
+    min-height: 1.5rem;
+    padding: 0 0.62rem;
+    border-radius: 999px;
+    border-color: rgba(255, 247, 224, 0.08);
+    background: rgba(255, 247, 223, 0.06);
+    color: rgba(255, 248, 228, 0.76);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .luna-chip--history-online {
+    border-color: rgba(255, 247, 224, 0.09);
+    background: rgba(255, 247, 223, 0.08);
+    color: rgba(255, 250, 233, 0.86);
+  }
+
+  .luna-chip--history-offline {
+    border-color: rgba(166, 255, 219, 0.24);
+    background: rgba(109, 168, 135, 0.2);
+    color: rgba(235, 255, 244, 0.96);
+  }
+
+  .luna-chip--playrecord {
+    min-height: 1.42rem;
+    padding: 0 0.54rem;
+    border-radius: 999px;
+    border-color: rgba(166, 198, 255, 0.1);
+    background: rgba(9, 20, 48, 0.32);
+    color: rgba(226, 238, 255, 0.88);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
   }
 
   .luna-progress-track {
     overflow: hidden;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
 
   html.dark .luna-progress-track {
-    background: rgba(120, 151, 220, 0.16);
+    background: rgba(116, 149, 222, 0.1);
   }
 
   .luna-progress-fill {
     background: linear-gradient(
       90deg,
       var(--luna-accent) 0%,
-      rgba(152, 255, 211, 0.8) 100%
+      rgba(158, 255, 220, 0.74) 100%
     );
-    box-shadow: 0 0 16px var(--luna-accent-soft);
+    box-shadow: 0 0 10px var(--luna-accent-soft);
   }
 
   .luna-scroll-track {
@@ -549,18 +1001,18 @@ body {
   .luna-scroll-thumb {
     background: linear-gradient(
       180deg,
-      var(--luna-accent) 0%,
+      rgba(226, 235, 255, 0.86) 0%,
       var(--luna-rail-thumb) 100%
     );
-    box-shadow: 0 0 18px var(--luna-accent-soft);
+    box-shadow: 0 0 12px rgba(194, 215, 255, 0.22);
   }
 
   .luna-scroll-arrow {
     border: 1px solid var(--luna-rail-border);
     background: var(--luna-rail-fill);
-    color: var(--luna-heading);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    color: rgba(239, 245, 255, 0.86);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
   }
 }
 

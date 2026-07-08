@@ -30,14 +30,15 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
 
         <div
           aria-hidden='true'
-          className='pointer-events-none absolute inset-0 hidden md:block'
+          className='pointer-events-none fixed inset-0 z-0 hidden md:block'
         >
           <div className='luna-backdrop-sky' />
           <div className='luna-backdrop-glow' />
           <div className='luna-backdrop-glow-secondary' />
+          <div className='luna-backdrop-landscape' />
+          <div className='luna-backdrop-foreground' />
           <div className='luna-backdrop-mist' />
-          <div className='luna-backdrop-hill-primary' />
-          <div className='luna-backdrop-hill-secondary' />
+          <div className='luna-backdrop-landscape-haze' />
           <div className='luna-backdrop-noise' />
         </div>
 
@@ -50,7 +51,7 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
 
           {/* 主内容区域 */}
           <div className='min-w-0 flex-1 transition-all duration-300'>
-            <div className='hidden md:flex items-center justify-between px-7 pt-6 lg:px-10'>
+            <div className='hidden md:flex items-center justify-between px-7 pt-5 lg:px-10'>
               <div className='flex min-h-[2.625rem] items-center'>
                 {showBackButton ? (
                   <BackButton />
@@ -62,10 +63,10 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
                 )}
               </div>
 
-              <div className='flex items-center gap-3'>
-                <ThemeToggle />
-                <GlobalRatingFilterControl />
-                <UserMenu />
+              <div className='flex items-center gap-[0.64rem] pr-0.5'>
+                <ThemeToggle variant='ghost' />
+                <GlobalRatingFilterControl variant='ghost' />
+                <UserMenu variant='ghost' />
               </div>
             </div>
 
