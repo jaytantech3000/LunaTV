@@ -8,7 +8,7 @@ import {
   Heart,
   Link,
   Loader2,
-  PlayCircleIcon,
+  Play,
   Radio,
   Trash2,
 } from 'lucide-react';
@@ -107,6 +107,33 @@ function emitFollowUpdatesError(message: string): void {
   );
 }
 
+function getVideoTypeLabel(
+  type?: string,
+  episodes?: number,
+  origin: 'vod' | 'live' = 'vod'
+): string | null {
+  if (origin === 'live') {
+    return '直播';
+  }
+
+  switch (type) {
+    case 'movie':
+      return '电影';
+    case 'tv':
+      return '剧集';
+    case 'anime':
+      return '动漫';
+    case 'show':
+      return '综艺';
+    default:
+      if (typeof episodes === 'number' && episodes > 1) {
+        return '剧集';
+      }
+
+      return null;
+  }
+}
+
 const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
   function VideoCard(
     {
@@ -115,10 +142,10 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       query = '',
       poster = '',
       episodes,
+      progress,
       source,
       source_name,
       source_names,
-      progress = 0,
       year,
       from,
       currentEpisode,
@@ -964,7 +991,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       const configs = {
         playrecord: {
           showSourceName: true,
-          showProgress: true,
           showPlayButton: true,
           showHeart: true,
           showCheckCircle: true,
@@ -974,7 +1000,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         },
         favorite: {
           showSourceName: true,
-          showProgress: false,
           showPlayButton: true,
           showHeart: true,
           showCheckCircle: false,
@@ -984,7 +1009,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         },
         search: {
           showSourceName: true,
-          showProgress: false,
           showPlayButton: true,
           showHeart: true, // 移动端菜单中需要显示收藏选项
           showCheckCircle: false,
@@ -994,7 +1018,6 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         },
         douban: {
           showSourceName: false,
-          showProgress: false,
           showPlayButton: true,
           showHeart: false,
           showCheckCircle: false,
@@ -1004,18 +1027,11 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         },
       };
       return configs[from] || configs.search;
-    }, [from, isAggregate, douban_id, rate]);
+    }, [from, rate]);
 
     const showRatingBadge = config.showRating && !!rate;
-    const showEpisodesBadge = !!actualEpisodes && actualEpisodes > 1;
+    const showEpisodesBadge = Boolean(actualEpisodes && actualEpisodes > 1);
     const hasFollowNewEpisodes = hasNewEpisodes(followRecord);
-    const followBadgeTopClass = showRatingBadge
-      ? showEpisodesBadge
-        ? 'top-[4.5rem]'
-        : 'top-10'
-      : showEpisodesBadge
-      ? 'top-10'
-      : 'top-2';
 
     // 移动端操作菜单配置
     const mobileActions = useMemo(() => {
@@ -1026,7 +1042,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         actions.push({
           id: 'play',
           label: origin === 'live' ? '观看直播' : '播放',
-          icon: <PlayCircleIcon size={20} />,
+          icon: <Play size={20} />,
           onClick: handleClick,
           color: 'primary' as const,
         });
@@ -1211,17 +1227,147 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       Boolean(effectivePlaybackMode);
     const playbackModeLabel =
       effectivePlaybackMode === 'offline' ? '离线' : '在线';
-    const playbackModeClassName =
-      effectivePlaybackMode === 'offline'
-        ? 'border-emerald-500/60 text-emerald-600 dark:border-emerald-400/60 dark:text-emerald-300'
-        : 'border-sky-500/50 text-sky-600 dark:border-sky-400/50 dark:text-sky-300';
-    const usesGlassShell = from === 'playrecord' || from === 'favorite';
-    const cardShellClassName = usesGlassShell
-      ? 'luna-card-shell rounded-[1.65rem] p-2 pb-4'
-      : '';
-    const posterRadiusClassName = usesGlassShell
-      ? 'rounded-[1.2rem]'
-      : 'rounded-[1.35rem]';
+    const typeLabel = getVideoTypeLabel(
+      actualSearchType,
+      actualEpisodes,
+      origin
+    );
+    const showInlineFavoriteAction = config.showHeart && from !== 'search';
+    const showInlineDeleteAction =
+      config.showCheckCircle &&
+      from === 'playrecord' &&
+      Boolean(actualSource && actualId);
+    const showHoverActionRail =
+      showInlineFavoriteAction || showInlineDeleteAction;
+    const showOfflinePlaybackChip =
+      shouldShowPlaybackModeBadge && effectivePlaybackMode === 'offline';
+    const showYearBadge =
+      config.showYear &&
+      actualYear &&
+      actualYear !== 'unknown' &&
+      actualYear.trim() !== '';
+    const metadataItems = useMemo<
+      Array<{
+        key: string;
+        label: string;
+        tone?: 'neutral' | 'accent';
+        icon?: React.ReactNode;
+      }>
+    >(() => {
+      const items: Array<{
+        key: string;
+        label: string;
+        tone?: 'neutral' | 'accent';
+        icon?: React.ReactNode;
+      }> = [];
+
+      if (config.showSourceName && source_name) {
+        items.push({
+          key: 'source',
+          label: source_name,
+          icon:
+            origin === 'live' ? <Radio size={11} className='shrink-0' /> : null,
+        });
+      }
+
+      if (typeLabel) {
+        items.push({
+          key: 'type',
+          label: typeLabel,
+          tone: 'neutral',
+        });
+      }
+
+      if (showOfflinePlaybackChip) {
+        items.push({
+          key: 'playback',
+          label: playbackModeLabel,
+          tone: 'accent',
+        });
+      }
+
+      return items;
+    }, [
+      config.showSourceName,
+      origin,
+      playbackModeLabel,
+      showOfflinePlaybackChip,
+      source_name,
+      typeLabel,
+    ]);
+    const aggregateSourceSummary = useMemo(() => {
+      if (
+        !isAggregate ||
+        !dynamicSourceNames ||
+        dynamicSourceNames.length === 0
+      ) {
+        return null;
+      }
+
+      const prioritySources = [
+        '爱奇艺',
+        '腾讯视频',
+        '优酷',
+        '芒果TV',
+        '哔哩哔哩',
+        'Netflix',
+        'Disney+',
+      ];
+      const uniqueSources = Array.from(new Set(dynamicSourceNames));
+      const sortedSources = [...uniqueSources].sort((a, b) => {
+        const aIndex = prioritySources.indexOf(a);
+        const bIndex = prioritySources.indexOf(b);
+
+        if (aIndex !== -1 && bIndex !== -1) {
+          return aIndex - bIndex;
+        }
+
+        if (aIndex !== -1) {
+          return -1;
+        }
+
+        if (bIndex !== -1) {
+          return 1;
+        }
+
+        return a.localeCompare(b);
+      });
+      const maxDisplayCount = 6;
+
+      return {
+        count: uniqueSources.length,
+        displaySources: sortedSources.slice(0, maxDisplayCount),
+        hasMore: sortedSources.length > maxDisplayCount,
+        remainingCount: Math.max(0, sortedSources.length - maxDisplayCount),
+      };
+    }, [dynamicSourceNames, isAggregate]);
+    const cardShellClassName = 'luna-card-shell rounded-[1.15rem] p-0';
+    const posterClassName = `luna-card-poster relative aspect-[11/19] overflow-hidden rounded-[1.15rem] ${
+      origin === 'live' ? 'ring-1 ring-white/20 dark:ring-sky-200/15' : ''
+    }`;
+    const posterImageClassName =
+      origin === 'live'
+        ? 'object-contain p-4 sm:p-5'
+        : 'luna-card-poster-media object-cover';
+    const posterOverlayClassName = `luna-card-poster-overlay absolute inset-0 transition-opacity duration-200 ease-out ${
+      isNavigating ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'
+    }`;
+    const infoPanelClassName = 'luna-card-info mt-[0.38rem]';
+    const nonSelectableStyle: React.CSSProperties = {
+      WebkitUserSelect: 'none',
+      userSelect: 'none',
+      WebkitTouchCallout: 'none',
+    };
+    const interactiveCardStyle: React.CSSProperties = {
+      ...nonSelectableStyle,
+      WebkitTapHighlightColor: 'transparent',
+      touchAction: 'manipulation',
+      pointerEvents: 'auto',
+    };
+    const imageStyle: React.CSSProperties = {
+      ...nonSelectableStyle,
+      pointerEvents: 'none',
+    };
 
     return (
       <>
@@ -1238,66 +1384,36 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           onFocus={prefetchDestination}
           onTouchStartCapture={prefetchDestination}
           {...longPressProps}
-          style={
-            {
-              // 禁用所有默认的长按和选择效果
-              WebkitUserSelect: 'none',
-              userSelect: 'none',
-              WebkitTouchCallout: 'none',
-              WebkitTapHighlightColor: 'transparent',
-              touchAction: 'manipulation',
-              // 禁用右键菜单和长按菜单
-              pointerEvents: 'auto',
-            } as React.CSSProperties
-          }
+          style={interactiveCardStyle}
           onContextMenu={(e) => {
-            // 阻止默认右键菜单
             e.preventDefault();
             e.stopPropagation();
-
-            // 右键弹出操作菜单
             openActionSheet();
-
             return false;
           }}
           onDragStart={(e) => {
-            // 阻止拖拽
             e.preventDefault();
             return false;
           }}
         >
-          {/* 海报容器 */}
           <div
-            className={`luna-card-poster relative aspect-[2/3] overflow-hidden ${posterRadiusClassName} ${
-              origin === 'live'
-                ? 'ring-1 ring-white/20 dark:ring-sky-200/15'
-                : ''
-            }`}
-            style={
-              {
-                WebkitUserSelect: 'none',
-                userSelect: 'none',
-                WebkitTouchCallout: 'none',
-              } as React.CSSProperties
-            }
+            className={posterClassName}
+            style={nonSelectableStyle}
             onContextMenu={(e) => {
               e.preventDefault();
               return false;
             }}
           >
-            {/* 骨架屏 */}
             {!isLoading && <ImagePlaceholder aspectRatio='aspect-[2/3]' />}
-            {/* 图片 */}
             <Image
               src={processImageUrl(actualPoster)}
               alt={actualTitle}
               fill
-              className={origin === 'live' ? 'object-contain' : 'object-cover'}
+              className={posterImageClassName}
               referrerPolicy='no-referrer'
               loading='lazy'
               onLoadingComplete={() => setIsLoading(true)}
               onError={(e) => {
-                // 图片加载失败时的重试机制
                 const img = e.target as HTMLImageElement;
                 if (!img.dataset.retried) {
                   img.dataset.retried = 'true';
@@ -1306,15 +1422,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                   }, 2000);
                 }
               }}
-              style={
-                {
-                  // 禁用图片的默认长按效果
-                  WebkitUserSelect: 'none',
-                  userSelect: 'none',
-                  WebkitTouchCallout: 'none',
-                  pointerEvents: 'none', // 图片不响应任何指针事件
-                } as React.CSSProperties
-              }
+              style={imageStyle}
               onContextMenu={(e) => {
                 e.preventDefault();
                 return false;
@@ -1325,66 +1433,42 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               }}
             />
 
-            <div className='pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.08),transparent_18%),linear-gradient(180deg,transparent_58%,rgba(0,0,0,0.18)_100%)]' />
+            <div className='pointer-events-none absolute inset-0 luna-card-poster-sheen' />
 
-            {isNavigating && (
-              <div className='absolute inset-0 z-20 flex items-center justify-center bg-black/45 backdrop-blur-[1px]'>
+            {isNavigating ? (
+              <div className='absolute inset-0 z-30 flex items-center justify-center bg-black/45 backdrop-blur-[1px]'>
                 <div className='inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-black/75 px-3 py-2 text-xs font-medium text-white shadow-xl shadow-black/30'>
                   <Loader2 className='h-4 w-4 animate-spin text-emerald-300' />
                   <span>正在打开</span>
                 </div>
               </div>
-            )}
+            ) : null}
 
-            {/* 悬浮遮罩 */}
             <div
-              className={`absolute inset-0 bg-[linear-gradient(180deg,var(--luna-overlay-start)_0%,transparent_34%,var(--luna-overlay-end)_100%)] transition-opacity duration-200 ease-out ${
-                isNavigating
-                  ? 'opacity-100'
-                  : 'opacity-70 group-hover:opacity-100'
-              }`}
-              style={
-                {
-                  WebkitUserSelect: 'none',
-                  userSelect: 'none',
-                  WebkitTouchCallout: 'none',
-                } as React.CSSProperties
-              }
+              className={posterOverlayClassName}
+              style={nonSelectableStyle}
               onContextMenu={(e) => {
                 e.preventDefault();
                 return false;
               }}
             />
 
-            {/* 播放按钮 */}
-            {config.showPlayButton && (
+            {config.showPlayButton ? (
               <div
                 data-button='true'
-                className='absolute inset-0 flex items-center justify-center opacity-0 transition-all duration-200 ease-out delay-75 group-hover:opacity-100'
-                style={
-                  {
-                    WebkitUserSelect: 'none',
-                    userSelect: 'none',
-                    WebkitTouchCallout: 'none',
-                  } as React.CSSProperties
-                }
+                className='pointer-events-none absolute inset-0 z-20 flex scale-[0.94] items-center justify-center opacity-0 transition-all duration-200 ease-out sm:group-hover:scale-100 sm:group-hover:opacity-100'
+                style={nonSelectableStyle}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   return false;
                 }}
               >
-                <div className='luna-card-action flex h-14 w-14 items-center justify-center rounded-full'>
-                  <PlayCircleIcon
-                    size={34}
-                    strokeWidth={1.05}
-                    className='fill-transparent text-[var(--luna-card-text)] transition-transform duration-200 ease-out group-hover:scale-[1.03]'
-                    style={
-                      {
-                        WebkitUserSelect: 'none',
-                        userSelect: 'none',
-                        WebkitTouchCallout: 'none',
-                      } as React.CSSProperties
-                    }
+                <div className='luna-card-action luna-card-action--play flex h-[3.35rem] w-[3.35rem] items-center justify-center rounded-full sm:h-[3.5rem] sm:w-[3.5rem]'>
+                  <Play
+                    size={20}
+                    strokeWidth={2.35}
+                    className='translate-x-[1px] fill-white text-white transition-transform duration-200 ease-out group-hover:scale-[1.03] sm:h-[1.38rem] sm:w-[1.38rem]'
+                    style={nonSelectableStyle}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       return false;
@@ -1392,47 +1476,160 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                   />
                 </div>
               </div>
-            )}
+            ) : null}
 
-            {/* 操作按钮 */}
-            {(config.showHeart || config.showCheckCircle) && (
+            {showYearBadge ? (
               <div
-                data-button='true'
-                className='absolute bottom-3 right-3 flex gap-2 opacity-0 translate-y-2 transition-all duration-200 ease-out sm:group-hover:translate-y-0 sm:group-hover:opacity-100'
-                style={
-                  {
-                    WebkitUserSelect: 'none',
-                    userSelect: 'none',
-                    WebkitTouchCallout: 'none',
-                  } as React.CSSProperties
-                }
+                className='luna-chip luna-chip--ghost absolute left-3 top-3 z-20 min-h-0 px-2.5 py-1 text-[0.68rem] font-semibold'
+                style={nonSelectableStyle}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   return false;
                 }}
               >
-                {config.showCheckCircle && (
+                {actualYear}
+              </div>
+            ) : null}
+
+            {showRatingBadge || showEpisodesBadge || hasFollowNewEpisodes ? (
+              <div
+                className='absolute right-2 top-2 z-20 flex flex-col items-end gap-[0.22rem]'
+                style={nonSelectableStyle}
+              >
+                {showRatingBadge ? (
+                  <div className='luna-card-badge luna-card-badge--score'>
+                    {rate}
+                  </div>
+                ) : null}
+                {showEpisodesBadge ? (
+                  <div className='luna-card-badge luna-card-badge--accent'>
+                    {currentEpisode
+                      ? `${currentEpisode}/${actualEpisodes}`
+                      : actualEpisodes}
+                  </div>
+                ) : null}
+                {hasFollowNewEpisodes ? (
+                  <div className='luna-card-badge luna-card-badge--warning'>
+                    NEW
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {config.showDoubanLink && actualDoubanId && actualDoubanId !== 0 ? (
+              <a
+                href={
+                  isBangumi
+                    ? `https://bgm.tv/subject/${actualDoubanId.toString()}`
+                    : `https://movie.douban.com/subject/${actualDoubanId.toString()}`
+                }
+                target='_blank'
+                rel='noopener noreferrer'
+                onClick={(e) => e.stopPropagation()}
+                className={`absolute left-3 z-20 opacity-0 -translate-x-2 transition-all duration-200 ease-out delay-100 sm:group-hover:translate-x-0 sm:group-hover:opacity-100 ${
+                  showYearBadge ? 'top-[3rem]' : 'top-3'
+                }`}
+                style={nonSelectableStyle}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  return false;
+                }}
+              >
+                <div className='luna-card-action flex h-8 w-8 items-center justify-center rounded-full text-[var(--luna-card-text)]'>
+                  <Link
+                    size={16}
+                    style={{
+                      ...nonSelectableStyle,
+                      pointerEvents: 'none',
+                    }}
+                  />
+                </div>
+              </a>
+            ) : null}
+
+            {aggregateSourceSummary ? (
+              <div
+                className='absolute bottom-[4.9rem] right-3 z-20 opacity-0 transition-all duration-200 ease-out delay-75 sm:group-hover:opacity-100'
+                style={nonSelectableStyle}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  return false;
+                }}
+              >
+                <div className='relative group/sources'>
+                  <div className='luna-card-action flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-xs font-bold text-[var(--luna-card-text)]'>
+                    {aggregateSourceSummary.count}
+                  </div>
+                  <div className='pointer-events-none invisible absolute bottom-full right-0 z-50 mb-2 opacity-0 transition-all duration-200 ease-out delay-100 group-hover/sources:visible group-hover/sources:opacity-100'>
+                    <div className='luna-popover min-w-[100px] max-w-[140px] overflow-hidden rounded-[1rem] border border-[var(--luna-popover-border)] p-1.5 text-xs text-[var(--luna-card-text)] shadow-xl sm:min-w-[120px] sm:max-w-[200px] sm:p-2'>
+                      <div className='space-y-0.5 sm:space-y-1'>
+                        {aggregateSourceSummary.displaySources.map(
+                          (sourceName, index) => (
+                            <div
+                              key={index}
+                              className='flex items-center gap-1 sm:gap-1.5'
+                            >
+                              <div className='h-0.5 w-0.5 flex-shrink-0 rounded-full bg-[var(--luna-accent)] sm:h-1 sm:w-1' />
+                              <span
+                                className='truncate text-[10px] leading-tight sm:text-xs'
+                                title={sourceName}
+                              >
+                                {sourceName}
+                              </span>
+                            </div>
+                          )
+                        )}
+                      </div>
+
+                      {aggregateSourceSummary.hasMore ? (
+                        <div className='mt-1 border-t border-white/10 pt-1 sm:mt-2 sm:pt-1.5'>
+                          <div className='flex items-center justify-center text-[var(--luna-card-muted)]'>
+                            <span className='text-[10px] font-medium sm:text-xs'>
+                              +{aggregateSourceSummary.remainingCount} 播放源
+                            </span>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className='absolute right-2 top-full h-0 w-0 border-l-[4px] border-r-[4px] border-t-[4px] border-transparent border-t-white/10 sm:right-3 sm:border-l-[6px] sm:border-r-[6px] sm:border-t-[6px]' />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {showHoverActionRail ? (
+              <div
+                data-button='true'
+                className='absolute bottom-[0.68rem] right-[0.72rem] z-30 flex translate-y-2 items-center gap-[0.34rem] opacity-0 transition-all duration-200 ease-out sm:group-hover:translate-y-0 sm:group-hover:opacity-100'
+                style={nonSelectableStyle}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  return false;
+                }}
+              >
+                {showInlineDeleteAction ? (
                   <button
                     type='button'
                     onClick={handleDeleteRecord}
-                    className='luna-card-action flex h-8 w-8 items-center justify-center rounded-full'
+                    className='flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded-full text-white/90 transition-colors duration-200 hover:bg-white/10 hover:text-white'
                     aria-label='删除记录'
                   >
                     <Trash2
-                      size={16}
+                      size={15}
                       className='text-[var(--luna-card-text)]'
                     />
                   </button>
-                )}
-                {config.showHeart && from !== 'search' && (
+                ) : null}
+                {showInlineFavoriteAction ? (
                   <button
                     type='button'
                     onClick={handleToggleFavorite}
-                    className='luna-card-action flex h-8 w-8 items-center justify-center rounded-full'
+                    className='flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded-full text-white/90 transition-colors duration-200 hover:bg-white/10 hover:text-white'
                     aria-label={favorited ? '取消收藏' : '添加收藏'}
                   >
                     <Heart
-                      size={16}
+                      size={15}
                       className={`transition-colors duration-200 ${
                         favorited
                           ? 'fill-rose-500 stroke-rose-500'
@@ -1440,468 +1637,61 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                       }`}
                     />
                   </button>
-                )}
+                ) : null}
               </div>
-            )}
+            ) : null}
 
-            {/* 年份徽章 */}
-            {config.showYear &&
-              actualYear &&
-              actualYear !== 'unknown' &&
-              actualYear.trim() !== '' && (
-                <div
-                  className='luna-chip absolute left-2 top-2 min-h-0 px-2.5 py-1 text-[0.68rem] font-semibold'
-                  style={
-                    {
-                      WebkitUserSelect: 'none',
-                      userSelect: 'none',
-                      WebkitTouchCallout: 'none',
-                    } as React.CSSProperties
-                  }
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    return false;
-                  }}
-                >
-                  {actualYear}
-                </div>
-              )}
-
-            {/* 徽章 */}
-            {showRatingBadge && (
-              <div
-                className='absolute right-2 top-2 flex h-7 min-w-[1.85rem] items-center justify-center rounded-full bg-[linear-gradient(180deg,var(--luna-score-from)_0%,var(--luna-score-to)_100%)] px-1.5 text-xs font-bold text-white shadow-[0_10px_18px_rgba(0,0,0,0.22)] transition-transform duration-200 ease-out group-hover:scale-[1.04]'
-                style={
-                  {
-                    WebkitUserSelect: 'none',
-                    userSelect: 'none',
-                    WebkitTouchCallout: 'none',
-                  } as React.CSSProperties
-                }
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  return false;
-                }}
-              >
-                {rate}
-              </div>
-            )}
-
-            {showEpisodesBadge && (
-              <div
-                className={`absolute right-2 ${
-                  showRatingBadge ? 'top-10' : 'top-2'
-                } rounded-[0.7rem] bg-[var(--luna-accent)] px-2 py-1 text-xs font-semibold text-white shadow-[0_10px_18px_var(--luna-accent-soft)] transition-transform duration-200 ease-out group-hover:scale-[1.04]`}
-                style={
-                  {
-                    WebkitUserSelect: 'none',
-                    userSelect: 'none',
-                    WebkitTouchCallout: 'none',
-                  } as React.CSSProperties
-                }
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  return false;
-                }}
-              >
-                {currentEpisode
-                  ? `${currentEpisode}/${actualEpisodes}`
-                  : actualEpisodes}
-              </div>
-            )}
-
-            {hasFollowNewEpisodes && (
-              <div
-                className={`absolute right-2 ${followBadgeTopClass} rounded-[0.7rem] border border-amber-300/60 bg-amber-500/95 px-2 py-1 text-[11px] font-bold tracking-[0.08em] text-white shadow-md transition-transform duration-200 ease-out group-hover:scale-[1.04]`}
-                style={
-                  {
-                    WebkitUserSelect: 'none',
-                    userSelect: 'none',
-                    WebkitTouchCallout: 'none',
-                  } as React.CSSProperties
-                }
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  return false;
-                }}
-              >
-                NEW
-              </div>
-            )}
-
-            {/* 豆瓣链接 */}
-            {config.showDoubanLink &&
-              actualDoubanId &&
-              actualDoubanId !== 0 && (
-                <a
-                  href={
-                    isBangumi
-                      ? `https://bgm.tv/subject/${actualDoubanId.toString()}`
-                      : `https://movie.douban.com/subject/${actualDoubanId.toString()}`
-                  }
-                  target='_blank'
-                  rel='noopener noreferrer'
-                  onClick={(e) => e.stopPropagation()}
-                  className='absolute left-2 top-2 opacity-0 -translate-x-2 transition-all duration-200 ease-out delay-100 sm:group-hover:translate-x-0 sm:group-hover:opacity-100'
-                  style={
-                    {
-                      WebkitUserSelect: 'none',
-                      userSelect: 'none',
-                      WebkitTouchCallout: 'none',
-                    } as React.CSSProperties
-                  }
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    return false;
-                  }}
-                >
-                  <div
-                    className='luna-card-action flex h-8 w-8 items-center justify-center rounded-full text-[var(--luna-card-text)]'
-                    style={
-                      {
-                        WebkitUserSelect: 'none',
-                        userSelect: 'none',
-                        WebkitTouchCallout: 'none',
-                      } as React.CSSProperties
-                    }
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      return false;
-                    }}
-                  >
-                    <Link
-                      size={16}
-                      style={
-                        {
-                          WebkitUserSelect: 'none',
-                          userSelect: 'none',
-                          WebkitTouchCallout: 'none',
-                          pointerEvents: 'none',
-                        } as React.CSSProperties
-                      }
-                    />
-                  </div>
-                </a>
-              )}
-
-            {/* 聚合播放源指示器 */}
-            {isAggregate &&
-              dynamicSourceNames &&
-              dynamicSourceNames.length > 0 &&
-              (() => {
-                const uniqueSources = Array.from(new Set(dynamicSourceNames));
-                const sourceCount = uniqueSources.length;
-
-                return (
-                  <div
-                    className='absolute bottom-2 right-2 opacity-0 transition-all duration-300 ease-in-out delay-75 sm:group-hover:opacity-100'
-                    style={
-                      {
-                        WebkitUserSelect: 'none',
-                        userSelect: 'none',
-                        WebkitTouchCallout: 'none',
-                      } as React.CSSProperties
-                    }
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      return false;
-                    }}
-                  >
-                    <div
-                      className='relative group/sources'
-                      style={
-                        {
-                          WebkitUserSelect: 'none',
-                          userSelect: 'none',
-                          WebkitTouchCallout: 'none',
-                        } as React.CSSProperties
-                      }
-                    >
-                      <div
-                        className='luna-card-action flex h-7 w-7 cursor-pointer items-center justify-center rounded-full text-xs font-bold text-[var(--luna-card-text)] sm:h-8 sm:w-8'
-                        style={
-                          {
-                            WebkitUserSelect: 'none',
-                            userSelect: 'none',
-                            WebkitTouchCallout: 'none',
-                          } as React.CSSProperties
-                        }
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          return false;
-                        }}
-                      >
-                        {sourceCount}
-                      </div>
-
-                      {/* 播放源详情悬浮框 */}
-                      {(() => {
-                        // 优先显示的播放源（常见的主流平台）
-                        const prioritySources = [
-                          '爱奇艺',
-                          '腾讯视频',
-                          '优酷',
-                          '芒果TV',
-                          '哔哩哔哩',
-                          'Netflix',
-                          'Disney+',
-                        ];
-
-                        // 按优先级排序播放源
-                        const sortedSources = uniqueSources.sort((a, b) => {
-                          const aIndex = prioritySources.indexOf(a);
-                          const bIndex = prioritySources.indexOf(b);
-                          if (aIndex !== -1 && bIndex !== -1)
-                            return aIndex - bIndex;
-                          if (aIndex !== -1) return -1;
-                          if (bIndex !== -1) return 1;
-                          return a.localeCompare(b);
-                        });
-
-                        const maxDisplayCount = 6; // 最多显示6个
-                        const displaySources = sortedSources.slice(
-                          0,
-                          maxDisplayCount
-                        );
-                        const hasMore = sortedSources.length > maxDisplayCount;
-                        const remainingCount =
-                          sortedSources.length - maxDisplayCount;
-
-                        return (
-                          <div
-                            className='absolute bottom-full mb-2 opacity-0 invisible group-hover/sources:opacity-100 group-hover/sources:visible transition-all duration-200 ease-out delay-100 pointer-events-none z-50 right-0 sm:right-0 -translate-x-0 sm:translate-x-0'
-                            style={
-                              {
-                                WebkitUserSelect: 'none',
-                                userSelect: 'none',
-                                WebkitTouchCallout: 'none',
-                              } as React.CSSProperties
-                            }
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              return false;
-                            }}
-                          >
-                            <div
-                              className='luna-popover min-w-[100px] max-w-[140px] overflow-hidden rounded-[1rem] border border-[var(--luna-popover-border)] p-1.5 text-xs text-[var(--luna-card-text)] shadow-xl sm:min-w-[120px] sm:max-w-[200px] sm:p-2'
-                              style={
-                                {
-                                  WebkitUserSelect: 'none',
-                                  userSelect: 'none',
-                                  WebkitTouchCallout: 'none',
-                                } as React.CSSProperties
-                              }
-                              onContextMenu={(e) => {
-                                e.preventDefault();
-                                return false;
-                              }}
-                            >
-                              {/* 单列布局 */}
-                              <div className='space-y-0.5 sm:space-y-1'>
-                                {displaySources.map((sourceName, index) => (
-                                  <div
-                                    key={index}
-                                    className='flex items-center gap-1 sm:gap-1.5'
-                                  >
-                                    <div className='h-0.5 w-0.5 flex-shrink-0 rounded-full bg-[var(--luna-accent)] sm:h-1 sm:w-1'></div>
-                                    <span
-                                      className='truncate text-[10px] sm:text-xs leading-tight'
-                                      title={sourceName}
-                                    >
-                                      {sourceName}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-
-                              {/* 显示更多提示 */}
-                              {hasMore && (
-                                <div className='mt-1 border-t border-white/10 pt-1 sm:mt-2 sm:pt-1.5'>
-                                  <div className='flex items-center justify-center text-[var(--luna-card-muted)]'>
-                                    <span className='text-[10px] sm:text-xs font-medium'>
-                                      +{remainingCount} 播放源
-                                    </span>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* 小箭头 */}
-                              <div className='absolute right-2 top-full h-0 w-0 border-l-[4px] border-r-[4px] border-t-[4px] border-transparent border-t-white/10 sm:right-3 sm:border-l-[6px] sm:border-r-[6px] sm:border-t-[6px]'></div>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                );
-              })()}
-          </div>
-
-          {/* 进度条 */}
-          {config.showProgress && progress !== undefined && (
             <div
-              className='luna-progress-track mt-3 h-[5px] w-full'
-              style={
-                {
-                  WebkitUserSelect: 'none',
-                  userSelect: 'none',
-                  WebkitTouchCallout: 'none',
-                } as React.CSSProperties
-              }
+              className={infoPanelClassName}
+              style={nonSelectableStyle}
               onContextMenu={(e) => {
                 e.preventDefault();
                 return false;
               }}
             >
-              <div
-                className='luna-progress-fill h-full transition-all duration-500 ease-out'
-                style={
-                  {
-                    width: `${progress}%`,
-                    WebkitUserSelect: 'none',
-                    userSelect: 'none',
-                    WebkitTouchCallout: 'none',
-                  } as React.CSSProperties
-                }
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  return false;
-                }}
-              />
-            </div>
-          )}
-
-          {/* 标题与来源 */}
-          <div
-            className={`mt-3 px-1 ${
-              usesGlassShell ? 'text-left' : 'text-left'
-            }`}
-            style={
-              {
-                WebkitUserSelect: 'none',
-                userSelect: 'none',
-                WebkitTouchCallout: 'none',
-              } as React.CSSProperties
-            }
-            onContextMenu={(e) => {
-              e.preventDefault();
-              return false;
-            }}
-          >
-            <div
-              className='relative'
-              style={
-                {
-                  WebkitUserSelect: 'none',
-                  userSelect: 'none',
-                  WebkitTouchCallout: 'none',
-                } as React.CSSProperties
-              }
-            >
-              <span
-                className='peer block truncate text-[0.98rem] font-semibold text-[var(--luna-card-text)] transition-colors duration-200 ease-out group-hover:text-white'
-                style={
-                  {
-                    WebkitUserSelect: 'none',
-                    userSelect: 'none',
-                    WebkitTouchCallout: 'none',
-                  } as React.CSSProperties
-                }
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  return false;
-                }}
-              >
-                {actualTitle}
-              </span>
-              {/* 自定义 tooltip */}
-              <div
-                className='luna-popover pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-[0.9rem] px-3 py-1 text-xs text-[var(--luna-card-text)] opacity-0 invisible transition-all duration-200 ease-out delay-100 peer-hover:visible peer-hover:opacity-100'
-                style={
-                  {
-                    WebkitUserSelect: 'none',
-                    userSelect: 'none',
-                    WebkitTouchCallout: 'none',
-                  } as React.CSSProperties
-                }
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  return false;
-                }}
-              >
-                {actualTitle}
-                <div
-                  className='absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-l-4 border-r-4 border-t-4 border-transparent border-t-white/10'
-                  style={
-                    {
-                      WebkitUserSelect: 'none',
-                      userSelect: 'none',
-                      WebkitTouchCallout: 'none',
-                    } as React.CSSProperties
-                  }
-                ></div>
-              </div>
-            </div>
-            {config.showSourceName &&
-              (source_name || shouldShowPlaybackModeBadge) && (
-                <span
-                  className='mt-2 flex flex-wrap items-center justify-start gap-2 text-xs text-[var(--luna-card-muted)]'
-                  style={
-                    {
-                      WebkitUserSelect: 'none',
-                      userSelect: 'none',
-                      WebkitTouchCallout: 'none',
-                    } as React.CSSProperties
-                  }
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    return false;
-                  }}
-                >
-                  {source_name && (
-                    <span
-                      className='luna-chip'
-                      style={
-                        {
-                          WebkitUserSelect: 'none',
-                          userSelect: 'none',
-                          WebkitTouchCallout: 'none',
-                        } as React.CSSProperties
-                      }
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        return false;
-                      }}
-                    >
-                      {origin === 'live' && (
-                        <Radio
-                          size={12}
-                          className='inline-block text-gray-500 dark:text-gray-400 mr-1.5'
-                        />
-                      )}
-                      {source_name}
-                    </span>
-                  )}
-                  {shouldShowPlaybackModeBadge && (
-                    <span
-                      className={`luna-chip ${playbackModeClassName}`}
-                      style={
-                        {
-                          WebkitUserSelect: 'none',
-                          userSelect: 'none',
-                          WebkitTouchCallout: 'none',
-                        } as React.CSSProperties
-                      }
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        return false;
-                      }}
-                    >
-                      {playbackModeLabel}
-                    </span>
-                  )}
+              <div className='relative min-w-0'>
+                <span className='peer block truncate text-[0.94rem] font-semibold leading-[1.08] tracking-[-0.028em] text-[var(--luna-card-text)] transition-colors duration-200 ease-out group-hover:text-white sm:text-[0.98rem]'>
+                  {actualTitle}
                 </span>
-              )}
+                <div className='luna-popover pointer-events-none absolute bottom-full left-1/2 mb-2 invisible -translate-x-1/2 whitespace-nowrap rounded-[0.9rem] px-3 py-1 text-xs text-[var(--luna-card-text)] opacity-0 transition-all duration-200 ease-out delay-100 peer-hover:visible peer-hover:opacity-100'>
+                  {actualTitle}
+                  <div className='absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-l-4 border-r-4 border-t-4 border-transparent border-t-white/10' />
+                </div>
+              </div>
+
+              {metadataItems.length > 0 ? (
+                <div
+                  className={`mt-[0.36rem] flex flex-wrap items-center gap-[0.3rem] ${
+                    showHoverActionRail ? 'pr-8 sm:pr-9' : ''
+                  }`}
+                >
+                  {metadataItems.map((item) => (
+                    <span
+                      key={item.key}
+                      className={`luna-chip ${
+                        item.tone === 'accent'
+                          ? 'luna-chip--accent'
+                          : item.tone === 'neutral'
+                          ? 'luna-chip--neutral'
+                          : ''
+                      }`}
+                    >
+                      {item.icon}
+                      {item.label}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            {progress !== undefined ? (
+              <div className='luna-card-progress-track absolute bottom-0 left-0 right-0 z-30'>
+                <div
+                  className='luna-card-progress-fill h-full'
+                  style={{ width: `${Math.max(0, Math.min(progress, 100))}%` }}
+                />
+              </div>
+            ) : null}
           </div>
         </div>
 

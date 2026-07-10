@@ -246,6 +246,10 @@ export default async function RootLayout({
     resolveSitePresentation(),
     buildPublicRuntimeConfig(),
   ]);
+  const isDesktopTarget = runtimeConfig.APP_TARGET === 'desktop';
+  const themeStorageKey = isDesktopTarget ? 'lunatv-desktop-theme' : 'theme';
+  const defaultTheme = isDesktopTarget ? 'dark' : 'system';
+  const enableSystemTheme = !isDesktopTarget;
 
   return (
     <html lang='zh-CN' suppressHydrationWarning>
@@ -273,8 +277,9 @@ export default async function RootLayout({
       >
         <ThemeProvider
           attribute='class'
-          defaultTheme='system'
-          enableSystem
+          defaultTheme={defaultTheme}
+          enableSystem={enableSystemTheme}
+          storageKey={themeStorageKey}
           disableTransitionOnChange
         >
           <DesktopUpdateBootstrap />

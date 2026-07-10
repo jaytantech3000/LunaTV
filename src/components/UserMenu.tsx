@@ -44,7 +44,11 @@ interface AuthInfo {
   role?: 'owner' | 'admin' | 'user';
 }
 
-export const UserMenu: React.FC = () => {
+interface UserMenuProps {
+  variant?: 'default' | 'ghost';
+}
+
+export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
   const router = useRouter();
   const { beginNavigation, pendingNavigation } = useNavigationFeedback();
   const [isOpen, setIsOpen] = useState(false);
@@ -61,6 +65,11 @@ export const UserMenu: React.FC = () => {
   const [desktopOwnerPasswordConfigured, setDesktopOwnerPasswordConfigured] =
     useState(false);
   const [mounted, setMounted] = useState(false);
+  const isGhost = variant === 'ghost';
+  const buttonClassName = isGhost
+    ? 'luna-toolbar-button luna-toolbar-button--ghost'
+    : 'luna-toolbar-button';
+  const iconClassName = isGhost ? 'h-[1.26rem] w-[1.26rem]' : 'w-full h-full';
 
   // Body 滚动锁定 - 使用 overflow 方式避免布局问题
   useEffect(() => {
@@ -777,13 +786,19 @@ export const UserMenu: React.FC = () => {
       <div className='relative'>
         <button
           onClick={handleMenuClick}
-          className='luna-toolbar-button'
+          className={buttonClassName}
           aria-label='User Menu'
         >
-          <User className='w-full h-full' />
+          <User className={iconClassName} strokeWidth={1.72} />
         </button>
         {updateStatus === UpdateStatus.HAS_UPDATE && (
-          <div className='absolute top-[2px] right-[2px] w-2 h-2 bg-yellow-500 rounded-full'></div>
+          <div
+            className={`absolute rounded-full bg-yellow-500 ${
+              isGhost
+                ? 'right-[1px] top-[1px] h-1.5 w-1.5'
+                : 'right-[2px] top-[2px] h-2 w-2'
+            }`}
+          ></div>
         )}
       </div>
 

@@ -13,6 +13,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const projectRoot = join(__dirname, '..')
 const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+const useWindowsCommandShell = process.platform === 'win32'
 
 let tauriChild = null
 let shuttingDown = false
@@ -76,6 +77,7 @@ function runTauriDev() {
         LUNATV_DESKTOP_SKIP_BOOTSTRAP: '1',
       },
       stdio: 'inherit',
+      shell: useWindowsCommandShell,
     })
 
     tauriChild.on('error', reject)

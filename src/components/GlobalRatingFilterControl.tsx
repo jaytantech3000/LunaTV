@@ -12,11 +12,17 @@ import { useGlobalRatingFilterStore } from '@/stores/useGlobalRatingFilterStore'
 
 const PRESET_RATINGS = [6, 7, 8, 9];
 
+interface GlobalRatingFilterControlProps {
+  variant?: 'default' | 'ghost';
+}
+
 function formatRating(value: number): string {
   return normalizeMinimumRating(value).toFixed(1);
 }
 
-export default function GlobalRatingFilterControl() {
+export default function GlobalRatingFilterControl({
+  variant = 'default',
+}: GlobalRatingFilterControlProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const enabled = useGlobalRatingFilterStore((state) => state.enabled);
   const minimumRating = useGlobalRatingFilterStore(
@@ -31,6 +37,13 @@ export default function GlobalRatingFilterControl() {
   const [draftRating, setDraftRating] = useState(
     formatRating(DEFAULT_GLOBAL_MINIMUM_RATING)
   );
+  const isGhost = variant === 'ghost';
+  const buttonClassName = `relative ${
+    isGhost
+      ? 'luna-toolbar-button luna-toolbar-button--ghost'
+      : 'luna-toolbar-button'
+  } ${enabled ? 'text-[var(--luna-accent)]' : ''}`;
+  const iconClassName = isGhost ? 'h-[1.24rem] w-[1.24rem]' : 'h-full w-full';
 
   useEffect(() => {
     setDraftRating(formatRating(minimumRating));
@@ -79,7 +92,13 @@ export default function GlobalRatingFilterControl() {
   };
 
   if (!hasHydrated) {
-    return <div className='h-[2.625rem] w-[2.625rem]' />;
+    return (
+      <div
+        className={
+          isGhost ? 'h-[2.06rem] w-[2.06rem]' : 'h-[2.625rem] w-[2.625rem]'
+        }
+      />
+    );
   }
 
   return (
@@ -87,14 +106,12 @@ export default function GlobalRatingFilterControl() {
       <button
         type='button'
         onClick={() => setIsOpen((previousValue) => !previousValue)}
-        className={`luna-toolbar-button relative ${
-          enabled ? 'text-[var(--luna-accent)]' : ''
-        }`}
+        className={buttonClassName}
         aria-label='打开评分过滤器'
         aria-expanded={isOpen}
       >
-        <SlidersHorizontal className='h-full w-full' />
-        {enabled ? (
+        <SlidersHorizontal className={iconClassName} strokeWidth={1.68} />
+        {enabled && !isGhost ? (
           <span className='absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-green-500 dark:bg-green-400' />
         ) : null}
       </button>

@@ -20,6 +20,7 @@ const FRONTEND_POLL_INTERVAL_MS = 1000
 const KEEPALIVE_POLL_INTERVAL_MS = 3000
 
 const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+const useWindowsCommandShell = process.platform === 'win32'
 
 let frontendChild = null
 let shuttingDown = false
@@ -69,6 +70,7 @@ function runBlockingCommand(command, args) {
   execFileSync(command, args, {
     cwd: projectRoot,
     stdio: 'inherit',
+    shell: useWindowsCommandShell,
   })
 }
 
@@ -381,6 +383,7 @@ function startFrontendDevServer() {
     cwd: projectRoot,
     env: process.env,
     stdio: 'inherit',
+    shell: useWindowsCommandShell,
   })
 
   frontendChild.on('error', error => {

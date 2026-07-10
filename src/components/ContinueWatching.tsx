@@ -119,6 +119,8 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
     const [source, id] = key.split('+');
     return { source, id };
   };
+  const cardContainerClassName =
+    'w-[6.85rem] min-w-[6.85rem] sm:w-[13rem] sm:min-w-[13rem]';
 
   return (
     <section className={`mb-10 ${className || ''}`}>
@@ -136,13 +138,10 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
           </button>
         ) : null}
       </div>
-      <ScrollableRow>
+      <ScrollableRow contentClassName='flex overflow-x-auto px-[0.08rem] py-1 pb-7 scrollbar-hide gap-[0.9rem] sm:gap-[1.08rem] sm:pb-8'>
         {loading
           ? Array.from({ length: 6 }).map((_, index) => (
-              <div
-                key={index}
-                className='min-w-[96px] w-24 sm:min-w-[11rem] sm:w-[11rem]'
-              >
+              <div key={index} className={cardContainerClassName}>
                 <div className='luna-skeleton-card relative aspect-[2/3] w-full animate-pulse'>
                   <div className='absolute inset-0 bg-white/10 dark:bg-white/5' />
                 </div>
@@ -154,10 +153,7 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
               const { source, id } = parseKey(record.key);
 
               return (
-                <div
-                  key={record.key}
-                  className='min-w-[96px] w-24 sm:min-w-[11rem] sm:w-[11rem]'
-                >
+                <div key={record.key} className={cardContainerClassName}>
                   <VideoCard
                     id={id}
                     title={record.title}
@@ -177,7 +173,7 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
                         prev.filter((item) => item.key !== record.key)
                       )
                     }
-                    type={record.total_episodes > 1 ? 'tv' : ''}
+                    type={record.total_episodes > 1 ? 'tv' : 'movie'}
                   />
                 </div>
               );

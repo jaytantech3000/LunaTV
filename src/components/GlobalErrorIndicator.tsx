@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface ErrorInfo {
   id: string;
@@ -12,19 +12,41 @@ export function GlobalErrorIndicator() {
   const [currentError, setCurrentError] = useState<ErrorInfo | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [isReplacing, setIsReplacing] = useState(false);
+  const currentErrorRef = useRef<ErrorInfo | null>(null);
+  const hideTimerRef = useRef<number | null>(null);
+  const lastErrorRef = useRef<{
+    message: string;
+    timestamp: number;
+  } | null>(null);
 
   useEffect(() => {
     // 监听自定义错误事件
     const handleError = (event: CustomEvent) => {
       const { message } = event.detail;
+      const now = Date.now();
+      const lastError = lastErrorRef.current;
+
+      // Suppress rapid-fire duplicates so a noisy source does not pin the toast.
+      if (
+        lastError &&
+        lastError.message === message &&
+        now - lastError.timestamp < 30000
+      ) {
+        return;
+      }
+
       const newError: ErrorInfo = {
-        id: Date.now().toString(),
+        id: now.toString(),
         message,
-        timestamp: Date.now(),
+        timestamp: now,
+      };
+      lastErrorRef.current = {
+        message,
+        timestamp: now,
       };
 
       // 如果已有错误，开始替换动画
-      if (currentError) {
+      if (currentErrorRef.current) {
         setCurrentError(newError);
         setIsReplacing(true);
 
@@ -36,8 +58,21 @@ export function GlobalErrorIndicator() {
         // 第一次显示错误
         setCurrentError(newError);
       }
+      currentErrorRef.current = newError;
 
       setIsVisible(true);
+
+      if (hideTimerRef.current !== null) {
+        window.clearTimeout(hideTimerRef.current);
+      }
+
+      hideTimerRef.current = window.setTimeout(() => {
+        setIsVisible(false);
+        setCurrentError(null);
+        setIsReplacing(false);
+        currentErrorRef.current = null;
+        hideTimerRef.current = null;
+      }, 3200);
     };
 
     // 监听错误事件
@@ -45,13 +80,22 @@ export function GlobalErrorIndicator() {
 
     return () => {
       window.removeEventListener('globalError', handleError as EventListener);
+      if (hideTimerRef.current !== null) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
     };
-  }, [currentError]);
+  }, []);
 
   const handleClose = () => {
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
     setIsVisible(false);
     setCurrentError(null);
     setIsReplacing(false);
+    currentErrorRef.current = null;
   };
 
   if (!isVisible || !currentError) {
@@ -59,7 +103,7 @@ export function GlobalErrorIndicator() {
   }
 
   return (
-    <div className='fixed top-4 right-4 z-[2000]'>
+    <div className='fixed right-4 top-16 z-[2000] md:top-20'>
       {/* 错误卡片 */}
       <div
         className={`bg-red-500 text-white px-4 py-3 rounded-lg shadow-lg flex items-center justify-between min-w-[300px] max-w-[400px] transition-all duration-300 ${

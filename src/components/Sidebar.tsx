@@ -367,14 +367,14 @@ const Sidebar = ({ onToggle, activePath }: SidebarProps) => {
     [active, pathname]
   );
 
-  const sidebarWidthClass = isCollapsed ? 'w-[5.5rem]' : 'w-[17.5rem]';
-  const sidebarSpacerClass = isCollapsed ? 'w-[6.5rem]' : 'w-[18.5rem]';
+  const sidebarWidthClass = isCollapsed ? 'w-[5.4rem]' : 'w-[17rem]';
+  const sidebarSpacerClass = isCollapsed ? 'w-[6.4rem]' : 'w-[18rem]';
   const navItemClassName = `luna-sidebar-link ${
-    isCollapsed ? 'justify-center px-0' : 'px-3'
-  } py-3`;
+    isCollapsed ? 'justify-center px-0' : 'px-[0.88rem]'
+  } py-[0.72rem]`;
   const navLabelClassName =
-    'whitespace-nowrap text-[15px] font-medium tracking-[0.01em]';
-  const navIconClassName = 'luna-sidebar-icon h-[1.05rem] w-[1.05rem]';
+    'whitespace-nowrap text-[14px] font-medium tracking-[0.01em]';
+  const navIconClassName = 'luna-sidebar-icon h-[1rem] w-[1rem]';
 
   const renderNavItem = (item: NavItem) => {
     const Icon = item.icon;

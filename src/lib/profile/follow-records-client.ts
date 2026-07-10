@@ -268,7 +268,10 @@ export async function getFollowRecord(
   id: string
 ): Promise<FollowRecord | null> {
   const key = generateStorageKey(source, id);
-  const allFollowRecords = await getAllFollowRecords();
+  const allFollowRecords = await getAllFollowRecords({
+    // Passive badge/status lookups should not surface a blocking global toast.
+    suppressGlobalError: true,
+  });
   return allFollowRecords[key] || null;
 }
 
@@ -306,7 +309,9 @@ export async function saveFollowRecord(
   }
 
   try {
-    const allFollows = await getAllFollowRecords();
+    const allFollows = await getAllFollowRecords({
+      suppressGlobalError: true,
+    });
     allFollows[key] = follow;
     writeLocalFollowRecords(allFollows);
     dispatchFollowRecordsUpdated(allFollows);
@@ -349,7 +354,9 @@ export async function deleteFollowRecord(
   }
 
   try {
-    const allFollows = await getAllFollowRecords();
+    const allFollows = await getAllFollowRecords({
+      suppressGlobalError: true,
+    });
     delete allFollows[key];
     writeLocalFollowRecords(allFollows);
     dispatchFollowRecordsUpdated(allFollows);

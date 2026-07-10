@@ -4,11 +4,15 @@ import { useEffect, useRef, useState } from 'react';
 interface ScrollableRowProps {
   children: React.ReactNode;
   scrollDistance?: number;
+  className?: string;
+  contentClassName?: string;
 }
 
 export default function ScrollableRow({
   children,
   scrollDistance = 1000,
+  className,
+  contentClassName,
 }: ScrollableRowProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [showLeftScroll, setShowLeftScroll] = useState(false);
@@ -90,7 +94,7 @@ export default function ScrollableRow({
 
   return (
     <div
-      className='relative'
+      className={className ? `relative ${className}` : 'relative'}
       onMouseEnter={() => {
         setIsHovered(true);
         checkScroll();
@@ -99,7 +103,10 @@ export default function ScrollableRow({
     >
       <div
         ref={containerRef}
-        className='flex gap-5 overflow-x-auto px-1 py-2 pb-8 scrollbar-hide sm:gap-[1.15rem] sm:pb-10'
+        className={
+          contentClassName ??
+          'flex gap-[0.72rem] overflow-x-auto px-1 py-2 pb-8 scrollbar-hide sm:gap-[0.72rem] sm:pb-9'
+        }
         onScroll={checkScroll}
       >
         {children}
@@ -124,19 +131,19 @@ export default function ScrollableRow({
       {showRightScroll ? (
         <div
           className={`pointer-events-none absolute inset-y-0 right-0 z-[600] hidden w-16 items-center justify-center transition-opacity duration-200 sm:flex ${
-            isHovered ? 'opacity-100' : 'opacity-0'
+            isHovered ? 'opacity-100' : 'opacity-62'
           }`}
         >
           <div className='absolute bottom-4 top-4 right-5 w-4'>
-            <div className='luna-scroll-track absolute bottom-0 left-1/2 top-0 w-[3px] -translate-x-1/2 rounded-full opacity-70' />
-            <div className='luna-scroll-thumb absolute left-1/2 top-[18%] h-[32%] w-[3px] -translate-x-1/2 rounded-full' />
+            <div className='luna-scroll-track absolute bottom-0 left-1/2 top-0 w-[3px] -translate-x-1/2 rounded-full opacity-85' />
+            <div className='luna-scroll-thumb absolute left-1/2 top-[18%] h-[34%] w-[3px] -translate-x-1/2 rounded-full' />
           </div>
           <button
             onClick={handleScrollRightClick}
-            className='luna-scroll-arrow pointer-events-auto relative right-0.5 flex h-12 w-12 items-center justify-center rounded-full transition-transform duration-200 hover:translate-x-0.5'
+            className='luna-scroll-arrow pointer-events-auto relative right-0.5 flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-200 hover:translate-x-0.5'
             aria-label='向右滚动'
           >
-            <ChevronRight className='h-5 w-5' />
+            <ChevronRight className='h-[1.05rem] w-[1.05rem]' />
           </button>
         </div>
       ) : null}
