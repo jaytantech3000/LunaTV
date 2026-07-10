@@ -34,7 +34,8 @@
 *.pem
 .history/
 /tmp/
-/.codegraph/
+.codegraph/
+/.hermes/
 
 # debug
 npm-debug.log*
