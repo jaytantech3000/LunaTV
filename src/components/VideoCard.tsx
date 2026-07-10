@@ -1341,8 +1341,8 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
         remainingCount: Math.max(0, sortedSources.length - maxDisplayCount),
       };
     }, [dynamicSourceNames, isAggregate]);
-    const cardShellClassName = 'luna-card-shell rounded-[1.15rem] p-0';
-    const posterClassName = `luna-card-poster relative aspect-[11/19] overflow-hidden rounded-[1.15rem] ${
+    const cardShellClassName = 'luna-card-shell rounded-[0.9rem] p-0';
+    const posterClassName = `luna-card-poster relative aspect-[11/19] overflow-hidden rounded-[0.9rem] ${
       origin === 'live' ? 'ring-1 ring-white/20 dark:ring-sky-200/15' : ''
     }`;
     const posterImageClassName =

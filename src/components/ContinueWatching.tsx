@@ -120,7 +120,7 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
     return { source, id };
   };
   const cardContainerClassName =
-    'w-[6.85rem] min-w-[6.85rem] sm:w-[13rem] sm:min-w-[13rem]';
+    'w-[6.85rem] min-w-[6.85rem] sm:w-[11.2rem] sm:min-w-[11.2rem]';
 
   return (
     <section className={`mb-10 ${className || ''}`}>

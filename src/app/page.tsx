@@ -464,7 +464,7 @@ function HomeClient() {
                       ? Array.from({ length: 8 }).map((_, index) => (
                           <div
                             key={index}
-                            className='min-w-[96px] w-24 sm:min-w-[13rem] sm:w-[13rem]'
+                            className='min-w-[96px] w-24 sm:min-w-[11.2rem] sm:w-[11.2rem]'
                           >
                             <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
                               <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
@@ -475,7 +475,7 @@ function HomeClient() {
                       : filteredHotMovies.map((movie, index) => (
                           <div
                             key={index}
-                            className='min-w-[96px] w-24 sm:min-w-[13rem] sm:w-[13rem]'
+                            className='min-w-[96px] w-24 sm:min-w-[11.2rem] sm:w-[11.2rem]'
                           >
                             <VideoCard
                               from='douban'
@@ -510,7 +510,7 @@ function HomeClient() {
                       ? Array.from({ length: 8 }).map((_, index) => (
                           <div
                             key={index}
-                            className='min-w-[96px] w-24 sm:min-w-[13rem] sm:w-[13rem]'
+                            className='min-w-[96px] w-24 sm:min-w-[11.2rem] sm:w-[11.2rem]'
                           >
                             <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
                               <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
@@ -521,7 +521,7 @@ function HomeClient() {
                       : filteredHotTvShows.map((show, index) => (
                           <div
                             key={index}
-                            className='min-w-[96px] w-24 sm:min-w-[13rem] sm:w-[13rem]'
+                            className='min-w-[96px] w-24 sm:min-w-[11.2rem] sm:w-[11.2rem]'
                           >
                             <VideoCard
                               from='douban'
@@ -555,7 +555,7 @@ function HomeClient() {
                       ? Array.from({ length: 8 }).map((_, index) => (
                           <div
                             key={index}
-                            className='min-w-[96px] w-24 sm:min-w-[13rem] sm:w-[13rem]'
+                            className='min-w-[96px] w-24 sm:min-w-[11.2rem] sm:w-[11.2rem]'
                           >
                             <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
                               <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
@@ -566,7 +566,7 @@ function HomeClient() {
                       : filteredTodayBangumiItems.map((anime, index) => (
                           <div
                             key={`${anime.id}-${index}`}
-                            className='min-w-[96px] w-24 sm:min-w-[13rem] sm:w-[13rem]'
+                            className='min-w-[96px] w-24 sm:min-w-[11.2rem] sm:w-[11.2rem]'
                           >
                             <VideoCard
                               from='douban'
@@ -607,7 +607,7 @@ function HomeClient() {
                       ? Array.from({ length: 8 }).map((_, index) => (
                           <div
                             key={index}
-                            className='min-w-[96px] w-24 sm:min-w-[13rem] sm:w-[13rem]'
+                            className='min-w-[96px] w-24 sm:min-w-[11.2rem] sm:w-[11.2rem]'
                           >
                             <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
                               <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
@@ -618,7 +618,7 @@ function HomeClient() {
                       : filteredHotVarietyShows.map((show, index) => (
                           <div
                             key={index}
-                            className='min-w-[96px] w-24 sm:min-w-[13rem] sm:w-[13rem]'
+                            className='min-w-[96px] w-24 sm:min-w-[11.2rem] sm:w-[11.2rem]'
                           >
                             <VideoCard
                               from='douban'

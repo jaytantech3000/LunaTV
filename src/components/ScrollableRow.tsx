@@ -105,7 +105,7 @@ export default function ScrollableRow({
         ref={containerRef}
         className={
           contentClassName ??
-          'flex gap-[0.72rem] overflow-x-auto px-1 py-2 pb-8 scrollbar-hide sm:gap-[0.72rem] sm:pb-9'
+          'flex gap-[0.95rem] overflow-x-auto px-1 py-2 pb-8 scrollbar-hide sm:gap-[0.95rem] sm:pb-9'
         }
         onScroll={checkScroll}
       >
