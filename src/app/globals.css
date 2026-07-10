@@ -90,6 +90,9 @@
   --luna-meta-text: rgba(255, 250, 242, 0.92);
   --luna-overlay-start: rgba(19, 22, 18, 0.02);
   --luna-overlay-end: rgba(21, 24, 21, 0.6);
+  --luna-card-info-top: rgba(68, 75, 64, 0);
+  --luna-card-info-mid: rgba(75, 80, 67, 0.5);
+  --luna-card-info-bottom: rgba(67, 72, 60, 0.78);
   --luna-accent: #45d08a;
   --luna-accent-soft: rgba(74, 214, 138, 0.28);
   --luna-score-from: #ee7fbe;
@@ -178,6 +181,9 @@ html.dark {
   --luna-meta-text: rgba(227, 241, 255, 0.92);
   --luna-overlay-start: rgba(5, 13, 31, 0.04);
   --luna-overlay-end: rgba(4, 11, 29, 0.74);
+  --luna-card-info-top: rgba(3, 8, 20, 0);
+  --luna-card-info-mid: rgba(3, 8, 20, 0.58);
+  --luna-card-info-bottom: rgba(3, 8, 20, 0.84);
   --luna-accent: #27d482;
   --luna-accent-soft: rgba(39, 212, 130, 0.32);
   --luna-score-from: #d56dc0;
@@ -737,16 +743,15 @@ body {
     bottom: 0;
     left: 0;
     z-index: 20;
-    min-height: 28%;
-    padding: 0.78rem 0.82rem 0.9rem;
+    min-height: 25%;
+    padding: 0.66rem 0.78rem 0.76rem;
     border: 0;
-    border-radius: 0 0 1.15rem 1.15rem;
+    border-radius: 0 0 0.9rem 0.9rem;
     background: linear-gradient(
       180deg,
-      rgba(3, 8, 20, 0) 0%,
-      rgba(3, 8, 20, 0.82) 28%,
-      rgba(3, 8, 20, 0.96) 52%,
-      rgba(3, 8, 20, 0.99) 100%
+      var(--luna-card-info-top) 0%,
+      var(--luna-card-info-mid) 46%,
+      var(--luna-card-info-bottom) 100%
     );
     box-shadow: none;
   }
@@ -754,10 +759,9 @@ body {
   html.dark .luna-card-info {
     background: linear-gradient(
       180deg,
-      rgba(2, 7, 18, 0) 0%,
-      rgba(2, 7, 18, 0.84) 28%,
-      rgba(2, 7, 18, 0.97) 52%,
-      rgba(2, 7, 18, 0.99) 100%
+      var(--luna-card-info-top) 0%,
+      var(--luna-card-info-mid) 46%,
+      var(--luna-card-info-bottom) 100%
     );
   }
 
