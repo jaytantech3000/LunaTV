@@ -31,6 +31,7 @@
   --luna-sky-glow: rgba(249, 251, 245, 0.46);
   --luna-sky-glow-secondary: rgba(241, 247, 243, 0.18);
   --luna-fog-color: rgba(253, 249, 238, 0.62);
+  --luna-backdrop-cover: rgba(61, 70, 53, 0.14);
   --luna-terrain-primary: radial-gradient(
       ellipse at 35% 25%,
       rgba(195, 185, 136, 0.92),
@@ -221,6 +222,7 @@ body {
     background: var(--luna-shell-bg);
   }
 
+  .luna-backdrop-cover,
   .luna-backdrop-sky,
   .luna-backdrop-glow,
   .luna-backdrop-glow-secondary,
@@ -235,6 +237,15 @@ body {
     inset: 0;
     pointer-events: none;
     transition: background 220ms ease, opacity 220ms ease, transform 220ms ease;
+  }
+
+  .luna-backdrop-cover {
+    z-index: 1;
+    background: var(--luna-backdrop-cover);
+  }
+
+  html.dark .luna-backdrop-cover {
+    display: none;
   }
 
   .luna-backdrop-sky {

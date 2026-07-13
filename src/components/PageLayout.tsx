@@ -32,6 +32,7 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
           aria-hidden='true'
           className='pointer-events-none fixed inset-0 z-0 hidden md:block'
         >
+          <div className='luna-backdrop-cover' />
           <div className='luna-backdrop-sky' />
           <div className='luna-backdrop-glow' />
           <div className='luna-backdrop-glow-secondary' />
