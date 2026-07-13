@@ -1456,14 +1456,14 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
             {config.showPlayButton ? (
               <div
                 data-button='true'
-                className='pointer-events-none absolute inset-0 z-20 flex scale-[0.94] items-center justify-center opacity-0 transition-all duration-200 ease-out sm:group-hover:scale-100 sm:group-hover:opacity-100'
+                className='pointer-events-none absolute inset-0 z-20 flex scale-[0.88] items-center justify-center opacity-0 transition-all duration-200 ease-out sm:group-hover:scale-100 sm:group-hover:opacity-100'
                 style={nonSelectableStyle}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   return false;
                 }}
               >
-                <div className='luna-card-action luna-card-action--play flex h-[3.35rem] w-[3.35rem] items-center justify-center rounded-full sm:h-[3.5rem] sm:w-[3.5rem]'>
+                <div className='luna-card-action luna-card-action--play flex h-[3.7rem] w-[3.7rem] items-center justify-center rounded-full sm:h-[3.9rem] sm:w-[3.9rem]'>
                   <Play
                     size={20}
                     strokeWidth={2.35}
@@ -1650,7 +1650,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               }}
             >
               <div className='relative min-w-0'>
-                <span className='peer block truncate text-[0.94rem] font-semibold leading-[1.08] tracking-[-0.028em] text-[var(--luna-card-text)] transition-colors duration-200 ease-out group-hover:text-white sm:text-[0.98rem]'>
+                <span className='luna-card-title peer block truncate transition-colors duration-200 ease-out group-hover:text-white'>
                   {actualTitle}
                 </span>
                 <div className='luna-popover pointer-events-none absolute bottom-full left-1/2 mb-2 invisible -translate-x-1/2 whitespace-nowrap rounded-[0.9rem] px-3 py-1 text-xs text-[var(--luna-card-text)] opacity-0 transition-all duration-200 ease-out delay-100 peer-hover:visible peer-hover:opacity-100'>

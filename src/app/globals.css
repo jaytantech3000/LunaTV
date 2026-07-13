@@ -90,9 +90,11 @@
   --luna-meta-text: rgba(255, 250, 242, 0.92);
   --luna-overlay-start: rgba(19, 22, 18, 0.02);
   --luna-overlay-end: rgba(21, 24, 21, 0.6);
+  --luna-poster-cover: rgba(34, 43, 31, 0.3);
+  --luna-poster-hover-cover: rgba(28, 38, 26, 0.48);
   --luna-card-info-top: rgba(68, 75, 64, 0);
-  --luna-card-info-mid: rgba(75, 80, 67, 0.5);
-  --luna-card-info-bottom: rgba(67, 72, 60, 0.78);
+  --luna-card-info-mid: rgba(68, 73, 61, 0.62);
+  --luna-card-info-bottom: rgba(58, 63, 52, 0.88);
   --luna-accent: #45d08a;
   --luna-accent-soft: rgba(74, 214, 138, 0.28);
   --luna-score-from: #ee7fbe;
@@ -181,9 +183,11 @@ html.dark {
   --luna-meta-text: rgba(227, 241, 255, 0.92);
   --luna-overlay-start: rgba(5, 13, 31, 0.04);
   --luna-overlay-end: rgba(4, 11, 29, 0.74);
+  --luna-poster-cover: rgba(2, 8, 22, 0.22);
+  --luna-poster-hover-cover: rgba(1, 6, 18, 0.52);
   --luna-card-info-top: rgba(3, 8, 20, 0);
-  --luna-card-info-mid: rgba(3, 8, 20, 0.58);
-  --luna-card-info-bottom: rgba(3, 8, 20, 0.84);
+  --luna-card-info-mid: rgba(3, 8, 20, 0.66);
+  --luna-card-info-bottom: rgba(3, 8, 20, 0.9);
   --luna-accent: #27d482;
   --luna-accent-soft: rgba(39, 212, 130, 0.32);
   --luna-score-from: #d56dc0;
@@ -659,6 +663,20 @@ body {
     box-shadow: 0 14px 26px rgba(0, 0, 0, 0.24);
   }
 
+  .luna-card-poster::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    background: var(--luna-poster-cover);
+    pointer-events: none;
+    transition: background 180ms ease;
+  }
+
+  .group:hover .luna-card-poster::before {
+    background: var(--luna-poster-hover-cover);
+  }
+
   .luna-card-poster-media {
     transform: none;
     transform-origin: center;
@@ -667,8 +685,8 @@ body {
   }
 
   .group:hover .luna-card-poster-media {
-    transform: scale(1.015);
-    filter: saturate(1) brightness(1) contrast(1);
+    transform: scale(1.024);
+    filter: saturate(0.92) brightness(0.86) contrast(1.04);
   }
 
   html.dark .luna-card-poster-media {
@@ -676,7 +694,7 @@ body {
   }
 
   html.dark .group:hover .luna-card-poster-media {
-    filter: saturate(1) brightness(1) contrast(1.02);
+    filter: saturate(0.9) brightness(0.82) contrast(1.06);
   }
 
   .luna-card-poster-sheen {
@@ -737,14 +755,22 @@ body {
       );
   }
 
+  .luna-card-title {
+    color: #fff;
+    font-size: 0.94rem;
+    font-weight: 700;
+    line-height: 1.08;
+    letter-spacing: -0.028em;
+  }
+
   .luna-card-info {
     position: absolute;
     right: 0;
     bottom: 0;
     left: 0;
     z-index: 20;
-    min-height: 25%;
-    padding: 0.66rem 0.78rem 0.76rem;
+    min-height: 28%;
+    padding: 0.72rem 0.78rem 0.8rem;
     border: 0;
     border-radius: 0 0 0.9rem 0.9rem;
     background: linear-gradient(
