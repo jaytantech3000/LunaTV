@@ -152,7 +152,65 @@ describe('favorites client', () => {
 
     await expect(getAllFavorites()).resolves.toEqual({});
     await expect(isFavorited('demo', '1')).resolves.toBe(false);
-
     expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
+  });
+
+  it('shares an in-flight cold favorites read', async () => {
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie('remote-owner');
+
+    let resolveFetch:
+      | ((favorites: Record<string, unknown>) => void)
+      | undefined;
+    mockedFetchRemoteProfileJson.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const firstRead = getAllFavorites();
+    const secondRead = getAllFavorites();
+
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledTimes(1);
+
+    resolveFetch?.({});
+
+    await expect(Promise.all([firstRead, secondRead])).resolves.toEqual([
+      {},
+      {},
+    ]);
+  });
+
+  it('does not let an older favorites read overwrite a mutation snapshot', async () => {
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie('remote-owner');
+    const favorite = {
+      title: 'Newer Favorite',
+      source_name: 'Demo Source',
+      year: '2026',
+      cover: 'cover.jpg',
+      total_episodes: 12,
+      save_time: 2,
+    };
+    let resolveFetch:
+      | ((favorites: Record<string, unknown>) => void)
+      | undefined;
+    mockedFetchRemoteProfileJson.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const readPromise = getAllFavorites();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await saveFavorite('demo', '1', favorite);
+
+    resolveFetch?.({});
+    await expect(readPromise).resolves.toEqual({});
+    await expect(isFavorited('demo', '1')).resolves.toBe(true);
   });
 });

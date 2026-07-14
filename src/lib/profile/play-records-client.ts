@@ -34,6 +34,8 @@ const DESKTOP_PROFILE_BOOTSTRAP_WAIT_TIMEOUT_MS = 12000;
 const DESKTOP_PROFILE_BOOTSTRAP_POLL_INTERVAL_MS = 200;
 
 let desktopProfileBootstrapWaitPromise: Promise<void> | null = null;
+let playRecordsReadPromise: Promise<Record<string, PlayRecord>> | null = null;
+let playRecordsMutationVersion = 0;
 
 function triggerGlobalError(message: string) {
   if (typeof window !== 'undefined') {
@@ -198,44 +200,36 @@ export async function getAllPlayRecords(): Promise<Record<string, PlayRecord>> {
     const cachedData = cacheManager.getCachedPlayRecords();
 
     if (cachedData) {
-      fetchFromApi<Record<string, PlayRecord>>(
+      return cachedData;
+    }
+
+    if (!playRecordsReadPromise) {
+      const readMutationVersion = playRecordsMutationVersion;
+      playRecordsReadPromise = fetchFromApi<Record<string, PlayRecord>>(
         USER_DATA_API_PATHS.playRecords,
         PROFILE_API_NO_REDIRECT_OPTIONS
       )
         .then((freshData) => {
-          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
+          if (readMutationVersion === playRecordsMutationVersion) {
             cacheManager.cachePlayRecords(freshData);
-            dispatchPlayRecordsUpdated(freshData);
           }
+          return freshData;
         })
         .catch((err) => {
           if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
-            return;
+            return {};
           }
 
-          console.warn('后台同步播放记录失败:', err);
-          triggerGlobalError('后台同步播放记录失败');
+          console.error('获取播放记录失败:', err);
+          triggerGlobalError('获取播放记录失败');
+          return {};
+        })
+        .finally(() => {
+          playRecordsReadPromise = null;
         });
-
-      return cachedData;
     }
 
-    try {
-      const freshData = await fetchFromApi<Record<string, PlayRecord>>(
-        USER_DATA_API_PATHS.playRecords,
-        PROFILE_API_NO_REDIRECT_OPTIONS
-      );
-      cacheManager.cachePlayRecords(freshData);
-      return freshData;
-    } catch (err) {
-      if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
-        return {};
-      }
-
-      console.error('获取播放记录失败:', err);
-      triggerGlobalError('获取播放记录失败');
-      return {};
-    }
+    return playRecordsReadPromise;
   }
 
   try {
@@ -257,6 +251,7 @@ export async function savePlayRecord(
   if (shouldUseRemoteUserDataStorage()) {
     await waitForDesktopProfileBootstrapReady();
     await ensureDesktopLocalProfileStoreHydrated();
+    playRecordsMutationVersion += 1;
     const cachedRecords = cacheManager.getCachedPlayRecords() || {};
     cachedRecords[key] = record;
     cacheManager.cachePlayRecords(cachedRecords);
@@ -301,6 +296,7 @@ export async function deletePlayRecord(
   if (shouldUseRemoteUserDataStorage()) {
     await waitForDesktopProfileBootstrapReady();
     await ensureDesktopLocalProfileStoreHydrated();
+    playRecordsMutationVersion += 1;
     const cachedRecords = cacheManager.getCachedPlayRecords() || {};
     delete cachedRecords[key];
     cacheManager.cachePlayRecords(cachedRecords);
@@ -339,6 +335,7 @@ export async function clearAllPlayRecords(): Promise<void> {
   if (shouldUseRemoteUserDataStorage()) {
     await waitForDesktopProfileBootstrapReady();
     await ensureDesktopLocalProfileStoreHydrated();
+    playRecordsMutationVersion += 1;
     cacheManager.cachePlayRecords({});
     dispatchPlayRecordsUpdated({});
 

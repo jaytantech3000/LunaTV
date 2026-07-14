@@ -25,6 +25,9 @@ import {
 import { shouldUseProfileApiStorage } from './runtime';
 import { generateStorageKey } from './storage-key';
 
+let favoritesReadPromise: Promise<Record<string, Favorite>> | null = null;
+let favoritesMutationVersion = 0;
+
 function triggerGlobalError(message: string) {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
@@ -84,44 +87,36 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
     const cachedData = cacheManager.getCachedFavorites();
 
     if (cachedData) {
-      fetchFromApi<Record<string, Favorite>>(
+      return cachedData;
+    }
+
+    if (!favoritesReadPromise) {
+      const readMutationVersion = favoritesMutationVersion;
+      favoritesReadPromise = fetchFromApi<Record<string, Favorite>>(
         USER_DATA_API_PATHS.favorites,
         PROFILE_API_NO_REDIRECT_OPTIONS
       )
         .then((freshData) => {
-          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
+          if (readMutationVersion === favoritesMutationVersion) {
             cacheManager.cacheFavorites(freshData);
-            dispatchFavoritesUpdated(freshData);
           }
+          return freshData;
         })
         .catch((err) => {
           if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
-            return;
+            return {};
           }
 
-          console.warn('后台同步收藏失败:', err);
-          triggerGlobalError('后台同步收藏失败');
+          console.error('获取收藏失败:', err);
+          triggerGlobalError('获取收藏失败');
+          return {};
+        })
+        .finally(() => {
+          favoritesReadPromise = null;
         });
-
-      return cachedData;
     }
 
-    try {
-      const freshData = await fetchFromApi<Record<string, Favorite>>(
-        USER_DATA_API_PATHS.favorites,
-        PROFILE_API_NO_REDIRECT_OPTIONS
-      );
-      cacheManager.cacheFavorites(freshData);
-      return freshData;
-    } catch (err) {
-      if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
-        return {};
-      }
-
-      console.error('获取收藏失败:', err);
-      triggerGlobalError('获取收藏失败');
-      return {};
-    }
+    return favoritesReadPromise;
   }
 
   try {
@@ -142,6 +137,7 @@ export async function saveFavorite(
 
   if (shouldUseRemoteUserDataStorage()) {
     await ensureDesktopLocalProfileStoreHydrated();
+    favoritesMutationVersion += 1;
     const cachedFavorites = cacheManager.getCachedFavorites() || {};
     cachedFavorites[key] = favorite;
     cacheManager.cacheFavorites(cachedFavorites);
@@ -185,6 +181,7 @@ export async function deleteFavorite(
 
   if (shouldUseRemoteUserDataStorage()) {
     await ensureDesktopLocalProfileStoreHydrated();
+    favoritesMutationVersion += 1;
     const cachedFavorites = cacheManager.getCachedFavorites() || {};
     delete cachedFavorites[key];
     cacheManager.cacheFavorites(cachedFavorites);
@@ -281,6 +278,7 @@ export async function isFavorited(
 export async function clearAllFavorites(): Promise<void> {
   if (shouldUseRemoteUserDataStorage()) {
     await ensureDesktopLocalProfileStoreHydrated();
+    favoritesMutationVersion += 1;
     cacheManager.cacheFavorites({});
     dispatchFavoritesUpdated({});
 

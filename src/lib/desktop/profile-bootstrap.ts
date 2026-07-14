@@ -41,6 +41,9 @@ export interface LoadedDesktopProfileBootstrapState {
   localAuth: DesktopAuthStatus;
 }
 
+let desktopProfileBootstrapPromise: Promise<DesktopProfileBootstrapPayload> | null =
+  null;
+
 function isRecoverableDesktopBootstrapError(error: unknown): boolean {
   if (!isDesktopTauriRuntimeAvailable()) {
     return false;
@@ -107,20 +110,28 @@ export async function getDesktopProfileBootstrap(
     }
   }
 
-  try {
-    return cacheDesktopProfileBootstrap(
-      await fetchDesktopProfileBootstrapPayload()
-    );
-  } catch (error) {
-    if (!isRecoverableDesktopBootstrapError(error)) {
-      throw error;
-    }
+  if (!desktopProfileBootstrapPromise) {
+    desktopProfileBootstrapPromise = (async () => {
+      try {
+        return cacheDesktopProfileBootstrap(
+          await fetchDesktopProfileBootstrapPayload()
+        );
+      } catch (error) {
+        if (!isRecoverableDesktopBootstrapError(error)) {
+          throw error;
+        }
 
-    await startLocalService();
-    return cacheDesktopProfileBootstrap(
-      await fetchDesktopProfileBootstrapPayload()
-    );
+        await startLocalService();
+        return cacheDesktopProfileBootstrap(
+          await fetchDesktopProfileBootstrapPayload()
+        );
+      }
+    })().finally(() => {
+      desktopProfileBootstrapPromise = null;
+    });
   }
+
+  return desktopProfileBootstrapPromise;
 }
 
 export function applyDesktopProfileBootstrap(

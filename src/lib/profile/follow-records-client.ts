@@ -31,6 +31,9 @@ const DESKTOP_PROFILE_BOOTSTRAP_WAIT_TIMEOUT_MS = 12000;
 const DESKTOP_PROFILE_BOOTSTRAP_POLL_INTERVAL_MS = 200;
 
 let desktopProfileBootstrapWaitPromise: Promise<void> | null = null;
+let followRecordsReadPromise: Promise<Record<string, FollowRecord>> | null =
+  null;
+let followRecordsMutationVersion = 0;
 
 interface GetAllFollowRecordsOptions {
   suppressGlobalError?: boolean;
@@ -205,53 +208,46 @@ export async function getAllFollowRecords(
     const cachedData = cacheManager.getCachedFollowRecords();
 
     if (cachedData) {
-      fetchFromApi<Record<string, FollowRecord>>(
+      return cachedData;
+    }
+
+    if (!followRecordsReadPromise) {
+      const readMutationVersion = followRecordsMutationVersion;
+      followRecordsReadPromise = fetchFromApi<Record<string, FollowRecord>>(
         USER_DATA_API_PATHS.follows,
         PROFILE_API_NO_REDIRECT_OPTIONS
       )
         .then((freshData) => {
-          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
+          if (readMutationVersion === followRecordsMutationVersion) {
             cacheManager.cacheFollowRecords(freshData);
-            dispatchFollowRecordsUpdated(freshData);
           }
+          return freshData;
         })
         .catch((err) => {
           if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
-            return;
+            return {};
           }
 
-          console.warn('后台同步追更记录失败:', err);
+          if (options.suppressGlobalError) {
+            console.warn('后台读取追更记录失败:', err);
+            return {};
+          }
+
+          if (isDesktopLocalProfileRuntime()) {
+            console.warn('桌面追更记录暂时不可用，已跳过首次提示:', err);
+            return {};
+          }
+
+          console.error('获取追更记录失败:', err);
+          triggerGlobalError('获取追更记录失败');
+          return {};
+        })
+        .finally(() => {
+          followRecordsReadPromise = null;
         });
-
-      return cachedData;
     }
 
-    try {
-      const freshData = await fetchFromApi<Record<string, FollowRecord>>(
-        USER_DATA_API_PATHS.follows,
-        PROFILE_API_NO_REDIRECT_OPTIONS
-      );
-      cacheManager.cacheFollowRecords(freshData);
-      return freshData;
-    } catch (err) {
-      if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
-        return {};
-      }
-
-      if (options?.suppressGlobalError) {
-        console.warn('后台读取追更记录失败:', err);
-        return {};
-      }
-
-      if (isDesktopLocalProfileRuntime()) {
-        console.warn('桌面追更记录暂时不可用，已跳过首次提示:', err);
-        return {};
-      }
-
-      console.error('获取追更记录失败:', err);
-      triggerGlobalError('获取追更记录失败');
-      return {};
-    }
+    return followRecordsReadPromise;
   }
 
   try {
@@ -285,6 +281,7 @@ export async function saveFollowRecord(
   if (shouldUseRemoteUserDataStorage()) {
     await waitForDesktopProfileBootstrapReady();
     await ensureDesktopLocalProfileStoreHydrated();
+    followRecordsMutationVersion += 1;
     const cachedFollows = cacheManager.getCachedFollowRecords() || {};
     cachedFollows[key] = follow;
     cacheManager.cacheFollowRecords(cachedFollows);
@@ -331,6 +328,7 @@ export async function deleteFollowRecord(
   if (shouldUseRemoteUserDataStorage()) {
     await waitForDesktopProfileBootstrapReady();
     await ensureDesktopLocalProfileStoreHydrated();
+    followRecordsMutationVersion += 1;
     const cachedFollows = cacheManager.getCachedFollowRecords() || {};
     delete cachedFollows[key];
     cacheManager.cacheFollowRecords(cachedFollows);

@@ -168,9 +168,7 @@ describe('follow records client', () => {
         title: 'Remote Follow',
       })
     );
-    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/follows', {
-      redirectOnUnauthorized: false,
-    });
+    expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
 
     await deleteFollowRecord('demo', '1');
 
@@ -259,5 +257,65 @@ describe('follow records client', () => {
     );
 
     dispatchEventSpy.mockRestore();
+  });
+
+  it('shares an in-flight cold follow-record read', async () => {
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie('remote-owner');
+
+    let resolveFetch: ((follows: Record<string, unknown>) => void) | undefined;
+    mockedFetchRemoteProfileJson.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const firstRead = getAllFollowRecords();
+    const secondRead = getAllFollowRecords();
+
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledTimes(1);
+
+    resolveFetch?.({});
+
+    await expect(Promise.all([firstRead, secondRead])).resolves.toEqual([
+      {},
+      {},
+    ]);
+  });
+
+  it('does not let an older follow-record read overwrite a mutation snapshot', async () => {
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie('remote-owner');
+    const follow = {
+      title: 'Newer Follow',
+      source_name: 'Demo Source',
+      year: '2026',
+      cover: 'cover.jpg',
+      followed_at: 1,
+      followed_episode_count: 1,
+      acknowledged_episode_count: 1,
+      latest_episode_count: 2,
+      last_checked_at: 3,
+    };
+    let resolveFetch: ((follows: Record<string, unknown>) => void) | undefined;
+    mockedFetchRemoteProfileJson.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const readPromise = getAllFollowRecords();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await saveFollowRecord('demo', '1', follow);
+
+    resolveFetch?.({});
+    await expect(readPromise).resolves.toEqual({});
+    expect(getCachedFollowRecordsSnapshot()).toEqual({
+      'demo+1': expect.objectContaining({ title: 'Newer Follow' }),
+    });
   });
 });

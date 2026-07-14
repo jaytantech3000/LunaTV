@@ -224,6 +224,19 @@ describe('profile session helpers', () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('does not retry non-idempotent desktop local TypeError failures', async () => {
+    (isDesktopLocalProfileRuntime as jest.Mock).mockReturnValue(true);
+    (global.fetch as jest.Mock).mockRejectedValue(
+      new TypeError('Failed to fetch')
+    );
+
+    await expect(
+      fetchProfileResponse('/playrecords', { method: 'POST' })
+    ).rejects.toThrow('Failed to fetch');
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('retries transient desktop profile sync fetch failures before succeeding', async () => {
     (isDesktopLocalProfileRuntime as jest.Mock).mockReturnValue(false);
     (resolveProfileRuntime as jest.Mock).mockReturnValue({

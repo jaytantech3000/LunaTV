@@ -278,6 +278,59 @@ describe('desktop profile bootstrap helpers', () => {
     expect(mutableWindow.__DESKTOP_PROFILE_BOOTSTRAP__).toEqual(payload);
   });
 
+  it('shares a cold desktop bootstrap fetch between concurrent callers', async () => {
+    let resolveResponse:
+      | ((response: { ok: boolean; status: number; json: jest.Mock }) => void)
+      | undefined;
+    const payload = {
+      appTarget: 'desktop',
+      runtime: {
+        siteName: 'Single Flight LunaTV',
+        profileSyncEnabled: false,
+      },
+      profileSync: {
+        enabled: false,
+        reachable: false,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'localstorage',
+        profileMode: 'single-user-local',
+        error: null,
+        errorKind: null,
+        syncDomains: [],
+      },
+      localAuth: {
+        username: 'owner',
+        passwordRequired: true,
+        multiUser: false,
+        ownerPasswordConfigured: true,
+      },
+    };
+    (apiFetch as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveResponse = resolve;
+        })
+    );
+
+    const firstLoad = getDesktopProfileBootstrap();
+    await Promise.resolve();
+    const secondLoad = getDesktopProfileBootstrap();
+
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    resolveResponse?.({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue(payload),
+    });
+
+    await expect(Promise.all([firstLoad, secondLoad])).resolves.toEqual([
+      payload,
+      payload,
+    ]);
+  });
+
   it('restarts the local service and retries bootstrap fetches after a transient network failure', async () => {
     const payload = {
       appTarget: 'desktop',

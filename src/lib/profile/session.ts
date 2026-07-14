@@ -146,6 +146,7 @@ export async function fetchProfileResponse(
     ? await withLocalServiceAccessToken(requestInit)
     : requestInit;
 
+  const requestIsSafe = isSafeProfileRequestMethod(requestInit.method);
   let response: Response | null = null;
 
   for (
@@ -157,6 +158,7 @@ export async function fetchProfileResponse(
       response = await fetch(requestUrl, authorizedRequestInit);
     } catch (error) {
       if (
+        !requestIsSafe ||
         !isRecoverableDesktopProfileRequestError(error) ||
         attempt + 1 >= DESKTOP_LOCAL_PROFILE_FETCH_RETRY_COUNT
       ) {

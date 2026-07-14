@@ -179,9 +179,7 @@ describe('play records client', () => {
         title: 'Remote Demo',
       }),
     });
-    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/playrecords', {
-      redirectOnUnauthorized: false,
-    });
+    expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
 
     await clearAllPlayRecords();
 
@@ -282,5 +280,66 @@ describe('play records client', () => {
       }
     );
     expect(localStorage.getItem('moontv_play_records')).toBeNull();
+  });
+
+  it('shares an in-flight cold play-record read', async () => {
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie('remote-owner');
+
+    let resolveFetch: ((records: Record<string, unknown>) => void) | undefined;
+    mockedFetchRemoteProfileJson.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const firstRead = getAllPlayRecords();
+    const secondRead = getAllPlayRecords();
+
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledTimes(1);
+
+    resolveFetch?.({});
+
+    await expect(Promise.all([firstRead, secondRead])).resolves.toEqual([
+      {},
+      {},
+    ]);
+  });
+
+  it('does not let an older play-record read overwrite a mutation snapshot', async () => {
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie('remote-owner');
+
+    const record = {
+      title: 'Newer Demo',
+      source_name: 'Demo Source',
+      year: '2026',
+      cover: 'cover.jpg',
+      index: 1,
+      total_episodes: 12,
+      play_time: 30,
+      total_time: 60,
+      save_time: 2,
+    };
+    let resolveFetch: ((records: Record<string, unknown>) => void) | undefined;
+    mockedFetchRemoteProfileJson.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const readPromise = getAllPlayRecords();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await savePlayRecord('demo', '1', record);
+
+    resolveFetch?.({});
+    await expect(readPromise).resolves.toEqual({});
+    expect(getCachedPlayRecordsSnapshot()).toEqual({
+      'demo+1': expect.objectContaining({ title: 'Newer Demo' }),
+    });
   });
 });
