@@ -69,15 +69,15 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       currentRemoteUsername: 'remote-owner',
       currentRemoteRole: 'owner',
       plan: {
-        currentLocalUsername: 'local-owner',
+        currentLocalUsername: 'admin',
         currentRemoteUsername: 'remote-owner',
         items: [
           {
-            localUsername: 'local-owner',
+            localUsername: 'admin',
             remoteUsername: 'remote-owner',
             requiresAccountCreation: false,
             summary: {
-              username: 'local-owner',
+              username: 'admin',
               playRecordCount: 3,
               favoriteCount: 1,
               followCount: 2,
@@ -102,7 +102,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       },
       downloadPreview: {
         hasDownloads: true,
-        currentOwnerUsername: 'local-owner',
+        currentOwnerUsername: 'admin',
         targetUsername: 'remote-owner',
         taskCount: 2,
         libraryCount: 1,
@@ -115,7 +115,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
 
     render(
       <DesktopProfileSyncOnboardingCard
-        currentLocalUsername='local-owner'
+        currentLocalUsername='admin'
         profileSyncEnabled={false}
         selectedSyncDomains={['playrecords', 'favorites']}
       />
@@ -140,12 +140,12 @@ describe('DesktopProfileSyncOnboardingCard', () => {
         remoteBaseUrl: 'https://luna.hkcu.qzz.io',
         username: 'remote-owner',
         password: 'secret',
-        currentLocalUsername: 'local-owner',
+        currentLocalUsername: 'admin',
       });
     });
 
     expect(
-      await screen.findByText('local-owner -> remote-owner')
+      await screen.findByText('admin -> remote-owner')
     ).toBeInTheDocument();
     expect(screen.getByText('beta -> beta')).toBeInTheDocument();
     expect(screen.getByText('将自动创建')).toBeInTheDocument();
@@ -207,15 +207,15 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       currentRemoteUsername: 'remote-owner',
       currentRemoteRole: 'owner',
       plan: {
-        currentLocalUsername: 'local-owner',
+        currentLocalUsername: 'admin',
         currentRemoteUsername: 'remote-owner',
         items: [
           {
-            localUsername: 'local-owner',
+            localUsername: 'admin',
             remoteUsername: 'remote-owner',
             requiresAccountCreation: false,
             summary: {
-              username: 'local-owner',
+              username: 'admin',
               playRecordCount: 3,
               favoriteCount: 1,
               followCount: 2,
@@ -227,7 +227,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       },
       downloadPreview: {
         hasDownloads: true,
-        currentOwnerUsername: 'local-owner',
+        currentOwnerUsername: 'admin',
         targetUsername: 'remote-owner',
         taskCount: 2,
         libraryCount: 1,
@@ -246,10 +246,10 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       ],
       migratedAccounts: [
         {
-          localUsername: 'local-owner',
+          localUsername: 'admin',
           remoteUsername: 'remote-owner',
           localSummary: {
-            username: 'local-owner',
+            username: 'admin',
             playRecordCount: 3,
             favoriteCount: 1,
             followCount: 2,
@@ -267,7 +267,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       ],
       downloadRebind: {
         didRebind: true,
-        previousOwnerUsername: 'local-owner',
+        previousOwnerUsername: 'admin',
         nextOwnerUsername: 'remote-owner',
         taskCount: 2,
         libraryCount: 1,
@@ -281,7 +281,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
 
     const { rerender } = render(
       <DesktopProfileSyncOnboardingCard
-        currentLocalUsername='local-owner'
+        currentLocalUsername='admin'
         profileSyncEnabled={false}
         selectedSyncDomains={['favorites']}
       />
@@ -296,7 +296,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '生成迁移预览' }));
 
-    await screen.findByText('local-owner -> remote-owner');
+    await screen.findByText('admin -> remote-owner');
 
     fireEvent.click(screen.getByRole('button', { name: '开始开启同步' }));
     expect(
@@ -311,14 +311,14 @@ describe('DesktopProfileSyncOnboardingCard', () => {
         remoteBaseUrl: 'https://luna.hkcu.qzz.io',
         username: 'remote-owner',
         password: 'secret',
-        currentLocalUsername: 'local-owner',
+        currentLocalUsername: 'admin',
         strategy: 'local-first',
         syncDomains: ['favorites'],
       });
     });
 
     expect(mockArmDesktopDownloadOwnershipHandoff).toHaveBeenCalledWith({
-      previousOwnerUsername: 'local-owner',
+      previousOwnerUsername: 'admin',
       nextOwnerUsername: 'remote-owner',
     });
     expect(mockSetAuthInfoInBrowser).toHaveBeenCalledWith({
@@ -341,7 +341,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       await act(async () => {
         rerender(
           <DesktopProfileSyncOnboardingCard
-            currentLocalUsername='local-owner'
+            currentLocalUsername='admin'
             profileSyncEnabled={true}
             selectedSyncDomains={['favorites']}
           />
@@ -381,7 +381,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
 
     render(
       <DesktopProfileSyncOnboardingCard
-        currentLocalUsername='local-owner'
+        currentLocalUsername='admin'
         profileSyncEnabled
         selectedSyncDomains={['playrecords']}
       />
@@ -409,7 +409,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
   it('opens the existing onboarding form for an unauthenticated remote sync session instead of sending sync-now', () => {
     render(
       <DesktopProfileSyncOnboardingCard
-        currentLocalUsername='local-owner'
+        currentLocalUsername='admin'
         profileSyncEnabled
         requiresRemoteLogin
         selectedSyncDomains={['playrecords']}
@@ -446,7 +446,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
   it('renders a compact warning strip when sync is enabled but still needs attention', () => {
     render(
       <DesktopProfileSyncOnboardingCard
-        currentLocalUsername='local-owner'
+        currentLocalUsername='admin'
         profileSyncEnabled
       />
     );
@@ -463,7 +463,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
 
     render(
       <DesktopProfileSyncOnboardingCard
-        currentLocalUsername='local-owner'
+        currentLocalUsername='admin'
         profileSyncEnabled={false}
       />
     );

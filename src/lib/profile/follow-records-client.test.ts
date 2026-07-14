@@ -68,7 +68,7 @@ function clearDesktopBootstrapPayload() {
   ).__DESKTOP_PROFILE_BOOTSTRAP__;
 }
 
-function setDesktopAuthCookie(username = 'desktop-owner') {
+function setDesktopAuthCookie(username = 'admin') {
   document.cookie = `auth-info=${encodeURIComponent(
     JSON.stringify({
       username,

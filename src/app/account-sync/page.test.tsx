@@ -143,12 +143,12 @@ describe('AccountSyncPage', () => {
       APP_TARGET: 'desktop',
     });
     (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
-      username: 'local-owner',
+      username: 'admin',
       role: 'owner',
     });
     (isDesktopTauriRuntimeAvailable as jest.Mock).mockReturnValue(true);
     (getDesktopAuthStatus as jest.Mock).mockResolvedValue({
-      username: 'local-owner',
+      username: 'admin',
       passwordRequired: true,
       multiUser: false,
       ownerPasswordConfigured: true,
@@ -175,7 +175,7 @@ describe('AccountSyncPage', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('onboarding-card')).toHaveTextContent(
-        'local-owner|false|playrecords,favorites,follows,searchhistory,skipconfigs|false'
+        'admin|false|playrecords,favorites,follows,searchhistory,skipconfigs|false'
       );
     });
 
@@ -220,7 +220,7 @@ describe('AccountSyncPage', () => {
       );
     });
     expect(screen.getByTestId('onboarding-card')).toHaveTextContent(
-      'local-owner|true|playrecords,adminsettings|false'
+      'admin|true|playrecords,adminsettings|false'
     );
   });
 
@@ -310,8 +310,8 @@ describe('AccountSyncPage', () => {
 
   it('refreshes the page state on browser auth and runtime refresh events', async () => {
     (getAuthInfoFromBrowserCookie as jest.Mock)
-      .mockReturnValueOnce({ username: 'local-owner', role: 'owner' })
-      .mockReturnValueOnce({ username: 'local-owner', role: 'owner' })
+      .mockReturnValueOnce({ username: 'admin', role: 'owner' })
+      .mockReturnValueOnce({ username: 'admin', role: 'owner' })
       .mockReturnValueOnce({ username: 'remote-owner', role: 'owner' })
       .mockReturnValue({ username: 'remote-owner', role: 'owner' });
     (readDesktopProfileSyncStatusState as jest.Mock)
@@ -350,7 +350,7 @@ describe('AccountSyncPage', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('onboarding-card')).toHaveTextContent(
-        'local-owner|false|playrecords,favorites,follows,searchhistory,skipconfigs|false'
+        'admin|false|playrecords,favorites,follows,searchhistory,skipconfigs|false'
       );
     });
 

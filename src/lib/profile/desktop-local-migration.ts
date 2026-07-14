@@ -34,6 +34,8 @@ type MigrationDomain =
   | 'skipconfigs';
 
 const MIGRATION_MARKER_PREFIX = 'lunatv:desktop-local-profile-migrated:v1';
+const DEFAULT_DESKTOP_OWNER_USERNAME = 'admin';
+const LEGACY_DEFAULT_DESKTOP_OWNER_USERNAME = 'desktop-local-owner';
 const NO_REDIRECT_OPTIONS: RemoteProfileRequestInit = {
   redirectOnUnauthorized: false,
 };
@@ -246,17 +248,33 @@ async function migrateSkipConfigs(): Promise<void> {
 
 function getMigrationUsername(): string {
   return (
-    getAuthInfoFromBrowserCookie()?.username?.trim() || 'desktop-local-owner'
+    getAuthInfoFromBrowserCookie()?.username?.trim() ||
+    DEFAULT_DESKTOP_OWNER_USERNAME
   );
 }
 
-function buildDomainMarker(username: string, domain: MigrationDomain): string {
+export function buildDomainMarker(
+  username: string,
+  domain: MigrationDomain
+): string {
   return `${MIGRATION_MARKER_PREFIX}:${username}:${domain}`;
 }
 
-function isDomainMigrated(username: string, domain: MigrationDomain): boolean {
+export function isDomainMigrated(
+  username: string,
+  domain: MigrationDomain
+): boolean {
   try {
-    return localStorage.getItem(buildDomainMarker(username, domain)) === '1';
+    if (localStorage.getItem(buildDomainMarker(username, domain)) === '1') {
+      return true;
+    }
+
+    return (
+      username === DEFAULT_DESKTOP_OWNER_USERNAME &&
+      localStorage.getItem(
+        buildDomainMarker(LEGACY_DEFAULT_DESKTOP_OWNER_USERNAME, domain)
+      ) === '1'
+    );
   } catch {
     return false;
   }

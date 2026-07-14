@@ -138,7 +138,7 @@ describe('profile client cache refresh', () => {
     mockShouldUseProfileApiStorage.mockReturnValue(true);
     document.cookie = `auth-info=${encodeURIComponent(
       JSON.stringify({
-        username: 'desktop-owner',
+        username: 'admin',
         sessionMode: 'desktop-local',
       })
     )}; path=/`;

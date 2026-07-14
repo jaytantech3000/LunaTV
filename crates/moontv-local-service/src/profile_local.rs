@@ -14,7 +14,7 @@ use url::form_urlencoded;
 
 use crate::{
     AppError, AppResult, AppState, build_local_auth_status_payload, current_timestamp_ms,
-    no_store_json_response, resolve_owner_username_for_import,
+    no_store_json_response, resolve_owner_username_for_import, DEFAULT_DESKTOP_OWNER_USERNAME,
 };
 
 const SEARCH_HISTORY_LIMIT: usize = 20;
@@ -567,7 +567,7 @@ fn validate_local_profile_user(state: &AppState, username: &str) -> AppResult<()
         .load_admin_persistence()
         .map_err(|error| AppError::internal(error.to_string()))?;
     let owner_username = resolve_owner_username_for_import(&persistence.config)
-        .unwrap_or_else(|| "owner".to_string());
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
 
     if username == owner_username {
         return Ok(());

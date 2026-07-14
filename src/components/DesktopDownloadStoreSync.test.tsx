@@ -484,7 +484,7 @@ describe('DesktopDownloadStoreSync', () => {
           poster: 'https://img.example.com/demo.jpg',
           year: '2026',
           episodeTitles: ['Episode 1'],
-          ownerUsername: 'local-owner',
+          ownerUsername: 'admin',
           episodes: [],
           totalSizeBytes: 0,
           updatedAt: 1,
@@ -507,7 +507,7 @@ describe('DesktopDownloadStoreSync', () => {
             poster: 'https://img.example.com/demo.jpg',
             year: '2026',
             episodeTitles: ['Episode 1'],
-            ownerUsername: 'local-owner',
+            ownerUsername: 'admin',
             episodes: [],
             totalSizeBytes: 0,
             updatedAt: 1,
@@ -548,7 +548,7 @@ describe('DesktopDownloadStoreSync', () => {
     });
 
     expect(useDownloadStore.getState().library['demo:1']?.ownerUsername).toBe(
-      'local-owner'
+      'admin'
     );
 
     act(() => {

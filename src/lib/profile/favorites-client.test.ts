@@ -45,7 +45,7 @@ const mockedPostRemoteProfilePayload =
     typeof postRemoteProfilePayload
   >;
 
-function setDesktopAuthCookie(username = 'desktop-owner') {
+function setDesktopAuthCookie(username = 'admin') {
   document.cookie = `auth-info=${encodeURIComponent(
     JSON.stringify({
       username,

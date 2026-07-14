@@ -107,7 +107,7 @@ describe('desktop profile sync helpers', () => {
       currentRemoteUsername: 'remote-owner',
       currentRemoteRole: 'owner',
       plan: {
-        currentLocalUsername: 'local-owner',
+        currentLocalUsername: 'admin',
         currentRemoteUsername: 'remote-owner',
         items: [],
       },
@@ -124,7 +124,7 @@ describe('desktop profile sync helpers', () => {
       remoteBaseUrl: 'https://luna.hkcu.qzz.io',
       username: 'remote-owner',
       password: 'secret',
-      currentLocalUsername: 'local-owner',
+      currentLocalUsername: 'admin',
     };
 
     (apiFetch as jest.Mock).mockResolvedValue({
@@ -195,7 +195,7 @@ describe('desktop profile sync helpers', () => {
       remoteBaseUrl: 'https://luna.hkcu.qzz.io',
       username: 'remote-owner',
       password: 'secret',
-      currentLocalUsername: 'local-owner',
+      currentLocalUsername: 'admin',
       strategy: 'web-first' as const,
     };
 

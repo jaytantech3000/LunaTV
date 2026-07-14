@@ -137,13 +137,13 @@ describe('download session helpers', () => {
       getAuthInfoFromBrowserCookie: jest.Mock;
     };
 
-    mockStoreState.ownerUsername = 'local-owner';
+    mockStoreState.ownerUsername = 'admin';
     authModule.getAuthInfoFromBrowserCookie.mockReturnValue({
       username: 'remote-owner',
     });
 
     armDesktopDownloadOwnershipHandoff({
-      previousOwnerUsername: 'local-owner',
+      previousOwnerUsername: 'admin',
       nextOwnerUsername: 'remote-owner',
     });
 
