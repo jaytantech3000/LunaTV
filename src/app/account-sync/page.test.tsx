@@ -124,6 +124,11 @@ jest.mock('@/components/DesktopProfileSyncScopeCard', () => ({
   }) => mockScopeCard(props),
 }));
 
+jest.mock('@/components/DesktopPrivilegeGate', () => ({
+  __esModule: true,
+  default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 jest.mock('@/components/PageLayout', () => ({
   __esModule: true,
   default: ({ children }: { children: React.ReactNode }) => (
@@ -247,8 +252,8 @@ describe('AccountSyncPage', () => {
 
   it('keeps the desktop account-sync page usable for a guest and defers remote login until an action', async () => {
     (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue(null);
-    (getDesktopAuthStatus as jest.Mock).mockRejectedValue(
-      new Error('本地认证状态不可用')
+    (getDesktopAuthStatus as jest.Mock).mockImplementation(() =>
+      Promise.reject(new Error('本地认证状态不可用'))
     );
     (readDesktopProfileSyncStatusState as jest.Mock).mockResolvedValue({
       status: {
@@ -280,6 +285,27 @@ describe('AccountSyncPage', () => {
     expect(screen.getByTestId('scope-card')).toHaveTextContent(
       'playrecords,favorites,follows,searchhistory,skipconfigs|false|false'
     );
+  });
+
+  it('keeps guest onboarding available when profile sync status returns 401', async () => {
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue(null);
+    (getDesktopAuthStatus as jest.Mock).mockImplementation(() =>
+      Promise.reject(new Error('本地认证状态不可用'))
+    );
+    (readDesktopProfileSyncStatusState as jest.Mock).mockResolvedValue({
+      status: undefined,
+      error: 'Failed to load profile sync status: 401',
+    });
+
+    render(<AccountSyncPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-card')).toHaveTextContent(
+        'null|false|playrecords,favorites,follows,searchhistory,skipconfigs|false|false'
+      );
+    });
+    expect(screen.getByText('无法读取')).toBeInTheDocument();
+    expect(screen.getByText('去配置')).toBeInTheDocument();
   });
 
   it('refreshes the page state on browser auth and runtime refresh events', async () => {

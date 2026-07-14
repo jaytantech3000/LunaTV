@@ -360,7 +360,7 @@ export default function AccountSyncPage() {
                 }
                 profileSyncEnabled={Boolean(profileSyncStatus?.enabled)}
                 selectedSyncDomains={selectedSyncDomains}
-                isSyncUnavailable={Boolean(normalizedProfileSyncStatusError)}
+                isSyncUnavailable={false}
                 requiresRemoteLogin={requiresRemoteLogin}
                 onSyncSuccess={handleSyncSuccess}
                 authorizationGranted={hasLocalSyncAuthorization}
