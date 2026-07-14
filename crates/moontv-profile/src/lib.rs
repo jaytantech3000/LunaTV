@@ -19,6 +19,7 @@ const FAVORITES_DOMAIN_KEY: &str = "favorites";
 const FOLLOW_RECORDS_DOMAIN_KEY: &str = "follows";
 const SEARCH_HISTORY_DOMAIN_KEY: &str = "searchhistory";
 const SKIP_CONFIGS_DOMAIN_KEY: &str = "skipconfigs";
+const PROFILE_DEVICE_ID_METADATA_KEY: &str = "profile:device-id";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlayRecord {
@@ -257,6 +258,25 @@ impl LocalDesktopProfileStore {
         self.sqlite.pending_profile_outbox_count(username)
     }
 
+    pub fn get_or_create_device_id(&self) -> Result<String> {
+        if let Some(device_id) = self
+            .sqlite
+            .read_app_metadata::<String>(PROFILE_DEVICE_ID_METADATA_KEY)?
+        {
+            return Ok(device_id);
+        }
+
+        let mut random = [0_u8; 16];
+        rand::rng().fill_bytes(&mut random);
+        let device_id = random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        self.sqlite
+            .write_app_metadata(PROFILE_DEVICE_ID_METADATA_KEY, &device_id)?;
+        Ok(device_id)
+    }
+
     fn load_domain<T>(&self, username: &str, domain: &str) -> Result<T>
     where
         T: DeserializeOwned + Default,
@@ -324,6 +344,14 @@ mod tests {
         let sqlite =
             DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite");
         let store = LocalDesktopProfileStore::new(sqlite);
+        let device_id = store.get_or_create_device_id().expect("device id");
+        assert_eq!(device_id.len(), 32);
+        assert_eq!(
+            LocalDesktopProfileStore::new(store.sqlite().clone())
+                .get_or_create_device_id()
+                .expect("persisted device id"),
+            device_id
+        );
         let favorite = Favorite {
             title: "Demo".to_string(),
             source_name: "Source".to_string(),
