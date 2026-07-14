@@ -5,11 +5,23 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 
 const ROOT_DOMAIN = 'hkcu.qzz.io';
+const AUTH_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+type AuthRole = 'owner' | 'admin' | 'user';
+
+function buildAuthSignaturePayload(
+  username: string,
+  role: AuthRole,
+  timestamp: number
+): string {
+  return `${username}:${role}:${timestamp}`;
+}
 
 export async function middleware(request: NextRequest) {
   const host = normalizeHost(request.headers.get('host'));
   const { pathname } = request.nextUrl;
-  const appTarget = process.env.NEXT_PUBLIC_APP_TARGET || process.env.APP_TARGET;
+  const appTarget =
+    process.env.NEXT_PUBLIC_APP_TARGET || process.env.APP_TARGET;
 
   if (appTarget === 'desktop') {
     return NextResponse.next();
@@ -27,51 +39,53 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
-
   if (!process.env.PASSWORD) {
-    // 如果没有设置密码，重定向到警告页面
     const warningUrl = new URL('/warning', request.url);
     return NextResponse.redirect(warningUrl);
   }
 
-  // 从cookie获取认证信息
   const authInfo = getAuthInfoFromCookie(request);
 
   if (!authInfo) {
     return handleAuthFailure(request, pathname);
   }
 
-  // localstorage模式：在middleware中完成验证
-  if (storageType === 'localstorage') {
-    if (!authInfo.password || authInfo.password !== process.env.PASSWORD) {
-      return handleAuthFailure(request, pathname);
-    }
-    return NextResponse.next();
-  }
-
-  // 其他模式：只验证签名
-  // 检查是否有用户名（非localStorage模式下密码不存储在cookie中）
-  if (!authInfo.username || !authInfo.signature) {
+  // localstorage mode uses the same signed, expiring cookie as other modes.
+  if (
+    !authInfo.username ||
+    !authInfo.signature ||
+    !authInfo.timestamp ||
+    !isAuthRole(authInfo.role) ||
+    !isValidAuthTimestamp(authInfo.timestamp)
+  ) {
     return handleAuthFailure(request, pathname);
   }
 
-  // 验证签名（如果存在）
-  if (authInfo.signature) {
-    const isValidSignature = await verifySignature(
+  const isValidSignature = await verifySignature(
+    buildAuthSignaturePayload(
       authInfo.username,
-      authInfo.signature,
-      process.env.PASSWORD || ''
-    );
+      authInfo.role,
+      authInfo.timestamp
+    ),
+    authInfo.signature,
+    process.env.PASSWORD || ''
+  );
 
-    // 签名验证通过即可
-    if (isValidSignature) {
-      return NextResponse.next();
-    }
-  }
+  return isValidSignature
+    ? NextResponse.next()
+    : handleAuthFailure(request, pathname);
+}
 
-  // 签名验证失败或不存在签名
-  return handleAuthFailure(request, pathname);
+function isAuthRole(value: unknown): value is AuthRole {
+  return value === 'owner' || value === 'admin' || value === 'user';
+}
+
+function isValidAuthTimestamp(timestamp: number): boolean {
+  return (
+    Number.isSafeInteger(timestamp) &&
+    timestamp <= Date.now() &&
+    Date.now() - timestamp <= AUTH_SESSION_MAX_AGE_MS
+  );
 }
 
 // 验证签名

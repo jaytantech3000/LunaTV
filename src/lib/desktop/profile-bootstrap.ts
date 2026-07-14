@@ -1,4 +1,3 @@
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { AppRuntimeConfig, getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 
@@ -89,12 +88,7 @@ function cacheDesktopProfileBootstrap(
 }
 
 function hasStoredDesktopProfileSyncCredentials(): boolean {
-  const authInfo = getAuthInfoFromBrowserCookie();
-  return Boolean(
-    authInfo?.sessionMode === 'desktop-profile-sync' &&
-      authInfo.username?.trim() &&
-      authInfo.password?.trim()
-  );
+  return false;
 }
 
 export async function getDesktopProfileBootstrap(

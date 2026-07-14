@@ -81,6 +81,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
   }, [isChangePasswordOpen]);
 
   // 修改密码相关状态
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
@@ -174,6 +175,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
 
   const openChangePasswordDialog = (notice = '') => {
     setIsChangePasswordOpen(true);
+    setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
     setPasswordError('');
@@ -291,6 +293,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
 
   const handleCloseChangePassword = () => {
     setIsChangePasswordOpen(false);
+    setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
     setPasswordError('');
@@ -322,7 +325,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
         }
 
         const nextAuthStatus = await changeDesktopPassword(
-          authInfo.username,
+          currentPassword,
           normalizedNewPassword
         );
         setDesktopAuthRequired(nextAuthStatus.passwordRequired);
@@ -714,6 +717,24 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
           ) : null}
 
           <div className='space-y-4'>
+            {isDesktopTarget &&
+            !desktopProfileSyncEnabled &&
+            desktopAuthRequired ? (
+              <div>
+                <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
+                  当前密码
+                </label>
+                <input
+                  type='password'
+                  autoComplete='current-password'
+                  className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition-colors bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400'
+                  placeholder='请输入当前密码'
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  disabled={passwordLoading}
+                />
+              </div>
+            ) : null}
             {/* 新密码输入 */}
             <div>
               <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>

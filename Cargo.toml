@@ -16,6 +16,7 @@ version = "200.0.1"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
+argon2 = "0.5.3"
 axum = { version = "0.8.6", features = ["macros"] }
 base64 = "0.22.1"
 bs58 = "0.5.1"
@@ -27,6 +28,7 @@ hyper-util = { version = "0.1.20", features = ["http1", "server", "service", "to
 minisign-verify = "0.2"
 regex = "1.12.2"
 reqwest = { version = "0.12.24", default-features = false, features = ["brotli", "cookies", "deflate", "gzip", "http2", "json", "rustls-tls", "stream"] }
+rand = "0.9.4"
 rfd = "0.17.2"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 semver = "1.0.27"

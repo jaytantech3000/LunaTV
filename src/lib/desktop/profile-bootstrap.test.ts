@@ -121,7 +121,7 @@ describe('desktop profile bootstrap helpers', () => {
     );
   });
 
-  it('preserves stored credentials when silent restore succeeds but bootstrap refresh falls back to the cached payload', async () => {
+  it('applies the cached unauthenticated payload when password recovery is unavailable', async () => {
     const initialPayload = {
       appTarget: 'desktop',
       runtime: {
@@ -169,10 +169,7 @@ describe('desktop profile bootstrap helpers', () => {
     });
 
     expect(applyDesktopProfileSyncStatus).toHaveBeenCalledWith(
-      initialPayload.profileSync,
-      {
-        preserveStoredCredentials: true,
-      }
+      initialPayload.profileSync
     );
   });
 
@@ -222,10 +219,7 @@ describe('desktop profile bootstrap helpers', () => {
     });
 
     expect(applyDesktopProfileSyncStatus).toHaveBeenCalledWith(
-      initialPayload.profileSync,
-      {
-        preserveStoredCredentials: true,
-      }
+      initialPayload.profileSync
     );
   });
 

@@ -13,9 +13,14 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use futures::StreamExt;
 use minisign_verify::{PublicKey, Signature};
+use rand::Rng;
 use reqwest::{
     ClientBuilder, StatusCode,
     header::{ACCEPT, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap, HeaderValue, RANGE},
@@ -68,14 +73,32 @@ const PROFILE_SYNC_USER_DATA_DOMAINS: [&str; 5] = [
     "skipconfigs",
 ];
 
-#[derive(Default)]
 struct DesktopRuntimeState {
     service_process: Mutex<Option<ServiceProcess>>,
+    local_service_access_token: String,
+    verified_desktop_auth_session: Mutex<Option<DesktopAuthSession>>,
     service_start_lock: AsyncMutex<()>,
     last_start_failure: Mutex<Option<LocalServiceStartupFailure>>,
     active_update_download: Mutex<Option<ActiveDesktopUpdateDownload>>,
     paused_update_download: Mutex<Option<PausedDesktopUpdateDownload>>,
     downloaded_update: Mutex<Option<DownloadedDesktopUpdate>>,
+}
+
+impl Default for DesktopRuntimeState {
+    fn default() -> Self {
+        let mut token_bytes = [0_u8; 32];
+        rand::rng().fill(&mut token_bytes);
+        Self {
+            service_process: Mutex::default(),
+            local_service_access_token: BASE64_STANDARD.encode(token_bytes),
+            verified_desktop_auth_session: Mutex::default(),
+            service_start_lock: AsyncMutex::default(),
+            last_start_failure: Mutex::default(),
+            active_update_download: Mutex::default(),
+            paused_update_download: Mutex::default(),
+            downloaded_update: Mutex::default(),
+        }
+    }
 }
 
 struct ActiveDesktopUpdateDownload {
@@ -572,6 +595,13 @@ fn write_app_config(
 }
 
 #[tauri::command]
+fn get_local_service_access_token(
+    state: State<'_, DesktopRuntimeState>,
+) -> String {
+    state.local_service_access_token.clone()
+}
+
+#[tauri::command]
 fn get_desktop_auth_status(app: AppHandle) -> Result<DesktopAuthStatus, String> {
     get_desktop_auth_status_impl(&app).map_err(|error| error.to_string())
 }
@@ -579,6 +609,7 @@ fn get_desktop_auth_status(app: AppHandle) -> Result<DesktopAuthStatus, String> 
 #[tauri::command]
 fn desktop_login(
     app: AppHandle,
+    state: State<'_, DesktopRuntimeState>,
     username: Option<String>,
     password: Option<String>,
 ) -> Result<DesktopAuthSession, String> {
@@ -589,15 +620,20 @@ fn desktop_login(
 
     if requested_username == auth_config.username {
         if let Some(expected_password) = auth_config.password {
-            if provided_password.trim() != expected_password {
+            if !verify_desktop_password(&expected_password, provided_password.trim()) {
                 return Err("用户名或密码错误".to_string());
             }
         }
 
-        return Ok(DesktopAuthSession {
+        let session = DesktopAuthSession {
             username: requested_username,
             role: "owner".to_string(),
-        });
+        };
+        *state
+            .verified_desktop_auth_session
+            .lock()
+            .map_err(|_| "failed to lock desktop authentication state".to_string())? = Some(session.clone());
+        return Ok(session);
     }
 
     let target_user = auth_config
@@ -614,23 +650,30 @@ fn desktop_login(
         .password
         .ok_or_else(|| "该账号未配置密码".to_string())?;
 
-    if provided_password.trim() != expected_password {
+    if !verify_desktop_password(&expected_password, provided_password.trim()) {
         return Err("用户名或密码错误".to_string());
     }
 
-    Ok(DesktopAuthSession {
+    let session = DesktopAuthSession {
         username: target_user.username,
         role: target_user.role,
-    })
+    };
+    *state
+        .verified_desktop_auth_session
+        .lock()
+        .map_err(|_| "failed to lock desktop authentication state".to_string())? = Some(session.clone());
+    Ok(session)
 }
 
 #[tauri::command]
 fn change_desktop_password(
     app: AppHandle,
-    username: String,
+    state: State<'_, DesktopRuntimeState>,
+    current_password: Option<String>,
     new_password: String,
 ) -> Result<DesktopAuthStatus, String> {
-    change_desktop_password_impl(&app, username, new_password).map_err(|error| error.to_string())
+    change_desktop_password_impl(&app, &state, current_password, new_password)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -784,6 +827,7 @@ pub fn run() {
             save_local_service_diagnostics,
             read_app_config,
             write_app_config,
+            get_local_service_access_token,
             get_desktop_auth_status,
             desktop_login,
             change_desktop_password,
@@ -930,6 +974,8 @@ async fn start_local_service_impl_inner(
             .arg(&paths.data_dir)
             .arg("--sqlite-path")
             .arg(&paths.sqlite_path)
+            .arg("--access-token")
+            .arg(&state.local_service_access_token)
             .current_dir(&paths.data_dir)
             .stdin(Stdio::null())
             .stdout(if cfg!(debug_assertions) {
@@ -3653,14 +3699,39 @@ fn get_desktop_auth_status_impl(app: &AppHandle) -> Result<DesktopAuthStatus> {
 
 fn change_desktop_password_impl(
     app: &AppHandle,
-    username: String,
+    state: &DesktopRuntimeState,
+    current_password: Option<String>,
     new_password: String,
 ) -> Result<DesktopAuthStatus> {
-    let target_username = normalize_required_string(username, "用户名不能为空")?;
     let normalized_password = normalize_required_string(new_password, "新密码不能为空")?;
+    let session = state
+        .verified_desktop_auth_session
+        .lock()
+        .map_err(|_| anyhow::anyhow!("failed to lock desktop authentication state"))?
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("当前未登录，无法修改密码"))?;
     let auth_config = resolve_desktop_auth_config(app)?;
+    let expected_password = if session.username == auth_config.username {
+        auth_config.password
+    } else {
+        auth_config
+            .local_users
+            .iter()
+            .find(|user| user.username == session.username && !user.banned)
+            .and_then(|user| user.password.clone())
+    };
 
-    if target_username == auth_config.username {
+    if let Some(expected_password) = expected_password {
+        let provided_password = normalize_required_string(
+            current_password.unwrap_or_default(),
+            "请输入当前密码",
+        )?;
+        if !verify_desktop_password(&expected_password, &provided_password) {
+            anyhow::bail!("当前密码错误");
+        }
+    }
+
+    if session.username == auth_config.username {
         let paths = resolve_runtime_paths(app)?;
         ensure_desktop_config_file(&paths.config_path)?;
 
@@ -3671,23 +3742,21 @@ fn change_desktop_password_impl(
             normalized_password.as_str(),
         );
         write_json_value_file(&paths.config_path, &config_value)?;
-
         return get_desktop_auth_status_impl(app);
     }
 
     let user_exists = auth_config
         .local_users
         .iter()
-        .any(|user| user.username == target_username);
-
+        .any(|user| user.username == session.username && !user.banned);
     if !user_exists {
-        anyhow::bail!("用户不存在");
+        anyhow::bail!("用户不存在或已被禁用");
     }
 
     let mut persistence_value = read_desktop_admin_persistence_value(app)?;
     set_desktop_local_user_password_value(
         &mut persistence_value,
-        target_username.as_str(),
+        session.username.as_str(),
         normalized_password.as_str(),
     );
     write_desktop_admin_persistence_value(app, &persistence_value)?;
@@ -3820,7 +3889,7 @@ fn set_desktop_owner_password_value(
 
     auth_object.insert(
         "password".to_string(),
-        serde_json::Value::String(new_password.to_string()),
+        serde_json::Value::String(hash_desktop_password(new_password)),
     );
 }
 
@@ -3849,8 +3918,28 @@ fn set_desktop_local_user_password_value(
         .expect("userPasswords should be an object after normalization");
     passwords_object.insert(
         username.to_string(),
-        serde_json::Value::String(new_password.to_string()),
+        serde_json::Value::String(hash_desktop_password(new_password)),
     );
+}
+
+fn verify_desktop_password(stored_password: &str, candidate_password: &str) -> bool {
+    if let Ok(parsed_hash) = PasswordHash::new(stored_password) {
+        return Argon2::default()
+            .verify_password(candidate_password.as_bytes(), &parsed_hash)
+            .is_ok();
+    }
+
+    stored_password == candidate_password
+}
+
+fn hash_desktop_password(password: &str) -> String {
+    let mut salt_bytes = [0_u8; 16];
+    rand::rng().fill(&mut salt_bytes);
+    let salt = SaltString::encode_b64(&salt_bytes).expect("failed to encode desktop password salt");
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .expect("failed to hash desktop password")
+        .to_string()
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -5377,11 +5466,11 @@ mod tests {
         build_profile_sync_status_diagnostic_detail, collect_diagnostics_error_text,
         describe_primary_port_issue, ensure_default_desktop_owner_auth_value,
         extract_desktop_release_version, extract_profile_sync_api_base_url,
-        find_desktop_release_manifest_url, local_service_health_check,
+        find_desktop_release_manifest_url, hash_desktop_password, local_service_health_check,
         normalize_desktop_release_history, normalize_release_repository_slug,
         select_preferred_sidecar_candidates, set_desktop_local_user_password_value,
         set_desktop_owner_password_value, should_reuse_untracked_local_service,
-        summarize_trial_output,
+        summarize_trial_output, verify_desktop_password,
     };
     use std::time::Duration;
     use std::path::PathBuf;
@@ -5455,11 +5544,13 @@ mod tests {
         });
 
         set_desktop_owner_password_value(&mut config_value, "owner", "new-pass");
+        let stored_password = config_value["auth"]["password"]
+            .as_str()
+            .expect("hashed owner password");
 
-        assert_eq!(
-            config_value["auth"]["password"],
-            serde_json::Value::String("new-pass".to_string())
-        );
+        assert_ne!(stored_password, "new-pass");
+        assert!(stored_password.starts_with("$argon2"));
+        assert!(verify_desktop_password(stored_password, "new-pass"));
         assert_eq!(
             config_value["profile_sync"]["api_base_url"],
             serde_json::Value::String("http://127.0.0.1:8787".to_string())
@@ -5662,10 +5753,12 @@ mod tests {
 
         set_desktop_local_user_password_value(&mut persistence_value, "alice", "new-pass");
 
-        assert_eq!(
-            persistence_value["userPasswords"]["alice"],
-            serde_json::Value::String("new-pass".to_string())
-        );
+        let stored_password = persistence_value["userPasswords"]["alice"]
+            .as_str()
+            .expect("hashed local user password");
+        assert_ne!(stored_password, "new-pass");
+        assert!(stored_password.starts_with("$argon2"));
+        assert!(verify_desktop_password(stored_password, "new-pass"));
         assert_eq!(
             persistence_value["config"]["UserConfig"]["Users"][0]["username"],
             serde_json::Value::String("alice".to_string())

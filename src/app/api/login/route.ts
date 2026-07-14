@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { BROWSER_AUTH_INFO_COOKIE_NAME } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 
@@ -39,25 +40,29 @@ async function generateSignature(
     .join('');
 }
 
+function buildAuthSignaturePayload(
+  username: string,
+  role: 'owner' | 'admin' | 'user',
+  timestamp: number
+): string {
+  return `${username}:${role}:${timestamp}`;
+}
+
 async function generateAuthCookie(
-  username?: string,
-  password?: string,
-  role?: 'owner' | 'admin' | 'user',
-  includePassword = false
+  username: string | undefined,
+  role: 'owner' | 'admin' | 'user',
+  _password?: string
 ): Promise<string> {
   const authData: any = { role: role || 'user' };
 
-  if (includePassword && password) {
-    authData.password = password;
-  }
-
   if (username && process.env.PASSWORD) {
+    const timestamp = Date.now();
     authData.username = username;
+    authData.timestamp = timestamp;
     authData.signature = await generateSignature(
-      username,
+      buildAuthSignaturePayload(username, authData.role, timestamp),
       process.env.PASSWORD
     );
-    authData.timestamp = Date.now();
   }
 
   return encodeURIComponent(JSON.stringify(authData));
@@ -66,20 +71,14 @@ async function generateAuthCookie(
 async function buildAuthenticatedResponse(
   username: string,
   password: string,
-  role: 'owner' | 'admin' | 'user',
-  includePassword = false
+  role: 'owner' | 'admin' | 'user'
 ): Promise<NextResponse> {
   const response = NextResponse.json({
     ok: true,
     username,
     role,
   });
-  const cookieValue = await generateAuthCookie(
-    username,
-    password,
-    role,
-    includePassword
-  );
+  const cookieValue = await generateAuthCookie(username, role, password);
   const expires = new Date();
   expires.setDate(expires.getDate() + 7);
 
@@ -87,9 +86,20 @@ async function buildAuthenticatedResponse(
     path: '/',
     expires,
     sameSite: 'lax',
-    httpOnly: false,
-    secure: false,
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
   });
+  response.cookies.set(
+    BROWSER_AUTH_INFO_COOKIE_NAME,
+    encodeURIComponent(JSON.stringify({ username, role })),
+    {
+      path: '/',
+      expires,
+      sameSite: 'lax',
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+    }
+  );
 
   return response;
 }
@@ -133,8 +143,7 @@ export async function POST(req: NextRequest) {
       return buildAuthenticatedResponse(
         process.env.USERNAME || LOCALSTORAGE_FALLBACK_OWNER_USERNAME,
         password,
-        'owner',
-        true
+        'owner'
       );
     }
 

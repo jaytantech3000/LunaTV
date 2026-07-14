@@ -13,6 +13,10 @@ use aes::{
     cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
 };
 use anyhow::{Context, Result};
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHasher, SaltString},
+};
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
@@ -110,8 +114,8 @@ use profile_sync_onboarding::{
 use vod_proxy::{get_vod_key, get_vod_m3u8, get_vod_segment};
 
 const DEFAULT_HOST: &str = "127.0.0.1";
-const WINDOWS_WILDCARD_BIND_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 8787;
+const LOCAL_SERVICE_ACCESS_TOKEN_HEADER: &str = "x-moontv-local-token";
 const DEFAULT_CONFIG_FILE_NAME: &str = "config.example.json";
 const DEFAULT_DATA_DIR_NAME: &str = ".lunatv-desktop";
 const DEFAULT_SQLITE_FILE_NAME: &str = "moontv-desktop.sqlite3";
@@ -317,6 +321,8 @@ pub struct Cli {
     pub data_dir: Option<PathBuf>,
     #[arg(long)]
     pub sqlite_path: Option<PathBuf>,
+    #[arg(long)]
+    pub access_token: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -335,6 +341,7 @@ pub struct AppState {
     download_runtime_schedule_lock: Arc<Mutex<()>>,
     profile_sync: ProfileSyncClient,
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
+    access_token: Option<String>,
     bangumi_api_base_url: String,
     douban_api_base_url: String,
     douban_movie_api_base_url: String,
@@ -361,13 +368,17 @@ impl AppState {
         fs::create_dir_all(&data_dir)
             .with_context(|| format!("failed to create {}", data_dir.display()))?;
 
-        Self::try_new(
+        let state = Self::try_new(
             cli.host.clone(),
             cli.port,
             config_path,
             data_dir,
             sqlite_path,
-        )
+        )?;
+        Ok(match cli.access_token.clone() {
+            Some(access_token) => state.with_access_token(access_token),
+            None => state,
+        })
     }
 
     pub fn new(
@@ -424,6 +435,7 @@ impl AppState {
                     .expect("failed to build profile sync http client"),
             ),
             profile_sync_session: Arc::new(RwLock::new(None)),
+            access_token: None,
             bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
             douban_api_base_url: DEFAULT_DOUBAN_API_BASE_URL.to_string(),
             douban_movie_api_base_url: DEFAULT_DOUBAN_MOVIE_API_BASE_URL.to_string(),
@@ -434,6 +446,11 @@ impl AppState {
 
     fn bind_addr(&self) -> String {
         format!("{}:{}", effective_bind_host(&self.host), self.port)
+    }
+
+    pub fn with_access_token(mut self, access_token: String) -> Self {
+        self.access_token = normalize_optional_string(Some(access_token));
+        self
     }
 
     fn load_config(&self) -> Result<ServiceConfig> {
@@ -1676,15 +1693,7 @@ fn blocking_local_service_health_probe(base_url: &str) -> std::result::Result<u1
 }
 
 fn effective_bind_host(configured_host: &str) -> &str {
-    resolve_bind_host(configured_host, cfg!(target_os = "windows"))
-}
-
-fn resolve_bind_host<'a>(configured_host: &'a str, use_windows_wildcard_bind: bool) -> &'a str {
-    if use_windows_wildcard_bind && configured_host == DEFAULT_HOST {
-        WINDOWS_WILDCARD_BIND_HOST
-    } else {
-        configured_host
-    }
+    configured_host
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -1886,7 +1895,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/proxy/vod/m3u8", get(get_vod_m3u8))
         .route("/api/proxy/vod/segment", get(get_vod_segment))
         .route("/api/proxy/vod/key", get(get_vod_key))
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state,
+            local_service_access_middleware,
+        ))
         .layer(middleware::from_fn(cors_middleware))
 }
 
@@ -1926,7 +1939,10 @@ async fn cors_middleware(request: Request, next: Next) -> Response {
 }
 
 fn apply_cors_headers(headers: &mut HeaderMap) {
-    headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+    headers.insert(
+        ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("tauri://localhost"),
+    );
     headers.insert(
         ACCESS_CONTROL_ALLOW_METHODS,
         HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"),
@@ -1934,13 +1950,56 @@ fn apply_cors_headers(headers: &mut HeaderMap) {
     headers.insert(
         ACCESS_CONTROL_ALLOW_HEADERS,
         HeaderValue::from_static(
-            "Content-Type, Range, Origin, Accept, Authorization, X-MoonTV-Response-Status, X-MoonTV-Download-Intent",
+            "Content-Type, Range, Origin, Accept, Authorization, X-MoonTV-Response-Status, X-MoonTV-Download-Intent, X-MoonTV-Local-Token",
         ),
     );
     headers.insert(
         ACCESS_CONTROL_EXPOSE_HEADERS,
         HeaderValue::from_static("Content-Length, Content-Range"),
     );
+}
+
+async fn local_service_access_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    if request.method() == Method::OPTIONS || !requires_local_service_access_token(path) {
+        return next.run(request).await;
+    }
+
+    let is_authorized = state.access_token.as_deref().is_some_and(|expected| {
+        request
+            .headers()
+            .get(LOCAL_SERVICE_ACCESS_TOKEN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|actual| actual == expected)
+    });
+    if is_authorized {
+        return next.run(request).await;
+    }
+
+    AppError::new(StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+}
+
+fn requires_local_service_access_token(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/login"
+            | "/api/logout"
+            | "/api/change-password"
+            | "/api/profile-sync/status"
+            | "/api/profile-sync/sync-now"
+    ) || path.starts_with("/api/admin/")
+        || matches!(
+            path,
+            "/api/playrecords"
+                | "/api/favorites"
+                | "/api/follows"
+                | "/api/searchhistory"
+                | "/api/skipconfigs"
+        )
 }
 
 async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -3089,7 +3148,7 @@ async fn update_admin_user_config(
             persistence.config.user_config.users.push(user);
             persistence
                 .user_passwords
-                .insert(target_username, target_password);
+                .insert(target_username, hash_desktop_password(&target_password));
         }
         "ban" | "unban" => {
             let target_username = require_owned_string(payload.target_username, "缺少目标用户名")?;
@@ -3132,7 +3191,7 @@ async fn update_admin_user_config(
             }
             persistence
                 .user_passwords
-                .insert(target_username, target_password);
+                .insert(target_username, hash_desktop_password(&target_password));
         }
         "deleteUser" => {
             let target_username = require_owned_string(payload.target_username, "缺少目标用户名")?;
@@ -4592,6 +4651,16 @@ fn build_service_config_from_admin(
             })
             .collect(),
     }
+}
+
+fn hash_desktop_password(password: &str) -> String {
+    let mut salt_bytes = [0_u8; 16];
+    rand::rng().fill(&mut salt_bytes);
+    let salt = SaltString::encode_b64(&salt_bytes).expect("failed to encode desktop password salt");
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .expect("failed to hash desktop password")
+        .to_string()
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -7541,6 +7610,52 @@ mod tests {
                 .contains("x-moontv-download-intent"),
             "expected allow headers to include x-moontv-download-intent, got: {allow_headers}"
         );
+    }
+
+    #[tokio::test]
+    async fn configured_local_service_rejects_api_requests_without_access_token() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let app = build_router(
+            AppState::new(
+                DEFAULT_HOST.to_string(),
+                DEFAULT_PORT,
+                config_path,
+                temp_dir.path.join("data"),
+                temp_dir.path.join("data/moontv.sqlite3"),
+            )
+            .with_access_token("test-access-token".to_string()),
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .body(Body::empty())
+                    .expect("unauthorized request"),
+            )
+            .await
+            .expect("unauthorized response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .header("X-MoonTV-Local-Token", "test-access-token")
+                    .body(Body::empty())
+                    .expect("authorized request"),
+            )
+            .await
+            .expect("authorized response");
+        assert_ne!(authorized.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]

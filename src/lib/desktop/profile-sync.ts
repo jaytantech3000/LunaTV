@@ -158,37 +158,9 @@ function normalizeRole(
 }
 
 function hasStoredDesktopProfileSyncCredentials(
-  authInfo: ReturnType<typeof getAuthInfoFromBrowserCookie>
+  _authInfo: ReturnType<typeof getAuthInfoFromBrowserCookie>
 ): boolean {
-  return Boolean(
-    authInfo?.sessionMode === 'desktop-profile-sync' &&
-      authInfo.username?.trim() &&
-      authInfo.password?.trim()
-  );
-}
-
-function getStoredDesktopProfileSyncCredentials(): {
-  username: string;
-  password: string;
-  role: 'owner' | 'admin' | 'user';
-} | null {
-  const authInfo = getAuthInfoFromBrowserCookie();
-  const username = authInfo?.username?.trim();
-  const password = authInfo?.password?.trim();
-
-  if (
-    authInfo?.sessionMode !== 'desktop-profile-sync' ||
-    !username ||
-    !password
-  ) {
-    return null;
-  }
-
-  return {
-    username,
-    password,
-    role: normalizeRole(authInfo.role),
-  };
+  return false;
 }
 
 export function resolveDesktopProfileSyncState(
@@ -311,48 +283,7 @@ export async function syncDesktopProfileNow(
 }
 
 export async function restoreDesktopProfileSyncSession(): Promise<boolean> {
-  const credentials = getStoredDesktopProfileSyncCredentials();
-
-  if (!credentials) {
-    return false;
-  }
-
-  try {
-    const response = await apiFetch('/login', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        username: credentials.username,
-        password: credentials.password,
-      }),
-      cache: 'no-store',
-    });
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        clearAuthInfoInBrowser();
-      }
-
-      return false;
-    }
-
-    const payload = (await response.json().catch(() => ({}))) as {
-      username?: string;
-      role?: DesktopProfileSyncStatus['role'];
-    };
-
-    setAuthInfoInBrowser({
-      username: payload.username?.trim() || credentials.username,
-      role: normalizeRole(payload.role || credentials.role),
-      password: credentials.password,
-      sessionMode: 'desktop-profile-sync',
-    });
-    return true;
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 export function describeDesktopProfileSyncStatusReadError(

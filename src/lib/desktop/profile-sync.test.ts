@@ -212,63 +212,29 @@ describe('desktop profile sync helpers', () => {
     );
   });
 
-  it('restores the saved desktop profile sync session through the local service', async () => {
+  it('does not silently restore desktop profile sync sessions from stored credentials', async () => {
     (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
       username: 'cloud-owner',
       role: 'owner',
       password: 'secret',
       sessionMode: 'desktop-profile-sync',
-    });
-    (apiFetch as jest.Mock).mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: jest.fn().mockResolvedValue({
-        ok: true,
-        username: 'cloud-owner',
-        role: 'owner',
-      }),
-    });
-
-    await expect(restoreDesktopProfileSyncSession()).resolves.toBe(true);
-
-    expect(apiFetch).toHaveBeenCalledWith('/login', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        username: 'cloud-owner',
-        password: 'secret',
-      }),
-      cache: 'no-store',
-    });
-    expect(setAuthInfoInBrowser).toHaveBeenCalledWith({
-      username: 'cloud-owner',
-      role: 'owner',
-      password: 'secret',
-      sessionMode: 'desktop-profile-sync',
-    });
-    expect(clearAuthInfoInBrowser).not.toHaveBeenCalled();
-  });
-
-  it('clears stale desktop profile sync credentials when silent restore is rejected', async () => {
-    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
-      username: 'cloud-owner',
-      role: 'owner',
-      password: 'secret',
-      sessionMode: 'desktop-profile-sync',
-    });
-    (apiFetch as jest.Mock).mockResolvedValue({
-      ok: false,
-      status: 401,
-      clone: jest.fn().mockReturnValue({
-        json: jest.fn().mockResolvedValue({}),
-      }),
-      text: jest.fn().mockResolvedValue(''),
     });
 
     await expect(restoreDesktopProfileSyncSession()).resolves.toBe(false);
-    expect(clearAuthInfoInBrowser).toHaveBeenCalledTimes(1);
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
+  });
+
+  it('does not clear browser auth through removed silent session restoration', async () => {
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
+      username: 'cloud-owner',
+      role: 'owner',
+      password: 'secret',
+      sessionMode: 'desktop-profile-sync',
+    });
+
+    await expect(restoreDesktopProfileSyncSession()).resolves.toBe(false);
+    expect(clearAuthInfoInBrowser).not.toHaveBeenCalled();
     expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
   });
 
@@ -359,7 +325,7 @@ describe('desktop profile sync helpers', () => {
     expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
   });
 
-  it('keeps stored profile sync credentials during transient unauthenticated bootstrap fallback', () => {
+  it('clears unauthenticated sync auth when no credential recovery exists', () => {
     (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
       username: 'cloud-owner',
       role: 'owner',
@@ -391,7 +357,7 @@ describe('desktop profile sync helpers', () => {
       PROFILE_SYNC_STORAGE_TYPE: 'redis',
       PROFILE_SYNC_PROFILE_MODE: 'shared-multi-user',
     });
-    expect(clearAuthInfoInBrowser).not.toHaveBeenCalled();
+    expect(clearAuthInfoInBrowser).toHaveBeenCalledTimes(1);
     expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
   });
 

@@ -17,6 +17,7 @@ export interface AuthCookiePayload {
 }
 
 export const DESKTOP_AUTH_STORAGE_KEY = 'lunatv:desktop-auth-session';
+export const BROWSER_AUTH_INFO_COOKIE_NAME = 'auth-info';
 export const BROWSER_AUTH_UPDATED_EVENT = 'lunatv:browser-auth-updated';
 
 declare global {
@@ -83,10 +84,6 @@ function parseAuthCookiePayload(rawValue: string): AuthCookiePayload | null {
 function sanitizeAuthPayloadForCookie(
   payload: AuthCookiePayload
 ): AuthCookiePayload {
-  if (payload.sessionMode !== 'desktop-profile-sync') {
-    return payload;
-  }
-
   const { password: _password, ...cookiePayload } = payload;
   return cookiePayload;
 }
@@ -127,7 +124,10 @@ function persistDesktopAuthInfo(payload: AuthCookiePayload | null) {
 
   try {
     if (payload) {
-      localStorage.setItem(DESKTOP_AUTH_STORAGE_KEY, JSON.stringify(payload));
+      localStorage.setItem(
+        DESKTOP_AUTH_STORAGE_KEY,
+        JSON.stringify(sanitizeAuthPayloadForCookie(payload))
+      );
     } else {
       localStorage.removeItem(DESKTOP_AUTH_STORAGE_KEY);
     }
@@ -142,8 +142,11 @@ function writeAuthCookie(payload: AuthCookiePayload | null) {
   }
 
   if (!payload) {
-    document.cookie =
-      'auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+    if (isDesktopBrowserContext()) {
+      document.cookie =
+        'auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+    }
+    document.cookie = `${BROWSER_AUTH_INFO_COOKIE_NAME}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax`;
     return;
   }
 
@@ -152,7 +155,10 @@ function writeAuthCookie(payload: AuthCookiePayload | null) {
   const value = encodeURIComponent(
     JSON.stringify(sanitizeAuthPayloadForCookie(payload))
   );
-  document.cookie = `auth=${value}; path=/; expires=${expires.toUTCString()}; SameSite=Lax`;
+  if (isDesktopBrowserContext()) {
+    document.cookie = `auth=${value}; path=/; expires=${expires.toUTCString()}; SameSite=Lax`;
+  }
+  document.cookie = `${BROWSER_AUTH_INFO_COOKIE_NAME}=${value}; path=/; expires=${expires.toUTCString()}; SameSite=Lax`;
 }
 
 function mergeCookieAndDesktopStorageAuthInfo(
@@ -222,6 +228,7 @@ export function getAuthInfoFromCookie(request: NextRequest): {
   username?: string;
   signature?: string;
   timestamp?: number;
+  role?: 'owner' | 'admin' | 'user';
   sessionMode?: 'desktop-local' | 'desktop-profile-sync';
 } | null {
   const authCookie = request.cookies.get('auth');
@@ -269,9 +276,9 @@ export function getAuthInfoFromBrowserCookie(): {
       return acc;
     }, {} as Record<string, string>);
 
-    const authCookie = cookies['auth'];
-    const cookieAuthInfo = authCookie
-      ? parseAuthCookiePayload(authCookie)
+    const authInfoCookie = cookies[BROWSER_AUTH_INFO_COOKIE_NAME];
+    const cookieAuthInfo = authInfoCookie
+      ? parseAuthCookiePayload(authInfoCookie)
       : null;
 
     return mergeCookieAndDesktopStorageAuthInfo(cookieAuthInfo);

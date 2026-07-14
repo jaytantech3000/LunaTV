@@ -1,3 +1,4 @@
+import { localServiceFetch } from '@/lib/desktop/local-service-access';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { buildApiUrl } from '@/lib/transport/endpoint';
 
@@ -182,7 +183,7 @@ export function getDesktopDownloadRuntimeLabel(): string {
 
 export async function getDesktopDownloadRuntimeStorageInfo(): Promise<DesktopDownloadRuntimeStorageInfoResponse> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/storage-info'),
     {
       method: 'GET',
@@ -201,7 +202,7 @@ export async function putDesktopDownloadCacheEntry(
   ensureDesktopLocalDownloadRuntime();
   const body = await response.arrayBuffer();
 
-  const uploadResponse = await fetch(
+  const uploadResponse = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/cache', {
       url,
     }),
@@ -225,7 +226,7 @@ export async function getDesktopDownloadCacheMeta(
   url: string
 ): Promise<DesktopDownloadCacheMetaResponse> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/cache/meta', {
       url,
     }),
@@ -243,7 +244,7 @@ export async function getDesktopDownloadCachedResponse(
   url: string
 ): Promise<Response | undefined> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/cache/response', {
       url,
     }),
@@ -272,7 +273,7 @@ export async function fetchDesktopDownloadCacheResponse(
   } = {}
 ): Promise<Response> {
   ensureDesktopLocalDownloadRuntime();
-  return fetch(
+  return localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/cache/fetch', {
       url,
     }),
@@ -289,7 +290,7 @@ export async function deleteDesktopDownloadCacheEntry(
   url: string
 ): Promise<boolean> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/cache/delete', {
       url,
     }),
@@ -308,11 +309,14 @@ export async function deleteDesktopDownloadCacheEntry(
 
 export async function clearDesktopDownloadCache(): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(buildDesktopDownloadRuntimeUrl('/cache/all'), {
-    method: 'DELETE',
-    cache: 'no-store',
-    credentials: 'omit',
-  });
+  const response = await localServiceFetch(
+    buildDesktopDownloadRuntimeUrl('/cache/all'),
+    {
+      method: 'DELETE',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
 
   await parseJsonResponse(response);
 }
@@ -321,7 +325,7 @@ export async function putDesktopResourceIndex(
   record: ResourceIndexRecord
 ): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/resource-index'),
     {
       method: 'PUT',
@@ -341,7 +345,7 @@ export async function getDesktopResourceIndex(
   id: string
 ): Promise<ResourceIndexRecord | null> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/resource-index', {
       id,
     }),
@@ -357,7 +361,7 @@ export async function getDesktopResourceIndex(
 
 export async function deleteDesktopResourceIndex(id: string): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/resource-index', {
       id,
     }),
@@ -373,7 +377,7 @@ export async function deleteDesktopResourceIndex(id: string): Promise<void> {
 
 export async function clearDesktopResourceIndexes(): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/resource-index/all'),
     {
       method: 'DELETE',
@@ -387,11 +391,14 @@ export async function clearDesktopResourceIndexes(): Promise<void> {
 
 export async function getDesktopDownloadStoreSnapshot<T>(): Promise<T | null> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(buildDesktopDownloadRuntimeUrl('/store'), {
-    method: 'GET',
-    cache: 'no-store',
-    credentials: 'omit',
-  });
+  const response = await localServiceFetch(
+    buildDesktopDownloadRuntimeUrl('/store'),
+    {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
 
   return parseJsonResponse<T | null>(response);
 }
@@ -400,26 +407,32 @@ export async function putDesktopDownloadStoreSnapshot(
   snapshot: unknown
 ): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(buildDesktopDownloadRuntimeUrl('/store'), {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(snapshot),
-    cache: 'no-store',
-    credentials: 'omit',
-  });
+  const response = await localServiceFetch(
+    buildDesktopDownloadRuntimeUrl('/store'),
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(snapshot),
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
 
   await parseJsonResponse(response);
 }
 
 export async function clearDesktopDownloadStoreSnapshot(): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(buildDesktopDownloadRuntimeUrl('/store'), {
-    method: 'DELETE',
-    cache: 'no-store',
-    credentials: 'omit',
-  });
+  const response = await localServiceFetch(
+    buildDesktopDownloadRuntimeUrl('/store'),
+    {
+      method: 'DELETE',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
 
   await parseJsonResponse(response);
 }
@@ -431,7 +444,7 @@ export async function resolveDesktopDownloadManifest(
   } = {}
 ): Promise<ManifestParseResult> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/manifest/resolve'),
     {
       method: 'POST',
@@ -452,11 +465,14 @@ export async function resolveDesktopDownloadManifest(
 
 export async function getDesktopDownloadEngineSnapshot(): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(buildDesktopDownloadRuntimeUrl('/tasks'), {
-    method: 'GET',
-    cache: 'no-store',
-    credentials: 'omit',
-  });
+  const response = await localServiceFetch(
+    buildDesktopDownloadRuntimeUrl('/tasks'),
+    {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
 
   return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
 }
@@ -465,7 +481,7 @@ export async function getDesktopDownloadEngineTask(
   taskId: string
 ): Promise<DownloadTask | undefined> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl(`/tasks/${encodeURIComponent(taskId)}`),
     {
       method: 'GET',
@@ -483,11 +499,14 @@ export async function getDesktopDownloadEngineTask(
 
 export async function clearDesktopDownloadEngineTasks(): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(buildDesktopDownloadRuntimeUrl('/tasks'), {
-    method: 'DELETE',
-    cache: 'no-store',
-    credentials: 'omit',
-  });
+  const response = await localServiceFetch(
+    buildDesktopDownloadRuntimeUrl('/tasks'),
+    {
+      method: 'DELETE',
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
 
   return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
 }
@@ -497,7 +516,7 @@ async function postDesktopDownloadTaskCommand(
   command: DesktopDownloadEngineBulkCommand
 ): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl(
       `/tasks/${encodeURIComponent(taskId)}/${command}`
     ),
@@ -645,7 +664,7 @@ export async function putDesktopDownloadEngineSettings(
   settings: DesktopDownloadEngineSettingsUpdate
 ): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl('/tasks/settings'),
     {
       method: 'PUT',
@@ -665,15 +684,18 @@ export async function postDesktopDownloadTask(
   task: DownloadTask
 ): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(buildDesktopDownloadRuntimeUrl('/tasks'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(task),
-    cache: 'no-store',
-    credentials: 'omit',
-  });
+  const response = await localServiceFetch(
+    buildDesktopDownloadRuntimeUrl('/tasks'),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(task),
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
 
   return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
 }
@@ -707,18 +729,21 @@ export async function postDesktopDownloadTaskBulkCommand(
   taskIds: string[]
 ): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(buildDesktopDownloadRuntimeUrl('/tasks/bulk'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      command,
-      taskIds,
-    }),
-    cache: 'no-store',
-    credentials: 'omit',
-  });
+  const response = await localServiceFetch(
+    buildDesktopDownloadRuntimeUrl('/tasks/bulk'),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        command,
+        taskIds,
+      }),
+      cache: 'no-store',
+      credentials: 'omit',
+    }
+  );
 
   return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
 }
@@ -727,7 +752,7 @@ export async function deleteDesktopDownloadTask(
   taskId: string
 ): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await fetch(
+  const response = await localServiceFetch(
     buildDesktopDownloadRuntimeUrl(`/tasks/${encodeURIComponent(taskId)}`),
     {
       method: 'DELETE',

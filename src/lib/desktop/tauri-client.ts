@@ -106,7 +106,7 @@ export function isDesktopTauriRuntimeAvailable(): boolean {
   return Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
 }
 
-async function invokeDesktopCommand<T>(
+export async function invokeDesktopCommand<T>(
   command: string,
   args?: Record<string, unknown>
 ): Promise<T> {
@@ -195,11 +195,11 @@ export function desktopLogin(
 }
 
 export function changeDesktopPassword(
-  username: string,
+  currentPassword: string,
   newPassword: string
 ): Promise<DesktopAuthStatus> {
   return invokeDesktopCommand<DesktopAuthStatus>('change_desktop_password', {
-    username,
+    currentPassword,
     newPassword,
   });
 }

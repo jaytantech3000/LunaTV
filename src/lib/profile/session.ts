@@ -1,4 +1,8 @@
 import { clearAuthInfoInBrowser } from '@/lib/auth';
+import {
+  canUseLocalServiceAccessToken,
+  withLocalServiceAccessToken,
+} from '@/lib/desktop/local-service-access';
 import { purgeOfflineDownloads } from '@/lib/download/session';
 import { buildApiUrl } from '@/lib/transport/endpoint';
 
@@ -117,10 +121,11 @@ function delay(ms: number): Promise<void> {
 
 async function logoutProfileSession(): Promise<void> {
   await purgeOfflineDownloads();
-  await fetch(buildApiUrl(PROFILE_SESSION_API_PATHS.logout), {
+  const requestInit = await withLocalServiceAccessToken({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
   });
+  await fetch(buildApiUrl(PROFILE_SESSION_API_PATHS.logout), requestInit);
 }
 
 export async function fetchProfileResponse(
@@ -137,6 +142,9 @@ export async function fetchProfileResponse(
     ...requestOptions,
     credentials: credentials || 'same-origin',
   };
+  const authorizedRequestInit = canUseLocalServiceAccessToken()
+    ? await withLocalServiceAccessToken(requestInit)
+    : requestInit;
 
   let response: Response | null = null;
 
@@ -146,7 +154,7 @@ export async function fetchProfileResponse(
     attempt += 1
   ) {
     try {
-      response = await fetch(requestUrl, requestInit);
+      response = await fetch(requestUrl, authorizedRequestInit);
     } catch (error) {
       if (
         !isRecoverableDesktopProfileRequestError(error) ||

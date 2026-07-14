@@ -19,7 +19,7 @@ describe('browser auth helpers', () => {
     document.cookie = 'auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
   });
 
-  it('keeps desktop profile sync passwords in desktop storage while omitting them from the auth cookie', () => {
+  it('does not persist desktop profile sync passwords in browser storage or cookies', () => {
     setAuthInfoInBrowser({
       username: 'cloud-owner',
       role: 'owner',
@@ -42,12 +42,11 @@ describe('browser auth helpers', () => {
       password?: string;
     } | null;
 
-    expect(storedPayload?.password).toBe('secret');
+    expect(storedPayload?.password).toBeUndefined();
     expect(cookiePayload?.password).toBeUndefined();
     expect(getAuthInfoFromBrowserCookie()).toEqual({
       username: 'cloud-owner',
       role: 'owner',
-      password: 'secret',
       sessionMode: 'desktop-profile-sync',
     });
   });

@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+argon2.workspace = true
 axum = { workspace = true, features = ["multipart"] }
 aes = "0.8.4"
 base64 = "0.22.1"
@@ -22,7 +23,7 @@ moontv-download = { path = "../moontv-download" }
 moontv-profile = { path = "../moontv-profile" }
 moontv-storage = { path = "../moontv-storage" }
 moontv-sync = { path = "../moontv-sync" }
-rand = "0.9.4"
+rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true
