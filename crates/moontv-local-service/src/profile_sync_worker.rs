@@ -201,6 +201,7 @@ fn build_outbox_request(record: &ProfileOutboxRecord) -> anyhow::Result<ProfileS
                 "favorites" => json!({ "key": entity_key, "favorite": value }),
                 "follows" => json!({ "key": entity_key, "follow": value }),
                 "skipconfigs" => json!({ "key": entity_key, "config": value }),
+                "searchhistory" => json!({ "keyword": entity_key }),
                 _ => {
                     return Err(anyhow::anyhow!(
                         "upsert is not supported for {}",
@@ -210,17 +211,6 @@ fn build_outbox_request(record: &ProfileOutboxRecord) -> anyhow::Result<ProfileS
             };
             json_request(Method::POST, path, body)?
         }
-        "replace-domain" if record.domain == "searchhistory" => {
-            let payload = decode_profile_payload(record)?;
-            let keyword = payload
-                .as_array()
-                .and_then(|history| history.first())
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("searchhistory replacement missing first keyword")
-                })?;
-            json_request(Method::POST, path, json!({ "keyword": keyword }))?
-        }
         "delete" => {
             let entity_key = record
                 .entity_key
@@ -228,6 +218,7 @@ fn build_outbox_request(record: &ProfileOutboxRecord) -> anyhow::Result<ProfileS
                 .ok_or_else(|| anyhow::anyhow!("profile delete missing entity key"))?;
             let key = match record.domain.as_str() {
                 "playrecords" | "favorites" | "follows" | "skipconfigs" => "key",
+                "searchhistory" => "keyword",
                 _ => {
                     return Err(anyhow::anyhow!(
                         "delete is not supported for {}",

@@ -178,7 +178,7 @@ export function resolveDesktopProfileSyncState(
     return 'offline';
   }
 
-  if (status.errorKind === 'unauthorized') {
+  if (status.reauthRequired || status.errorKind === 'unauthorized') {
     return 'auth-expired';
   }
 

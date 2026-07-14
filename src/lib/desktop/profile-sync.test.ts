@@ -288,6 +288,16 @@ describe('desktop profile sync helpers', () => {
         syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
       })
     ).toBe('auth-expired');
+
+    expect(
+      resolveDesktopProfileSyncState({
+        enabled: true,
+        reachable: true,
+        authenticated: false,
+        errorKind: null,
+        reauthRequired: true,
+      })
+    ).toBe('auth-expired');
   });
 
   it('projects authenticated sync state into runtime config and browser auth', () => {

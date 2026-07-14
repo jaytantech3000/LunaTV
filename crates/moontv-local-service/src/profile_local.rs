@@ -342,16 +342,16 @@ pub(crate) async fn handle_profile_search_history(
                 .load_search_history(&username)
                 .map_err(|error| AppError::internal(error.to_string()))?;
             history.retain(|item| item != &keyword);
-            history.insert(0, keyword);
+            history.insert(0, keyword.clone());
             history.truncate(SEARCH_HISTORY_LIMIT);
             persist_local_profile_mutation(
                 &store,
                 &username,
                 ProfileDomain::SearchHistory,
                 &history,
-                ProfileMutation::ReplaceDomain {
-                    value: serde_json::to_value(&history)
-                        .map_err(|error| AppError::internal(error.to_string()))?,
+                ProfileMutation::Upsert {
+                    entity_key: keyword.clone(),
+                    value: serde_json::Value::String(keyword),
                 },
             )?;
             no_store_json_response(&history)
@@ -369,9 +369,8 @@ pub(crate) async fn handle_profile_search_history(
                     &username,
                     ProfileDomain::SearchHistory,
                     &history,
-                    ProfileMutation::ReplaceDomain {
-                        value: serde_json::to_value(&history)
-                            .map_err(|error| AppError::internal(error.to_string()))?,
+                    ProfileMutation::Delete {
+                        entity_key: keyword,
                     },
                 )?;
             } else {
