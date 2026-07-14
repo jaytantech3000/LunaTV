@@ -2152,7 +2152,10 @@ async fn local_service_access_middleware(
             .is_some_and(|actual| actual == expected),
     };
     if is_authorized
-        && (!requires_admin_capability(path)
+        && (!state
+            .admin_capability
+            .as_ref()
+            .is_some_and(|_| requires_admin_capability(path))
             || has_valid_admin_capability(&state, request.headers()))
     {
         return next.run(request).await;
@@ -2173,11 +2176,6 @@ fn has_valid_admin_capability(state: &AppState, headers: &HeaderMap) -> bool {
 
 fn requires_admin_capability(path: &str) -> bool {
     path.starts_with("/api/admin/")
-        && !matches!(
-            path,
-            "/api/admin/profile-sync/onboarding/preview"
-                | "/api/admin/profile-sync/onboarding/execute"
-        )
 }
 
 fn requires_local_service_access_token(path: &str) -> bool {
@@ -7919,32 +7917,42 @@ mod tests {
             .with_admin_capability("test-admin-capability".to_string()),
         );
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/admin/config")
-                    .header("X-MoonTV-Local-Token", "test-access-token")
-                    .body(Body::empty())
-                    .expect("access-token-only admin request"),
-            )
-            .await
-            .expect("access-token-only admin response");
+        for path in [
+            "/api/admin/config",
+            "/api/admin/profile-sync/onboarding/preview",
+            "/api/admin/profile-sync/onboarding/execute",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(path)
+                        .header("X-MoonTV-Local-Token", "test-access-token")
+                        .body(Body::empty())
+                        .expect("access-token-only admin request"),
+                )
+                .await
+                .expect("access-token-only admin response");
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
 
-        let authorized = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/admin/config")
-                    .header("X-MoonTV-Local-Token", "test-access-token")
-                    .header("X-MoonTV-Admin-Capability", "test-admin-capability")
-                    .body(Body::empty())
-                    .expect("capability-authorized admin request"),
-            )
-            .await
-            .expect("capability-authorized admin response");
+            let authorized = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(path)
+                        .header("X-MoonTV-Local-Token", "test-access-token")
+                        .header("X-MoonTV-Admin-Capability", "test-admin-capability")
+                        .body(Body::empty())
+                        .expect("capability-authorized admin request"),
+                )
+                .await
+                .expect("capability-authorized admin response");
 
-        assert_ne!(authorized.status(), StatusCode::UNAUTHORIZED);
+            assert_ne!(authorized.status(), StatusCode::UNAUTHORIZED, "{path}");
+        }
     }
 
     #[tokio::test]

@@ -661,14 +661,11 @@ fn desktop_login(
         return Err("用户名或密码错误".to_string());
     }
 
+    let is_admin = matches!(target_user.role.as_str(), "owner" | "admin");
     let session = DesktopAuthSession {
         username: target_user.username,
         role: target_user.role,
-        admin_capability: if matches!(target_user.role.as_str(), "owner" | "admin") {
-            Some(state.local_service_admin_capability.clone())
-        } else {
-            None
-        },
+        admin_capability: is_admin.then(|| state.local_service_admin_capability.clone()),
     };
     *state
         .verified_desktop_auth_session
