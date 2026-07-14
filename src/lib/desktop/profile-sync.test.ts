@@ -4,6 +4,7 @@ import {
   setAuthInfoInBrowser,
 } from '@/lib/auth';
 import {
+  type DesktopProfileSyncStatus,
   applyDesktopProfileSyncStatus,
   describeDesktopProfileSyncStatusReadError,
   executeDesktopProfileSyncOnboarding,
@@ -33,6 +34,25 @@ jest.mock('@/lib/auth', () => ({
 }));
 
 describe('desktop profile sync helpers', () => {
+  it('accepts local-first outbox worker status fields from the local service contract', () => {
+    const status: DesktopProfileSyncStatus = {
+      enabled: true,
+      reachable: true,
+      authenticated: true,
+      pendingOutboxCount: 2,
+      reauthRequired: true,
+      lastOutboxError: '远端账号同步后端返回 429',
+      nextOutboxAttemptAt: 123456,
+    };
+
+    expect(status).toMatchObject({
+      pendingOutboxCount: 2,
+      reauthRequired: true,
+      lastOutboxError: '远端账号同步后端返回 429',
+      nextOutboxAttemptAt: 123456,
+    });
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     (getRuntimeConfig as jest.Mock).mockReturnValue({

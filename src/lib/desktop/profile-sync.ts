@@ -25,6 +25,10 @@ export interface DesktopProfileSyncStatus {
   error?: string | null;
   errorKind?: DesktopProfileSyncErrorKind | null;
   syncDomains?: readonly string[] | null;
+  pendingOutboxCount?: number;
+  reauthRequired?: boolean;
+  lastOutboxError?: string | null;
+  nextOutboxAttemptAt?: number | null;
 }
 
 export interface DesktopProfileSyncStatusState {

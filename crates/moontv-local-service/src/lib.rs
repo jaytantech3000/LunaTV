@@ -79,6 +79,7 @@ mod playback_prefetch;
 mod profile_local;
 mod profile_sync;
 mod profile_sync_onboarding;
+mod profile_sync_worker;
 mod vod_proxy;
 
 pub(crate) use content_search::{search_all_sites, search_site};
@@ -341,6 +342,8 @@ pub struct AppState {
     download_runtime_schedule_lock: Arc<Mutex<()>>,
     profile_sync: ProfileSyncClient,
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
+    profile_sync_last_username: Arc<RwLock<Option<String>>>,
+    profile_sync_worker_lock: Arc<Mutex<()>>,
     access_token: Option<String>,
     bangumi_api_base_url: String,
     douban_api_base_url: String,
@@ -435,6 +438,8 @@ impl AppState {
                     .expect("failed to build profile sync http client"),
             ),
             profile_sync_session: Arc::new(RwLock::new(None)),
+            profile_sync_last_username: Arc::new(RwLock::new(None)),
+            profile_sync_worker_lock: Arc::new(Mutex::new(())),
             access_token: None,
             bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
             douban_api_base_url: DEFAULT_DOUBAN_API_BASE_URL.to_string(),
@@ -1904,6 +1909,8 @@ pub fn build_router(state: AppState) -> Router {
 }
 
 fn spawn_background_tasks(state: AppState) {
+    profile_sync_worker::spawn_profile_outbox_worker(state.clone());
+
     tokio::spawn(async move {
         if let Err(error) = refresh_admin_config_subscription_if_due(&state).await {
             warn!("desktop subscription refresh task failed during startup: {error}");
@@ -7488,11 +7495,11 @@ mod tests {
         );
         assert_eq!(
             payload.get("sqlite_schema_version"),
-            Some(&Value::Number(2.into()))
+            Some(&Value::Number(3.into()))
         );
         assert_eq!(
             payload.get("sqlite_migration_count"),
-            Some(&Value::Number(2.into()))
+            Some(&Value::Number(3.into()))
         );
         assert_eq!(
             payload.get("version"),
@@ -10011,6 +10018,291 @@ segment0.ts
         assert!(owner_snapshot.follow_records.is_empty());
         assert!(owner_snapshot.search_history.is_empty());
         assert!(owner_snapshot.skip_configs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn profile_outbox_worker_pushes_only_the_due_head_and_exposes_pending_status() {
+        let requests = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
+        let captured_requests = requests.clone();
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/server-config",
+                    get(|| async move {
+                        Json(json!({
+                            "StorageType": "redis",
+                            "ProfileMode": "shared-multi-user"
+                        }))
+                    }),
+                )
+                .route(
+                    "/api/favorites",
+                    post(move |request: axum::extract::Request| {
+                        let captured_requests = captured_requests.clone();
+                        async move {
+                            let uri = request.uri().to_string();
+                            let method = request.method().clone();
+                            let body = to_bytes(request.into_body(), usize::MAX)
+                                .await
+                                .expect("read outbox request body");
+                            captured_requests.lock().expect("capture requests").push((
+                                method,
+                                uri,
+                                serde_json::from_slice(&body).expect("parse outbox request body"),
+                            ));
+                            Json(json!({ "success": true }))
+                        }
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": upstream.base_url()
+              },
+              "api_site": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+            username: "remote-user".to_string(),
+            role: "user".to_string(),
+        });
+        let store = state.profile_store();
+        let device_id = store.get_or_create_device_id().expect("device id");
+        let favorite = Favorite {
+            title: "Queued favorite".to_string(),
+            source_name: "Demo".to_string(),
+            year: "2026".to_string(),
+            cover: "cover.jpg".to_string(),
+            total_episodes: 1,
+            save_time: 1,
+            search_title: None,
+            playback_mode: None,
+            offline_content_id: None,
+            is_adult: None,
+            origin: None,
+        };
+        store
+            .apply_local_mutation_and_enqueue(
+                "remote-user",
+                &device_id,
+                moontv_profile::ProfileDomain::Favorites,
+                &std::collections::BTreeMap::from([("demo+1".to_string(), favorite.clone())]),
+                moontv_profile::ProfileMutation::Upsert {
+                    entity_key: "demo+1".to_string(),
+                    value: serde_json::to_value(&favorite).expect("serialize favorite"),
+                },
+            )
+            .expect("enqueue favorite upsert");
+        store
+            .apply_local_mutation_and_enqueue(
+                "remote-user",
+                &device_id,
+                moontv_profile::ProfileDomain::Favorites,
+                &std::collections::BTreeMap::<String, Favorite>::new(),
+                moontv_profile::ProfileMutation::Delete {
+                    entity_key: "demo+1".to_string(),
+                },
+            )
+            .expect("enqueue favorite delete");
+
+        crate::profile_sync_worker::run_profile_outbox_worker_tick(&state).await;
+
+        assert_eq!(store.pending_outbox_count("remote-user").unwrap(), 1);
+        assert_eq!(requests.lock().expect("capture requests").len(), 1);
+        assert_eq!(
+            requests.lock().expect("capture requests")[0],
+            (
+                Method::POST,
+                "/api/favorites".to_string(),
+                json!({ "key": "demo+1", "favorite": favorite })
+            )
+        );
+
+        let app = build_router(state.clone());
+        let status = read_json_body(
+            app.oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .body(Body::empty())
+                    .expect("profile sync status request"),
+            )
+            .await
+            .expect("profile sync status response"),
+        )
+        .await;
+        assert_eq!(
+            status.get("pendingOutboxCount").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            status.get("reauthRequired").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(status.get("lastOutboxError"), Some(&Value::Null));
+        assert_eq!(status.get("nextOutboxAttemptAt"), Some(&Value::Null));
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_outbox_worker_blocks_auth_and_login_clears_the_block() {
+        let favorite_attempts = Arc::new(AtomicU64::new(0));
+        let next_favorite_attempt = favorite_attempts.clone();
+        let upstream = spawn_mock_server(
+            Router::new()
+                .route(
+                    "/api/favorites",
+                    post(move || {
+                        let next_favorite_attempt = next_favorite_attempt.clone();
+                        async move {
+                            if next_favorite_attempt.fetch_add(1, Ordering::Relaxed) == 0 {
+                                StatusCode::UNAUTHORIZED
+                            } else {
+                                StatusCode::OK
+                            }
+                        }
+                    }),
+                )
+                .route(
+                    "/api/login",
+                    post(|| async move {
+                        Json(json!({
+                            "ok": true,
+                            "username": "remote-user",
+                            "role": "user"
+                        }))
+                    }),
+                ),
+        )
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": { "api_base_url": upstream.base_url() },
+              "api_site": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+            username: "remote-user".to_string(),
+            role: "user".to_string(),
+        });
+        let store = state.profile_store();
+        let device_id = store.get_or_create_device_id().expect("device id");
+        let favorite = Favorite {
+            title: "Queued favorite".to_string(),
+            source_name: "Demo".to_string(),
+            year: "2026".to_string(),
+            cover: "cover.jpg".to_string(),
+            total_episodes: 1,
+            save_time: 1,
+            search_title: None,
+            playback_mode: None,
+            offline_content_id: None,
+            is_adult: None,
+            origin: None,
+        };
+        store
+            .apply_local_mutation_and_enqueue(
+                "remote-user",
+                &device_id,
+                moontv_profile::ProfileDomain::Favorites,
+                &std::collections::BTreeMap::from([("demo+1".to_string(), favorite.clone())]),
+                moontv_profile::ProfileMutation::Upsert {
+                    entity_key: "demo+1".to_string(),
+                    value: serde_json::to_value(favorite).expect("serialize favorite"),
+                },
+            )
+            .expect("enqueue favorite upsert");
+
+        crate::profile_sync_worker::run_profile_outbox_worker_tick(&state).await;
+
+        assert!(state.profile_sync_session.read().await.is_none());
+        let blocked = state
+            .sqlite
+            .profile_sync_worker_state("remote-user")
+            .expect("worker state query")
+            .expect("worker state");
+        assert!(blocked.auth_blocked_at_ms.is_some());
+        assert_eq!(
+            blocked.auth_blocked_error.as_deref(),
+            Some("远端账号同步后端返回 401")
+        );
+        assert_eq!(store.pending_outbox_count("remote-user").unwrap(), 1);
+
+        let blocked_status = read_json_body(
+            build_router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/profile-sync/status")
+                        .body(Body::empty())
+                        .expect("blocked profile sync status request"),
+                )
+                .await
+                .expect("blocked profile sync status response"),
+        )
+        .await;
+        assert_eq!(
+            blocked_status
+                .get("pendingOutboxCount")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            blocked_status
+                .get("reauthRequired")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            blocked_status
+                .get("lastOutboxError")
+                .and_then(Value::as_str),
+            Some("远端账号同步后端返回 401")
+        );
+
+        let app = build_router(state.clone());
+        let login_response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/login")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"password":"demo"}"#))
+                    .expect("profile sync login request"),
+            )
+            .await
+            .expect("profile sync login response");
+        assert_eq!(login_response.status(), StatusCode::OK);
+        assert!(
+            state
+                .sqlite
+                .profile_sync_worker_state("remote-user")
+                .expect("worker state query")
+                .expect("worker state")
+                .auth_blocked_at_ms
+                .is_none()
+        );
+
+        upstream.abort();
     }
 
     #[tokio::test]

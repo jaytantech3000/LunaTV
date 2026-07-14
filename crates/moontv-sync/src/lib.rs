@@ -95,6 +95,10 @@ pub struct ProfileSyncStatusResponse {
     pub error: Option<String>,
     pub error_kind: Option<ProfileSyncErrorKind>,
     pub sync_domains: Vec<String>,
+    pub pending_outbox_count: u64,
+    pub reauth_required: bool,
+    pub last_outbox_error: Option<String>,
+    pub next_outbox_attempt_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -324,6 +328,10 @@ impl ProfileSyncClient {
                 error: None,
                 error_kind: None,
                 sync_domains,
+                pending_outbox_count: 0,
+                reauth_required: false,
+                last_outbox_error: None,
+                next_outbox_attempt_at: None,
             };
         };
 
@@ -339,6 +347,10 @@ impl ProfileSyncClient {
                 error: None,
                 error_kind: None,
                 sync_domains,
+                pending_outbox_count: 0,
+                reauth_required: false,
+                last_outbox_error: None,
+                next_outbox_attempt_at: None,
             },
             Err(error) => ProfileSyncStatusResponse {
                 enabled,
@@ -357,6 +369,10 @@ impl ProfileSyncClient {
                 error: Some(error.message),
                 error_kind: Some(error.kind),
                 sync_domains,
+                pending_outbox_count: 0,
+                reauth_required: false,
+                last_outbox_error: None,
+                next_outbox_attempt_at: None,
             },
         }
     }
@@ -648,10 +664,7 @@ mod tests {
             username: "demo".to_string(),
             role: "user".to_string(),
         };
-        let sync_domains = vec![
-            "playrecords".to_string(),
-            "adminsettings".to_string(),
-        ];
+        let sync_domains = vec!["playrecords".to_string(), "adminsettings".to_string()];
 
         let payload = client
             .build_status_response(Some(&upstream.base_url()), Some(&session), &sync_domains)
@@ -666,9 +679,7 @@ mod tests {
         assert_eq!(payload.role.as_deref(), Some("user"));
         assert_eq!(payload.error, None);
         assert_eq!(payload.error_kind, None);
-        assert_eq!(
-            payload.sync_domains, sync_domains
-        );
+        assert_eq!(payload.sync_domains, sync_domains);
 
         upstream.abort();
     }

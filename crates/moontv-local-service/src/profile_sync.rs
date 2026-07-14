@@ -14,6 +14,7 @@ use moontv_sync::{
 };
 
 use crate::profile_local;
+use crate::profile_sync_worker::{profile_outbox_worker_status, wake_profile_outbox_worker};
 use crate::{
     AppError, AppResult, AppState, ServiceConfig, build_profile_bootstrap_response,
     no_store_json_response,
@@ -142,14 +143,24 @@ pub(crate) async fn build_profile_sync_status_payload(
     config: &ServiceConfig,
 ) -> ProfileSyncStatusResponse {
     let session = state.profile_sync_session.read().await.clone();
-    state
+    let status_username = match session.as_ref() {
+        Some(session) => Some(session.username.clone()),
+        None => state.profile_sync_last_username.read().await.clone(),
+    };
+    let mut payload = state
         .profile_sync
         .build_status_response(
             config.profile_sync_api_base_url.as_deref(),
             session.as_ref(),
             &config.profile_sync_domains,
         )
-        .await
+        .await;
+    let worker_status = profile_outbox_worker_status(state, status_username.as_deref());
+    payload.pending_outbox_count = worker_status.pending_outbox_count;
+    payload.reauth_required = worker_status.reauth_required;
+    payload.last_outbox_error = worker_status.last_outbox_error;
+    payload.next_outbox_attempt_at = worker_status.next_outbox_attempt_at;
+    payload
 }
 
 pub(crate) async fn get_profile_bootstrap(State(state): State<AppState>) -> AppResult<Response> {
@@ -273,6 +284,14 @@ async fn apply_profile_sync_session_mutation(
         }
         ProfileSyncSessionMutation::Set(session) => {
             *state.profile_sync_session.write().await = Some(session.clone());
+            *state.profile_sync_last_username.write().await = Some(session.username.clone());
+            if let Err(error) = state.sqlite.clear_profile_sync_auth_block(
+                &session.username,
+                crate::current_timestamp_ms() as i64,
+            ) {
+                tracing::warn!("failed to clear profile outbox auth block after login: {error}");
+            }
+            wake_profile_outbox_worker(state).await;
         }
     }
 }
