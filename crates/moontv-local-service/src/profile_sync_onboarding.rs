@@ -1414,7 +1414,8 @@ mod tests {
         let error = ensure_current_local_account(&[], "missing")
             .expect_err("reject non-existent explicit user");
 
-        assert_eq!(error.to_string(), "当前本地帐号不存在于桌面帐号列表");
+        assert_eq!(error.status, crate::StatusCode::BAD_REQUEST);
+        assert_eq!(error.message, "当前本地帐号不存在于桌面帐号列表");
     }
 
     #[test]
