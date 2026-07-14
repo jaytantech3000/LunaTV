@@ -24,6 +24,7 @@ export interface DesktopAuthStatus {
 export interface DesktopAuthSession {
   username: string;
   role: 'owner' | 'admin' | 'user';
+  adminCapability?: string;
 }
 
 export interface DesktopAvailableUpdate {

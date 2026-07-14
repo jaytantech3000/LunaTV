@@ -1,4 +1,5 @@
 import { apiFetch } from './api-client';
+import { setDesktopAdminCapabilityForTests } from '../desktop/admin-capability';
 import { buildApiUrl, getApiBaseUrl } from './endpoint';
 
 describe('transport endpoint helpers', () => {
@@ -10,6 +11,7 @@ describe('transport endpoint helpers', () => {
     delete process.env.NEXT_PUBLIC_API_BASE_URL;
     delete window.RUNTIME_CONFIG;
     jest.clearAllMocks();
+    setDesktopAdminCapabilityForTests(null);
   });
 
   afterAll(() => {
@@ -81,5 +83,29 @@ describe('transport endpoint helpers', () => {
         method: 'POST',
       })
     );
+  });
+
+  it('adds the in-memory desktop admin capability to admin requests only', async () => {
+    window.RUNTIME_CONFIG = {
+      API_BASE_URL: 'http://127.0.0.1:8787/',
+      APP_TARGET: 'desktop',
+    };
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    global.fetch = fetchMock as typeof fetch;
+
+    setDesktopAdminCapabilityForTests('verified-capability');
+
+    await apiFetch('/admin/site');
+    await apiFetch('/live/channels');
+
+    const adminHeaders = new Headers(fetchMock.mock.calls[0][1].headers);
+    const publicHeaders = new Headers(fetchMock.mock.calls[1][1].headers);
+    expect(adminHeaders.get('X-MoonTV-Admin-Capability')).toBe(
+      'verified-capability'
+    );
+    expect(publicHeaders.get('X-MoonTV-Admin-Capability')).toBeNull();
   });
 });

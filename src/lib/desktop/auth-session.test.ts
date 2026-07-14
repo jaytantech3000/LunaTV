@@ -10,6 +10,10 @@ import {
   loginDesktopSession,
   logoutDesktopSession,
 } from '@/lib/desktop/auth-session';
+import {
+  clearDesktopAdminCapability,
+  getDesktopAdminCapability,
+} from '@/lib/desktop/admin-capability';
 import { desktopLogin, getDesktopAuthStatus } from '@/lib/desktop/tauri-client';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
@@ -32,6 +36,7 @@ jest.mock('@/lib/desktop/tauri-client', () => ({
 describe('desktop auth session helpers', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    clearDesktopAdminCapability();
     localStorage.clear();
     (getRuntimeConfig as jest.Mock).mockReturnValue({
       APP_TARGET: 'desktop',
@@ -100,6 +105,43 @@ describe('desktop auth session helpers', () => {
       role: 'owner',
       sessionMode: 'desktop-local',
     });
+  });
+
+  it('keeps the native admin capability only after owner or admin login', async () => {
+    (desktopLogin as jest.Mock).mockResolvedValue({
+      username: 'owner',
+      role: 'owner',
+      adminCapability: 'owner-capability',
+    });
+
+    await loginDesktopSession(undefined, 'secret');
+
+    expect(getDesktopAdminCapability()).toBe('owner-capability');
+  });
+
+  it('does not retain a native admin capability for a regular user login', async () => {
+    (desktopLogin as jest.Mock).mockResolvedValue({
+      username: 'kid',
+      role: 'user',
+      adminCapability: 'unexpected-capability',
+    });
+
+    await loginDesktopSession('kid', 'secret');
+
+    expect(getDesktopAdminCapability()).toBeNull();
+  });
+
+  it('clears the native admin capability on desktop logout', async () => {
+    (desktopLogin as jest.Mock).mockResolvedValue({
+      username: 'owner',
+      role: 'owner',
+      adminCapability: 'owner-capability',
+    });
+    await loginDesktopSession(undefined, 'secret');
+
+    logoutDesktopSession();
+
+    expect(getDesktopAdminCapability()).toBeNull();
   });
 
   it('restores the owner session when owner password is empty even in multi-user mode', async () => {

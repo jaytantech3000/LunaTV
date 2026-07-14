@@ -6,6 +6,10 @@ import {
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
 import {
+  clearDesktopAdminCapability,
+  setDesktopAdminCapability,
+} from './admin-capability';
+import {
   DesktopAuthSession,
   DesktopAuthStatus,
   desktopLogin,
@@ -126,6 +130,14 @@ export async function loginDesktopSession(
   password: string
 ): Promise<DesktopAuthSession> {
   const session = await desktopLogin(username, password);
+  if (
+    (session.role === 'owner' || session.role === 'admin') &&
+    session.adminCapability
+  ) {
+    setDesktopAdminCapability(session.adminCapability);
+  } else {
+    clearDesktopAdminCapability();
+  }
   clearExplicitDesktopLogout();
   setAuthInfoInBrowser(buildDesktopAuthPayload(session.username, session.role));
   return session;
@@ -134,6 +146,7 @@ export async function loginDesktopSession(
 export function logoutDesktopSession(options?: {
   rememberLoggedOut?: boolean;
 }) {
+  clearDesktopAdminCapability();
   persistDesktopLogoutMarker(options?.rememberLoggedOut === true);
   clearAuthInfoInBrowser();
 }

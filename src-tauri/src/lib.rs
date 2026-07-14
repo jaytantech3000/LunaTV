@@ -76,6 +76,7 @@ const PROFILE_SYNC_USER_DATA_DOMAINS: [&str; 5] = [
 struct DesktopRuntimeState {
     service_process: Mutex<Option<ServiceProcess>>,
     local_service_access_token: String,
+    local_service_admin_capability: String,
     verified_desktop_auth_session: Mutex<Option<DesktopAuthSession>>,
     service_start_lock: AsyncMutex<()>,
     last_start_failure: Mutex<Option<LocalServiceStartupFailure>>,
@@ -88,9 +89,12 @@ impl Default for DesktopRuntimeState {
     fn default() -> Self {
         let mut token_bytes = [0_u8; 32];
         rand::rng().fill(&mut token_bytes);
+        let mut admin_capability_bytes = [0_u8; 32];
+        rand::rng().fill(&mut admin_capability_bytes);
         Self {
             service_process: Mutex::default(),
             local_service_access_token: BASE64_STANDARD.encode(token_bytes),
+            local_service_admin_capability: BASE64_STANDARD.encode(admin_capability_bytes),
             verified_desktop_auth_session: Mutex::default(),
             service_start_lock: AsyncMutex::default(),
             last_start_failure: Mutex::default(),
@@ -223,6 +227,8 @@ struct DesktopAuthStatus {
 struct DesktopAuthSession {
     username: String,
     role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admin_capability: Option<String>,
 }
 
 #[derive(Clone)]
@@ -628,6 +634,7 @@ fn desktop_login(
         let session = DesktopAuthSession {
             username: requested_username,
             role: "owner".to_string(),
+            admin_capability: Some(state.local_service_admin_capability.clone()),
         };
         *state
             .verified_desktop_auth_session
@@ -657,6 +664,11 @@ fn desktop_login(
     let session = DesktopAuthSession {
         username: target_user.username,
         role: target_user.role,
+        admin_capability: if matches!(target_user.role.as_str(), "owner" | "admin") {
+            Some(state.local_service_admin_capability.clone())
+        } else {
+            None
+        },
     };
     *state
         .verified_desktop_auth_session
@@ -976,6 +988,8 @@ async fn start_local_service_impl_inner(
             .arg(&paths.sqlite_path)
             .arg("--access-token")
             .arg(&state.local_service_access_token)
+            .arg("--admin-capability")
+            .arg(&state.local_service_admin_capability)
             .current_dir(&paths.data_dir)
             .stdin(Stdio::null())
             .stdout(if cfg!(debug_assertions) {
@@ -5459,7 +5473,7 @@ fn resolve_sidecar_binary_paths(app: &AppHandle, current_version: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_DESKTOP_OWNER_USERNAME, GithubReleaseAssetPayload, GithubReleasePayload,
+        DEFAULT_DESKTOP_OWNER_USERNAME, DesktopRuntimeState, GithubReleaseAssetPayload, GithubReleasePayload,
         LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus, LocalServiceHealthCheck,
         LocalServiceStartupFailure, PortOccupant, SidecarBinaryVersionProbe,
         SidecarTrialResult, append_cache_busting_query,
@@ -5480,6 +5494,18 @@ mod tests {
     };
     use url::Url;
 
+
+    #[test]
+    fn generates_distinct_non_empty_native_secrets_for_access_and_admin_capability() {
+        let state = DesktopRuntimeState::default();
+
+        assert!(!state.local_service_access_token.is_empty());
+        assert!(!state.local_service_admin_capability.is_empty());
+        assert_ne!(
+            state.local_service_access_token,
+            state.local_service_admin_capability
+        );
+    }
 
     #[test]
     fn injects_default_owner_username_without_forcing_password() {

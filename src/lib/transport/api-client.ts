@@ -1,4 +1,5 @@
 import { withLocalServiceAccessToken } from '@/lib/desktop/local-service-access';
+import { withDesktopAdminCapability } from '@/lib/desktop/admin-capability';
 
 import { ApiSearchParams, buildApiUrl } from './endpoint';
 
@@ -13,6 +14,6 @@ export async function apiFetch(
   const { searchParams, ...init } = options;
   return fetch(
     buildApiUrl(path, searchParams),
-    await withLocalServiceAccessToken(init)
+    await withLocalServiceAccessToken(withDesktopAdminCapability(path, init))
   );
 }

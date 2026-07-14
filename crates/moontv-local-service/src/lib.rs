@@ -119,6 +119,7 @@ use vod_proxy::{get_vod_key, get_vod_m3u8, get_vod_segment};
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8787;
 const LOCAL_SERVICE_ACCESS_TOKEN_HEADER: &str = "x-moontv-local-token";
+const LOCAL_SERVICE_ADMIN_CAPABILITY_HEADER: &str = "x-moontv-admin-capability";
 const DEFAULT_CONFIG_FILE_NAME: &str = "config.example.json";
 const DEFAULT_DATA_DIR_NAME: &str = ".lunatv-desktop";
 const DEFAULT_SQLITE_FILE_NAME: &str = "moontv-desktop.sqlite3";
@@ -326,6 +327,8 @@ pub struct Cli {
     pub sqlite_path: Option<PathBuf>,
     #[arg(long)]
     pub access_token: Option<String>,
+    #[arg(long)]
+    pub admin_capability: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -351,6 +354,7 @@ pub struct AppState {
     profile_sync_worker_lock: Arc<Mutex<()>>,
     profile_mutation_locks: Arc<StdMutex<HashMap<String, Weak<Mutex<()>>>>>,
     access_token: Option<String>,
+    admin_capability: Option<String>,
     bangumi_api_base_url: String,
     douban_api_base_url: String,
     douban_movie_api_base_url: String,
@@ -418,8 +422,12 @@ impl AppState {
             data_dir,
             sqlite_path,
         )?;
-        Ok(match cli.access_token.clone() {
+        let state = match cli.access_token.clone() {
             Some(access_token) => state.with_access_token(access_token),
+            None => state,
+        };
+        Ok(match cli.admin_capability.clone() {
+            Some(admin_capability) => state.with_admin_capability(admin_capability),
             None => state,
         })
     }
@@ -494,6 +502,7 @@ impl AppState {
             profile_sync_worker_lock: Arc::new(Mutex::new(())),
             profile_mutation_locks: Arc::new(StdMutex::new(HashMap::new())),
             access_token: None,
+            admin_capability: None,
             bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
             douban_api_base_url: DEFAULT_DOUBAN_API_BASE_URL.to_string(),
             douban_movie_api_base_url: DEFAULT_DOUBAN_MOVIE_API_BASE_URL.to_string(),
@@ -567,6 +576,11 @@ impl AppState {
 
     pub fn with_access_token(mut self, access_token: String) -> Self {
         self.access_token = normalize_optional_string(Some(access_token));
+        self
+    }
+
+    pub fn with_admin_capability(mut self, admin_capability: String) -> Self {
+        self.admin_capability = normalize_optional_string(Some(admin_capability));
         self
     }
 
@@ -2110,7 +2124,7 @@ fn apply_cors_headers_for_origin(headers: &mut HeaderMap, request_origin: Option
     headers.insert(
         ACCESS_CONTROL_ALLOW_HEADERS,
         HeaderValue::from_static(
-            "Content-Type, Range, Origin, Accept, Authorization, X-MoonTV-Response-Status, X-MoonTV-Download-Intent, X-MoonTV-Local-Token",
+            "Content-Type, Range, Origin, Accept, Authorization, X-MoonTV-Response-Status, X-MoonTV-Download-Intent, X-MoonTV-Local-Token, X-MoonTV-Admin-Capability",
         ),
     );
     headers.insert(
@@ -2137,11 +2151,33 @@ async fn local_service_access_middleware(
             .and_then(|value| value.to_str().ok())
             .is_some_and(|actual| actual == expected),
     };
-    if is_authorized {
+    if is_authorized
+        && (!requires_admin_capability(path)
+            || has_valid_admin_capability(&state, request.headers()))
+    {
         return next.run(request).await;
     }
 
     AppError::new(StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+}
+
+fn has_valid_admin_capability(state: &AppState, headers: &HeaderMap) -> bool {
+    match state.admin_capability.as_deref() {
+        None => false,
+        Some(expected) => headers
+            .get(LOCAL_SERVICE_ADMIN_CAPABILITY_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|actual| actual == expected),
+    }
+}
+
+fn requires_admin_capability(path: &str) -> bool {
+    path.starts_with("/api/admin/")
+        && !matches!(
+            path,
+            "/api/admin/profile-sync/onboarding/preview"
+                | "/api/admin/profile-sync/onboarding/execute"
+        )
 }
 
 fn requires_local_service_access_token(path: &str) -> bool {
@@ -7858,6 +7894,56 @@ mod tests {
             )
             .await
             .expect("authorized response");
+        assert_ne!(authorized.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn configured_local_service_rejects_admin_requests_with_only_access_token() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let app = build_router(
+            AppState::new(
+                DEFAULT_HOST.to_string(),
+                DEFAULT_PORT,
+                config_path,
+                temp_dir.path.join("data"),
+                temp_dir.path.join("data/moontv.sqlite3"),
+            )
+            .with_access_token("test-access-token".to_string())
+            .with_admin_capability("test-admin-capability".to_string()),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/config")
+                    .header("X-MoonTV-Local-Token", "test-access-token")
+                    .body(Body::empty())
+                    .expect("access-token-only admin request"),
+            )
+            .await
+            .expect("access-token-only admin response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/config")
+                    .header("X-MoonTV-Local-Token", "test-access-token")
+                    .header("X-MoonTV-Admin-Capability", "test-admin-capability")
+                    .body(Body::empty())
+                    .expect("capability-authorized admin request"),
+            )
+            .await
+            .expect("capability-authorized admin response");
+
         assert_ne!(authorized.status(), StatusCode::UNAUTHORIZED);
     }
 
