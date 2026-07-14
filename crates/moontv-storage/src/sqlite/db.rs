@@ -353,6 +353,39 @@ impl DesktopSqlite {
             .context("failed to count pending profile outbox")
     }
 
+    pub fn latest_auth_blocked_profile_sync_worker_state(
+        &self,
+    ) -> Result<Option<ProfileSyncWorkerState>> {
+        let connection = open_connection(&self.path)?;
+        connection
+            .query_row(
+                "SELECT username, device_id, next_local_seq, last_pushed_seq,
+                        last_remote_generation_json, last_sync_at_ms, last_sync_error,
+                        next_attempt_at_ms, auth_blocked_at_ms, auth_blocked_error
+                 FROM profile_sync_state
+                 WHERE auth_blocked_at_ms IS NOT NULL
+                 ORDER BY updated_at_ms DESC, username DESC
+                 LIMIT 1",
+                [],
+                |row| {
+                    Ok(ProfileSyncWorkerState {
+                        username: row.get(0)?,
+                        device_id: row.get(1)?,
+                        next_local_seq: row.get(2)?,
+                        last_pushed_seq: row.get(3)?,
+                        last_remote_generation_json: row.get(4)?,
+                        last_sync_at_ms: row.get(5)?,
+                        last_sync_error: row.get(6)?,
+                        next_attempt_at_ms: row.get(7)?,
+                        auth_blocked_at_ms: row.get(8)?,
+                        auth_blocked_error: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+            .context("failed to read latest auth-blocked profile sync worker state")
+    }
+
     pub fn profile_sync_worker_state(
         &self,
         username: &str,
@@ -963,6 +996,55 @@ mod tests {
                 next_attempt_at_ms: Some(50),
                 auth_blocked_at_ms: None,
                 auth_blocked_error: None,
+            }
+        );
+    }
+
+    #[test]
+    fn latest_auth_blocked_worker_state_selects_most_recent_profile() {
+        let temp_dir = TestDir::new();
+        let database =
+            DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite");
+
+        for (username, op_id, timestamp_ms) in [("alice", "op-alice", 10), ("bob", "op-bob", 20)] {
+            database
+                .apply_profile_mutation(ProfileMutationWrite {
+                    username,
+                    device_id: "device-a",
+                    domain_metadata_key: "profile:test:favorites",
+                    domain: "favorites",
+                    entity_key: Some("demo"),
+                    operation: "upsert",
+                    snapshot_json: "{}",
+                    payload_json: None,
+                    op_id,
+                    timestamp_ms,
+                })
+                .expect("enqueue mutation");
+        }
+        database
+            .block_profile_sync_auth("alice", 30, "alice session expired")
+            .expect("block alice");
+        database
+            .block_profile_sync_auth("bob", 40, "bob session expired")
+            .expect("block bob");
+
+        assert_eq!(
+            database
+                .latest_auth_blocked_profile_sync_worker_state()
+                .expect("read latest auth block")
+                .expect("blocked worker state"),
+            ProfileSyncWorkerState {
+                username: "bob".to_owned(),
+                device_id: "device-a".to_owned(),
+                next_local_seq: 2,
+                last_pushed_seq: None,
+                last_remote_generation_json: None,
+                last_sync_at_ms: Some(40),
+                last_sync_error: Some("bob session expired".to_owned()),
+                next_attempt_at_ms: None,
+                auth_blocked_at_ms: Some(40),
+                auth_blocked_error: Some("bob session expired".to_owned()),
             }
         );
     }

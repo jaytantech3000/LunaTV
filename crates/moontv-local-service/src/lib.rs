@@ -10225,6 +10225,110 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn profile_sync_status_survives_sidecar_restart_with_latest_auth_blocked_profile() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": { "api_base_url": "http://127.0.0.1:1" },
+              "api_site": {}
+            }),
+        );
+        let data_dir = temp_dir.path.join("data");
+        let sqlite_path = data_dir.join("moontv.sqlite3");
+        let before_restart = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path.clone(),
+            data_dir.clone(),
+            sqlite_path.clone(),
+        );
+        let store = before_restart.profile_store();
+        let device_id = store.get_or_create_device_id().expect("device id");
+        for (username, title) in [
+            ("older-user", "Older queued favorite"),
+            ("newer-user", "Newer queued favorite"),
+        ] {
+            let favorite = Favorite {
+                title: title.to_string(),
+                source_name: "Demo".to_string(),
+                year: "2026".to_string(),
+                cover: "cover.jpg".to_string(),
+                total_episodes: 1,
+                save_time: 1,
+                search_title: None,
+                playback_mode: None,
+                offline_content_id: None,
+                is_adult: None,
+                origin: None,
+            };
+            store
+                .apply_local_mutation_and_enqueue(
+                    username,
+                    &device_id,
+                    moontv_profile::ProfileDomain::Favorites,
+                    &std::collections::BTreeMap::from([("demo+1".to_string(), favorite.clone())]),
+                    moontv_profile::ProfileMutation::Upsert {
+                        entity_key: "demo+1".to_string(),
+                        value: serde_json::to_value(favorite).expect("serialize favorite"),
+                    },
+                )
+                .expect("enqueue favorite");
+        }
+        before_restart
+            .sqlite
+            .block_profile_sync_auth("older-user", 30, "older session expired")
+            .expect("block older profile");
+        before_restart
+            .sqlite
+            .block_profile_sync_auth("newer-user", 40, "newer session expired")
+            .expect("block newer profile");
+        drop(before_restart);
+
+        let after_restart = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            data_dir,
+            sqlite_path,
+        );
+        assert!(after_restart.profile_sync_session.read().await.is_none());
+        assert!(
+            after_restart
+                .profile_sync_last_username
+                .read()
+                .await
+                .is_none()
+        );
+
+        let status = read_json_body(
+            build_router(after_restart)
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/profile-sync/status")
+                        .body(Body::empty())
+                        .expect("profile sync status request"),
+                )
+                .await
+                .expect("profile sync status response"),
+        )
+        .await;
+
+        assert_eq!(
+            status.get("pendingOutboxCount").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            status.get("reauthRequired").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            status.get("lastOutboxError").and_then(Value::as_str),
+            Some("newer session expired")
+        );
+    }
+
+    #[tokio::test]
     async fn profile_outbox_worker_blocks_auth_and_login_clears_the_block() {
         let favorite_attempts = Arc::new(AtomicU64::new(0));
         let next_favorite_attempt = favorite_attempts.clone();

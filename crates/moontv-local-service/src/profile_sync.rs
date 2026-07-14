@@ -143,9 +143,18 @@ pub(crate) async fn build_profile_sync_status_payload(
     config: &ServiceConfig,
 ) -> ProfileSyncStatusResponse {
     let session = state.profile_sync_session.read().await.clone();
+    let last_username = state.profile_sync_last_username.read().await.clone();
     let status_username = match session.as_ref() {
         Some(session) => Some(session.username.clone()),
-        None => state.profile_sync_last_username.read().await.clone(),
+        None => state
+            .sqlite
+            .latest_auth_blocked_profile_sync_worker_state()
+            .map(|worker_state| worker_state.map(|item| item.username))
+            .unwrap_or_else(|error| {
+                tracing::warn!("failed to find persisted auth-blocked profile for status: {error}");
+                None
+            })
+            .or(last_username),
     };
     let mut payload = state
         .profile_sync
