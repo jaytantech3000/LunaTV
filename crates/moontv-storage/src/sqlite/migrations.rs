@@ -16,6 +16,11 @@ const MIGRATIONS: &[SqliteMigration] = &[
         name: "profile_sync_local_ops",
         sql: include_str!("migrations/0002_profile_sync_local_ops.sql"),
     },
+    SqliteMigration {
+        version: 3,
+        name: "profile_sync_worker_state",
+        sql: include_str!("migrations/0003_profile_sync_worker_state.sql"),
+    },
 ];
 
 pub fn all() -> &'static [SqliteMigration] {

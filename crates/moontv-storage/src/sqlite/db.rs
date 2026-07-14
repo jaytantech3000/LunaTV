@@ -35,6 +35,20 @@ pub struct ProfileOutboxRecord {
     pub acked_at_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileSyncWorkerState {
+    pub username: String,
+    pub device_id: String,
+    pub next_local_seq: i64,
+    pub last_pushed_seq: Option<i64>,
+    pub last_remote_generation_json: Option<String>,
+    pub last_sync_at_ms: Option<i64>,
+    pub last_sync_error: Option<String>,
+    pub next_attempt_at_ms: Option<i64>,
+    pub auth_blocked_at_ms: Option<i64>,
+    pub auth_blocked_error: Option<String>,
+}
+
 pub struct ProfileMutationWrite<'a> {
     pub username: &'a str,
     pub device_id: &'a str,
@@ -339,35 +353,174 @@ impl DesktopSqlite {
             .context("failed to count pending profile outbox")
     }
 
-    pub fn mark_profile_outbox_acked(&self, op_id: &str, acked_at_ms: i64) -> Result<bool> {
+    pub fn profile_sync_worker_state(
+        &self,
+        username: &str,
+    ) -> Result<Option<ProfileSyncWorkerState>> {
         let connection = open_connection(&self.path)?;
-        let changed = connection
-            .execute(
-                "UPDATE profile_outbox SET acked_at_ms = ?2, last_error = NULL
-                 WHERE op_id = ?1 AND acked_at_ms IS NULL",
-                params![op_id, acked_at_ms],
+        connection
+            .query_row(
+                "SELECT username, device_id, next_local_seq, last_pushed_seq,
+                        last_remote_generation_json, last_sync_at_ms, last_sync_error,
+                        next_attempt_at_ms, auth_blocked_at_ms, auth_blocked_error
+                 FROM profile_sync_state
+                 WHERE username = ?1",
+                [username],
+                |row| {
+                    Ok(ProfileSyncWorkerState {
+                        username: row.get(0)?,
+                        device_id: row.get(1)?,
+                        next_local_seq: row.get(2)?,
+                        last_pushed_seq: row.get(3)?,
+                        last_remote_generation_json: row.get(4)?,
+                        last_sync_at_ms: row.get(5)?,
+                        last_sync_error: row.get(6)?,
+                        next_attempt_at_ms: row.get(7)?,
+                        auth_blocked_at_ms: row.get(8)?,
+                        auth_blocked_error: row.get(9)?,
+                    })
+                },
             )
-            .context("failed to acknowledge profile outbox operation")?;
+            .optional()
+            .context("failed to read profile sync worker state")
+    }
+
+    pub fn ack_profile_outbox_head(
+        &self,
+        username: &str,
+        op_id: &str,
+        local_seq: i64,
+        acked_at_ms: i64,
+    ) -> Result<bool> {
+        let mut connection = open_connection(&self.path)?;
+        let tx = connection
+            .transaction()
+            .context("failed to start profile outbox acknowledgement transaction")?;
+        let changed = tx
+            .execute(
+                "UPDATE profile_outbox
+                 SET acked_at_ms = ?4, last_error = NULL
+                 WHERE username = ?1
+                   AND op_id = ?2
+                   AND local_seq = ?3
+                   AND acked_at_ms IS NULL
+                   AND local_seq = (
+                       SELECT MIN(local_seq)
+                       FROM profile_outbox
+                       WHERE username = ?1 AND acked_at_ms IS NULL
+                   )",
+                params![username, op_id, local_seq, acked_at_ms],
+            )
+            .context("failed to acknowledge profile outbox head")?;
+
+        if changed > 0 {
+            tx.execute(
+                "UPDATE profile_sync_state
+                 SET last_pushed_seq = ?2,
+                     last_sync_at_ms = ?3,
+                     last_sync_error = NULL,
+                     next_attempt_at_ms = NULL,
+                     updated_at_ms = ?3
+                 WHERE username = ?1",
+                params![username, local_seq, acked_at_ms],
+            )
+            .context("failed to update profile sync state after acknowledgement")?;
+        }
+
+        tx.commit()
+            .context("failed to commit profile outbox acknowledgement transaction")?;
         Ok(changed > 0)
     }
 
-    pub fn mark_profile_outbox_failed(
+    pub fn record_profile_outbox_head_failure(
         &self,
+        username: &str,
         op_id: &str,
+        local_seq: i64,
+        failed_at_ms: i64,
         next_attempt_at_ms: i64,
+        error: &str,
+    ) -> Result<bool> {
+        let mut connection = open_connection(&self.path)?;
+        let tx = connection
+            .transaction()
+            .context("failed to start profile outbox failure transaction")?;
+        let changed = tx
+            .execute(
+                "UPDATE profile_outbox
+                 SET attempt_count = attempt_count + 1,
+                     next_attempt_at_ms = ?4,
+                     last_error = ?5
+                 WHERE username = ?1
+                   AND op_id = ?2
+                   AND local_seq = ?3
+                   AND acked_at_ms IS NULL
+                   AND local_seq = (
+                       SELECT MIN(local_seq)
+                       FROM profile_outbox
+                       WHERE username = ?1 AND acked_at_ms IS NULL
+                   )",
+                params![username, op_id, local_seq, next_attempt_at_ms, error],
+            )
+            .context("failed to record profile outbox head failure")?;
+
+        if changed > 0 {
+            tx.execute(
+                "UPDATE profile_sync_state
+                 SET last_sync_at_ms = ?2,
+                     last_sync_error = ?3,
+                     next_attempt_at_ms = ?4,
+                     updated_at_ms = ?2
+                 WHERE username = ?1",
+                params![username, failed_at_ms, error, next_attempt_at_ms],
+            )
+            .context("failed to update profile sync state after outbox failure")?;
+        }
+
+        tx.commit()
+            .context("failed to commit profile outbox failure transaction")?;
+        Ok(changed > 0)
+    }
+
+    pub fn block_profile_sync_auth(
+        &self,
+        username: &str,
+        blocked_at_ms: i64,
         error: &str,
     ) -> Result<bool> {
         let connection = open_connection(&self.path)?;
         let changed = connection
             .execute(
-                "UPDATE profile_outbox
-                 SET attempt_count = attempt_count + 1,
-                     next_attempt_at_ms = ?2,
-                     last_error = ?3
-                 WHERE op_id = ?1 AND acked_at_ms IS NULL",
-                params![op_id, next_attempt_at_ms, error],
+                "UPDATE profile_sync_state
+                 SET auth_blocked_at_ms = ?2,
+                     auth_blocked_error = ?3,
+                     last_sync_at_ms = ?2,
+                     last_sync_error = ?3,
+                     updated_at_ms = ?2
+                 WHERE username = ?1",
+                params![username, blocked_at_ms, error],
             )
-            .context("failed to record profile outbox failure")?;
+            .context("failed to persist profile sync auth block")?;
+        Ok(changed > 0)
+    }
+
+    pub fn clear_profile_sync_auth_block(
+        &self,
+        username: &str,
+        cleared_at_ms: i64,
+    ) -> Result<bool> {
+        let connection = open_connection(&self.path)?;
+        let changed = connection
+            .execute(
+                "UPDATE profile_sync_state
+                 SET auth_blocked_at_ms = NULL,
+                     auth_blocked_error = NULL,
+                     updated_at_ms = ?2
+                 WHERE username = ?1
+                   AND (auth_blocked_at_ms IS NOT NULL OR auth_blocked_error IS NOT NULL)",
+                params![username, cleared_at_ms],
+            )
+            .context("failed to clear profile sync auth block")?;
         Ok(changed > 0)
     }
 
@@ -516,6 +669,60 @@ mod tests {
     }
 
     #[test]
+    fn existing_profile_sync_database_migrates_worker_state_columns() {
+        let temp_dir = TestDir::new();
+        let database_path = temp_dir.path.join("desktop.sqlite3");
+        let connection = Connection::open(&database_path).expect("open pre-migration database");
+        connection
+            .execute_batch(
+                "CREATE TABLE profile_sync_state (
+                    username TEXT PRIMARY KEY NOT NULL,
+                    device_id TEXT NOT NULL,
+                    next_local_seq INTEGER NOT NULL DEFAULT 1,
+                    last_pushed_seq INTEGER,
+                    last_remote_generation_json TEXT,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                INSERT INTO profile_sync_state (
+                    username, device_id, next_local_seq, updated_at_ms
+                ) VALUES ('alice', 'device-a', 2, 10);
+                CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL,
+                    applied_at_ms INTEGER NOT NULL
+                );
+                INSERT INTO schema_migrations (version, name, applied_at_ms)
+                VALUES (1, 'init_desktop_foundation', 1),
+                       (2, 'profile_sync_local_ops', 2);",
+            )
+            .expect("seed version two database");
+        drop(connection);
+
+        let database = DesktopSqlite::initialize(&database_path).expect("migrate database");
+
+        assert_eq!(database.info().schema_version, 3);
+        assert_eq!(database.info().applied_migration_count, 3);
+        assert_eq!(
+            database
+                .profile_sync_worker_state("alice")
+                .expect("read migrated worker state")
+                .expect("worker state"),
+            ProfileSyncWorkerState {
+                username: "alice".to_owned(),
+                device_id: "device-a".to_owned(),
+                next_local_seq: 2,
+                last_pushed_seq: None,
+                last_remote_generation_json: None,
+                last_sync_at_ms: None,
+                last_sync_error: None,
+                next_attempt_at_ms: None,
+                auth_blocked_at_ms: None,
+                auth_blocked_error: None,
+            }
+        );
+    }
+
+    #[test]
     fn download_store_snapshot_round_trips() {
         let temp_dir = TestDir::new();
         let database =
@@ -607,7 +814,7 @@ mod tests {
         assert_eq!(outbox[0].operation, "upsert");
 
         database
-            .mark_profile_outbox_acked("op-1", 25)
+            .ack_profile_outbox_head("alice", "op-1", first_seq, 25)
             .expect("ack first outbox operation");
         let next_outbox = database
             .list_due_profile_outbox("alice", 25, 10)
@@ -615,9 +822,202 @@ mod tests {
         assert_eq!(next_outbox.len(), 1);
         assert_eq!(next_outbox[0].operation, "delete");
         database
-            .mark_profile_outbox_acked("op-2", 30)
+            .ack_profile_outbox_head("alice", "op-2", second_seq, 30)
             .expect("ack second outbox operation");
         assert_eq!(database.pending_profile_outbox_count("alice").unwrap(), 0);
+    }
+
+    #[test]
+    fn ack_profile_outbox_head_only_acknowledges_the_matching_unacked_head() {
+        let temp_dir = TestDir::new();
+        let database =
+            DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite");
+        for (op_id, timestamp_ms) in [("op-1", 10), ("op-2", 20)] {
+            database
+                .apply_profile_mutation(ProfileMutationWrite {
+                    username: "alice",
+                    device_id: "device-a",
+                    domain_metadata_key: "profile:alice:favorites",
+                    domain: "favorites",
+                    entity_key: Some(op_id),
+                    operation: "upsert",
+                    snapshot_json: "{}",
+                    payload_json: None,
+                    op_id,
+                    timestamp_ms,
+                })
+                .expect("enqueue mutation");
+        }
+
+        assert!(
+            !database
+                .ack_profile_outbox_head("alice", "op-2", 2, 30)
+                .expect("reject non-head acknowledgement")
+        );
+        assert!(
+            !database
+                .ack_profile_outbox_head("alice", "op-1", 2, 30)
+                .expect("reject mismatched local sequence")
+        );
+        assert_eq!(database.pending_profile_outbox_count("alice").unwrap(), 2);
+
+        assert!(
+            database
+                .ack_profile_outbox_head("alice", "op-1", 1, 30)
+                .expect("acknowledge head")
+        );
+        assert_eq!(database.pending_profile_outbox_count("alice").unwrap(), 1);
+        assert_eq!(
+            database
+                .profile_sync_worker_state("alice")
+                .expect("read worker state")
+                .expect("worker state"),
+            ProfileSyncWorkerState {
+                username: "alice".to_owned(),
+                device_id: "device-a".to_owned(),
+                next_local_seq: 3,
+                last_pushed_seq: Some(1),
+                last_remote_generation_json: None,
+                last_sync_at_ms: Some(30),
+                last_sync_error: None,
+                next_attempt_at_ms: None,
+                auth_blocked_at_ms: None,
+                auth_blocked_error: None,
+            }
+        );
+
+        assert!(
+            database
+                .ack_profile_outbox_head("alice", "op-2", 2, 40)
+                .expect("acknowledge next head")
+        );
+        assert_eq!(
+            database
+                .profile_sync_worker_state("alice")
+                .unwrap()
+                .unwrap()
+                .last_pushed_seq,
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn recording_a_head_failure_persists_retry_state_without_skipping_the_queue() {
+        let temp_dir = TestDir::new();
+        let database =
+            DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite");
+        for (op_id, timestamp_ms) in [("op-1", 10), ("op-2", 20)] {
+            database
+                .apply_profile_mutation(ProfileMutationWrite {
+                    username: "alice",
+                    device_id: "device-a",
+                    domain_metadata_key: "profile:alice:favorites",
+                    domain: "favorites",
+                    entity_key: Some(op_id),
+                    operation: "upsert",
+                    snapshot_json: "{}",
+                    payload_json: None,
+                    op_id,
+                    timestamp_ms,
+                })
+                .expect("enqueue mutation");
+        }
+
+        assert!(
+            !database
+                .record_profile_outbox_head_failure("alice", "op-2", 2, 30, 50, "offline")
+                .expect("reject non-head failure")
+        );
+        assert!(
+            database
+                .record_profile_outbox_head_failure("alice", "op-1", 1, 30, 50, "offline")
+                .expect("record head failure")
+        );
+
+        assert!(
+            database
+                .list_due_profile_outbox("alice", 49, 10)
+                .expect("query before retry")
+                .is_empty()
+        );
+        let retried = database
+            .list_due_profile_outbox("alice", 50, 10)
+            .expect("query retry");
+        assert_eq!(retried.len(), 1);
+        assert_eq!(retried[0].op_id, "op-1");
+        assert_eq!(retried[0].attempt_count, 1);
+        assert_eq!(retried[0].last_error.as_deref(), Some("offline"));
+        assert_eq!(
+            database
+                .profile_sync_worker_state("alice")
+                .expect("read worker state")
+                .expect("worker state"),
+            ProfileSyncWorkerState {
+                username: "alice".to_owned(),
+                device_id: "device-a".to_owned(),
+                next_local_seq: 3,
+                last_pushed_seq: None,
+                last_remote_generation_json: None,
+                last_sync_at_ms: Some(30),
+                last_sync_error: Some("offline".to_owned()),
+                next_attempt_at_ms: Some(50),
+                auth_blocked_at_ms: None,
+                auth_blocked_error: None,
+            }
+        );
+    }
+
+    #[test]
+    fn auth_block_is_persisted_and_can_be_cleared() {
+        let temp_dir = TestDir::new();
+        let database =
+            DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite");
+        database
+            .apply_profile_mutation(ProfileMutationWrite {
+                username: "alice",
+                device_id: "device-a",
+                domain_metadata_key: "profile:alice:favorites",
+                domain: "favorites",
+                entity_key: Some("demo"),
+                operation: "upsert",
+                snapshot_json: "{}",
+                payload_json: None,
+                op_id: "op-1",
+                timestamp_ms: 10,
+            })
+            .expect("enqueue mutation");
+
+        assert!(
+            database
+                .block_profile_sync_auth("alice", 30, "remote session expired")
+                .expect("persist auth block")
+        );
+        let blocked = database
+            .profile_sync_worker_state("alice")
+            .expect("read blocked worker state")
+            .expect("worker state");
+        assert_eq!(blocked.auth_blocked_at_ms, Some(30));
+        assert_eq!(
+            blocked.auth_blocked_error.as_deref(),
+            Some("remote session expired")
+        );
+
+        assert!(
+            database
+                .clear_profile_sync_auth_block("alice", 40)
+                .expect("clear auth block")
+        );
+        assert!(
+            !database
+                .clear_profile_sync_auth_block("alice", 41)
+                .expect("clearing an absent auth block is a no-op")
+        );
+        let cleared = database
+            .profile_sync_worker_state("alice")
+            .expect("read cleared worker state")
+            .expect("worker state");
+        assert_eq!(cleared.auth_blocked_at_ms, None);
+        assert_eq!(cleared.auth_blocked_error, None);
     }
 
     #[test]
