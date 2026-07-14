@@ -428,6 +428,7 @@ pub(crate) async fn execute_profile_sync_onboarding(
             &item.remote_username,
             strategy,
             &filtered_snapshot,
+            &sync_domains,
             (index == 0)
                 .then_some(local_admin_config_snapshot.as_ref())
                 .flatten(),
@@ -586,6 +587,7 @@ async fn sync_profile_now(
         &remote_session.username,
         strategy,
         &filtered_snapshot,
+        sync_domains,
         admin_config_snapshot.as_ref(),
     )
     .await?;
@@ -772,12 +774,28 @@ async fn create_remote_user(
     Ok(())
 }
 
+fn web_profile_merge_domains(sync_domains: &[String]) -> Vec<&'static str> {
+    sync_domains
+        .iter()
+        .filter_map(|domain| match domain.as_str() {
+            "playrecords" => Some("playRecords"),
+            "favorites" => Some("favorites"),
+            "follows" => Some("follows"),
+            "searchhistory" => Some("searchHistory"),
+            "skipconfigs" => Some("skipConfigs"),
+            "adminsettings" => None,
+            _ => None,
+        })
+        .collect()
+}
+
 async fn merge_remote_profile_snapshot(
     state: &AppState,
     remote_base_url: &str,
     target_username: &str,
     strategy: DesktopProfileSyncConflictStrategy,
     snapshot: &LocalProfileSnapshot,
+    sync_domains: &[String],
     admin_config_snapshot: Option<&Value>,
 ) -> AppResult<DesktopProfileSyncMergedSummary> {
     let target_url =
@@ -786,6 +804,7 @@ async fn merge_remote_profile_snapshot(
     let mut payload = json!({
         "targetUsername": target_username,
         "strategy": strategy.as_str(),
+        "domains": web_profile_merge_domains(sync_domains),
         "snapshot": {
             "playRecords": snapshot.play_records,
             "favorites": snapshot.favorites,

@@ -11198,6 +11198,11 @@ segment0.ts
             Some("web-first")
         );
         assert_eq!(
+            captured_payloads[0].get("domains"),
+            Some(&json!(["favorites"])),
+            "only selected profile domains must be sent to the Web merge route"
+        );
+        assert_eq!(
             captured_payloads[0]
                 .get("snapshot")
                 .and_then(|value| value.get("favorites"))
