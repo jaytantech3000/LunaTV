@@ -254,6 +254,18 @@ impl LocalDesktopProfileStore {
         })
     }
 
+    pub fn save_profile_domain_snapshot<T>(
+        &self,
+        username: &str,
+        domain: ProfileDomain,
+        snapshot: &T,
+    ) -> Result<()>
+    where
+        T: Serialize + ?Sized,
+    {
+        self.save_domain(username, domain.as_str(), snapshot)
+    }
+
     pub fn pending_outbox_count(&self, username: &str) -> Result<u64> {
         self.sqlite.pending_profile_outbox_count(username)
     }

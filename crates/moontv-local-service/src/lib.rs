@@ -4,7 +4,7 @@ use std::{
     env, fs,
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex as StdMutex, OnceLock, Weak},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -50,7 +50,7 @@ use hyper::server::conn::http1;
 use hyper_util::{rt::TokioIo, service::TowerToHyperService};
 use md5::Md5;
 use moontv_download::{DesktopDownloadEngine, DesktopDownloadEngineSnapshot};
-use moontv_profile::LocalDesktopProfileStore;
+use moontv_profile::{LocalDesktopProfileStore, ProfileDomain};
 use moontv_storage::sqlite::{DesktopSqlite, SqliteDatabaseInfo};
 use moontv_sync::{
     PROFILE_SYNC_ADMIN_SETTINGS_DOMAIN, PROFILE_SYNC_USER_DATA_DOMAINS, ProfileSyncClient,
@@ -349,6 +349,7 @@ pub struct AppState {
     profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
     profile_sync_last_username: Arc<RwLock<Option<String>>>,
     profile_sync_worker_lock: Arc<Mutex<()>>,
+    profile_mutation_locks: Arc<StdMutex<HashMap<String, Weak<Mutex<()>>>>>,
     access_token: Option<String>,
     bangumi_api_base_url: String,
     douban_api_base_url: String,
@@ -361,6 +362,34 @@ pub struct AppState {
 struct ImageFlight {
     completion_tx: watch::Sender<Option<AppResult<CachedImage>>>,
     deadline: tokio::time::Instant,
+}
+
+struct ProfileMutationLock {
+    key: String,
+    lock: Arc<Mutex<()>>,
+    locks: Arc<StdMutex<HashMap<String, Weak<Mutex<()>>>>>,
+}
+
+impl ProfileMutationLock {
+    async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.lock.lock().await
+    }
+}
+
+impl Drop for ProfileMutationLock {
+    fn drop(&mut self) {
+        let Ok(mut locks) = self.locks.lock() else {
+            return;
+        };
+        if Arc::strong_count(&self.lock) == 1
+            && locks
+                .get(&self.key)
+                .and_then(Weak::upgrade)
+                .is_some_and(|current| Arc::ptr_eq(&current, &self.lock))
+        {
+            locks.remove(&self.key);
+        }
+    }
 }
 
 impl AppState {
@@ -463,6 +492,7 @@ impl AppState {
             profile_sync_session: Arc::new(RwLock::new(None)),
             profile_sync_last_username: Arc::new(RwLock::new(None)),
             profile_sync_worker_lock: Arc::new(Mutex::new(())),
+            profile_mutation_locks: Arc::new(StdMutex::new(HashMap::new())),
             access_token: None,
             bangumi_api_base_url: DEFAULT_BANGUMI_API_BASE_URL.to_string(),
             douban_api_base_url: DEFAULT_DOUBAN_API_BASE_URL.to_string(),
@@ -559,6 +589,31 @@ impl AppState {
 
     fn profile_store(&self) -> LocalDesktopProfileStore {
         LocalDesktopProfileStore::new(self.sqlite.clone())
+    }
+
+    fn acquire_profile_mutation_lock(
+        &self,
+        username: &str,
+        domain: ProfileDomain,
+    ) -> ProfileMutationLock {
+        let key = format!("{username}:{}", domain.as_str());
+        let mut locks = self
+            .profile_mutation_locks
+            .lock()
+            .expect("profile mutation lock registry poisoned");
+        locks.retain(|_, lock| lock.strong_count() > 0);
+
+        let lock = locks.get(&key).and_then(Weak::upgrade).unwrap_or_else(|| {
+            let lock = Arc::new(Mutex::new(()));
+            locks.insert(key.clone(), Arc::downgrade(&lock));
+            lock
+        });
+
+        ProfileMutationLock {
+            key,
+            lock,
+            locks: self.profile_mutation_locks.clone(),
+        }
     }
 
     fn write_download_engine_snapshot(
@@ -10489,6 +10544,192 @@ segment0.ts
         );
 
         upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_sync_session_persists_unselected_domain_without_enqueuing_outbox() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": "http://127.0.0.1:1",
+                "sync_domains": ["playrecords"]
+              },
+              "api_site": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+            username: "remote-user".to_string(),
+            role: "user".to_string(),
+        });
+        let app = build_router(state.clone());
+        let sync_cookie =
+            build_test_auth_cookie("ignored-cookie-user", "user", "desktop-profile-sync");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/favorites")
+                    .header("cookie", sync_cookie)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "key": "demo+1",
+                          "favorite": {
+                            "title": "Local-only Favorite",
+                            "source_name": "Demo Source",
+                            "year": "2026",
+                            "cover": "favorite.jpg",
+                            "total_episodes": 24,
+                            "save_time": 20,
+                            "search_title": null,
+                            "playback_mode": null,
+                            "offline_content_id": null,
+                            "is_adult": false,
+                            "origin": null
+                          }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("local-only favorite post request"),
+            )
+            .await
+            .expect("local-only favorite post response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            state
+                .profile_store()
+                .load_favorites("remote-user")
+                .expect("load local-only favorite")
+                .get("demo+1")
+                .map(|favorite| favorite.title.as_str()),
+            Some("Local-only Favorite")
+        );
+        assert_eq!(
+            state
+                .profile_store()
+                .pending_outbox_count("remote-user")
+                .expect("count local-only outbox"),
+            0,
+            "unselected domain must not enqueue a remote journal operation"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_profile_sync_favorite_writes_preserve_both_keys() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": "http://127.0.0.1:1",
+                "sync_domains": ["favorites"]
+              },
+              "api_site": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+            username: "remote-user".to_string(),
+            role: "user".to_string(),
+        });
+        let app = build_router(state.clone());
+        let sync_cookie =
+            build_test_auth_cookie("ignored-cookie-user", "user", "desktop-profile-sync");
+        let first_request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/favorites")
+            .header("cookie", sync_cookie.clone())
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({
+                  "key": "demo+1",
+                  "favorite": {
+                    "title": "First Favorite",
+                    "source_name": "Demo Source",
+                    "year": "2026",
+                    "cover": "first.jpg",
+                    "total_episodes": 24,
+                    "save_time": 20,
+                    "search_title": null,
+                    "playback_mode": null,
+                    "offline_content_id": null,
+                    "is_adult": false,
+                    "origin": null
+                  }
+                })
+                .to_string(),
+            ))
+            .expect("first favorite request");
+        let second_request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/favorites")
+            .header("cookie", sync_cookie)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({
+                  "key": "demo+2",
+                  "favorite": {
+                    "title": "Second Favorite",
+                    "source_name": "Demo Source",
+                    "year": "2026",
+                    "cover": "second.jpg",
+                    "total_episodes": 24,
+                    "save_time": 20,
+                    "search_title": null,
+                    "playback_mode": null,
+                    "offline_content_id": null,
+                    "is_adult": false,
+                    "origin": null
+                  }
+                })
+                .to_string(),
+            ))
+            .expect("second favorite request");
+
+        let (first_response, second_response) = tokio::join!(
+            app.clone().oneshot(first_request),
+            app.oneshot(second_request),
+        );
+        assert_eq!(
+            first_response.expect("first favorite response").status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            second_response.expect("second favorite response").status(),
+            StatusCode::OK
+        );
+
+        let favorites = state
+            .profile_store()
+            .load_favorites("remote-user")
+            .expect("load concurrent favorites");
+        assert_eq!(favorites.len(), 2);
+        assert!(favorites.contains_key("demo+1"));
+        assert!(favorites.contains_key("demo+2"));
+        assert_eq!(
+            state
+                .profile_store()
+                .pending_outbox_count("remote-user")
+                .expect("count concurrent outbox"),
+            2
+        );
     }
 
     #[tokio::test]

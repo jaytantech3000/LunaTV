@@ -18,6 +18,7 @@ use crate::{
 };
 
 const SEARCH_HISTORY_LIMIT: usize = 20;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopAuthCookiePayload {
@@ -60,6 +61,8 @@ pub(crate) async fn handle_profile_playrecords(
 ) -> AppResult<Response> {
     let username = resolve_local_profile_username(state, request.headers()).await?;
     let store = state.profile_store();
+    let lock = state.acquire_profile_mutation_lock(&username, ProfileDomain::PlayRecords);
+    let _guard = lock.lock().await;
 
     match *request.method() {
         Method::GET => {
@@ -81,6 +84,7 @@ pub(crate) async fn handle_profile_playrecords(
             }
             records.insert(key.clone(), record.clone());
             persist_local_profile_mutation(
+                state,
                 &store,
                 &username,
                 ProfileDomain::PlayRecords,
@@ -101,6 +105,7 @@ pub(crate) async fn handle_profile_playrecords(
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 records.remove(&key);
                 persist_local_profile_mutation(
+                    state,
                     &store,
                     &username,
                     ProfileDomain::PlayRecords,
@@ -113,6 +118,7 @@ pub(crate) async fn handle_profile_playrecords(
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 records.clear();
                 persist_local_profile_mutation(
+                    state,
                     &store,
                     &username,
                     ProfileDomain::PlayRecords,
@@ -136,6 +142,8 @@ pub(crate) async fn handle_profile_favorites(
 ) -> AppResult<Response> {
     let username = resolve_local_profile_username(state, request.headers()).await?;
     let store = state.profile_store();
+    let lock = state.acquire_profile_mutation_lock(&username, ProfileDomain::Favorites);
+    let _guard = lock.lock().await;
 
     match *request.method() {
         Method::GET => {
@@ -161,6 +169,7 @@ pub(crate) async fn handle_profile_favorites(
             }
             favorites.insert(key.clone(), favorite.clone());
             persist_local_profile_mutation(
+                state,
                 &store,
                 &username,
                 ProfileDomain::Favorites,
@@ -181,6 +190,7 @@ pub(crate) async fn handle_profile_favorites(
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 favorites.remove(&key);
                 persist_local_profile_mutation(
+                    state,
                     &store,
                     &username,
                     ProfileDomain::Favorites,
@@ -193,6 +203,7 @@ pub(crate) async fn handle_profile_favorites(
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 favorites.clear();
                 persist_local_profile_mutation(
+                    state,
                     &store,
                     &username,
                     ProfileDomain::Favorites,
@@ -216,6 +227,8 @@ pub(crate) async fn handle_profile_follows(
 ) -> AppResult<Response> {
     let username = resolve_local_profile_username(state, request.headers()).await?;
     let store = state.profile_store();
+    let lock = state.acquire_profile_mutation_lock(&username, ProfileDomain::Follows);
+    let _guard = lock.lock().await;
 
     match *request.method() {
         Method::GET => {
@@ -271,6 +284,7 @@ pub(crate) async fn handle_profile_follows(
 
             follows.insert(key.clone(), follow.clone());
             persist_local_profile_mutation(
+                state,
                 &store,
                 &username,
                 ProfileDomain::Follows,
@@ -291,6 +305,7 @@ pub(crate) async fn handle_profile_follows(
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 follows.remove(&key);
                 persist_local_profile_mutation(
+                    state,
                     &store,
                     &username,
                     ProfileDomain::Follows,
@@ -303,6 +318,7 @@ pub(crate) async fn handle_profile_follows(
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 follows.clear();
                 persist_local_profile_mutation(
+                    state,
                     &store,
                     &username,
                     ProfileDomain::Follows,
@@ -326,6 +342,8 @@ pub(crate) async fn handle_profile_search_history(
 ) -> AppResult<Response> {
     let username = resolve_local_profile_username(state, request.headers()).await?;
     let store = state.profile_store();
+    let lock = state.acquire_profile_mutation_lock(&username, ProfileDomain::SearchHistory);
+    let _guard = lock.lock().await;
 
     match *request.method() {
         Method::GET => {
@@ -345,6 +363,7 @@ pub(crate) async fn handle_profile_search_history(
             history.insert(0, keyword.clone());
             history.truncate(SEARCH_HISTORY_LIMIT);
             persist_local_profile_mutation(
+                state,
                 &store,
                 &username,
                 ProfileDomain::SearchHistory,
@@ -365,6 +384,7 @@ pub(crate) async fn handle_profile_search_history(
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 history.retain(|item| item != &keyword);
                 persist_local_profile_mutation(
+                    state,
                     &store,
                     &username,
                     ProfileDomain::SearchHistory,
@@ -379,6 +399,7 @@ pub(crate) async fn handle_profile_search_history(
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 history.clear();
                 persist_local_profile_mutation(
+                    state,
                     &store,
                     &username,
                     ProfileDomain::SearchHistory,
@@ -402,6 +423,8 @@ pub(crate) async fn handle_profile_skip_configs(
 ) -> AppResult<Response> {
     let username = resolve_local_profile_username(state, request.headers()).await?;
     let store = state.profile_store();
+    let lock = state.acquire_profile_mutation_lock(&username, ProfileDomain::SkipConfigs);
+    let _guard = lock.lock().await;
 
     match *request.method() {
         Method::GET => {
@@ -430,6 +453,7 @@ pub(crate) async fn handle_profile_skip_configs(
             };
             configs.insert(key.clone(), config.clone());
             persist_local_profile_mutation(
+                state,
                 &store,
                 &username,
                 ProfileDomain::SkipConfigs,
@@ -451,6 +475,7 @@ pub(crate) async fn handle_profile_skip_configs(
                 .map_err(|error| AppError::internal(error.to_string()))?;
             configs.remove(&key);
             persist_local_profile_mutation(
+                state,
                 &store,
                 &username,
                 ProfileDomain::SkipConfigs,
@@ -504,6 +529,7 @@ async fn resolve_local_profile_username(
 }
 
 fn persist_local_profile_mutation<T>(
+    state: &AppState,
     store: &LocalDesktopProfileStore,
     username: &str,
     domain: ProfileDomain,
@@ -513,6 +539,20 @@ fn persist_local_profile_mutation<T>(
 where
     T: Serialize + ?Sized,
 {
+    let config = state
+        .load_config()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if config.profile_sync_api_base_url.is_none()
+        || !config
+            .profile_sync_domains
+            .iter()
+            .any(|configured_domain| configured_domain == domain.as_str())
+    {
+        return store
+            .save_profile_domain_snapshot(username, domain, snapshot)
+            .map_err(|error| AppError::internal(error.to_string()));
+    }
+
     let device_id = store
         .get_or_create_device_id()
         .map_err(|error| AppError::internal(error.to_string()))?;
