@@ -46,7 +46,9 @@ describe('desktop release workflow config', () => {
   it('treats desktop as the only branch for page-only download-site updates', () => {
     const workflow = readProjectFile('.github/workflows/download-site.yml');
 
-    expect(workflow).toContain('branches:\n      - desktop');
-    expect(workflow).not.toContain('\n      - main\n');
+    expect(workflow).toMatch(/branches:\s*\n\s+- desktop(?:\s|$)/);
+    expect(workflow).not.toMatch(
+      /branches:\s*\n(?:\s+- [^\n]+\n)*\s+- main(?:\s|$)/
+    );
   });
 });

@@ -45,7 +45,9 @@ const downloadSiteAppModule =
 describe('download site app', () => {
   const originalMatchMedia = window.matchMedia;
   const originalNavigatorPlatform = window.navigator.platform;
-  const originalNavigatorUserAgentData = window.navigator.userAgentData;
+  const originalNavigatorUserAgentData = (
+    window.navigator as Navigator & { userAgentData?: unknown }
+  ).userAgentData;
 
   async function flushAsyncWork() {
     await new Promise((resolve) => setTimeout(resolve, 0));

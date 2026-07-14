@@ -6032,11 +6032,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn local_service_health_check_reports_tcp_connect_failures() {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind disposable listener");
-        let address = listener.local_addr().expect("listener address");
-        drop(listener);
+        let address = "127.0.0.1:0";
 
         let result = local_service_health_check(&format!("http://{address}")).await;
         assert!(!result.healthy);
