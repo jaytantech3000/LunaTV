@@ -44,7 +44,7 @@ describe('desktop profile sync status copy helpers', () => {
 
     expect(buildDesktopProfileSyncStatusValue(status)).toBe('已启用但不可达');
     expect(buildDesktopProfileSyncStatusDetail(status)).toContain(
-      '仅同步 收藏、追更'
+      '本地 SQLite 是日常读写主数据源；仅在后台同步 收藏、追更'
     );
     expect(buildDesktopProfileSyncStatusDetail(status)).toContain(
       '当前远端账号：kid'
@@ -86,6 +86,7 @@ describe('desktop profile sync status copy helpers', () => {
       { label: '远端可达性', value: '不可达' },
       { label: '当前帐号', value: 'kid' },
       { label: '最近错误', value: '远端账号同步后端不可达。' },
+      { label: '本地队列', value: '本地修改已同步' },
       { label: '同步范围', value: '收藏、追更' },
     ]);
   });
@@ -109,10 +110,35 @@ describe('desktop profile sync status copy helpers', () => {
       { label: '远端可达性', value: '可达，但状态异常' },
       { label: '当前帐号', value: 'kid' },
       { label: '最近错误', value: 'unexpected profile sync response' },
+      { label: '本地队列', value: '本地修改已同步' },
       { label: '同步范围', value: '收藏、追更' },
     ]);
     expect(buildDesktopProfileSyncLoginStatusMessage(status)).toBe(
       '云端账号同步协议不兼容，请升级桌面端或 Web 端。'
+    );
+  });
+
+  it('distinguishes locally saved changes from remote sync completion', () => {
+    const status = {
+      enabled: true,
+      reachable: true,
+      authenticated: false,
+      pendingOutboxCount: 3,
+      reauthRequired: true,
+      lastOutboxError: '远端账号同步后端返回 401',
+      syncDomains: ['favorites'],
+    } as const;
+
+    expect(buildDesktopProfileSyncDiagnostics(status)).toContainEqual({
+      label: '本地队列',
+      value: '3 项等待同步（需重新登录）',
+    });
+    expect(buildDesktopProfileSyncDiagnostics(status)).toContainEqual({
+      label: '最近错误',
+      value: '远端账号同步后端返回 401',
+    });
+    expect(buildDesktopProfileSyncStatusDetail(status)).toContain(
+      '3 项修改已保存到本机，重新登录后继续同步。'
     );
   });
 

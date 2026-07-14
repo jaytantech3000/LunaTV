@@ -27,6 +27,7 @@ import {
 } from '@/lib/profile/contracts';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
+import DesktopProfileSyncDiagnosticsGrid from '@/components/DesktopProfileSyncDiagnosticsGrid';
 import DesktopProfileSyncOnboardingCard from '@/components/DesktopProfileSyncOnboardingCard';
 import DesktopProfileSyncScopeCard from '@/components/DesktopProfileSyncScopeCard';
 import PageLayout from '@/components/PageLayout';
@@ -365,6 +366,16 @@ export default function AccountSyncPage() {
                 setSyncFeedbackMessage('');
               }}
             />
+
+            <section className='space-y-3'>
+              <div className='text-sm font-medium text-gray-700 dark:text-gray-200'>
+                本地保存与后台同步
+              </div>
+              <DesktopProfileSyncDiagnosticsGrid
+                profileSyncStatus={profileSyncStatus}
+                profileSyncStatusError={normalizedProfileSyncStatusError}
+              />
+            </section>
           </>
         )}
       </div>

@@ -71,8 +71,33 @@ function resolveDesktopProfileSyncLastErrorText(
     return normalizedReadErrorMessage;
   }
 
+  const normalizedOutboxError = normalizeErrorMessage(
+    profileSyncStatus?.lastOutboxError
+  );
+  if (normalizedOutboxError) {
+    return normalizedOutboxError;
+  }
+
   const normalizedStatusError = normalizeErrorMessage(profileSyncStatus?.error);
   return normalizedStatusError || '无';
+}
+
+function resolveDesktopProfileSyncQueueText(
+  profileSyncStatus: DesktopProfileSyncStatus | null | undefined,
+  readErrorMessage?: string | null
+): string {
+  if (normalizeErrorMessage(readErrorMessage)) {
+    return '无法读取';
+  }
+
+  const pendingCount = profileSyncStatus?.pendingOutboxCount ?? 0;
+  if (pendingCount > 0) {
+    return profileSyncStatus?.reauthRequired
+      ? `${pendingCount} 项等待同步（需重新登录）`
+      : `${pendingCount} 项已保存到本机，等待同步`;
+  }
+
+  return profileSyncStatus?.enabled ? '本地修改已同步' : '未启用';
 }
 
 export function resolveDesktopProfileSyncDomainsText(
@@ -194,9 +219,20 @@ export function buildDesktopProfileSyncStatusDetail(
   );
 
   const details = [
-    `仅同步 ${domainsText}；内容搜索、播放和代理继续本地处理。`,
+    `本地 SQLite 是日常读写主数据源；仅在后台同步 ${domainsText}。`,
     `当前模式：${modeText}${storageText}${accountText}。`,
   ];
+
+  const pendingCount = profileSyncStatus.pendingOutboxCount ?? 0;
+  if (pendingCount > 0) {
+    details.push(
+      `${pendingCount} 项修改已保存到本机，${
+        profileSyncStatus.reauthRequired
+          ? '重新登录后继续同步。'
+          : '正在等待后台同步。'
+      }`
+    );
+  }
 
   if (profileSyncStatus.error) {
     details.push(`最近错误：${profileSyncStatus.error}`);
@@ -231,6 +267,13 @@ export function buildDesktopProfileSyncDiagnostics(
     {
       label: '最近错误',
       value: resolveDesktopProfileSyncLastErrorText(
+        profileSyncStatus,
+        readErrorMessage
+      ),
+    },
+    {
+      label: '本地队列',
+      value: resolveDesktopProfileSyncQueueText(
         profileSyncStatus,
         readErrorMessage
       ),

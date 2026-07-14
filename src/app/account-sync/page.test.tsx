@@ -95,6 +95,11 @@ jest.mock('@/lib/runtime-config', () => ({
   getRuntimeConfig: jest.fn(),
 }));
 
+jest.mock('@/components/DesktopProfileSyncDiagnosticsGrid', () => ({
+  __esModule: true,
+  default: () => <div data-testid='sync-diagnostics'>同步队列诊断</div>,
+}));
+
 jest.mock('@/components/DesktopProfileSyncOnboardingCard', () => ({
   __esModule: true,
   default: (props: {
@@ -173,6 +178,8 @@ describe('AccountSyncPage', () => {
     expect(screen.getByText('同步状态摘要')).toBeInTheDocument();
     expect(screen.getByText('开启帐号同步')).toBeInTheDocument();
     expect(screen.getByText('管理同步范围')).toBeInTheDocument();
+    expect(screen.getByText('本地保存与后台同步')).toBeInTheDocument();
+    expect(screen.getByTestId('sync-diagnostics')).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /诊断详情/ })
     ).not.toBeInTheDocument();
