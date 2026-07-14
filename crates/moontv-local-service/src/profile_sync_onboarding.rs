@@ -340,11 +340,13 @@ pub(crate) async fn preview_profile_sync_onboarding(
     let remote_base_url = resolve_remote_base_url(payload.remote_base_url)?;
     let username = require_owned_string(payload.username, "缺少 Web 用户名")?;
     let password = require_owned_string(payload.password, "缺少 Web 密码")?;
-    let current_local_username =
-        require_owned_string(payload.current_local_username, "缺少当前本地帐号")?;
     let remote_session =
         login_remote_profile_sync(&state, &remote_base_url, &username, &password).await?;
     let local_account_summaries = load_local_account_summaries(&state)?;
+    let current_local_username = resolve_current_local_username(
+        payload.current_local_username,
+        &local_account_summaries,
+    )?;
     ensure_current_local_account(&local_account_summaries, &current_local_username)?;
     let remote_admin_config = fetch_remote_admin_config(&state, &remote_base_url).await?;
     ensure_remote_admin_role(&remote_admin_config.role)?;
@@ -377,13 +379,15 @@ pub(crate) async fn execute_profile_sync_onboarding(
     let remote_base_url = resolve_remote_base_url(payload.remote_base_url)?;
     let username = require_owned_string(payload.username, "缺少 Web 用户名")?;
     let password = require_owned_string(payload.password, "缺少 Web 密码")?;
-    let current_local_username =
-        require_owned_string(payload.current_local_username, "缺少当前本地帐号")?;
     let strategy = parse_required_conflict_strategy(payload.strategy)?;
     let sync_domains = validate_profile_sync_selected_domains(payload.sync_domains)?;
     let remote_session =
         login_remote_profile_sync(&state, &remote_base_url, &username, &password).await?;
     let local_account_summaries = load_local_account_summaries(&state)?;
+    let current_local_username = resolve_current_local_username(
+        payload.current_local_username,
+        &local_account_summaries,
+    )?;
     ensure_current_local_account(&local_account_summaries, &current_local_username)?;
     let local_snapshot_map = load_local_snapshot_map(&state, &local_account_summaries)?;
     let should_sync_adminsettings = sync_domains_include_adminsettings(&sync_domains);
@@ -1046,6 +1050,21 @@ fn load_local_account_summaries(
     }
 
     Ok(summaries)
+}
+
+fn resolve_current_local_username(
+    requested_username: Option<String>,
+    local_account_summaries: &[DesktopProfileSyncLocalAccountSummary],
+) -> AppResult<String> {
+    if let Some(username) = normalize_owned_string(requested_username) {
+        ensure_current_local_account(local_account_summaries, &username)?;
+        return Ok(username);
+    }
+
+    local_account_summaries
+        .first()
+        .map(|summary| summary.username.clone())
+        .ok_or_else(|| AppError::bad_request("桌面本地帐号列表为空"))
 }
 
 fn ensure_current_local_account(

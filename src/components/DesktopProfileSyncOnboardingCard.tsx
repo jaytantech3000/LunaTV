@@ -431,10 +431,9 @@ export default function DesktopProfileSyncOnboardingCard({
   const normalizedSelectedSyncDomains = selectedSyncDomains.length
     ? [...selectedSyncDomains]
     : [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS];
-  const canSubmit =
-    Boolean(normalizedCurrentLocalUsername) &&
-    Boolean(username.trim()) &&
-    Boolean(password.trim());
+  const effectiveCurrentLocalUsername =
+    normalizedCurrentLocalUsername || 'admin';
+  const canSubmit = Boolean(username.trim()) && Boolean(password.trim());
 
   useEffect(() => {
     setErrorCopyState('idle');
@@ -492,7 +491,7 @@ export default function DesktopProfileSyncOnboardingCard({
         remoteBaseUrl,
         username: username.trim(),
         password,
-        currentLocalUsername: normalizedCurrentLocalUsername,
+        currentLocalUsername: effectiveCurrentLocalUsername,
       });
       setPreview(nextPreview);
       setRemoteBaseUrl(nextPreview.remoteBaseUrl);
@@ -521,7 +520,7 @@ export default function DesktopProfileSyncOnboardingCard({
         remoteBaseUrl,
         username: username.trim(),
         password,
-        currentLocalUsername: normalizedCurrentLocalUsername,
+        currentLocalUsername: effectiveCurrentLocalUsername,
         strategy: nextStrategy,
         syncDomains: normalizedSelectedSyncDomains,
       });

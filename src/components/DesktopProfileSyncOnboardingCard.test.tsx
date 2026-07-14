@@ -155,6 +155,52 @@ describe('DesktopProfileSyncOnboardingCard', () => {
     expect(screen.getByText('开始前请确认')).toBeInTheDocument();
   });
 
+  it('lets a desktop guest submit Web credentials without a browser local username', async () => {
+    mockPreviewDesktopProfileSyncOnboarding.mockResolvedValue({
+      remoteBaseUrl: 'https://luna.hkcu.qzz.io',
+      currentRemoteUsername: 'remote-owner',
+      currentRemoteRole: 'owner',
+      plan: {
+        currentLocalUsername: 'admin',
+        currentRemoteUsername: 'remote-owner',
+        items: [],
+      },
+      downloadPreview: {
+        hasDownloads: false,
+        currentOwnerUsername: null,
+        targetUsername: null,
+        taskCount: 0,
+        libraryCount: 0,
+      },
+      warnings: [],
+    });
+
+    render(
+      <DesktopProfileSyncOnboardingCard
+        profileSyncEnabled={false}
+        selectedSyncDomains={['favorites']}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '开启同步' }));
+    fireEvent.change(screen.getByLabelText('Web 用户名'), {
+      target: { value: 'remote-owner' },
+    });
+    fireEvent.change(screen.getByLabelText('Web 密码'), {
+      target: { value: 'secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '生成迁移预览' }));
+
+    await waitFor(() => {
+      expect(mockPreviewDesktopProfileSyncOnboarding).toHaveBeenCalledWith({
+        remoteBaseUrl: 'https://luna.hkcu.qzz.io',
+        username: 'remote-owner',
+        password: 'secret',
+        currentLocalUsername: 'admin',
+      });
+    });
+  });
+
   it('executes onboarding with the selected sync domains and surfaces the success dialog', async () => {
     mockPreviewDesktopProfileSyncOnboarding.mockResolvedValue({
       remoteBaseUrl: 'https://luna.hkcu.qzz.io',
