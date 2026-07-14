@@ -420,9 +420,12 @@ function HomeClient() {
                   </button>
                 )}
               </div>
-              <div className='grid grid-cols-3 justify-start gap-x-3 gap-y-12 px-0 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-6 sm:gap-y-14'>
+              <div className='grid grid-cols-3 justify-start gap-x-3 gap-y-12 px-0 sm:grid-cols-[repeat(auto-fill,_11.2rem)] sm:gap-x-[1.08rem] sm:gap-y-14'>
                 {visibleFavoriteItems.map((item) => (
-                  <div key={item.id + item.source} className='w-full'>
+                  <div
+                    key={item.id + item.source}
+                    className='w-full sm:w-[11.2rem]'
+                  >
                     <VideoCard
                       query={item.search_title}
                       {...item}
