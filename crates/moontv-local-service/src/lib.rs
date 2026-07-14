@@ -359,7 +359,8 @@ pub struct AppState {
 
 #[derive(Debug)]
 struct ImageFlight {
-    completion_tx: watch::Sender<()>,
+    completion_tx: watch::Sender<Option<AppResult<CachedImage>>>,
+    deadline: tokio::time::Instant,
 }
 
 impl AppState {
@@ -496,7 +497,11 @@ impl AppState {
     async fn acquire_image_flight(
         &self,
         url: &str,
-    ) -> (Arc<ImageFlight>, Option<watch::Receiver<()>>, bool) {
+    ) -> (
+        Arc<ImageFlight>,
+        Option<watch::Receiver<Option<AppResult<CachedImage>>>>,
+        bool,
+    ) {
         let mut flights = self.image_flights.lock().await;
         if let Some(flight) = flights.get(url) {
             return (
@@ -505,20 +510,28 @@ impl AppState {
                 false,
             );
         }
-        let (completion_tx, _) = watch::channel(());
-        let flight = Arc::new(ImageFlight { completion_tx });
+        let (completion_tx, _) = watch::channel(None);
+        let flight = Arc::new(ImageFlight {
+            completion_tx,
+            deadline: tokio::time::Instant::now() + image_proxy::IMAGE_PROXY_TIMEOUT,
+        });
         flights.insert(url.to_string(), flight.clone());
         (flight, None, true)
     }
 
-    async fn release_image_flight(&self, url: &str, flight: &Arc<ImageFlight>) {
+    async fn complete_image_flight(
+        &self,
+        url: &str,
+        flight: &Arc<ImageFlight>,
+        result: AppResult<CachedImage>,
+    ) {
         let mut flights = self.image_flights.lock().await;
         if flights
             .get(url)
             .is_some_and(|active_flight| Arc::ptr_eq(active_flight, flight))
         {
+            flight.completion_tx.send_replace(Some(result));
             flights.remove(url);
-            flight.completion_tx.send_replace(());
         }
     }
 
@@ -1572,7 +1585,7 @@ struct UpstreamResponseMeta {
     content_range: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct AppError {
     status: StatusCode,
     code: Option<&'static str>,
@@ -13106,6 +13119,82 @@ segment0.ts
             .await
             .expect("image proxy body");
         assert_eq!(body.as_ref(), &[1_u8, 2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn image_proxy_followers_return_the_leaders_payload_limit_error() {
+        let (request_started_tx, request_started_rx) = tokio::sync::oneshot::channel();
+        let request_started = Arc::new(Mutex::new(Some(request_started_tx)));
+        let upstream = spawn_mock_server(Router::new().route(
+            "/image.jpg",
+            get(move || {
+                let request_started = request_started.clone();
+                async move {
+                    if let Some(sender) = request_started
+                        .lock()
+                        .expect("lock image request start sender")
+                        .take()
+                    {
+                        let _ = sender.send(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    let mut response = Response::new(Body::from(vec![0_u8; 10 * 1024 * 1024 + 1]));
+                    response
+                        .headers_mut()
+                        .insert(CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
+                    response
+                }
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(&temp_dir, json!({ "api_site": {} }));
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        let image_url = Url::parse(&format!("{}/image.jpg", upstream.base_url()))
+            .expect("parse mock image URL");
+
+        let leader_state = state.clone();
+        let leader_url = image_url.clone();
+        let leader = tokio::spawn(async move {
+            image_proxy::get_or_fetch_image(&leader_state, leader_url).await
+        });
+        request_started_rx
+            .await
+            .expect("leader requested upstream image");
+
+        let mut followers = Vec::new();
+        for _ in 0..4 {
+            let follower_state = state.clone();
+            let follower_url = image_url.clone();
+            followers.push(tokio::spawn(async move {
+                image_proxy::get_or_fetch_image(&follower_state, follower_url).await
+            }));
+        }
+
+        let leader_error = leader
+            .await
+            .expect("leader task did not panic")
+            .expect_err("leader must reject an oversized image");
+        assert_eq!(leader_error.status, StatusCode::PAYLOAD_TOO_LARGE);
+        for follower in followers {
+            let follower_error = follower
+                .await
+                .expect("follower task did not panic")
+                .expect_err("follower must receive the leader failure");
+            assert_eq!(
+                follower_error.status,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "follower must preserve the leader's error classification"
+            );
+        }
+
+        upstream.abort();
     }
 
     #[tokio::test]

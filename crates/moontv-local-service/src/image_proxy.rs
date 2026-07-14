@@ -18,7 +18,7 @@ use crate::{AppError, AppResult, AppState, image_cache::CachedImage};
 const IMAGE_PROXY_CACHE_CONTROL: &str = "public, max-age=15720000, s-maxage=15720000";
 const DOUBAN_IMAGE_REFERER: &str = "https://movie.douban.com/";
 const IMAGE_PROXY_MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
-const IMAGE_PROXY_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const IMAGE_PROXY_TIMEOUT: Duration = Duration::from_secs(10);
 const ALLOWED_IMAGE_CONTENT_TYPES: &[&str] = &[
     "image/avif",
     "image/gif",
@@ -41,7 +41,7 @@ pub(crate) async fn get_image_proxy(
     Ok(image_response(image))
 }
 
-async fn get_or_fetch_image(state: &AppState, image_url: Url) -> AppResult<CachedImage> {
+pub(crate) async fn get_or_fetch_image(state: &AppState, image_url: Url) -> AppResult<CachedImage> {
     let cache_key = image_url.as_str().to_string();
     if let Some(image) = state.read_cached_image(&cache_key)? {
         return Ok(image);
@@ -51,27 +51,36 @@ async fn get_or_fetch_image(state: &AppState, image_url: Url) -> AppResult<Cache
     if !is_leader {
         let mut completion_rx =
             completion_rx.expect("image fetch follower has a completion receiver");
-        completion_rx.changed().await.map_err(|_| {
-            AppError::new(StatusCode::BAD_GATEWAY, "image fetch flight was cancelled")
-        })?;
-        return state.read_cached_image(&cache_key)?.ok_or_else(|| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "image fetch did not populate cache",
-            )
-        });
+        return tokio::time::timeout_at(flight.deadline, async move {
+            loop {
+                if let Some(result) = completion_rx.borrow().clone() {
+                    return result;
+                }
+                completion_rx.changed().await.map_err(|_| {
+                    AppError::new(StatusCode::BAD_GATEWAY, "image fetch flight was cancelled")
+                })?;
+            }
+        })
+        .await
+        .map_err(|_| AppError::new(StatusCode::GATEWAY_TIMEOUT, "image fetch timed out"))?;
     }
 
-    let result = match fetch_image(state, image_url).await {
+    let result = match fetch_image(state, image_url, flight.deadline).await {
         Ok(image) => state.write_cached_image(&cache_key, &image).map(|()| image),
         Err(error) => Err(error),
     };
-    state.release_image_flight(&cache_key, &flight).await;
+    state
+        .complete_image_flight(&cache_key, &flight, result.clone())
+        .await;
     result
 }
 
-async fn fetch_image(state: &AppState, image_url: Url) -> AppResult<CachedImage> {
-    tokio::time::timeout(IMAGE_PROXY_TIMEOUT, async {
+async fn fetch_image(
+    state: &AppState,
+    image_url: Url,
+    deadline: tokio::time::Instant,
+) -> AppResult<CachedImage> {
+    tokio::time::timeout_at(deadline, async {
         let upstream_response = state
             .image_client
             .get(image_url)

@@ -21,7 +21,7 @@ pub(crate) struct CachedImage {
 pub(crate) struct ImageCache {
     root: PathBuf,
     max_bytes: u64,
-    write_lock: Arc<Mutex<()>>,
+    access_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -37,11 +37,15 @@ impl ImageCache {
         Ok(Self {
             root,
             max_bytes: IMAGE_CACHE_MAX_BYTES,
-            write_lock: Arc::new(Mutex::new(())),
+            access_lock: Arc::new(Mutex::new(())),
         })
     }
 
     pub(crate) fn get(&self, url: &str) -> io::Result<Option<CachedImage>> {
+        let _access_lock = self
+            .access_lock
+            .lock()
+            .map_err(|_| io::Error::other("image cache access lock poisoned"))?;
         let key = cache_key(url);
         let body_path = self.root.join(format!("{key}.body"));
         let meta_path = self.root.join(format!("{key}.meta.json"));
@@ -70,10 +74,10 @@ impl ImageCache {
     }
 
     pub(crate) fn store(&self, url: &str, image: &CachedImage) -> io::Result<()> {
-        let _write_lock = self
-            .write_lock
+        let _access_lock = self
+            .access_lock
             .lock()
-            .map_err(|_| io::Error::other("image cache write lock poisoned"))?;
+            .map_err(|_| io::Error::other("image cache access lock poisoned"))?;
         let key = cache_key(url);
         let body_path = self.root.join(format!("{key}.body"));
         let meta_path = self.root.join(format!("{key}.meta.json"));
@@ -175,7 +179,11 @@ mod tests {
     use std::{
         env, fs,
         path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicBool, AtomicU64, Ordering},
+        },
+        thread,
     };
 
     static NEXT_TEST_DIR_ID: AtomicU64 = AtomicU64::new(0);
@@ -249,6 +257,134 @@ mod tests {
                 .get("https://img1.doubanio.com/second.jpg")
                 .expect("read retained image"),
             Some(image)
+        );
+    }
+
+    #[test]
+    fn concurrent_readers_never_observe_a_partially_replaced_entry() {
+        let temp_dir = TestDir::new();
+        let cache = Arc::new(ImageCache::new(&temp_dir.path).expect("create image cache"));
+        let url = "https://img1.doubanio.com/concurrent.jpg";
+        let jpeg = CachedImage {
+            content_type: "image/jpeg".to_string(),
+            body: vec![1; 1024],
+        };
+        let png = CachedImage {
+            content_type: "image/png".to_string(),
+            body: vec![2; 1024],
+        };
+        cache.store(url, &jpeg).expect("seed image cache");
+
+        let start = Arc::new(Barrier::new(10));
+        let observed_partial_entry = Arc::new(AtomicBool::new(false));
+        let mut workers = Vec::new();
+
+        for image in [jpeg.clone(), png.clone()] {
+            let cache = cache.clone();
+            let start = start.clone();
+            let url = url.to_string();
+            workers.push(thread::spawn(move || {
+                start.wait();
+                for _ in 0..2_000 {
+                    cache.store(&url, &image).expect("concurrent cache store");
+                }
+            }));
+        }
+
+        for _ in 0..8 {
+            let cache = cache.clone();
+            let start = start.clone();
+            let observed_partial_entry = observed_partial_entry.clone();
+            let url = url.to_string();
+            let jpeg = jpeg.clone();
+            let png = png.clone();
+            workers.push(thread::spawn(move || {
+                start.wait();
+                for _ in 0..2_000 {
+                    match cache.get(&url).expect("concurrent cache read") {
+                        Some(image) if image == jpeg || image == png => {}
+                        Some(_) | None => {
+                            observed_partial_entry.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                    }
+                }
+            }));
+        }
+
+        for worker in workers {
+            worker.join().expect("cache worker did not panic");
+        }
+
+        assert!(
+            !observed_partial_entry.load(Ordering::Relaxed),
+            "a reader observed a missing or mismatched body/metadata pair while replacement was in progress"
+        );
+    }
+
+    #[test]
+    fn concurrent_eviction_never_exposes_a_partially_removed_entry() {
+        let temp_dir = TestDir::new();
+        let mut cache = ImageCache::new(&temp_dir.path).expect("create image cache");
+        cache.max_bytes = 2 * 1024;
+        let cache = Arc::new(cache);
+        let url = "https://img1.doubanio.com/evicted.jpg";
+        let retained = CachedImage {
+            content_type: "image/jpeg".to_string(),
+            body: vec![3; 1024],
+        };
+        let replacing = CachedImage {
+            content_type: "image/png".to_string(),
+            body: vec![4; 1024],
+        };
+        cache.store(url, &retained).expect("seed cache entry");
+
+        let start = Arc::new(Barrier::new(10));
+        let observed_partial_entry = Arc::new(AtomicBool::new(false));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let cache = cache.clone();
+            let start = start.clone();
+            let replacing = replacing.clone();
+            workers.push(thread::spawn(move || {
+                start.wait();
+                for index in 0..500 {
+                    cache
+                        .store(
+                            &format!("https://img1.doubanio.com/filler-{index}.jpg"),
+                            &replacing,
+                        )
+                        .expect("store filler cache entry");
+                }
+            }));
+        }
+        for _ in 0..8 {
+            let cache = cache.clone();
+            let start = start.clone();
+            let observed_partial_entry = observed_partial_entry.clone();
+            let url = url.to_string();
+            let retained = retained.clone();
+            workers.push(thread::spawn(move || {
+                start.wait();
+                for _ in 0..500 {
+                    match cache.get(&url).expect("concurrent evicting cache read") {
+                        Some(image) if image == retained => {}
+                        None => {}
+                        Some(_) => {
+                            observed_partial_entry.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                    }
+                }
+            }));
+        }
+
+        for worker in workers {
+            worker.join().expect("cache worker did not panic");
+        }
+        assert!(
+            !observed_partial_entry.load(Ordering::Relaxed),
+            "a reader observed mixed body and metadata while eviction was in progress"
         );
     }
 }
