@@ -401,11 +401,10 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
   const isAuthenticated = Boolean(authInfo?.username);
   const isDesktopLocalAuthMode = isDesktopTarget && !desktopProfileSyncEnabled;
   const showAdminPanel = isDesktopTarget
-    ? isAuthenticated &&
-      (authInfo?.role === 'owner' || authInfo?.role === 'admin')
+    ? true
     : adminPanelEnabled &&
       (authInfo?.role === 'owner' || authInfo?.role === 'admin');
-  const showDesktopAccountSyncEntry = isDesktopTarget && showAdminPanel;
+  const showDesktopAccountSyncEntry = isDesktopTarget;
 
   // 检查是否显示修改密码按钮
   const showChangePassword =

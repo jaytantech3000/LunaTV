@@ -225,4 +225,20 @@ describe('UserMenu', () => {
       expect(mockRouter.push).toHaveBeenCalledWith('/config');
     });
   });
+
+  it('keeps account sync and management discoverable for desktop guests', async () => {
+    mockGetAuthInfoFromBrowserCookie.mockReturnValue(null);
+
+    render(<UserMenu />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+    expect(
+      await screen.findByRole('button', { name: '帐号同步' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '管理面板' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '登录' })).toBeInTheDocument();
+  });
 });
