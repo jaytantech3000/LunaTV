@@ -562,15 +562,84 @@ body {
     background: rgba(255, 255, 255, 0.04);
   }
 
-  .luna-sidebar-link[data-active='true'] {
-    color: var(--luna-nav-text);
+  html:not(.dark) .luna-sidebar-link:hover {
+    color: rgba(255, 255, 255, 0.98);
+    border-color: rgba(255, 255, 255, 0.28);
     background: linear-gradient(
       180deg,
-      rgba(88, 145, 214, 0.12),
-      var(--luna-nav-active-bg)
+      rgba(255, 255, 255, 0.34),
+      rgba(245, 248, 239, 0.2)
     );
-    border-color: var(--luna-nav-active-border);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42),
+      0 8px 18px rgba(76, 88, 65, 0.12);
+    transform: translateX(2px);
+  }
+
+  html:not(.dark) .luna-sidebar-link:hover .luna-sidebar-icon {
+    filter: drop-shadow(0 1px 2px rgba(54, 63, 47, 0.22));
+  }
+
+  html.dark .luna-sidebar-link:hover {
+    color: rgba(246, 250, 255, 0.98);
+    border-color: rgba(146, 196, 255, 0.26);
+    background: linear-gradient(
+      180deg,
+      rgba(104, 158, 226, 0.26),
+      rgba(38, 89, 161, 0.2)
+    );
+    box-shadow: inset 0 1px 0 rgba(213, 231, 255, 0.2),
+      0 10px 20px rgba(0, 8, 30, 0.26);
+    transform: translateX(2px);
+  }
+
+  html.dark .luna-sidebar-link:hover .luna-sidebar-icon {
+    filter: drop-shadow(0 1px 3px rgba(138, 200, 255, 0.38));
+  }
+
+  .luna-sidebar-link[data-active='true'] {
+    color: rgba(255, 255, 255, 0.99);
+    border-color: rgba(255, 255, 255, 0.34);
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.48),
+      rgba(231, 239, 220, 0.3)
+    );
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.56),
+      0 10px 22px rgba(76, 88, 65, 0.16);
+  }
+
+  html.dark .luna-sidebar-link[data-active='true'] {
+    color: rgba(250, 253, 255, 1);
+    border-color: rgba(157, 207, 255, 0.38);
+    background: linear-gradient(
+      180deg,
+      rgba(111, 170, 237, 0.38),
+      rgba(45, 102, 181, 0.32)
+    );
+    box-shadow: inset 0 1px 0 rgba(222, 239, 255, 0.28),
+      0 12px 24px rgba(0, 8, 32, 0.34);
+  }
+
+  .luna-sidebar-link[data-active='true']:hover {
+    transform: translateX(2px);
+  }
+
+  html:not(.dark) .luna-sidebar-link[data-active='true']:hover {
+    border-color: rgba(255, 255, 255, 0.48);
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.58),
+      rgba(226, 238, 210, 0.4)
+    );
+  }
+
+  html.dark .luna-sidebar-link[data-active='true']:hover {
+    border-color: rgba(175, 219, 255, 0.52);
+    background: linear-gradient(
+      180deg,
+      rgba(126, 184, 246, 0.48),
+      rgba(49, 111, 194, 0.4)
+    );
   }
 
   .luna-sidebar-link[data-active='true'] .luna-sidebar-icon,
