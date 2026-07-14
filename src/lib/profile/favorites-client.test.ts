@@ -134,9 +134,7 @@ describe('favorites client', () => {
       }),
     });
     await expect(isFavorited('demo', '1')).resolves.toBe(true);
-    expect(mockedFetchRemoteProfileJson).toHaveBeenCalledWith('/favorites', {
-      redirectOnUnauthorized: false,
-    });
+    expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
 
     await clearAllFavorites();
 

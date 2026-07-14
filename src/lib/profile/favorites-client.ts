@@ -221,58 +221,8 @@ export async function isFavorited(
   id: string
 ): Promise<boolean> {
   const key = generateStorageKey(source, id);
-
-  if (shouldUseRemoteUserDataStorage()) {
-    if (isProfileApiAuthPending()) {
-      return false;
-    }
-
-    await ensureDesktopLocalProfileStoreHydrated();
-    const cachedFavorites = cacheManager.getCachedFavorites();
-
-    if (cachedFavorites) {
-      fetchFromApi<Record<string, Favorite>>(
-        USER_DATA_API_PATHS.favorites,
-        PROFILE_API_NO_REDIRECT_OPTIONS
-      )
-        .then((freshData) => {
-          if (JSON.stringify(cachedFavorites) !== JSON.stringify(freshData)) {
-            cacheManager.cacheFavorites(freshData);
-            dispatchFavoritesUpdated(freshData);
-          }
-        })
-        .catch((err) => {
-          if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
-            return;
-          }
-
-          console.warn('后台同步收藏失败:', err);
-          triggerGlobalError('后台同步收藏失败');
-        });
-
-      return !!cachedFavorites[key];
-    }
-
-    try {
-      const freshData = await fetchFromApi<Record<string, Favorite>>(
-        USER_DATA_API_PATHS.favorites,
-        PROFILE_API_NO_REDIRECT_OPTIONS
-      );
-      cacheManager.cacheFavorites(freshData);
-      return !!freshData[key];
-    } catch (err) {
-      if (wasRedirectedToLogin(err) || isUnauthorizedRequestError(err)) {
-        return false;
-      }
-
-      console.error('检查收藏状态失败:', err);
-      triggerGlobalError('检查收藏状态失败');
-      return false;
-    }
-  }
-
-  const allFavorites = await getAllFavorites();
-  return !!allFavorites[key];
+  const favorites = await getAllFavorites();
+  return !!favorites[key];
 }
 
 export async function clearAllFavorites(): Promise<void> {
