@@ -5125,7 +5125,7 @@ fn import_local_admin_data_migration_archive(
 
     Ok(())
 }
-fn resolve_owner_username_for_import(admin_config: &DesktopAdminConfig) -> Option<String> {
+pub(crate) fn resolve_owner_username_for_import(admin_config: &DesktopAdminConfig) -> Option<String> {
     admin_config
         .user_config
         .users

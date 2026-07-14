@@ -6,28 +6,28 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
-    Json,
     extract::State,
     http::{Method, StatusCode},
     response::Response,
+    Json,
 };
 use moontv_profile::LocalProfileSnapshot;
 use moontv_sync::{
-    ProfileSyncError, ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncSessionMutation,
-    ProfileSyncStatusResponse, build_profile_sync_target_url,
+    build_profile_sync_target_url, ProfileSyncError, ProfileSyncForwardRequest, ProfileSyncSession,
+    ProfileSyncSessionMutation, ProfileSyncStatusResponse,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tracing::warn;
 
 use crate::{
-    AppError, AppResult, AppState, DesktopAdminConfig, apply_admin_settings_to_config_file,
-    build_admin_settings_sync_snapshot, download_runtime::DesktopDownloadResourceIndexRecord,
-    no_store_json_response, normalize_owned_string, persist_admin_config_file_with_subscription,
+    apply_admin_settings_to_config_file, build_admin_settings_sync_snapshot,
+    download_runtime::DesktopDownloadResourceIndexRecord, no_store_json_response,
+    normalize_owned_string, persist_admin_config_file_with_subscription,
     profile_sync::build_profile_sync_status_payload, read_json_file, require_owned_string,
-    sync_domains_include_adminsettings, validate_profile_sync_selected_domains,
+    resolve_owner_username_for_import, sync_domains_include_adminsettings,
+    validate_profile_sync_selected_domains, AppError, AppResult, AppState, DesktopAdminConfig,
 };
-
 const DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL: &str = "https://luna.hkcu.qzz.io";
 const AUTO_CREATED_WEB_ACCOUNT_INITIAL_PASSWORD: &str = "123456";
 const REMOTE_PROFILE_SYNC_MERGE_ROUTE_PATH: &str = "/api/admin/profile-sync/merge";
@@ -342,9 +342,10 @@ pub(crate) async fn preview_profile_sync_onboarding(
     let password = require_owned_string(payload.password, "缺少 Web 密码")?;
     let remote_session =
         login_remote_profile_sync(&state, &remote_base_url, &username, &password).await?;
-    let local_account_summaries = load_local_account_summaries(&state)?;
+    let (local_account_summaries, owner_username) = load_local_account_summaries(&state)?;
     let current_local_username = resolve_current_local_username(
         payload.current_local_username,
+        &owner_username,
         &local_account_summaries,
     )?;
     ensure_current_local_account(&local_account_summaries, &current_local_username)?;
@@ -383,9 +384,10 @@ pub(crate) async fn execute_profile_sync_onboarding(
     let sync_domains = validate_profile_sync_selected_domains(payload.sync_domains)?;
     let remote_session =
         login_remote_profile_sync(&state, &remote_base_url, &username, &password).await?;
-    let local_account_summaries = load_local_account_summaries(&state)?;
+    let (local_account_summaries, owner_username) = load_local_account_summaries(&state)?;
     let current_local_username = resolve_current_local_username(
         payload.current_local_username,
+        &owner_username,
         &local_account_summaries,
     )?;
     ensure_current_local_account(&local_account_summaries, &current_local_username)?;
@@ -1023,10 +1025,12 @@ fn summarize_upstream_body_prefix(body: &[u8], limit: usize) -> Option<String> {
 
 fn load_local_account_summaries(
     state: &AppState,
-) -> AppResult<Vec<DesktopProfileSyncLocalAccountSummary>> {
+) -> AppResult<(Vec<DesktopProfileSyncLocalAccountSummary>, String)> {
     let persistence = state
         .load_admin_persistence()
         .map_err(|error| AppError::internal(error.to_string()))?;
+    let owner_username = resolve_owner_username_for_import(&persistence.config)
+        .ok_or_else(|| AppError::internal("missing local owner username"))?;
     let profile_store = state.profile_store();
     let mut seen_usernames = BTreeSet::new();
     let mut summaries = Vec::new();
@@ -1049,11 +1053,26 @@ fn load_local_account_summaries(
         });
     }
 
-    Ok(summaries)
+    if seen_usernames.insert(owner_username.clone()) {
+        let snapshot = profile_store
+            .load_snapshot(&owner_username)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        summaries.push(DesktopProfileSyncLocalAccountSummary {
+            username: owner_username.clone(),
+            play_record_count: snapshot.play_records.len(),
+            favorite_count: snapshot.favorites.len(),
+            follow_count: snapshot.follow_records.len(),
+            search_history_count: snapshot.search_history.len(),
+            skip_config_count: snapshot.skip_configs.len(),
+        });
+    }
+
+    Ok((summaries, owner_username))
 }
 
 fn resolve_current_local_username(
     requested_username: Option<String>,
+    owner_username: &str,
     local_account_summaries: &[DesktopProfileSyncLocalAccountSummary],
 ) -> AppResult<String> {
     if let Some(username) = normalize_owned_string(requested_username) {
@@ -1061,10 +1080,8 @@ fn resolve_current_local_username(
         return Ok(username);
     }
 
-    local_account_summaries
-        .first()
-        .map(|summary| summary.username.clone())
-        .ok_or_else(|| AppError::bad_request("桌面本地帐号列表为空"))
+    ensure_current_local_account(local_account_summaries, owner_username)?;
+    Ok(owner_username.to_string())
 }
 
 fn ensure_current_local_account(
@@ -1366,12 +1383,39 @@ mod tests {
     use serde_json::json;
 
     use super::{
+        apply_profile_sync_api_base_url_to_config_file, ensure_current_local_account,
+        plan_profile_sync_onboarding, preview_onboarding_warnings,
+        rebind_download_store_snapshot_owner, resolve_current_local_username,
         DesktopProfileSyncConflictStrategy, DesktopProfileSyncLocalAccountSummary,
         DesktopProfileSyncOnboardingPlan, DesktopProfileSyncOnboardingPlanItem,
-        DesktopProfileSyncRemoteAccountState, apply_profile_sync_api_base_url_to_config_file,
-        plan_profile_sync_onboarding, preview_onboarding_warnings,
-        rebind_download_store_snapshot_owner,
+        DesktopProfileSyncRemoteAccountState,
     };
+
+    #[test]
+    fn missing_current_local_username_resolves_to_persisted_owner_even_when_users_are_empty() {
+        let summaries = vec![DesktopProfileSyncLocalAccountSummary {
+            username: "custom-owner".to_string(),
+            play_record_count: 0,
+            favorite_count: 0,
+            follow_count: 0,
+            search_history_count: 0,
+            skip_config_count: 0,
+        }];
+
+        assert_eq!(
+            resolve_current_local_username(None, "custom-owner", &summaries)
+                .expect("resolve persisted owner"),
+            "custom-owner"
+        );
+    }
+
+    #[test]
+    fn explicit_missing_current_local_username_is_rejected() {
+        let error = ensure_current_local_account(&[], "missing")
+            .expect_err("reject non-existent explicit user");
+
+        assert_eq!(error.to_string(), "当前本地帐号不存在于桌面帐号列表");
+    }
 
     #[test]
     fn current_local_account_maps_to_current_web_account_and_others_map_by_same_name() {
