@@ -360,6 +360,26 @@ describe('DesktopProfileSyncOnboardingCard', () => {
     expect(await screen.findByText('同步成功')).toBeInTheDocument();
   });
 
+  it('opens the existing onboarding form for an unauthenticated remote sync session instead of sending sync-now', () => {
+    render(
+      <DesktopProfileSyncOnboardingCard
+        currentLocalUsername='local-owner'
+        profileSyncEnabled
+        requiresRemoteLogin
+        selectedSyncDomains={['playrecords']}
+      />
+    );
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '登录并同步' }));
+
+    expect(screen.getByRole('dialog')).toHaveTextContent('登录 Web 帐号并同步');
+    expect(screen.getByLabelText('Web 用户名')).toBeInTheDocument();
+    expect(screen.getByLabelText('Web 密码')).toBeInTheDocument();
+    expect(mockSyncDesktopProfileNow).not.toHaveBeenCalled();
+  });
+
   it('renders a compact warning strip when sync is enabled but still needs attention', () => {
     render(
       <DesktopProfileSyncOnboardingCard

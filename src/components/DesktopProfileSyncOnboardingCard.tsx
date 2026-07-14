@@ -389,12 +389,14 @@ export default function DesktopProfileSyncOnboardingCard({
   profileSyncEnabled,
   selectedSyncDomains = PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS,
   isSyncUnavailable = false,
+  requiresRemoteLogin = false,
   onSyncSuccess,
 }: {
   currentLocalUsername?: string | null;
   profileSyncEnabled: boolean;
   selectedSyncDomains?: readonly ProfileSyncUserDataDomain[];
   isSyncUnavailable?: boolean;
+  requiresRemoteLogin?: boolean;
   onSyncSuccess?: (nextStatus: DesktopProfileSyncManualSyncResponse) => void;
 }) {
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
@@ -638,11 +640,17 @@ export default function DesktopProfileSyncOnboardingCard({
     void handleSyncNow(strategy);
   };
 
-  const actionTitle = profileSyncEnabled ? '已开启帐号同步' : '开启帐号同步';
+  const actionTitle = requiresRemoteLogin
+    ? '登录 Web 帐号并同步'
+    : profileSyncEnabled
+    ? '已开启帐号同步'
+    : '开启帐号同步';
   const actionMessage = syncFeedback?.message
     ? syncFeedback.message
     : isSyncUnavailable
     ? '当前无法读取本地同步状态'
+    : requiresRemoteLogin
+    ? '登录后即可继续同步'
     : profileSyncEnabled
     ? '当前使用 Web 帐号'
     : '当前仍在使用本地模式';
@@ -679,7 +687,7 @@ export default function DesktopProfileSyncOnboardingCard({
             </div>
             <AppButton
               onClick={
-                profileSyncEnabled
+                profileSyncEnabled && !requiresRemoteLogin
                   ? () => openSyncStrategyDialog('sync-now')
                   : () => setIsOnboardingOpen(true)
               }
@@ -693,7 +701,11 @@ export default function DesktopProfileSyncOnboardingCard({
               ) : (
                 <Cloud className='h-4 w-4' />
               )}
-              {profileSyncEnabled ? '同步' : '开启同步'}
+              {requiresRemoteLogin
+                ? '登录并同步'
+                : profileSyncEnabled
+                ? '同步'
+                : '开启同步'}
             </AppButton>
           </div>
         </div>
@@ -718,8 +730,14 @@ export default function DesktopProfileSyncOnboardingCard({
                   <Cloud className='h-5 w-5' />
                 </AppIconBadge>
                 <AppDialogTitleBlock
-                  title='开启帐号同步'
-                  subtitle='在弹窗内完成 Web 登录、迁移预览和正式开通。'
+                  title={
+                    requiresRemoteLogin ? '登录 Web 帐号并同步' : '开启帐号同步'
+                  }
+                  subtitle={
+                    requiresRemoteLogin
+                      ? '在弹窗内完成 Web 登录、迁移预览和同步恢复。'
+                      : '在弹窗内完成 Web 登录、迁移预览和正式开通。'
+                  }
                 />
               </div>
               <AppIconButton

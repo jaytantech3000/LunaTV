@@ -20,17 +20,21 @@ const mockOnboardingCard = jest.fn(
     profileSyncEnabled,
     selectedSyncDomains,
     isSyncUnavailable,
+    requiresRemoteLogin,
   }: {
     currentLocalUsername?: string | null;
     profileSyncEnabled: boolean;
     selectedSyncDomains?: readonly string[];
     isSyncUnavailable?: boolean;
+    requiresRemoteLogin?: boolean;
   }) => (
     <div data-testid='onboarding-card'>
       <div>开启帐号同步</div>
       {`${currentLocalUsername ?? 'null'}|${String(profileSyncEnabled)}|${
         selectedSyncDomains?.join(',') ?? ''
-      }|${String(isSyncUnavailable ?? false)}`}
+      }|${String(isSyncUnavailable ?? false)}|${String(
+        requiresRemoteLogin ?? false
+      )}`}
     </div>
   )
 );
@@ -107,6 +111,7 @@ jest.mock('@/components/DesktopProfileSyncOnboardingCard', () => ({
     profileSyncEnabled: boolean;
     selectedSyncDomains?: readonly string[];
     isSyncUnavailable?: boolean;
+    requiresRemoteLogin?: boolean;
   }) => mockOnboardingCard(props),
 }));
 
@@ -238,6 +243,43 @@ describe('AccountSyncPage', () => {
         'playrecords|false|false'
       );
     });
+  });
+
+  it('keeps the desktop account-sync page usable for a guest and defers remote login until an action', async () => {
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue(null);
+    (getDesktopAuthStatus as jest.Mock).mockRejectedValue(
+      new Error('本地认证状态不可用')
+    );
+    (readDesktopProfileSyncStatusState as jest.Mock).mockResolvedValue({
+      status: {
+        enabled: true,
+        reachable: true,
+        authenticated: false,
+        username: null,
+        role: null,
+        storageType: 'redis',
+        profileMode: 'shared-multi-user',
+        error: null,
+        errorKind: null,
+        syncDomains: null,
+      },
+      error: '',
+    });
+
+    render(<AccountSyncPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-card')).toHaveTextContent(
+        'null|true|playrecords,favorites,follows,searchhistory,skipconfigs|false|true'
+      );
+    });
+
+    expect(screen.getByText('需要处理')).toBeInTheDocument();
+    expect(screen.getByText('帐号：')).toHaveTextContent('帐号：未登录');
+    expect(screen.getByText('开启帐号同步')).toBeInTheDocument();
+    expect(screen.getByTestId('scope-card')).toHaveTextContent(
+      'playrecords,favorites,follows,searchhistory,skipconfigs|false|false'
+    );
   });
 
   it('refreshes the page state on browser auth and runtime refresh events', async () => {

@@ -258,6 +258,9 @@ export default function AccountSyncPage() {
   }, [allowAdminSettings]);
 
   const normalizedProfileSyncStatusError = profileSyncStatusError.trim();
+  const requiresRemoteLogin = Boolean(
+    profileSyncStatus?.enabled && !profileSyncStatus.authenticated
+  );
   const summaryStatusValue = buildAccountSyncSummaryValue(
     profileSyncStatus,
     normalizedProfileSyncStatusError,
@@ -353,6 +356,7 @@ export default function AccountSyncPage() {
                 profileSyncEnabled={Boolean(profileSyncStatus?.enabled)}
                 selectedSyncDomains={selectedSyncDomains}
                 isSyncUnavailable={Boolean(normalizedProfileSyncStatusError)}
+                requiresRemoteLogin={requiresRemoteLogin}
                 onSyncSuccess={handleSyncSuccess}
               />
             </section>
