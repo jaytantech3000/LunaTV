@@ -248,6 +248,161 @@ describe('/api/admin/profile-sync/merge', () => {
     );
   });
 
+  it('merges and replaces only explicitly selected profile domains', async () => {
+    (getAuthInfoFromCookie as jest.Mock).mockReturnValue({
+      username: 'admin',
+    });
+    (getConfig as jest.Mock).mockResolvedValue({
+      UserConfig: {
+        Users: [{ username: 'target-user', role: 'user', banned: false }],
+      },
+    });
+    (db.getAllFavorites as jest.Mock).mockResolvedValue({
+      'remote+1': {
+        title: 'remote favorite',
+        source_name: 'Demo',
+        total_episodes: 12,
+        year: '2026',
+        cover: 'cover.jpg',
+        save_time: 1,
+        search_title: 'remote favorite',
+      },
+    });
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/admin/profile-sync/merge', {
+        method: 'POST',
+        body: JSON.stringify({
+          targetUsername: 'target-user',
+          strategy: 'local-first',
+          domains: ['favorites'],
+          protocolVersion: '1.5',
+          requestId: 'request-123',
+          snapshot: {
+            favorites: {
+              'local+1': {
+                title: 'local favorite',
+                source_name: 'Demo',
+                total_episodes: 12,
+                year: '2026',
+                cover: 'cover.jpg',
+                save_time: 2,
+                search_title: 'local favorite',
+              },
+            },
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      targetUsername: 'target-user',
+      strategy: 'local-first',
+      protocolVersion: '1.5',
+      requestId: 'request-123',
+      summary: {
+        playRecordCount: 0,
+        favoriteCount: 2,
+        followCount: 0,
+        searchHistoryCount: 0,
+        skipConfigCount: 0,
+      },
+    });
+    expect(db.getAllFavorites).toHaveBeenCalledWith('target-user');
+    expect(db.deleteAllFavorites).toHaveBeenCalledWith('target-user');
+    expect(db.saveFavorite).toHaveBeenCalledWith(
+      'target-user',
+      'remote',
+      '1',
+      expect.objectContaining({ title: 'remote favorite' })
+    );
+    expect(db.saveFavorite).toHaveBeenCalledWith(
+      'target-user',
+      'local',
+      '1',
+      expect.objectContaining({ title: 'local favorite' })
+    );
+    expect(db.getAllPlayRecords).not.toHaveBeenCalled();
+    expect(db.deleteAllPlayRecords).not.toHaveBeenCalled();
+    expect(db.savePlayRecord).not.toHaveBeenCalled();
+    expect(db.getAllFollowRecords).not.toHaveBeenCalled();
+    expect(db.deleteAllFollowRecords).not.toHaveBeenCalled();
+    expect(db.saveFollowRecord).not.toHaveBeenCalled();
+    expect(db.getSearchHistory).not.toHaveBeenCalled();
+    expect(db.deleteSearchHistory).not.toHaveBeenCalled();
+    expect(db.addSearchHistory).not.toHaveBeenCalled();
+    expect(db.getAllSkipConfigs).not.toHaveBeenCalled();
+    expect(db.deleteSkipConfig).not.toHaveBeenCalled();
+    expect(db.setSkipConfig).not.toHaveBeenCalled();
+  });
+
+  it('accepts an empty explicit domain selection without profile database calls', async () => {
+    (getAuthInfoFromCookie as jest.Mock).mockReturnValue({
+      username: 'admin',
+    });
+    (getConfig as jest.Mock).mockResolvedValue({
+      UserConfig: {
+        Users: [{ username: 'target-user', role: 'user', banned: false }],
+      },
+    });
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/admin/profile-sync/merge', {
+        method: 'POST',
+        body: JSON.stringify({
+          targetUsername: 'target-user',
+          strategy: 'web-first',
+          domains: [],
+          snapshot: {},
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(db.getAllPlayRecords).not.toHaveBeenCalled();
+    expect(db.getAllFavorites).not.toHaveBeenCalled();
+    expect(db.getAllFollowRecords).not.toHaveBeenCalled();
+    expect(db.getSearchHistory).not.toHaveBeenCalled();
+    expect(db.getAllSkipConfigs).not.toHaveBeenCalled();
+    expect(db.deleteAllPlayRecords).not.toHaveBeenCalled();
+    expect(db.deleteAllFavorites).not.toHaveBeenCalled();
+    expect(db.deleteAllFollowRecords).not.toHaveBeenCalled();
+    expect(db.deleteSearchHistory).not.toHaveBeenCalled();
+    expect(db.deleteSkipConfig).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicit selection whose snapshot omits the selected domain', async () => {
+    (getAuthInfoFromCookie as jest.Mock).mockReturnValue({
+      username: 'admin',
+    });
+    (getConfig as jest.Mock).mockResolvedValue({
+      UserConfig: {
+        Users: [{ username: 'target-user', role: 'user', banned: false }],
+      },
+    });
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/admin/profile-sync/merge', {
+        method: 'POST',
+        body: JSON.stringify({
+          targetUsername: 'target-user',
+          strategy: 'web-first',
+          domains: ['searchHistory'],
+          snapshot: {},
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: '资料快照格式错误',
+    });
+    expect(db.getSearchHistory).not.toHaveBeenCalled();
+    expect(db.deleteSearchHistory).not.toHaveBeenCalled();
+  });
+
   it('ignores owner-only fields from the desktop adminsettings snapshot', async () => {
     (getAuthInfoFromCookie as jest.Mock).mockReturnValue({
       username: 'admin-user',

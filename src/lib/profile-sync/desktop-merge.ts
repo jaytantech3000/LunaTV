@@ -7,6 +7,16 @@ import type {
 
 export type DesktopProfileMergeStrategy = 'web-first' | 'local-first';
 
+export const DESKTOP_PROFILE_DOMAINS = [
+  'playRecords',
+  'favorites',
+  'follows',
+  'searchHistory',
+  'skipConfigs',
+] as const;
+
+export type DesktopProfileDomain = (typeof DESKTOP_PROFILE_DOMAINS)[number];
+
 export interface DesktopProfileSnapshot {
   playRecords: Record<string, PlayRecord>;
   favorites: Record<string, Favorite>;
@@ -77,34 +87,45 @@ export function mergeSearchHistory(
 export function mergeDesktopProfileSnapshot(
   remoteSnapshot: DesktopProfileSnapshot,
   localSnapshot: DesktopProfileSnapshot,
-  strategy: DesktopProfileMergeStrategy
+  strategy: DesktopProfileMergeStrategy,
+  domains: readonly DesktopProfileDomain[] = DESKTOP_PROFILE_DOMAINS
 ): DesktopProfileSnapshot {
   return {
-    playRecords: mergeKeyedDomain(
-      remoteSnapshot.playRecords,
-      localSnapshot.playRecords,
-      strategy
-    ),
-    favorites: mergeKeyedDomain(
-      remoteSnapshot.favorites,
-      localSnapshot.favorites,
-      strategy
-    ),
-    follows: mergeKeyedDomain(
-      remoteSnapshot.follows,
-      localSnapshot.follows,
-      strategy
-    ),
-    searchHistory: mergeSearchHistory(
-      remoteSnapshot.searchHistory,
-      localSnapshot.searchHistory,
-      strategy
-    ),
-    skipConfigs: mergeKeyedDomain(
-      remoteSnapshot.skipConfigs,
-      localSnapshot.skipConfigs,
-      strategy
-    ),
+    playRecords: domains.includes('playRecords')
+      ? mergeKeyedDomain(
+          remoteSnapshot.playRecords,
+          localSnapshot.playRecords,
+          strategy
+        )
+      : {},
+    favorites: domains.includes('favorites')
+      ? mergeKeyedDomain(
+          remoteSnapshot.favorites,
+          localSnapshot.favorites,
+          strategy
+        )
+      : {},
+    follows: domains.includes('follows')
+      ? mergeKeyedDomain(
+          remoteSnapshot.follows,
+          localSnapshot.follows,
+          strategy
+        )
+      : {},
+    searchHistory: domains.includes('searchHistory')
+      ? mergeSearchHistory(
+          remoteSnapshot.searchHistory,
+          localSnapshot.searchHistory,
+          strategy
+        )
+      : [],
+    skipConfigs: domains.includes('skipConfigs')
+      ? mergeKeyedDomain(
+          remoteSnapshot.skipConfigs,
+          localSnapshot.skipConfigs,
+          strategy
+        )
+      : {},
   };
 }
 
