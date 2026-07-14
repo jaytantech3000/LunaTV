@@ -65,7 +65,7 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
               </div>
 
               <div className='flex items-center gap-[0.78rem] pr-1'>
-                <ThemeToggle variant='ghost' />
+                <ThemeToggle />
                 <GlobalRatingFilterControl variant='ghost' />
                 <UserMenu variant='ghost' />
               </div>

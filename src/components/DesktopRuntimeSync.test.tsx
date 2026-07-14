@@ -2,22 +2,8 @@ import { act, render, waitFor } from '@testing-library/react';
 
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 
-const mockGetAuthInfoFromBrowserCookie = jest.fn();
-const mockBuildLoginPath = jest.fn((redirectPath?: string) =>
-  redirectPath
-    ? `/login?redirect=${encodeURIComponent(redirectPath)}`
-    : '/login'
-);
 const mockLoadDesktopProfileBootstrapState = jest.fn();
 const mockGetRuntimeConfig = jest.fn();
-
-jest.mock('@/lib/auth', () => ({
-  getAuthInfoFromBrowserCookie: () => mockGetAuthInfoFromBrowserCookie(),
-}));
-
-jest.mock('@/lib/desktop/auth-session', () => ({
-  buildLoginPath: (redirectPath?: string) => mockBuildLoginPath(redirectPath),
-}));
 
 jest.mock('@/lib/desktop/profile-bootstrap', () => ({
   loadDesktopProfileBootstrapState: (...args: unknown[]) =>
@@ -75,11 +61,6 @@ describe('DesktopRuntimeSync', () => {
     mockGetRuntimeConfig.mockReturnValue({
       APP_TARGET: 'desktop',
     });
-    mockGetAuthInfoFromBrowserCookie.mockReturnValue({
-      username: 'owner',
-      role: 'owner',
-      sessionMode: 'desktop-local',
-    });
   });
 
   afterEach(() => {
@@ -103,6 +84,24 @@ describe('DesktopRuntimeSync', () => {
       preferCachedPayload: true,
     });
     expect(updatedHandler).toHaveBeenCalledTimes(1);
+
+    window.removeEventListener(DESKTOP_RUNTIME_UPDATED_EVENT, updatedHandler);
+  });
+
+  it('keeps unauthenticated desktop visitors on public pages after bootstrap', async () => {
+    const updatedHandler = jest.fn();
+    window.addEventListener(DESKTOP_RUNTIME_UPDATED_EVENT, updatedHandler);
+    mockLoadDesktopProfileBootstrapState.mockResolvedValue(
+      createBootstrapState(true)
+    );
+
+    render(<DesktopRuntimeSync />);
+
+    await waitFor(() => {
+      expect(mockLoadDesktopProfileBootstrapState).toHaveBeenCalledTimes(1);
+    });
+    expect(updatedHandler).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname).not.toBe('/login');
 
     window.removeEventListener(DESKTOP_RUNTIME_UPDATED_EVENT, updatedHandler);
   });

@@ -19,8 +19,7 @@ export function ThemeToggle({ variant = 'default' }: ThemeToggleProps) {
     variant === 'ghost'
       ? 'luna-toolbar-button luna-toolbar-button--ghost'
       : 'luna-toolbar-button';
-  const iconClassName =
-    variant === 'ghost' ? 'h-[1.26rem] w-[1.26rem]' : 'h-full w-full';
+  const iconClassName = 'h-[1.26rem] w-[1.26rem]';
 
   const setThemeColor = (theme?: string) => {
     const meta = document.querySelector('meta[name="theme-color"]');
@@ -47,15 +46,7 @@ export function ThemeToggle({ variant = 'default' }: ThemeToggleProps) {
 
   if (!mounted) {
     // 渲染一个占位符以避免布局偏移
-    return (
-      <div
-        className={
-          variant === 'ghost'
-            ? 'h-[2.06rem] w-[2.06rem]'
-            : 'h-[2.625rem] w-[2.625rem]'
-        }
-      />
-    );
+    return <div className='h-[2.625rem] w-[2.625rem]' />;
   }
 
   const toggleTheme = () => {

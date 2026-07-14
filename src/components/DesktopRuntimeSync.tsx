@@ -2,8 +2,6 @@
 
 import { useEffect } from 'react';
 
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
-import { buildLoginPath } from '@/lib/desktop/auth-session';
 import { loadDesktopProfileBootstrapState } from '@/lib/desktop/profile-bootstrap';
 import {
   DESKTOP_RUNTIME_REFRESH_EVENT,
@@ -13,27 +11,6 @@ import { getRuntimeConfig } from '@/lib/runtime-config';
 
 const INITIAL_REFRESH_MAX_ATTEMPTS = 10;
 const INITIAL_REFRESH_RETRY_DELAY_MS = 1500;
-
-function redirectDesktopLoginIfNeeded() {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  const authInfo = getAuthInfoFromBrowserCookie();
-  if (authInfo?.username) {
-    return;
-  }
-
-  const currentPath = `${window.location.pathname}${window.location.search}`;
-  if (
-    window.location.pathname === '/login' ||
-    window.location.pathname === '/warning'
-  ) {
-    return;
-  }
-
-  window.location.replace(buildLoginPath(currentPath));
-}
 
 async function refreshDesktopRuntimeConfig(options?: {
   preferCachedPayload?: boolean;
@@ -47,7 +24,6 @@ async function refreshDesktopRuntimeConfig(options?: {
     return;
   }
 
-  redirectDesktopLoginIfNeeded();
   window.dispatchEvent(new Event(DESKTOP_RUNTIME_UPDATED_EVENT));
 }
 
