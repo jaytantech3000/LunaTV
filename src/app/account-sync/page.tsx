@@ -27,6 +27,7 @@ import {
 } from '@/lib/profile/contracts';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
+import DesktopPrivilegeGate from '@/components/DesktopPrivilegeGate';
 import DesktopProfileSyncDiagnosticsGrid from '@/components/DesktopProfileSyncDiagnosticsGrid';
 import DesktopProfileSyncOnboardingCard from '@/components/DesktopProfileSyncOnboardingCard';
 import DesktopProfileSyncScopeCard from '@/components/DesktopProfileSyncScopeCard';
@@ -166,6 +167,10 @@ export default function AccountSyncPage() {
     ProfileSyncUserDataDomain[]
   >([...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS]);
   const [syncFeedbackMessage, setSyncFeedbackMessage] = useState('');
+  const [isLocalAuthorizationRequested, setIsLocalAuthorizationRequested] =
+    useState(false);
+  const [hasLocalSyncAuthorization, setHasLocalSyncAuthorization] =
+    useState(false);
 
   useEffect(() => {
     let active = true;
@@ -358,7 +363,21 @@ export default function AccountSyncPage() {
                 isSyncUnavailable={Boolean(normalizedProfileSyncStatusError)}
                 requiresRemoteLogin={requiresRemoteLogin}
                 onSyncSuccess={handleSyncSuccess}
+                authorizationGranted={hasLocalSyncAuthorization}
+                onRequestAuthorization={() => {
+                  setHasLocalSyncAuthorization(false);
+                  setIsLocalAuthorizationRequested(true);
+                }}
               />
+              <DesktopPrivilegeGate
+                open={isLocalAuthorizationRequested}
+                onAuthorized={() => {
+                  setIsLocalAuthorizationRequested(false);
+                  setHasLocalSyncAuthorization(true);
+                }}
+              >
+                <span className='hidden' aria-hidden='true' />
+              </DesktopPrivilegeGate>
             </section>
 
             <DesktopProfileSyncScopeCard

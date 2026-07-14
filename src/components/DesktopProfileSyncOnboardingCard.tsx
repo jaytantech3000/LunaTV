@@ -391,6 +391,8 @@ export default function DesktopProfileSyncOnboardingCard({
   isSyncUnavailable = false,
   requiresRemoteLogin = false,
   onSyncSuccess,
+  onRequestAuthorization,
+  authorizationGranted = false,
 }: {
   currentLocalUsername?: string | null;
   profileSyncEnabled: boolean;
@@ -398,6 +400,8 @@ export default function DesktopProfileSyncOnboardingCard({
   isSyncUnavailable?: boolean;
   requiresRemoteLogin?: boolean;
   onSyncSuccess?: (nextStatus: DesktopProfileSyncManualSyncResponse) => void;
+  onRequestAuthorization?: () => void;
+  authorizationGranted?: boolean;
 }) {
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [remoteBaseUrl, setRemoteBaseUrl] = useState(
@@ -426,6 +430,12 @@ export default function DesktopProfileSyncOnboardingCard({
     tone: 'neutral' | 'success' | 'error';
     message: string;
   } | null>(null);
+
+  useEffect(() => {
+    if (authorizationGranted) {
+      setIsOnboardingOpen(true);
+    }
+  }, [authorizationGranted]);
 
   const normalizedCurrentLocalUsername = currentLocalUsername?.trim() || '';
   const normalizedSelectedSyncDomains = selectedSyncDomains.length
@@ -639,6 +649,15 @@ export default function DesktopProfileSyncOnboardingCard({
     void handleSyncNow(strategy);
   };
 
+  const requestOnboarding = () => {
+    if (onRequestAuthorization) {
+      onRequestAuthorization();
+      return;
+    }
+
+    setIsOnboardingOpen(true);
+  };
+
   const actionTitle = requiresRemoteLogin
     ? '登录 Web 帐号并同步'
     : profileSyncEnabled
@@ -688,7 +707,7 @@ export default function DesktopProfileSyncOnboardingCard({
               onClick={
                 profileSyncEnabled && !requiresRemoteLogin
                   ? () => openSyncStrategyDialog('sync-now')
-                  : () => setIsOnboardingOpen(true)
+                  : () => requestOnboarding()
               }
               disabled={
                 isSyncUnavailable || isPreviewing || isExecuting || isSyncingNow

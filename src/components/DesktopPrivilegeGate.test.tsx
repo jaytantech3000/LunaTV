@@ -4,6 +4,7 @@ const mockGetAuthInfoFromBrowserCookie = jest.fn();
 const mockGetDesktopAuthRequirement = jest.fn();
 const mockLoginDesktopSession = jest.fn();
 const mockGetRuntimeConfig = jest.fn();
+const mockGetDesktopAdminCapability = jest.fn();
 
 jest.mock('@/lib/auth', () => ({
   BROWSER_AUTH_UPDATED_EVENT: 'lunatv:browser-auth-updated',
@@ -19,6 +20,10 @@ jest.mock('@/lib/runtime-config', () => ({
   getRuntimeConfig: () => mockGetRuntimeConfig(),
 }));
 
+jest.mock('@/lib/desktop/admin-capability', () => ({
+  getDesktopAdminCapability: () => mockGetDesktopAdminCapability(),
+}));
+
 import DesktopPrivilegeGate from './DesktopPrivilegeGate';
 
 describe('DesktopPrivilegeGate', () => {
@@ -29,6 +34,7 @@ describe('DesktopPrivilegeGate', () => {
       PROFILE_SYNC_ENABLED: false,
     });
     mockGetAuthInfoFromBrowserCookie.mockReturnValue(null);
+    mockGetDesktopAdminCapability.mockReturnValue(null);
     mockGetDesktopAuthRequirement.mockResolvedValue({
       username: 'admin',
       passwordRequired: true,
@@ -69,6 +75,36 @@ describe('DesktopPrivilegeGate', () => {
       expect(mockLoginDesktopSession).toHaveBeenCalledWith(undefined, 'secret');
     });
     expect(await screen.findByText('管理内容')).toBeInTheDocument();
+  });
+
+  it('does not trust a browser cookie without a native admin capability', async () => {
+    mockGetAuthInfoFromBrowserCookie.mockReturnValue({
+      username: 'owner',
+      role: 'owner',
+    });
+
+    render(
+      <DesktopPrivilegeGate open>
+        <div>管理内容</div>
+      </DesktopPrivilegeGate>
+    );
+
+    expect(await screen.findByText('验证管理员身份')).toBeInTheDocument();
+    expect(screen.queryByText('管理内容')).not.toBeInTheDocument();
+  });
+
+  it('continues an open action with an existing native admin capability', async () => {
+    const onAuthorized = jest.fn();
+    mockGetDesktopAdminCapability.mockReturnValue('owner-capability');
+
+    render(
+      <DesktopPrivilegeGate open onAuthorized={onAuthorized}>
+        <div>管理内容</div>
+      </DesktopPrivilegeGate>
+    );
+
+    expect(await screen.findByText('管理内容')).toBeInTheDocument();
+    await waitFor(() => expect(onAuthorized).toHaveBeenCalledTimes(1));
   });
 
   it('rejects a verified non-admin desktop account', async () => {

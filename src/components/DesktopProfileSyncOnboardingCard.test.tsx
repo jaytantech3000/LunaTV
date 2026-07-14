@@ -426,6 +426,23 @@ describe('DesktopProfileSyncOnboardingCard', () => {
     expect(mockSyncDesktopProfileNow).not.toHaveBeenCalled();
   });
 
+  it('defers opening Web credentials until the local administrator authorization callback succeeds', () => {
+    const requestAuthorization = jest.fn();
+    render(
+      <DesktopProfileSyncOnboardingCard
+        currentLocalUsername='guest'
+        profileSyncEnabled={false}
+        onRequestAuthorization={requestAuthorization}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '开启同步' }));
+
+    expect(requestAuthorization).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(mockPreviewDesktopProfileSyncOnboarding).not.toHaveBeenCalled();
+  });
+
   it('renders a compact warning strip when sync is enabled but still needs attention', () => {
     render(
       <DesktopProfileSyncOnboardingCard

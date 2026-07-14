@@ -3,10 +3,8 @@
 import { ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-import {
-  BROWSER_AUTH_UPDATED_EVENT,
-  getAuthInfoFromBrowserCookie,
-} from '@/lib/auth';
+import { BROWSER_AUTH_UPDATED_EVENT } from '@/lib/auth';
+import { getDesktopAdminCapability } from '@/lib/desktop/admin-capability';
 import {
   getDesktopAuthRequirement,
   loginDesktopSession,
@@ -15,10 +13,14 @@ import { getRuntimeConfig } from '@/lib/runtime-config';
 
 interface DesktopPrivilegeGateProps {
   children: React.ReactNode;
+  open?: boolean;
+  onAuthorized?: () => void;
 }
 
 export default function DesktopPrivilegeGate({
   children,
+  open,
+  onAuthorized,
 }: DesktopPrivilegeGateProps) {
   const [ready, setReady] = useState(false);
   const [authorized, setAuthorized] = useState(false);
@@ -36,8 +38,7 @@ export default function DesktopPrivilegeGate({
         return;
       }
 
-      const auth = getAuthInfoFromBrowserCookie();
-      if (auth?.username && (auth.role === 'owner' || auth.role === 'admin')) {
+      if (getDesktopAdminCapability()) {
         setAuthorized(true);
         setReady(true);
         return;
@@ -57,6 +58,16 @@ export default function DesktopPrivilegeGate({
     return () =>
       window.removeEventListener(BROWSER_AUTH_UPDATED_EVENT, refresh);
   }, []);
+
+  useEffect(() => {
+    if (open && authorized) {
+      onAuthorized?.();
+    }
+  }, [authorized, onAuthorized, open]);
+
+  if (open === false) {
+    return <>{children}</>;
+  }
 
   if (!ready) {
     return (
