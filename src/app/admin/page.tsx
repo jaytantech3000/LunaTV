@@ -48,7 +48,10 @@ import { buildApiUrl } from '@/lib/transport/endpoint';
 import { isAdultSourceCandidate } from '@/lib/yellow';
 
 import DataMigration from '@/components/DataMigration';
+import DesktopPrivilegeGate from '@/components/DesktopPrivilegeGate';
 import PageLayout from '@/components/PageLayout';
+
+import AdminLoading from './loading';
 
 // 统一按钮样式系统
 const buttonStyles = {
@@ -6055,8 +6058,10 @@ function AdminPageClient() {
 
 export default function AdminPage() {
   return (
-    <Suspense>
-      <AdminPageClient />
-    </Suspense>
+    <DesktopPrivilegeGate>
+      <Suspense fallback={<AdminLoading />}>
+        <AdminPageClient />
+      </Suspense>
+    </DesktopPrivilegeGate>
   );
 }
