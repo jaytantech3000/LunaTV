@@ -37,35 +37,49 @@ function getDoubanImageProxyConfig(): {
   };
 }
 
+function isSafeDoubanImageUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      url.hostname.endsWith('.doubanio.com') &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 处理图片 URL，如果设置了图片代理则使用代理
  */
 export function processImageUrl(originalUrl: string): string {
   if (!originalUrl) return originalUrl;
 
-  // 仅处理豆瓣图片代理
-  if (!originalUrl.includes('doubanio.com')) {
+  const normalizedUrl = originalUrl.trim();
+  if (!isSafeDoubanImageUrl(normalizedUrl)) {
     return originalUrl;
   }
 
   const { proxyType, proxyUrl } = getDoubanImageProxyConfig();
   switch (proxyType) {
     case 'server':
-      return buildApiUrl('/image-proxy', { url: originalUrl });
+      return buildApiUrl('/image-proxy', { url: normalizedUrl });
     case 'cmliussss-cdn-tencent':
-      return originalUrl.replace(
+      return normalizedUrl.replace(
         /img\d+\.doubanio\.com/g,
         'img.doubanio.cmliussss.net'
       );
     case 'cmliussss-cdn-ali':
-      return originalUrl.replace(
+      return normalizedUrl.replace(
         /img\d+\.doubanio\.com/g,
         'img.doubanio.cmliussss.com'
       );
     case 'custom':
-      return `${proxyUrl}${encodeURIComponent(originalUrl)}`;
+      return `${proxyUrl}${encodeURIComponent(normalizedUrl)}`;
     default:
-      return buildApiUrl('/image-proxy', { url: originalUrl });
+      return buildApiUrl('/image-proxy', { url: normalizedUrl });
   }
 }
 

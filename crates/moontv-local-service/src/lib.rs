@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     convert::Infallible,
     env, fs,
     io::{Read, Write},
@@ -73,6 +73,7 @@ use url::{Url, form_urlencoded};
 mod content_detail;
 mod content_search;
 mod download_runtime;
+mod image_cache;
 mod image_proxy;
 mod live_proxy;
 mod playback_prefetch;
@@ -100,6 +101,7 @@ use download_runtime::{
     resolve_download_runtime_manifest, resume_download_runtime_task, retry_download_runtime_task,
     schedule_download_runtime_processing, stream_download_runtime_tasks,
 };
+use image_cache::{CachedImage, ImageCache};
 use image_proxy::get_image_proxy;
 use live_proxy::{get_live_key, get_live_logo, get_live_m3u8, get_live_precheck, get_live_segment};
 use profile_sync::{
@@ -336,6 +338,9 @@ pub struct AppState {
     sqlite_path: PathBuf,
     sqlite: DesktopSqlite,
     client: reqwest::Client,
+    image_client: reqwest::Client,
+    image_cache: ImageCache,
+    image_flights: Arc<Mutex<HashMap<String, Arc<ImageFlight>>>>,
     download_engine: Arc<RwLock<DesktopDownloadEngine>>,
     download_engine_snapshot_tx: watch::Sender<DesktopDownloadEngineSnapshot>,
     download_runtime_active_tasks: Arc<Mutex<BTreeSet<String>>>,
@@ -350,6 +355,11 @@ pub struct AppState {
     douban_movie_api_base_url: String,
     douban_search_api_base_url: String,
     live_channels_cache: Arc<RwLock<BTreeMap<String, LiveChannelsCache>>>,
+}
+
+#[derive(Debug)]
+struct ImageFlight {
+    completion_tx: watch::Sender<()>,
 }
 
 impl AppState {
@@ -417,6 +427,12 @@ impl AppState {
                 .unwrap_or_default(),
         );
         let (download_engine_snapshot_tx, _) = watch::channel(download_engine.snapshot());
+        let image_cache = ImageCache::new(&data_dir).with_context(|| {
+            format!(
+                "failed to initialize image cache under {}",
+                data_dir.display()
+            )
+        })?;
 
         Ok(Self {
             host,
@@ -427,6 +443,12 @@ impl AppState {
             sqlite_path,
             sqlite,
             client: reqwest::Client::new(),
+            image_client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("failed to build image proxy http client"),
+            image_cache,
+            image_flights: Arc::new(Mutex::new(HashMap::new())),
             download_engine: Arc::new(RwLock::new(download_engine)),
             download_engine_snapshot_tx,
             download_runtime_active_tasks: Arc::new(Mutex::new(BTreeSet::new())),
@@ -451,6 +473,53 @@ impl AppState {
 
     fn bind_addr(&self) -> String {
         format!("{}:{}", effective_bind_host(&self.host), self.port)
+    }
+
+    fn read_cached_image(&self, url: &str) -> AppResult<Option<CachedImage>> {
+        self.image_cache.get(url).map_err(|error| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to read image cache: {error}"),
+            )
+        })
+    }
+
+    fn write_cached_image(&self, url: &str, image: &CachedImage) -> AppResult<()> {
+        self.image_cache.store(url, image).map_err(|error| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to write image cache: {error}"),
+            )
+        })
+    }
+
+    async fn acquire_image_flight(
+        &self,
+        url: &str,
+    ) -> (Arc<ImageFlight>, Option<watch::Receiver<()>>, bool) {
+        let mut flights = self.image_flights.lock().await;
+        if let Some(flight) = flights.get(url) {
+            return (
+                flight.clone(),
+                Some(flight.completion_tx.subscribe()),
+                false,
+            );
+        }
+        let (completion_tx, _) = watch::channel(());
+        let flight = Arc::new(ImageFlight { completion_tx });
+        flights.insert(url.to_string(), flight.clone());
+        (flight, None, true)
+    }
+
+    async fn release_image_flight(&self, url: &str, flight: &Arc<ImageFlight>) {
+        let mut flights = self.image_flights.lock().await;
+        if flights
+            .get(url)
+            .is_some_and(|active_flight| Arc::ptr_eq(active_flight, flight))
+        {
+            flights.remove(url);
+            flight.completion_tx.send_replace(());
+        }
     }
 
     pub fn with_access_token(mut self, access_token: String) -> Self {
@@ -12868,31 +12937,7 @@ segment0.ts
     }
 
     #[tokio::test]
-    async fn image_proxy_endpoint_fetches_images_through_local_service() {
-        let upstream = spawn_mock_server(Router::new().route(
-            "/cover.jpg",
-            get(|headers: HeaderMap| async move {
-                assert_eq!(
-                    headers.get(REFERER).and_then(|value| value.to_str().ok()),
-                    Some("https://movie.douban.com/")
-                );
-                assert_eq!(
-                    headers
-                        .get(USER_AGENT)
-                        .and_then(|value| value.to_str().ok())
-                        .map(|value| value.contains("Mozilla/5.0")),
-                    Some(true)
-                );
-
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header(CONTENT_TYPE, "image/jpeg")
-                    .header(CONTENT_LENGTH, "4")
-                    .body(Body::from(vec![1_u8, 2, 3, 4]))
-                    .expect("image response")
-            }),
-        ))
-        .await;
+    async fn image_proxy_endpoint_serves_a_cached_douban_image() {
         let temp_dir = TestDir::new();
         let config_path = write_test_config(
             &temp_dir,
@@ -12901,14 +12946,24 @@ segment0.ts
               "api_site": {}
             }),
         );
-        let app = build_router(AppState::new(
+        let image_url = "https://img1.doubanio.com/cover.jpg";
+        let state = AppState::new(
             DEFAULT_HOST.to_string(),
             DEFAULT_PORT,
             config_path,
             temp_dir.path.join("data"),
             temp_dir.path.join("data/moontv.sqlite3"),
-        ));
-        let image_url = format!("{}/cover.jpg", upstream.base_url());
+        );
+        state
+            .write_cached_image(
+                image_url,
+                &CachedImage {
+                    content_type: "image/jpeg".to_string(),
+                    body: vec![1_u8, 2, 3, 4],
+                },
+            )
+            .expect("seed image cache");
+        let app = build_router(state);
 
         let response = app
             .oneshot(
@@ -12942,8 +12997,6 @@ segment0.ts
             .await
             .expect("image proxy body");
         assert_eq!(body.as_ref(), &[1_u8, 2, 3, 4]);
-
-        upstream.abort();
     }
 
     #[tokio::test]
