@@ -1969,13 +1969,14 @@ async fn local_service_access_middleware(
         return next.run(request).await;
     }
 
-    let is_authorized = state.access_token.as_deref().is_some_and(|expected| {
-        request
+    let is_authorized = match state.access_token.as_deref() {
+        None => true,
+        Some(expected) => request
             .headers()
             .get(LOCAL_SERVICE_ACCESS_TOKEN_HEADER)
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|actual| actual == expected)
-    });
+            .is_some_and(|actual| actual == expected),
+    };
     if is_authorized {
         return next.run(request).await;
     }
@@ -7500,13 +7501,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_bind_host_uses_windows_wildcard_for_default_loopback() {
-        assert_eq!(
-            resolve_bind_host(DEFAULT_HOST, true),
-            WINDOWS_WILDCARD_BIND_HOST
-        );
-        assert_eq!(resolve_bind_host(DEFAULT_HOST, false), DEFAULT_HOST);
-        assert_eq!(resolve_bind_host("192.168.1.8", true), "192.168.1.8");
+    fn effective_bind_host_preserves_the_configured_loopback_address() {
+        assert_eq!(effective_bind_host(DEFAULT_HOST), DEFAULT_HOST);
+        assert_eq!(effective_bind_host("192.168.1.8"), "192.168.1.8");
     }
 
     #[test]
@@ -7656,6 +7653,37 @@ mod tests {
             .await
             .expect("authorized response");
         assert_ne!(authorized.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn unconfigured_local_service_keeps_internal_test_routes_available() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile-sync/status")
+                    .body(Body::empty())
+                    .expect("unconfigured access-token request"),
+            )
+            .await
+            .expect("unconfigured access-token response");
+
+        assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]

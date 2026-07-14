@@ -67,7 +67,7 @@ function clearDesktopBootstrapPayload() {
 }
 
 function setDesktopAuthCookie(username = 'desktop-owner') {
-  document.cookie = `auth=${encodeURIComponent(
+  document.cookie = `auth-info=${encodeURIComponent(
     JSON.stringify({
       username,
       sessionMode: 'desktop-local',
@@ -79,6 +79,8 @@ describe('play records client', () => {
   beforeEach(() => {
     localStorage.clear();
     document.cookie = 'auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+    document.cookie =
+      'auth-info=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
     jest.clearAllMocks();
     clearDesktopBootstrapPayload();
     mockedIsDesktopLocalProfileRuntime.mockReturnValue(false);

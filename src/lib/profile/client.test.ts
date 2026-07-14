@@ -107,6 +107,8 @@ import { refreshAllCache } from '@/lib/profile/client';
 describe('profile client cache refresh', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    document.cookie =
+      'auth-info=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
     mockShouldUseProfileApiStorage.mockReturnValue(false);
     mockIsDesktopLocalProfileRuntime.mockReturnValue(false);
     mockEnsureDesktopLocalProfileStoreHydrated.mockResolvedValue(undefined);
@@ -134,7 +136,7 @@ describe('profile client cache refresh', () => {
 
   it('hydrates the local store and refreshes all profile domains through the api path', async () => {
     mockShouldUseProfileApiStorage.mockReturnValue(true);
-    document.cookie = `auth=${encodeURIComponent(
+    document.cookie = `auth-info=${encodeURIComponent(
       JSON.stringify({
         username: 'desktop-owner',
         sessionMode: 'desktop-local',
