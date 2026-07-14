@@ -1360,7 +1360,10 @@ fn extract_profile_sync_api_base_url(config_value: &serde_json::Value) -> Option
         .map(|value| value.to_string())
 }
 
-async fn fetch_local_profile_sync_status(base_url: &str) -> Result<LocalProfileSyncStatus> {
+async fn fetch_local_profile_sync_status(
+    base_url: &str,
+    access_token: &str,
+) -> Result<LocalProfileSyncStatus> {
     let endpoint = reqwest::Url::parse(&format!("{base_url}/"))
         .context("local service base URL is invalid")?
         .join(LOCAL_SERVICE_PROFILE_SYNC_STATUS_PATH.trim_start_matches('/'))
@@ -1368,6 +1371,7 @@ async fn fetch_local_profile_sync_status(base_url: &str) -> Result<LocalProfileS
     let response = reqwest::Client::new()
         .get(endpoint.clone())
         .header(reqwest::header::ACCEPT, "application/json")
+        .header("X-MoonTV-Local-Token", access_token)
         .timeout(Duration::from_secs(3))
         .send()
         .await
@@ -1948,7 +1952,7 @@ async fn run_local_service_diagnostics_impl(
     });
 
     if service_healthy {
-        match fetch_local_profile_sync_status(&base_url).await {
+        match fetch_local_profile_sync_status(&base_url, &state.local_service_access_token).await {
             Ok(profile_sync_status) => {
                 append_profile_sync_status_log_lines(&mut log_lines, &profile_sync_status);
                 findings.push(LocalServiceDiagnosticFinding {
@@ -5477,7 +5481,8 @@ mod tests {
         build_profile_sync_status_diagnostic_detail, collect_diagnostics_error_text,
         describe_primary_port_issue, ensure_default_desktop_owner_auth_value,
         extract_desktop_release_version, extract_profile_sync_api_base_url,
-        find_desktop_release_manifest_url, hash_desktop_password, local_service_health_check,
+        fetch_local_profile_sync_status, find_desktop_release_manifest_url, hash_desktop_password,
+        local_service_health_check,
         normalize_desktop_release_history, normalize_release_repository_slug,
         select_preferred_sidecar_candidates, set_desktop_local_user_password_value,
         set_desktop_owner_password_value, should_reuse_untracked_local_service,
@@ -6025,6 +6030,31 @@ mod tests {
         assert_eq!(result.status_code, Some(200));
         assert!(result.error.is_none());
         assert_eq!(result.version.as_deref(), Some("200.0.1-beta.16"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_profile_sync_status_sends_access_token_header() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test profile sync listener");
+        let address = listener.local_addr().expect("test listener address");
+        let base_url = format!("http://{address}");
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept test request");
+            let mut buffer = [0_u8; 2048];
+            let bytes_read = stream.read(&mut buffer).await.expect("read test request");
+            let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+            assert!(request.contains("x-moontv-local-token: test-access-token"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 57\nconnection: close\n\n{\"enabled\":false,\"reachable\":false,\"authenticated\":false}")
+                .await
+                .expect("write test response");
+        });
+
+        let result = fetch_local_profile_sync_status(&base_url, "test-access-token").await;
+        assert!(result.is_ok());
+        server.await.expect("test server task");
     }
 
     #[tokio::test(flavor = "current_thread")]
