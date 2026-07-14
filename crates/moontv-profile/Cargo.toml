@@ -7,5 +7,6 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 moontv-storage = { path = "../moontv-storage" }
+rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true

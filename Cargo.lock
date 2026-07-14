@@ -2409,6 +2409,7 @@ version = "200.0.1"
 dependencies = [
  "anyhow",
  "moontv-storage",
+ "rand",
  "serde",
  "serde_json",
 ]

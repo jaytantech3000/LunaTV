@@ -1,15 +1,13 @@
 use std::{
     collections::BTreeMap,
-    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
 use moontv_storage::sqlite::{DesktopSqlite, ProfileMutationWrite};
+use rand::RngCore;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-
-static PROFILE_OPERATION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub type PlayRecordMap = BTreeMap<String, PlayRecord>;
 pub type FavoriteMap = BTreeMap<String, Favorite>;
@@ -295,8 +293,13 @@ fn current_timestamp_ms() -> i64 {
 }
 
 fn next_operation_id(device_id: &str, timestamp_ms: i64) -> String {
-    let counter = PROFILE_OPERATION_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{device_id}:{timestamp_ms}:{counter}")
+    let mut random = [0_u8; 16];
+    rand::rng().fill_bytes(&mut random);
+    let random_hex = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{device_id}:{timestamp_ms}:{random_hex}")
 }
 
 #[cfg(test)]

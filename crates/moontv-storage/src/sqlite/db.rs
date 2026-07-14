@@ -292,7 +292,15 @@ impl DesktopSqlite {
                         local_seq, created_at_ms, attempt_count, next_attempt_at_ms,
                         last_error, acked_at_ms
                  FROM profile_outbox
-                 WHERE username = ?1 AND acked_at_ms IS NULL AND next_attempt_at_ms <= ?2
+                 WHERE username = ?1
+                   AND acked_at_ms IS NULL
+                   AND next_attempt_at_ms <= ?2
+                   AND NOT EXISTS (
+                     SELECT 1 FROM profile_outbox earlier
+                     WHERE earlier.username = profile_outbox.username
+                       AND earlier.acked_at_ms IS NULL
+                       AND earlier.local_seq < profile_outbox.local_seq
+                   )
                  ORDER BY local_seq ASC LIMIT ?3",
             )
             .context("failed to prepare profile outbox query")?;
@@ -331,20 +339,16 @@ impl DesktopSqlite {
             .context("failed to count pending profile outbox")
     }
 
-    pub fn mark_profile_outbox_acked(
-        &self,
-        username: &str,
-        through_local_seq: i64,
-        acked_at_ms: i64,
-    ) -> Result<usize> {
+    pub fn mark_profile_outbox_acked(&self, op_id: &str, acked_at_ms: i64) -> Result<bool> {
         let connection = open_connection(&self.path)?;
-        connection
+        let changed = connection
             .execute(
-                "UPDATE profile_outbox SET acked_at_ms = ?3, last_error = NULL
-                 WHERE username = ?1 AND local_seq <= ?2 AND acked_at_ms IS NULL",
-                params![username, through_local_seq, acked_at_ms],
+                "UPDATE profile_outbox SET acked_at_ms = ?2, last_error = NULL
+                 WHERE op_id = ?1 AND acked_at_ms IS NULL",
+                params![op_id, acked_at_ms],
             )
-            .context("failed to acknowledge profile outbox")
+            .context("failed to acknowledge profile outbox operation")?;
+        Ok(changed > 0)
     }
 
     pub fn mark_profile_outbox_failed(
@@ -599,12 +603,20 @@ mod tests {
         let outbox = database
             .list_due_profile_outbox("alice", 20, 10)
             .expect("list outbox");
-        assert_eq!(outbox.len(), 2);
-        assert_eq!(outbox[1].operation, "delete");
+        assert_eq!(outbox.len(), 1);
+        assert_eq!(outbox[0].operation, "upsert");
 
         database
-            .mark_profile_outbox_acked("alice", second_seq, 30)
-            .expect("ack outbox");
+            .mark_profile_outbox_acked("op-1", 25)
+            .expect("ack first outbox operation");
+        let next_outbox = database
+            .list_due_profile_outbox("alice", 25, 10)
+            .expect("list next outbox");
+        assert_eq!(next_outbox.len(), 1);
+        assert_eq!(next_outbox[0].operation, "delete");
+        database
+            .mark_profile_outbox_acked("op-2", 30)
+            .expect("ack second outbox operation");
         assert_eq!(database.pending_profile_outbox_count("alice").unwrap(), 0);
     }
 
