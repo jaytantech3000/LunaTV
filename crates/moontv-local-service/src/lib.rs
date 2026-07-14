@@ -2071,21 +2071,37 @@ async fn shutdown_signal() {
 }
 
 async fn cors_middleware(request: Request, next: Next) -> Response {
+    let request_origin = request
+        .headers()
+        .get(ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     if request.method() == Method::OPTIONS {
         let mut response = StatusCode::NO_CONTENT.into_response();
-        apply_cors_headers(response.headers_mut());
+        apply_cors_headers_for_origin(response.headers_mut(), request_origin.as_deref());
         return response;
     }
 
     let mut response = next.run(request).await;
-    apply_cors_headers(response.headers_mut());
+    apply_cors_headers_for_origin(response.headers_mut(), request_origin.as_deref());
     response
 }
 
 fn apply_cors_headers(headers: &mut HeaderMap) {
+    apply_cors_headers_for_origin(headers, None);
+}
+
+fn apply_cors_headers_for_origin(headers: &mut HeaderMap, request_origin: Option<&str>) {
+    let allowed_origin = match request_origin {
+        Some("tauri://localhost") => "tauri://localhost",
+        Some("https://tauri.localhost") => "https://tauri.localhost",
+        Some("http://tauri.localhost") => "http://tauri.localhost",
+        Some("http://127.0.0.1:3000") => "http://127.0.0.1:3000",
+        _ => "tauri://localhost",
+    };
     headers.insert(
         ACCESS_CONTROL_ALLOW_ORIGIN,
-        HeaderValue::from_static("tauri://localhost"),
+        HeaderValue::from_static(allowed_origin),
     );
     headers.insert(
         ACCESS_CONTROL_ALLOW_METHODS,
@@ -7740,6 +7756,13 @@ mod tests {
             .expect("cors preflight response");
 
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            response
+                .headers()
+                .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+                .and_then(|value| value.to_str().ok()),
+            Some("https://tauri.localhost")
+        );
         let allow_headers = response
             .headers()
             .get(ACCESS_CONTROL_ALLOW_HEADERS)
@@ -7750,6 +7773,45 @@ mod tests {
                 .to_ascii_lowercase()
                 .contains("x-moontv-download-intent"),
             "expected allow headers to include x-moontv-download-intent, got: {allow_headers}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_allows_the_desktop_dev_frontend_origin() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header(ORIGIN, "http://127.0.0.1:3000")
+                    .body(Body::empty())
+                    .expect("desktop dev request"),
+            )
+            .await
+            .expect("desktop dev response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+                .and_then(|value| value.to_str().ok()),
+            Some("http://127.0.0.1:3000")
         );
     }
 
