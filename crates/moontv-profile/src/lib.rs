@@ -1,8 +1,15 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
-use anyhow::Result;
-use moontv_storage::sqlite::DesktopSqlite;
+use anyhow::{Context, Result};
+use moontv_storage::sqlite::{DesktopSqlite, ProfileMutationWrite};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::Value;
+
+static PROFILE_OPERATION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub type PlayRecordMap = BTreeMap<String, PlayRecord>;
 pub type FavoriteMap = BTreeMap<String, Favorite>;
@@ -82,6 +89,35 @@ pub struct LocalProfileSnapshot {
     pub follow_records: FollowRecordMap,
     pub search_history: Vec<String>,
     pub skip_configs: SkipConfigMap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileDomain {
+    PlayRecords,
+    Favorites,
+    Follows,
+    SearchHistory,
+    SkipConfigs,
+}
+
+impl ProfileDomain {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PlayRecords => PLAY_RECORDS_DOMAIN_KEY,
+            Self::Favorites => FAVORITES_DOMAIN_KEY,
+            Self::Follows => FOLLOW_RECORDS_DOMAIN_KEY,
+            Self::SearchHistory => SEARCH_HISTORY_DOMAIN_KEY,
+            Self::SkipConfigs => SKIP_CONFIGS_DOMAIN_KEY,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProfileMutation {
+    Upsert { entity_key: String, value: Value },
+    Delete { entity_key: String },
+    ClearDomain,
+    ReplaceDomain { value: Value },
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +208,57 @@ impl LocalDesktopProfileStore {
         self.clear_domain(username, SKIP_CONFIGS_DOMAIN_KEY)
     }
 
+    pub fn apply_local_mutation_and_enqueue<T>(
+        &self,
+        username: &str,
+        device_id: &str,
+        domain: ProfileDomain,
+        snapshot: &T,
+        mutation: ProfileMutation,
+    ) -> Result<i64>
+    where
+        T: Serialize + ?Sized,
+    {
+        let snapshot_json = serde_json::to_string(snapshot)
+            .context("failed to serialize profile domain snapshot")?;
+        let (entity_key, operation, payload_json) = match mutation {
+            ProfileMutation::Upsert { entity_key, value } => (
+                Some(entity_key),
+                "upsert",
+                Some(serde_json::to_string(&value).context("failed to serialize profile upsert")?),
+            ),
+            ProfileMutation::Delete { entity_key } => (Some(entity_key), "delete", None),
+            ProfileMutation::ClearDomain => (None, "clear-domain", None),
+            ProfileMutation::ReplaceDomain { value } => (
+                None,
+                "replace-domain",
+                Some(
+                    serde_json::to_string(&value)
+                        .context("failed to serialize profile domain replacement")?,
+                ),
+            ),
+        };
+        let timestamp_ms = current_timestamp_ms();
+        let op_id = next_operation_id(device_id, timestamp_ms);
+        let metadata_key = domain_metadata_key(username, domain.as_str());
+        self.sqlite.apply_profile_mutation(ProfileMutationWrite {
+            username,
+            device_id,
+            domain_metadata_key: &metadata_key,
+            domain: domain.as_str(),
+            entity_key: entity_key.as_deref(),
+            operation,
+            snapshot_json: &snapshot_json,
+            payload_json: payload_json.as_deref(),
+            op_id: &op_id,
+            timestamp_ms,
+        })
+    }
+
+    pub fn pending_outbox_count(&self, username: &str) -> Result<u64> {
+        self.sqlite.pending_profile_outbox_count(username)
+    }
+
     fn load_domain<T>(&self, username: &str, domain: &str) -> Result<T>
     where
         T: DeserializeOwned + Default,
@@ -200,6 +287,18 @@ fn domain_metadata_key(username: &str, domain: &str) -> String {
     format!("profile:{username}:{domain}")
 }
 
+fn current_timestamp_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis() as i64
+}
+
+fn next_operation_id(device_id: &str, timestamp_ms: i64) -> String {
+    let counter = PROFILE_OPERATION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{device_id}:{timestamp_ms}:{counter}")
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -209,12 +308,90 @@ mod tests {
     };
 
     use super::{
-        Favorite, FavoriteMap, FollowRecord, FollowRecordMap, LocalDesktopProfileStore,
-        PlayRecord, PlayRecordMap, SkipConfig, SkipConfigMap,
+        Favorite, FavoriteMap, FollowRecord, FollowRecordMap, LocalDesktopProfileStore, PlayRecord,
+        PlayRecordMap, ProfileDomain, ProfileMutation, SkipConfig, SkipConfigMap,
     };
     use moontv_storage::sqlite::DesktopSqlite;
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn local_mutations_enqueue_ordered_operations_and_manage_tombstones() {
+        let temp_dir = TestDir::new();
+        let sqlite =
+            DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite");
+        let store = LocalDesktopProfileStore::new(sqlite);
+        let favorite = Favorite {
+            title: "Demo".to_string(),
+            source_name: "Source".to_string(),
+            year: "2026".to_string(),
+            cover: "cover.jpg".to_string(),
+            total_episodes: 1,
+            save_time: 1,
+            search_title: None,
+            playback_mode: None,
+            offline_content_id: None,
+            is_adult: None,
+            origin: None,
+        };
+        let snapshot = FavoriteMap::from([("demo+1".to_string(), favorite.clone())]);
+
+        let first = store
+            .apply_local_mutation_and_enqueue(
+                "alice",
+                "device-a",
+                ProfileDomain::Favorites,
+                &snapshot,
+                ProfileMutation::Upsert {
+                    entity_key: "demo+1".to_string(),
+                    value: serde_json::to_value(&favorite).unwrap(),
+                },
+            )
+            .expect("queue favorite upsert");
+        let second = store
+            .apply_local_mutation_and_enqueue(
+                "alice",
+                "device-a",
+                ProfileDomain::Favorites,
+                &FavoriteMap::default(),
+                ProfileMutation::Delete {
+                    entity_key: "demo+1".to_string(),
+                },
+            )
+            .expect("queue favorite delete");
+
+        assert_eq!((first, second), (1, 2));
+        assert_eq!(store.pending_outbox_count("alice").unwrap(), 2);
+        assert_eq!(
+            store.load_favorites("alice").unwrap(),
+            FavoriteMap::default()
+        );
+        assert!(
+            store
+                .sqlite()
+                .has_profile_tombstone("alice", "favorites", "demo+1")
+                .unwrap()
+        );
+
+        store
+            .apply_local_mutation_and_enqueue(
+                "alice",
+                "device-a",
+                ProfileDomain::Favorites,
+                &snapshot,
+                ProfileMutation::Upsert {
+                    entity_key: "demo+1".to_string(),
+                    value: serde_json::to_value(&favorite).unwrap(),
+                },
+            )
+            .expect("queue resurrecting upsert");
+        assert!(
+            !store
+                .sqlite()
+                .has_profile_tombstone("alice", "favorites", "demo+1")
+                .unwrap()
+        );
+    }
 
     #[test]
     fn local_profile_store_round_trips_all_domains() {

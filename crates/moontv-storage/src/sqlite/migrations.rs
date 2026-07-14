@@ -5,11 +5,18 @@ pub struct SqliteMigration {
     pub sql: &'static str,
 }
 
-const MIGRATIONS: &[SqliteMigration] = &[SqliteMigration {
-    version: 1,
-    name: "init_desktop_foundation",
-    sql: include_str!("migrations/0001_init.sql"),
-}];
+const MIGRATIONS: &[SqliteMigration] = &[
+    SqliteMigration {
+        version: 1,
+        name: "init_desktop_foundation",
+        sql: include_str!("migrations/0001_init.sql"),
+    },
+    SqliteMigration {
+        version: 2,
+        name: "profile_sync_local_ops",
+        sql: include_str!("migrations/0002_profile_sync_local_ops.sql"),
+    },
+];
 
 pub fn all() -> &'static [SqliteMigration] {
     MIGRATIONS

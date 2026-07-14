@@ -19,6 +19,35 @@ pub struct SqliteDatabaseInfo {
     pub applied_migration_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileOutboxRecord {
+    pub op_id: String,
+    pub username: String,
+    pub domain: String,
+    pub entity_key: Option<String>,
+    pub operation: String,
+    pub payload_json: Option<String>,
+    pub local_seq: i64,
+    pub created_at_ms: i64,
+    pub attempt_count: i64,
+    pub next_attempt_at_ms: i64,
+    pub last_error: Option<String>,
+    pub acked_at_ms: Option<i64>,
+}
+
+pub struct ProfileMutationWrite<'a> {
+    pub username: &'a str,
+    pub device_id: &'a str,
+    pub domain_metadata_key: &'a str,
+    pub domain: &'a str,
+    pub entity_key: Option<&'a str>,
+    pub operation: &'a str,
+    pub snapshot_json: &'a str,
+    pub payload_json: Option<&'a str>,
+    pub op_id: &'a str,
+    pub timestamp_ms: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct DesktopSqlite {
     path: PathBuf,
@@ -152,6 +181,209 @@ impl DesktopSqlite {
             .execute("DELETE FROM app_metadata WHERE metadata_key = ?1", [key])
             .with_context(|| format!("failed to delete app metadata for key {key}"))?;
         Ok(deleted > 0)
+    }
+
+    pub fn apply_profile_mutation(&self, write: ProfileMutationWrite<'_>) -> Result<i64> {
+        let mut connection = open_connection(&self.path)?;
+        let tx = connection
+            .transaction()
+            .context("failed to start profile mutation transaction")?;
+
+        tx.execute(
+            "INSERT INTO profile_sync_state (
+                username, device_id, next_local_seq, updated_at_ms
+             ) VALUES (?1, ?2, 1, ?3)
+             ON CONFLICT(username) DO UPDATE SET
+                device_id = excluded.device_id,
+                updated_at_ms = excluded.updated_at_ms",
+            params![write.username, write.device_id, write.timestamp_ms],
+        )
+        .context("failed to initialize profile sync state")?;
+        let local_seq = tx
+            .query_row(
+                "SELECT next_local_seq FROM profile_sync_state WHERE username = ?1",
+                [write.username],
+                |row| row.get::<_, i64>(0),
+            )
+            .context("failed to read next profile local sequence")?;
+        tx.execute(
+            "UPDATE profile_sync_state
+             SET next_local_seq = ?2, updated_at_ms = ?3
+             WHERE username = ?1",
+            params![write.username, local_seq + 1, write.timestamp_ms],
+        )
+        .context("failed to advance profile local sequence")?;
+        tx.execute(
+            "INSERT INTO app_metadata (metadata_key, value_json, updated_at_ms)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(metadata_key) DO UPDATE SET
+                value_json = excluded.value_json,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                write.domain_metadata_key,
+                write.snapshot_json,
+                write.timestamp_ms
+            ],
+        )
+        .context("failed to persist profile domain snapshot")?;
+        tx.execute(
+            "INSERT INTO profile_outbox (
+                op_id, username, domain, entity_key, operation, payload_json,
+                local_seq, created_at_ms, next_attempt_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            params![
+                write.op_id,
+                write.username,
+                write.domain,
+                write.entity_key,
+                write.operation,
+                write.payload_json,
+                local_seq,
+                write.timestamp_ms
+            ],
+        )
+        .context("failed to enqueue profile mutation")?;
+
+        if let Some(entity_key) = write.entity_key {
+            if write.operation == "delete" {
+                tx.execute(
+                    "INSERT INTO profile_tombstone (
+                        username, domain, entity_key, deleted_at_ms, local_seq, op_id
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     ON CONFLICT(username, domain, entity_key) DO UPDATE SET
+                        deleted_at_ms = excluded.deleted_at_ms,
+                        local_seq = excluded.local_seq,
+                        op_id = excluded.op_id",
+                    params![
+                        write.username,
+                        write.domain,
+                        entity_key,
+                        write.timestamp_ms,
+                        local_seq,
+                        write.op_id
+                    ],
+                )
+                .context("failed to persist profile tombstone")?;
+            } else if write.operation == "upsert" {
+                tx.execute(
+                    "DELETE FROM profile_tombstone
+                     WHERE username = ?1 AND domain = ?2 AND entity_key = ?3",
+                    params![write.username, write.domain, entity_key],
+                )
+                .context("failed to clear profile tombstone")?;
+            }
+        }
+
+        tx.commit()
+            .context("failed to commit profile mutation transaction")?;
+        Ok(local_seq)
+    }
+
+    pub fn list_due_profile_outbox(
+        &self,
+        username: &str,
+        now_ms: i64,
+        limit: usize,
+    ) -> Result<Vec<ProfileOutboxRecord>> {
+        let connection = open_connection(&self.path)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT op_id, username, domain, entity_key, operation, payload_json,
+                        local_seq, created_at_ms, attempt_count, next_attempt_at_ms,
+                        last_error, acked_at_ms
+                 FROM profile_outbox
+                 WHERE username = ?1 AND acked_at_ms IS NULL AND next_attempt_at_ms <= ?2
+                 ORDER BY local_seq ASC LIMIT ?3",
+            )
+            .context("failed to prepare profile outbox query")?;
+        let records = statement
+            .query_map(params![username, now_ms, limit as i64], |row| {
+                Ok(ProfileOutboxRecord {
+                    op_id: row.get(0)?,
+                    username: row.get(1)?,
+                    domain: row.get(2)?,
+                    entity_key: row.get(3)?,
+                    operation: row.get(4)?,
+                    payload_json: row.get(5)?,
+                    local_seq: row.get(6)?,
+                    created_at_ms: row.get(7)?,
+                    attempt_count: row.get(8)?,
+                    next_attempt_at_ms: row.get(9)?,
+                    last_error: row.get(10)?,
+                    acked_at_ms: row.get(11)?,
+                })
+            })
+            .context("failed to query profile outbox")?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("failed to decode profile outbox")?;
+        Ok(records)
+    }
+
+    pub fn pending_profile_outbox_count(&self, username: &str) -> Result<u64> {
+        let connection = open_connection(&self.path)?;
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM profile_outbox
+                 WHERE username = ?1 AND acked_at_ms IS NULL",
+                [username],
+                |row| row.get::<_, u64>(0),
+            )
+            .context("failed to count pending profile outbox")
+    }
+
+    pub fn mark_profile_outbox_acked(
+        &self,
+        username: &str,
+        through_local_seq: i64,
+        acked_at_ms: i64,
+    ) -> Result<usize> {
+        let connection = open_connection(&self.path)?;
+        connection
+            .execute(
+                "UPDATE profile_outbox SET acked_at_ms = ?3, last_error = NULL
+                 WHERE username = ?1 AND local_seq <= ?2 AND acked_at_ms IS NULL",
+                params![username, through_local_seq, acked_at_ms],
+            )
+            .context("failed to acknowledge profile outbox")
+    }
+
+    pub fn mark_profile_outbox_failed(
+        &self,
+        op_id: &str,
+        next_attempt_at_ms: i64,
+        error: &str,
+    ) -> Result<bool> {
+        let connection = open_connection(&self.path)?;
+        let changed = connection
+            .execute(
+                "UPDATE profile_outbox
+                 SET attempt_count = attempt_count + 1,
+                     next_attempt_at_ms = ?2,
+                     last_error = ?3
+                 WHERE op_id = ?1 AND acked_at_ms IS NULL",
+                params![op_id, next_attempt_at_ms, error],
+            )
+            .context("failed to record profile outbox failure")?;
+        Ok(changed > 0)
+    }
+
+    pub fn has_profile_tombstone(
+        &self,
+        username: &str,
+        domain: &str,
+        entity_key: &str,
+    ) -> Result<bool> {
+        let connection = open_connection(&self.path)?;
+        Ok(connection
+            .query_row(
+                "SELECT 1 FROM profile_tombstone
+                 WHERE username = ?1 AND domain = ?2 AND entity_key = ?3",
+                params![username, domain, entity_key],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .context("failed to inspect profile tombstone")?
+            .is_some())
     }
 }
 
@@ -314,6 +546,124 @@ mod tests {
                 .expect("read after clear"),
             None
         );
+    }
+
+    #[test]
+    fn profile_mutation_is_atomic_and_records_outbox_and_tombstones() {
+        let temp_dir = TestDir::new();
+        let database =
+            DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite");
+
+        let first_seq = database
+            .apply_profile_mutation(ProfileMutationWrite {
+                username: "alice",
+                device_id: "device-a",
+                domain_metadata_key: "profile:alice:favorites",
+                domain: "favorites",
+                entity_key: Some("demo+1"),
+                operation: "upsert",
+                snapshot_json: r#"{"demo+1":{"title":"Demo"}}"#,
+                payload_json: Some(r#"{"title":"Demo"}"#),
+                op_id: "op-1",
+                timestamp_ms: 10,
+            })
+            .expect("apply upsert");
+        assert_eq!(first_seq, 1);
+        assert_eq!(database.pending_profile_outbox_count("alice").unwrap(), 1);
+        assert!(
+            !database
+                .has_profile_tombstone("alice", "favorites", "demo+1")
+                .unwrap()
+        );
+
+        let second_seq = database
+            .apply_profile_mutation(ProfileMutationWrite {
+                username: "alice",
+                device_id: "device-a",
+                domain_metadata_key: "profile:alice:favorites",
+                domain: "favorites",
+                entity_key: Some("demo+1"),
+                operation: "delete",
+                snapshot_json: "{}",
+                payload_json: None,
+                op_id: "op-2",
+                timestamp_ms: 20,
+            })
+            .expect("apply delete");
+        assert_eq!(second_seq, 2);
+        assert!(
+            database
+                .has_profile_tombstone("alice", "favorites", "demo+1")
+                .unwrap()
+        );
+        let outbox = database
+            .list_due_profile_outbox("alice", 20, 10)
+            .expect("list outbox");
+        assert_eq!(outbox.len(), 2);
+        assert_eq!(outbox[1].operation, "delete");
+
+        database
+            .mark_profile_outbox_acked("alice", second_seq, 30)
+            .expect("ack outbox");
+        assert_eq!(database.pending_profile_outbox_count("alice").unwrap(), 0);
+    }
+
+    #[test]
+    fn duplicate_operation_rolls_back_snapshot_and_sequence() {
+        let temp_dir = TestDir::new();
+        let database =
+            DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite");
+        database
+            .apply_profile_mutation(ProfileMutationWrite {
+                username: "alice",
+                device_id: "device-a",
+                domain_metadata_key: "profile:alice:favorites",
+                domain: "favorites",
+                entity_key: Some("demo+1"),
+                operation: "upsert",
+                snapshot_json: r#"{"v":1}"#,
+                payload_json: None,
+                op_id: "same-op",
+                timestamp_ms: 10,
+            })
+            .unwrap();
+        assert!(
+            database
+                .apply_profile_mutation(ProfileMutationWrite {
+                    username: "alice",
+                    device_id: "device-a",
+                    domain_metadata_key: "profile:alice:favorites",
+                    domain: "favorites",
+                    entity_key: Some("demo+1"),
+                    operation: "upsert",
+                    snapshot_json: r#"{"v":2}"#,
+                    payload_json: None,
+                    op_id: "same-op",
+                    timestamp_ms: 10,
+                })
+                .is_err()
+        );
+        assert_eq!(
+            database
+                .read_app_metadata::<Value>("profile:alice:favorites")
+                .unwrap(),
+            Some(serde_json::json!({"v": 1}))
+        );
+        let next = database
+            .apply_profile_mutation(ProfileMutationWrite {
+                username: "alice",
+                device_id: "device-a",
+                domain_metadata_key: "profile:alice:favorites",
+                domain: "favorites",
+                entity_key: Some("demo+1"),
+                operation: "upsert",
+                snapshot_json: r#"{"v":3}"#,
+                payload_json: None,
+                op_id: "next-op",
+                timestamp_ms: 20,
+            })
+            .unwrap();
+        assert_eq!(next, 2);
     }
 
     #[test]
