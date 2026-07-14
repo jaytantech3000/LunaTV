@@ -4,8 +4,11 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, header::COOKIE},
     response::Response,
 };
-use moontv_profile::{Favorite, FollowRecord, PlayRecord, SkipConfig};
-use serde::Deserialize;
+use moontv_profile::{
+    Favorite, FollowRecord, LocalDesktopProfileStore, PlayRecord, ProfileDomain, ProfileMutation,
+    SkipConfig,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use url::form_urlencoded;
 
@@ -55,7 +58,7 @@ pub(crate) async fn handle_profile_playrecords(
     state: &AppState,
     request: Request,
 ) -> AppResult<Response> {
-    let username = resolve_local_profile_username(state, request.headers())?;
+    let username = resolve_local_profile_username(state, request.headers()).await?;
     let store = state.profile_store();
 
     match *request.method() {
@@ -76,10 +79,18 @@ pub(crate) async fn handle_profile_playrecords(
             if record.save_time == 0 {
                 record.save_time = current_timestamp_ms() as i64;
             }
-            records.insert(key, record);
-            store
-                .save_play_records(&username, &records)
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            records.insert(key.clone(), record.clone());
+            persist_local_profile_mutation(
+                &store,
+                &username,
+                ProfileDomain::PlayRecords,
+                &records,
+                ProfileMutation::Upsert {
+                    entity_key: key,
+                    value: serde_json::to_value(record)
+                        .map_err(|error| AppError::internal(error.to_string()))?,
+                },
+            )?;
             success_response()
         }
         Method::DELETE => {
@@ -89,13 +100,25 @@ pub(crate) async fn handle_profile_playrecords(
                     .load_play_records(&username)
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 records.remove(&key);
-                store
-                    .save_play_records(&username, &records)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
+                persist_local_profile_mutation(
+                    &store,
+                    &username,
+                    ProfileDomain::PlayRecords,
+                    &records,
+                    ProfileMutation::Delete { entity_key: key },
+                )?;
             } else {
-                store
-                    .clear_play_records(&username)
+                let mut records = store
+                    .load_play_records(&username)
                     .map_err(|error| AppError::internal(error.to_string()))?;
+                records.clear();
+                persist_local_profile_mutation(
+                    &store,
+                    &username,
+                    ProfileDomain::PlayRecords,
+                    &records,
+                    ProfileMutation::ClearDomain,
+                )?;
             }
 
             success_response()
@@ -111,7 +134,7 @@ pub(crate) async fn handle_profile_favorites(
     state: &AppState,
     request: Request,
 ) -> AppResult<Response> {
-    let username = resolve_local_profile_username(state, request.headers())?;
+    let username = resolve_local_profile_username(state, request.headers()).await?;
     let store = state.profile_store();
 
     match *request.method() {
@@ -136,10 +159,18 @@ pub(crate) async fn handle_profile_favorites(
             if favorite.save_time == 0 {
                 favorite.save_time = current_timestamp_ms() as i64;
             }
-            favorites.insert(key, favorite);
-            store
-                .save_favorites(&username, &favorites)
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            favorites.insert(key.clone(), favorite.clone());
+            persist_local_profile_mutation(
+                &store,
+                &username,
+                ProfileDomain::Favorites,
+                &favorites,
+                ProfileMutation::Upsert {
+                    entity_key: key,
+                    value: serde_json::to_value(favorite)
+                        .map_err(|error| AppError::internal(error.to_string()))?,
+                },
+            )?;
             success_response()
         }
         Method::DELETE => {
@@ -149,13 +180,25 @@ pub(crate) async fn handle_profile_favorites(
                     .load_favorites(&username)
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 favorites.remove(&key);
-                store
-                    .save_favorites(&username, &favorites)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
+                persist_local_profile_mutation(
+                    &store,
+                    &username,
+                    ProfileDomain::Favorites,
+                    &favorites,
+                    ProfileMutation::Delete { entity_key: key },
+                )?;
             } else {
-                store
-                    .clear_favorites(&username)
+                let mut favorites = store
+                    .load_favorites(&username)
                     .map_err(|error| AppError::internal(error.to_string()))?;
+                favorites.clear();
+                persist_local_profile_mutation(
+                    &store,
+                    &username,
+                    ProfileDomain::Favorites,
+                    &favorites,
+                    ProfileMutation::ClearDomain,
+                )?;
             }
 
             success_response()
@@ -171,7 +214,7 @@ pub(crate) async fn handle_profile_follows(
     state: &AppState,
     request: Request,
 ) -> AppResult<Response> {
-    let username = resolve_local_profile_username(state, request.headers())?;
+    let username = resolve_local_profile_username(state, request.headers()).await?;
     let store = state.profile_store();
 
     match *request.method() {
@@ -226,10 +269,18 @@ pub(crate) async fn handle_profile_follows(
                 },
             };
 
-            follows.insert(key, follow);
-            store
-                .save_follow_records(&username, &follows)
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            follows.insert(key.clone(), follow.clone());
+            persist_local_profile_mutation(
+                &store,
+                &username,
+                ProfileDomain::Follows,
+                &follows,
+                ProfileMutation::Upsert {
+                    entity_key: key,
+                    value: serde_json::to_value(follow)
+                        .map_err(|error| AppError::internal(error.to_string()))?,
+                },
+            )?;
             success_response()
         }
         Method::DELETE => {
@@ -239,13 +290,25 @@ pub(crate) async fn handle_profile_follows(
                     .load_follow_records(&username)
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 follows.remove(&key);
-                store
-                    .save_follow_records(&username, &follows)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
+                persist_local_profile_mutation(
+                    &store,
+                    &username,
+                    ProfileDomain::Follows,
+                    &follows,
+                    ProfileMutation::Delete { entity_key: key },
+                )?;
             } else {
-                store
-                    .clear_follow_records(&username)
+                let mut follows = store
+                    .load_follow_records(&username)
                     .map_err(|error| AppError::internal(error.to_string()))?;
+                follows.clear();
+                persist_local_profile_mutation(
+                    &store,
+                    &username,
+                    ProfileDomain::Follows,
+                    &follows,
+                    ProfileMutation::ClearDomain,
+                )?;
             }
 
             success_response()
@@ -261,7 +324,7 @@ pub(crate) async fn handle_profile_search_history(
     state: &AppState,
     request: Request,
 ) -> AppResult<Response> {
-    let username = resolve_local_profile_username(state, request.headers())?;
+    let username = resolve_local_profile_username(state, request.headers()).await?;
     let store = state.profile_store();
 
     match *request.method() {
@@ -281,9 +344,16 @@ pub(crate) async fn handle_profile_search_history(
             history.retain(|item| item != &keyword);
             history.insert(0, keyword);
             history.truncate(SEARCH_HISTORY_LIMIT);
-            store
-                .save_search_history(&username, &history)
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            persist_local_profile_mutation(
+                &store,
+                &username,
+                ProfileDomain::SearchHistory,
+                &history,
+                ProfileMutation::ReplaceDomain {
+                    value: serde_json::to_value(&history)
+                        .map_err(|error| AppError::internal(error.to_string()))?,
+                },
+            )?;
             no_store_json_response(&history)
         }
         Method::DELETE => {
@@ -294,13 +364,28 @@ pub(crate) async fn handle_profile_search_history(
                     .load_search_history(&username)
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 history.retain(|item| item != &keyword);
-                store
-                    .save_search_history(&username, &history)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
+                persist_local_profile_mutation(
+                    &store,
+                    &username,
+                    ProfileDomain::SearchHistory,
+                    &history,
+                    ProfileMutation::ReplaceDomain {
+                        value: serde_json::to_value(&history)
+                            .map_err(|error| AppError::internal(error.to_string()))?,
+                    },
+                )?;
             } else {
-                store
-                    .clear_search_history(&username)
+                let mut history = store
+                    .load_search_history(&username)
                     .map_err(|error| AppError::internal(error.to_string()))?;
+                history.clear();
+                persist_local_profile_mutation(
+                    &store,
+                    &username,
+                    ProfileDomain::SearchHistory,
+                    &history,
+                    ProfileMutation::ClearDomain,
+                )?;
             }
 
             success_response()
@@ -316,7 +401,7 @@ pub(crate) async fn handle_profile_skip_configs(
     state: &AppState,
     request: Request,
 ) -> AppResult<Response> {
-    let username = resolve_local_profile_username(state, request.headers())?;
+    let username = resolve_local_profile_username(state, request.headers()).await?;
     let store = state.profile_store();
 
     match *request.method() {
@@ -339,17 +424,23 @@ pub(crate) async fn handle_profile_skip_configs(
             let mut configs = store
                 .load_skip_configs(&username)
                 .map_err(|error| AppError::internal(error.to_string()))?;
-            configs.insert(
-                key,
-                SkipConfig {
-                    enable: payload.config.enable,
-                    intro_time: payload.config.intro_time.max(0),
-                    outro_time: payload.config.outro_time.max(0),
+            let config = SkipConfig {
+                enable: payload.config.enable,
+                intro_time: payload.config.intro_time.max(0),
+                outro_time: payload.config.outro_time.max(0),
+            };
+            configs.insert(key.clone(), config.clone());
+            persist_local_profile_mutation(
+                &store,
+                &username,
+                ProfileDomain::SkipConfigs,
+                &configs,
+                ProfileMutation::Upsert {
+                    entity_key: key,
+                    value: serde_json::to_value(config)
+                        .map_err(|error| AppError::internal(error.to_string()))?,
                 },
-            );
-            store
-                .save_skip_configs(&username, &configs)
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            )?;
             success_response()
         }
         Method::DELETE => {
@@ -360,9 +451,13 @@ pub(crate) async fn handle_profile_skip_configs(
                 .load_skip_configs(&username)
                 .map_err(|error| AppError::internal(error.to_string()))?;
             configs.remove(&key);
-            store
-                .save_skip_configs(&username, &configs)
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            persist_local_profile_mutation(
+                &store,
+                &username,
+                ProfileDomain::SkipConfigs,
+                &configs,
+                ProfileMutation::Delete { entity_key: key },
+            )?;
             success_response()
         }
         _ => Err(AppError::new(
@@ -372,10 +467,26 @@ pub(crate) async fn handle_profile_skip_configs(
     }
 }
 
-fn resolve_local_profile_username(state: &AppState, headers: &HeaderMap) -> AppResult<String> {
+pub(crate) fn is_desktop_profile_sync_cookie(headers: &HeaderMap) -> bool {
+    extract_auth_cookie_payload(headers)
+        .and_then(|payload| payload.session_mode)
+        .as_deref()
+        == Some("desktop-profile-sync")
+}
+
+async fn resolve_local_profile_username(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> AppResult<String> {
     if let Some(payload) = extract_auth_cookie_payload(headers) {
         if payload.session_mode.as_deref() == Some("desktop-profile-sync") {
-            return Err(AppError::new(StatusCode::UNAUTHORIZED, "Unauthorized"));
+            return state
+                .profile_sync_session
+                .read()
+                .await
+                .as_ref()
+                .and_then(|session| normalize_optional_string(Some(session.username.clone())))
+                .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, "Unauthorized"));
         }
 
         let username = normalize_optional_string(payload.username)
@@ -391,6 +502,25 @@ fn resolve_local_profile_username(state: &AppState, headers: &HeaderMap) -> AppR
     }
 
     Err(AppError::new(StatusCode::UNAUTHORIZED, "Unauthorized"))
+}
+
+fn persist_local_profile_mutation<T>(
+    store: &LocalDesktopProfileStore,
+    username: &str,
+    domain: ProfileDomain,
+    snapshot: &T,
+    mutation: ProfileMutation,
+) -> AppResult<()>
+where
+    T: Serialize + ?Sized,
+{
+    let device_id = store
+        .get_or_create_device_id()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    store
+        .apply_local_mutation_and_enqueue(username, &device_id, domain, snapshot, mutation)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(())
 }
 
 fn validate_local_profile_user(state: &AppState, username: &str) -> AppResult<()> {

@@ -7488,11 +7488,11 @@ mod tests {
         );
         assert_eq!(
             payload.get("sqlite_schema_version"),
-            Some(&Value::Number(1.into()))
+            Some(&Value::Number(2.into()))
         );
         assert_eq!(
             payload.get("sqlite_migration_count"),
-            Some(&Value::Number(1.into()))
+            Some(&Value::Number(2.into()))
         );
         assert_eq!(
             payload.get("version"),
@@ -10011,6 +10011,112 @@ segment0.ts
         assert!(owner_snapshot.follow_records.is_empty());
         assert!(owner_snapshot.search_history.is_empty());
         assert!(owner_snapshot.skip_configs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn profile_sync_session_uses_local_favorites_when_remote_is_unreachable() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "profile_sync": {
+                "api_base_url": "http://127.0.0.1:1"
+              },
+              "api_site": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+            username: "remote-user".to_string(),
+            role: "user".to_string(),
+        });
+        let app = build_router(state.clone());
+        let sync_cookie =
+            build_test_auth_cookie("ignored-cookie-user", "user", "desktop-profile-sync");
+
+        let post_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/favorites")
+                    .header("cookie", sync_cookie.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "key": "demo+1",
+                          "favorite": {
+                            "title": "Remote Session Favorite",
+                            "source_name": "Demo Source",
+                            "year": "2026",
+                            "cover": "favorite.jpg",
+                            "total_episodes": 24,
+                            "save_time": 20,
+                            "search_title": null,
+                            "playback_mode": null,
+                            "offline_content_id": null,
+                            "is_adult": false,
+                            "origin": null
+                          }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("local profile favorite post request"),
+            )
+            .await
+            .expect("local profile favorite post response");
+        assert_eq!(post_response.status(), StatusCode::OK);
+
+        let get_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/favorites?key=demo%2B1")
+                    .header("cookie", sync_cookie.clone())
+                    .body(Body::empty())
+                    .expect("local profile favorite get request"),
+            )
+            .await
+            .expect("local profile favorite get response");
+        assert_eq!(get_response.status(), StatusCode::OK);
+        let get_payload = read_json_body(get_response).await;
+        assert_eq!(
+            get_payload.get("title").and_then(Value::as_str),
+            Some("Remote Session Favorite")
+        );
+
+        let delete_response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/api/favorites?key=demo%2B1")
+                    .header("cookie", sync_cookie)
+                    .body(Body::empty())
+                    .expect("local profile favorite delete request"),
+            )
+            .await
+            .expect("local profile favorite delete response");
+        assert_eq!(delete_response.status(), StatusCode::OK);
+        assert!(
+            state
+                .profile_store()
+                .load_favorites("remote-user")
+                .expect("load locally persisted favorites")
+                .is_empty()
+        );
+        assert_eq!(
+            state
+                .profile_store()
+                .pending_outbox_count("remote-user")
+                .expect("load local profile outbox"),
+            2
+        );
     }
 
     #[tokio::test]

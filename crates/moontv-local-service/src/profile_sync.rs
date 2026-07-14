@@ -207,6 +207,10 @@ macro_rules! define_profile_user_data_proxy {
             State(state): State<AppState>,
             request: Request,
         ) -> AppResult<Response> {
+            if profile_local::is_desktop_profile_sync_cookie(request.headers()) {
+                return profile_local::$local_handler(&state, request).await;
+            }
+
             if should_proxy_profile_user_data(&state)? {
                 return proxy_profile_sync_passthrough(&state, request).await;
             }
