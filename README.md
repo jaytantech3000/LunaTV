@@ -42,6 +42,7 @@
 ## 🗺 目录
 
 - [技术栈](#技术栈)
+- [开发环境与可复现安装](#开发环境与可复现安装)
 - [分支约束](#分支约束)
 - [部署](#部署)
   - [一键部署](#zeabur-一键部署)
@@ -68,6 +69,24 @@
 | 播放器    | [ArtPlayer](https://github.com/zhw2590582/ArtPlayer) · [HLS.js](https://github.com/video-dev/hls.js/) |
 | 代码质量  | ESLint · Prettier · Jest                                                                              |
 | 部署      | Docker                                                                                                |
+
+## 开发环境与可复现安装
+
+- 使用 Node.js `v20.10.0`（见 [`.nvmrc`](.nvmrc)）。
+- 使用 Corepack 激活项目固定的 `pnpm@10.14.0`，不要依赖全局 pnpm：
+
+  ```sh
+  corepack enable
+  corepack prepare pnpm@10.14.0 --activate
+  pnpm install --frozen-lockfile
+  ```
+
+- 所有依赖安装都应使用 `--frozen-lockfile`，以确保 `pnpm-lock.yaml` 与已安装依赖完全一致；锁文件不匹配时应修复锁文件，而不是在安装时自动改写它。
+- 如果当前机器的 Corepack shim 已损坏（例如找不到 `corepack.js`），可临时使用 npm 获取同一固定版本，而无需修改项目配置：
+
+  ```sh
+  npm exec --yes --package=pnpm@10.14.0 -- pnpm install --frozen-lockfile
+  ```
 
 ## 分支约束
 
