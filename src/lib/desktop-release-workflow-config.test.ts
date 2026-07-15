@@ -17,6 +17,31 @@ describe('desktop release workflow config', () => {
     expect(workflow).toContain('name: Release Desktop App');
   });
 
+  it('runs the CSP contract as a release preflight before any public release can exist', () => {
+    const workflow = readProjectFile('.github/workflows/desktop-release.yml');
+
+    expect(workflow).toContain('csp_preflight:');
+    expect(workflow).toContain('name: Validate Tauri CSP Contract');
+    expect(workflow).toContain('run: pnpm check:tauri-csp');
+    expect(workflow).toMatch(
+      /ensure_release:\s*[\s\S]*?needs:\s*csp_preflight/
+    );
+    expect(workflow).toMatch(
+      /publish_release:\s*[\s\S]*?needs:\s*ensure_release/
+    );
+  });
+
+  it('keeps CSP validation as the first executable release-build command', () => {
+    const workflow = readProjectFile('.github/workflows/desktop-release.yml');
+    const publishRelease = workflow.slice(
+      workflow.indexOf('  publish_release:')
+    );
+
+    expect(publishRelease).toMatch(
+      /- name: Install dependencies[\s\S]*?- name: Validate Tauri CSP contract[\s\S]*?run: pnpm check:tauri-csp[\s\S]*?- name: Sync desktop version/
+    );
+  });
+
   it('removes internal-only tauri release overrides', () => {
     expect(
       existsSync(
@@ -31,6 +56,19 @@ describe('desktop release workflow config', () => {
         )
       )
     ).toBe(false);
+  });
+
+  it('keeps Windows overlay configs free of app.security overrides', () => {
+    for (const relativePath of [
+      'src-tauri/tauri.windows.conf.json',
+      'src-tauri/tauri.windows.ci.conf.json',
+    ]) {
+      const config = JSON.parse(readProjectFile(relativePath)) as {
+        app?: { security?: unknown };
+      };
+
+      expect(config.app?.security).toBeUndefined();
+    }
   });
 
   it('documents only the public desktop release flow', () => {

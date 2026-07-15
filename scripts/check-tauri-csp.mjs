@@ -1,113 +1,139 @@
 #!/usr/bin/env node
 
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const configPath = resolve('src-tauri/tauri.conf.json');
 const config = JSON.parse(await readFile(configPath, 'utf8'));
 const security = config.app?.security;
+const tauriConfigDirectory = resolve('src-tauri');
 
-if (!security || typeof security.csp !== 'object' || security.csp === null) {
-  throw new Error(
-    'Expected app.security.csp to be a structured production CSP.'
-  );
-}
+const CANONICAL_PRODUCTION_CSP = {
+  'base-uri': ["'self'"],
+  'connect-src': [
+    "'self'",
+    'ipc:',
+    'http://ipc.localhost',
+    'http://127.0.0.1:8787',
+    'http:',
+    'https:',
+  ],
+  'default-src': ["'self'"],
+  'font-src': ["'self'"],
+  'form-action': ["'self'"],
+  'frame-ancestors': ["'none'"],
+  'frame-src': ["'none'"],
+  'img-src': ["'self'", 'data:', 'blob:', 'http:', 'https:'],
+  'manifest-src': ["'self'"],
+  'media-src': ["'self'", 'blob:', 'http:', 'https:'],
+  'object-src': ["'none'"],
+  'script-src': ["'self'"],
+  'style-src': ["'self'", "'unsafe-inline'"],
+  'worker-src': ["'self'", 'blob:'],
+};
 
-if (
-  !security.devCsp ||
-  typeof security.devCsp !== 'object' ||
-  security.devCsp === null
-) {
-  throw new Error(
-    'Expected app.security.devCsp to be a structured development CSP.'
-  );
-}
+const CANONICAL_DEVELOPMENT_CSP = {
+  ...CANONICAL_PRODUCTION_CSP,
+  'connect-src': [
+    ...CANONICAL_PRODUCTION_CSP['connect-src'],
+    'ws://127.0.0.1:3000',
+  ],
+  'script-src': ["'self'", "'unsafe-eval'", "'unsafe-inline'"],
+};
 
-const productionScriptSources = security.csp['script-src'] ?? [];
-if (productionScriptSources.includes("'unsafe-eval'")) {
-  throw new Error('Production script-src must not allow unsafe-eval.');
-}
-
-if (productionScriptSources.includes("'unsafe-inline'")) {
-  throw new Error('Production script-src must not allow unsafe-inline.');
-}
-
-if (!(security.csp['style-src'] ?? []).includes("'unsafe-inline'")) {
-  throw new Error(
-    'Production style-src must retain unsafe-inline for audited React style attributes.'
-  );
-}
-
-for (const directive of [
-  'base-uri',
-  'connect-src',
-  'default-src',
-  'font-src',
-  'form-action',
-  'frame-ancestors',
-  'img-src',
-  'manifest-src',
-  'media-src',
-  'object-src',
-  'script-src',
-  'style-src',
-  'worker-src',
-]) {
-  if (!Array.isArray(security.csp[directive])) {
-    throw new Error(`Production CSP must define ${directive}.`);
+function assertCanonicalPolicy(policyName, actual, expected) {
+  if (!actual || typeof actual !== 'object' || Array.isArray(actual)) {
+    throw new Error(
+      `Expected app.security.${policyName} to be a structured CSP.`
+    );
   }
-}
 
-for (const [directive, source] of [
-  ['connect-src', 'ipc:'],
-  ['connect-src', 'http://ipc.localhost'],
-  ['connect-src', 'http://127.0.0.1:8787'],
-  ['img-src', 'data:'],
-  ['img-src', 'blob:'],
-  ['media-src', 'blob:'],
-  ['worker-src', 'blob:'],
-]) {
-  if (!(security.csp[directive] ?? []).includes(source)) {
-    throw new Error(`Production ${directive} must include ${source}.`);
+  const actualDirectives = Object.keys(actual).sort();
+  const expectedDirectives = Object.keys(expected).sort();
+
+  if (JSON.stringify(actualDirectives) !== JSON.stringify(expectedDirectives)) {
+    throw new Error(
+      `${policyName} must define exactly the canonical directive set; expected ${expectedDirectives.join(
+        ', '
+      )} but found ${actualDirectives.join(', ')}.`
+    );
   }
-}
 
-for (const directive of ['connect-src', 'img-src', 'media-src']) {
-  for (const source of ['http:', 'https:']) {
-    if (!(security.csp[directive] ?? []).includes(source)) {
+  for (const directive of expectedDirectives) {
+    const actualSources = actual[directive];
+    const expectedSources = expected[directive];
+
+    if (!Array.isArray(actualSources)) {
       throw new Error(
-        `Production ${directive} must retain ${source} for configurable upstream services.`
+        `${policyName} ${directive} must be an array of sources.`
+      );
+    }
+
+    if (new Set(actualSources).size !== actualSources.length) {
+      throw new Error(
+        `${policyName} ${directive} must not contain duplicate sources.`
+      );
+    }
+
+    const sortedActualSources = [...actualSources].sort();
+    const sortedExpectedSources = [...expectedSources].sort();
+
+    if (
+      JSON.stringify(sortedActualSources) !==
+      JSON.stringify(sortedExpectedSources)
+    ) {
+      throw new Error(
+        `${policyName} ${directive} must equal the canonical sources ${expectedSources.join(
+          ' '
+        )}.`
       );
     }
   }
 }
 
-if ((security.csp['frame-ancestors'] ?? []).join(' ') !== "'none'") {
-  throw new Error('Production frame-ancestors must be none.');
+if (!security || typeof security !== 'object' || Array.isArray(security)) {
+  throw new Error('Expected app.security to be an object.');
 }
 
-if ((security.csp['object-src'] ?? []).join(' ') !== "'none'") {
-  throw new Error('Production object-src must be none.');
-}
+assertCanonicalPolicy('csp', security.csp, CANONICAL_PRODUCTION_CSP);
+assertCanonicalPolicy('devCsp', security.devCsp, CANONICAL_DEVELOPMENT_CSP);
 
-const developmentScriptSources = security.devCsp['script-src'] ?? [];
-for (const source of ["'unsafe-eval'", "'unsafe-inline'"]) {
-  if (!developmentScriptSources.includes(source)) {
-    throw new Error(
-      `Development script-src must include ${source} for Next HMR.`
-    );
-  }
-}
-
-const developmentConnectSources = security.devCsp['connect-src'] ?? [];
-if (!developmentConnectSources.includes('ws://127.0.0.1:3000')) {
+if (Object.hasOwn(security, 'dangerousDisableAssetCspModification')) {
   throw new Error(
-    'Development connect-src must include ws://127.0.0.1:3000 for Next HMR.'
+    'Production must not configure dangerousDisableAssetCspModification.'
   );
 }
 
-if (security.dangerousDisableAssetCspModification) {
-  throw new Error('Tauri asset CSP modification must remain enabled.');
+const headers = security.headers;
+if (headers !== undefined) {
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) {
+    throw new Error('app.security.headers must be an object when configured.');
+  }
+
+  for (const headerName of Object.keys(headers)) {
+    if (headerName.toLowerCase() === 'content-security-policy') {
+      throw new Error(
+        'app.security.headers must not define a Content-Security-Policy header that could override the canonical CSP.'
+      );
+    }
+  }
+}
+
+const overlayConfigNames = (await readdir(tauriConfigDirectory)).filter(
+  (fileName) =>
+    /^tauri(?:\.[^.]+)*\.conf\.json$/.test(fileName) &&
+    fileName !== 'tauri.conf.json'
+);
+
+for (const overlayConfigName of overlayConfigNames) {
+  const overlayConfigPath = resolve(tauriConfigDirectory, overlayConfigName);
+  const overlayConfig = JSON.parse(await readFile(overlayConfigPath, 'utf8'));
+
+  if (Object.hasOwn(overlayConfig.app ?? {}, 'security')) {
+    throw new Error(
+      `${overlayConfigName} must not define app.security; overlays must inherit the canonical CSP from tauri.conf.json.`
+    );
+  }
 }
 
 console.log('Tauri CSP contract passed.');

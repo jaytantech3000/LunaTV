@@ -36,6 +36,7 @@
         "font-src": ["'self'"],
         "form-action": ["'self'"],
         "frame-ancestors": ["'none'"],
+        "frame-src": ["'none'"],
         "img-src": ["'self'", "data:", "blob:", "http:", "https:"],
         "manifest-src": ["'self'"],
         "media-src": ["'self'", "blob:", "http:", "https:"],
@@ -59,6 +60,7 @@
         "font-src": ["'self'"],
         "form-action": ["'self'"],
         "frame-ancestors": ["'none'"],
+        "frame-src": ["'none'"],
         "img-src": ["'self'", "data:", "blob:", "http:", "https:"],
         "manifest-src": ["'self'"],
         "media-src": ["'self'", "blob:", "http:", "https:"],
@@ -92,8 +94,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "binaries/moontv-local-service"
-    ]
+    "externalBin": ["binaries/moontv-local-service"]
   }
 }
