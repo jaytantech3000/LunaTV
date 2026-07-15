@@ -2,6 +2,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import ts from 'typescript';
 
 import { readDesktopReleaseMetadata } from './desktop-release-utils.mjs';
 
@@ -44,6 +45,83 @@ function getDesktopReleaseProxyBaseUrl() {
   );
 }
 
+function isJsonPropertyNamed(property, name) {
+  return (
+    ts.isPropertyAssignment(property) &&
+    ((ts.isIdentifier(property.name) && property.name.text === name) ||
+      (ts.isStringLiteral(property.name) && property.name.text === name))
+  );
+}
+
+function readUniqueJsonProperty(object, name, pathDescription, filePath) {
+  const properties = object.properties.filter((property) =>
+    isJsonPropertyNamed(property, name)
+  );
+
+  if (properties.length !== 1) {
+    const problem = properties.length === 0 ? 'missing' : 'duplicate';
+    throw new Error(
+      `Could not resolve an unambiguous ${pathDescription}.${name} in ${filePath}: ${problem} property`
+    );
+  }
+
+  return properties[0].initializer;
+}
+
+function readUpdaterEndpointsField(filePath, content) {
+  try {
+    JSON.parse(content);
+  } catch {
+    throw new Error(`Could not parse strict JSON in ${filePath}`);
+  }
+
+  const sourceFile = ts.parseJsonText(filePath, content);
+  if (sourceFile.parseDiagnostics.length > 0) {
+    throw new Error(`Could not parse JSON in ${filePath}`);
+  }
+
+  const rootObject = sourceFile.statements[0]?.expression;
+  if (!rootObject || !ts.isObjectLiteralExpression(rootObject)) {
+    throw new Error(`Could not resolve an unambiguous plugins structure in ${filePath}`);
+  }
+
+  const plugins = readUniqueJsonProperty(rootObject, 'plugins', 'root', filePath);
+  if (!ts.isObjectLiteralExpression(plugins)) {
+    throw new Error(`Invalid plugins structure in ${filePath}: expected an object`);
+  }
+
+  const updater = readUniqueJsonProperty(plugins, 'updater', 'plugins', filePath);
+  if (!ts.isObjectLiteralExpression(updater)) {
+    throw new Error(
+      `Invalid plugins.updater structure in ${filePath}: expected an object`
+    );
+  }
+
+  const endpoints = readUniqueJsonProperty(
+    updater,
+    'endpoints',
+    'plugins.updater',
+    filePath
+  );
+  if (!ts.isArrayLiteralExpression(endpoints)) {
+    throw new Error(
+      `Invalid plugins.updater.endpoints structure in ${filePath}: expected an array`
+    );
+  }
+
+  if (!endpoints.elements.every(ts.isStringLiteral)) {
+    throw new Error(
+      `Invalid plugins.updater.endpoints structure in ${filePath}: expected string endpoints`
+    );
+  }
+
+  return {
+    end: endpoints.end,
+    start: endpoints.getStart(sourceFile),
+    values: endpoints.elements.map((element) => element.text),
+  };
+}
+
 async function main() {
   const projectRoot = process.cwd();
   const configPath = path.join(projectRoot, 'src-tauri', 'tauri.conf.json');
@@ -61,31 +139,21 @@ async function main() {
     new Set([directEndpoint, proxyEndpoint].filter(Boolean))
   );
   const content = await fs.readFile(configPath, 'utf8');
-  const config = JSON.parse(content);
-  const currentEndpoints = config.plugins?.updater?.endpoints;
+  const currentEndpoints = readUpdaterEndpointsField(configPath, content);
 
   if (
-    Array.isArray(currentEndpoints) &&
-    currentEndpoints.length === endpoints.length &&
-    currentEndpoints.every((endpoint, index) => endpoint === endpoints[index])
+    currentEndpoints.values.length === endpoints.length &&
+    currentEndpoints.values.every((endpoint, index) => endpoint === endpoints[index])
   ) {
     console.log(`Synced updater endpoints: ${endpoints.join(', ')}`);
     return;
   }
 
-  if (!config.plugins) {
-    config.plugins = {};
-  }
-
-  if (!config.plugins.updater) {
-    config.plugins.updater = {};
-  }
-
-  config.plugins.updater.endpoints = endpoints;
-
   await fs.writeFile(
     configPath,
-    `${JSON.stringify(config, null, 2)}\n`,
+    `${content.slice(0, currentEndpoints.start)}${JSON.stringify(
+      endpoints
+    )}${content.slice(currentEndpoints.end)}`,
     'utf8'
   );
 

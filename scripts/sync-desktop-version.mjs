@@ -110,8 +110,12 @@ function readVersionModuleField(filePath, content) {
     );
   });
 
+  if (versionDeclarations.length === 0) {
+    return null;
+  }
+
   if (
-    versionDeclarations.length !== 1 ||
+    versionDeclarations.length > 1 ||
     !ts.isStringLiteral(versionDeclarations[0].initializer)
   ) {
     throw new Error(
@@ -130,10 +134,8 @@ function readVersionModuleField(filePath, content) {
 }
 
 function planVersionModule(filePath, currentContent, version) {
-  let versionField;
-  try {
-    versionField = readVersionModuleField(filePath, currentContent);
-  } catch {
+  const versionField = readVersionModuleField(filePath, currentContent);
+  if (!versionField) {
     const eol = currentContent.includes('\r\n') ? '\r\n' : '\n';
     return [
       '/* eslint-disable no-console */',

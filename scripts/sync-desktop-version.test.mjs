@@ -229,17 +229,150 @@ await withFixture('1.2.3', async (fixtureRoot) => {
 
 await withFixture('1.2.3', async (fixtureRoot) => {
   const versionModulePath = path.join(fixtureRoot, 'src/lib/version.ts');
-  const conflictingVersionModule =
-    "export const CURRENT_VERSION = '1.2.3';\r\nexport const CURRENT_VERSION = '2.3.4';\r\n";
+  const missingVersionModule = '// create a canonical version module\r\n';
 
-  await writeFile(versionModulePath, conflictingVersionModule, 'utf8');
+  await writeFile(versionModulePath, missingVersionModule, 'utf8');
 
   const result = runSync(fixtureRoot);
-  const updatedVersionModule = await readFile(versionModulePath, 'utf8');
 
   assert.equal(result.status, 0, result.stderr);
-  assert.notEqual(updatedVersionModule, conflictingVersionModule);
-  assert.match(updatedVersionModule, /CURRENT_VERSION = '1\.2\.3'/);
+  assert.equal(
+    await readFile(versionModulePath, 'utf8'),
+    [
+      '/* eslint-disable no-console */',
+      '',
+      "const CURRENT_VERSION = '1.2.3';",
+      '',
+      'export { CURRENT_VERSION };',
+      '',
+    ].join('\r\n'),
+    'a missing CURRENT_VERSION must create the canonical module with its existing EOL style'
+  );
+});
+
+for (const { name, content } of [
+  {
+    name: 'duplicate CURRENT_VERSION declarations',
+    content:
+      "export const CURRENT_VERSION = '1.2.3';\r\nexport const CURRENT_VERSION = '2.3.4';\r\n",
+  },
+  {
+    name: 'non-string CURRENT_VERSION initializer',
+    content: 'export const CURRENT_VERSION = 123;\r\n',
+  },
+  {
+    name: 'malformed CURRENT_VERSION source',
+    content: 'export const CURRENT_VERSION = ;\r\n',
+  },
+]) {
+  await withFixture('1.2.3', async (fixtureRoot) => {
+    const versionModulePath = path.join(fixtureRoot, 'src/lib/version.ts');
+
+    await writeFile(versionModulePath, content, 'utf8');
+
+    const before = await snapshotTargets(fixtureRoot);
+    const result = runSync(fixtureRoot);
+    const after = await snapshotTargets(fixtureRoot);
+
+    assert.notEqual(result.status, 0, `${name} must fail closed`);
+    assert.match(
+      result.stderr,
+      /unambiguous|ambiguity|duplicate|structure|parse|TypeScript/i,
+      `${name} must report an ambiguity or parse error`
+    );
+    assert.deepEqual(
+      after,
+      before,
+      `${name} must not rewrite any target file or change mtime`
+    );
+    assert.equal(await readFile(versionModulePath, 'utf8'), content);
+  });
+}
+
+for (const { name, content } of [
+  {
+    name: 'duplicate endpoints',
+    content: '{"plugins":{"updater":{"endpoints":["https://obsolete.example.test/latest.json"],"endpoints":' +
+      JSON.stringify(expectedUpdaterEndpoints) +
+      '}}}',
+  },
+  {
+    name: 'duplicate plugins',
+    content: '{"plugins":{"updater":{"endpoints":["https://obsolete.example.test/latest.json"]}},"plugins":{"updater":{"endpoints":' +
+      JSON.stringify(expectedUpdaterEndpoints) +
+      '}}}',
+  },
+  {
+    name: 'duplicate updater',
+    content: '{"plugins":{"updater":{"endpoints":["https://obsolete.example.test/latest.json"]},"updater":{"endpoints":' +
+      JSON.stringify(expectedUpdaterEndpoints) +
+      '}}}',
+  },
+  {
+    name: 'non-object updater structure',
+    content: JSON.stringify({ plugins: { updater: [] } }),
+  },
+]) {
+  await withFixture('1.2.3', async (fixtureRoot) => {
+    const tauriConfigPath = path.join(fixtureRoot, 'src-tauri/tauri.conf.json');
+    const tauriConfig = `${content}\r\n`;
+
+    await writeFile(tauriConfigPath, tauriConfig, 'utf8');
+
+    const before = await snapshotTargets(fixtureRoot);
+    const beforeBytes = await readFile(tauriConfigPath);
+    const result = runUpdaterConfigSync(fixtureRoot);
+    const after = await snapshotTargets(fixtureRoot);
+
+    assert.notEqual(result.status, 0, `${name} must fail closed`);
+    assert.match(
+      result.stderr,
+      /ambiguity|duplicate|structure|unambiguous/i,
+      `${name} must report an ambiguity or structure error`
+    );
+    assert.deepEqual(
+      after,
+      before,
+      `${name} must not rewrite any target file or change mtime`
+    );
+    assert.deepEqual(
+      await readFile(tauriConfigPath),
+      beforeBytes,
+      `${name} must preserve tauri.conf.json bytes`
+    );
+  });
+}
+
+await withFixture('1.2.3', async (fixtureRoot) => {
+  const tauriConfigPath = path.join(fixtureRoot, 'src-tauri/tauri.conf.json');
+  const invalidJsonConfig = [
+    '{"plugins":{"updater":{/* stale JSONC comment */"endpoints":["https://obsolete.example.test/latest.json"]}}}',
+    '',
+  ].join('\r\n');
+
+  await writeFile(tauriConfigPath, invalidJsonConfig, 'utf8');
+
+  const before = await snapshotTargets(fixtureRoot);
+  const beforeBytes = await readFile(tauriConfigPath);
+  const result = runUpdaterConfigSync(fixtureRoot);
+  const after = await snapshotTargets(fixtureRoot);
+
+  assert.notEqual(result.status, 0, 'strictly invalid JSON must fail closed');
+  assert.match(
+    result.stderr,
+    /parse|JSON|ambiguity|structure/i,
+    'strict JSON failure must report a parse, ambiguity, or structure error'
+  );
+  assert.deepEqual(
+    after,
+    before,
+    'strictly invalid JSON must not rewrite any target file or change mtime'
+  );
+  assert.deepEqual(
+    await readFile(tauriConfigPath),
+    beforeBytes,
+    'strictly invalid JSON must preserve tauri.conf.json bytes'
+  );
 });
 
 await withFixture('1.2.3', async (fixtureRoot) => {
