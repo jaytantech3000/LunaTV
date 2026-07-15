@@ -1,4 +1,4 @@
-import { AdminConfig } from '@/lib/admin.types';
+import type { AdminConfig } from '@/lib/admin.types';
 import { AuthContext, createProfileContext, ProfileContext } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import {
@@ -17,7 +17,10 @@ export class ProfileServiceError extends Error {
   }
 }
 
-function findConfiguredUser(config: AdminConfig, username: string) {
+function findConfiguredUser(
+  config: Pick<AdminConfig, 'UserConfig'>,
+  username: string
+) {
   return config.UserConfig.Users.find((user) => user.username === username);
 }
 
@@ -29,7 +32,7 @@ export async function requireActiveProfileContext(
   authContext: AuthContext,
   options: {
     storageType?: AppStorageType;
-    config?: AdminConfig;
+    config?: Pick<AdminConfig, 'UserConfig'>;
   } = {}
 ): Promise<ProfileContext> {
   const storageType = options.storageType || getConfiguredStorageType();

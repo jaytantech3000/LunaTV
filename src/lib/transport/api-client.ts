@@ -1,5 +1,5 @@
-import { withLocalServiceAccessToken } from '@/lib/desktop/local-service-access';
 import { withDesktopAdminCapability } from '@/lib/desktop/admin-capability';
+import { withLocalServiceAccessToken } from '@/lib/desktop/local-service-access';
 
 import { ApiSearchParams, buildApiUrl } from './endpoint';
 

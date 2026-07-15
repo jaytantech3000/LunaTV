@@ -1,14 +1,14 @@
+import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
+import { getDetailFromApi, searchFromApi } from '@/lib/downstream';
+import { SearchResult } from '@/lib/types';
+import { filterAdultContentResults } from '@/lib/yellow';
+
 import {
   getContentDetail,
   getContentSuggestions,
   searchContent,
   searchContentInResource,
 } from './service';
-
-import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
-import { getDetailFromApi, searchFromApi } from '@/lib/downstream';
-import { SearchResult } from '@/lib/types';
-import { filterAdultContentResults } from '@/lib/yellow';
 
 jest.mock('@/lib/config', () => ({
   getAvailableApiSites: jest.fn(),
@@ -54,7 +54,7 @@ describe('content service', () => {
   const mockedGetDetailFromApi = getDetailFromApi as jest.Mock;
   const mockedFilterAdultContentResults =
     filterAdultContentResults as jest.Mock;
-  const originalConsoleWarn = console.warn;
+  let consoleWarnSpy: jest.SpyInstance;
 
   beforeEach(() => {
     mockedGetConfig.mockResolvedValue({
@@ -84,15 +84,12 @@ describe('content service', () => {
     mockedFilterAdultContentResults.mockImplementation(
       (results: SearchResult[]) => results
     );
-    console.warn = jest.fn();
+    consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
   });
 
   afterEach(() => {
+    consoleWarnSpy.mockRestore();
     jest.clearAllMocks();
-  });
-
-  afterAll(() => {
-    console.warn = originalConsoleWarn;
   });
 
   it('returns cached empty search response without loading full context', async () => {

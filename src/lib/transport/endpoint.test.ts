@@ -1,6 +1,6 @@
 import { apiFetch } from './api-client';
-import { setDesktopAdminCapabilityForTests } from '../desktop/admin-capability';
 import { buildApiUrl, getApiBaseUrl } from './endpoint';
+import { setDesktopAdminCapabilityForTests } from '../desktop/admin-capability';
 
 describe('transport endpoint helpers', () => {
   const originalFetch = global.fetch;

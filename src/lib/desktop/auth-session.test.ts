@@ -4,16 +4,16 @@ import {
   setAuthInfoInBrowser,
 } from '@/lib/auth';
 import {
+  clearDesktopAdminCapability,
+  getDesktopAdminCapability,
+} from '@/lib/desktop/admin-capability';
+import {
   DESKTOP_AUTH_LOGOUT_MARKER_KEY,
   ensureDesktopAuthSession,
   hasExplicitDesktopLogout,
   loginDesktopSession,
   logoutDesktopSession,
 } from '@/lib/desktop/auth-session';
-import {
-  clearDesktopAdminCapability,
-  getDesktopAdminCapability,
-} from '@/lib/desktop/admin-capability';
 import { desktopLogin, getDesktopAuthStatus } from '@/lib/desktop/tauri-client';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 

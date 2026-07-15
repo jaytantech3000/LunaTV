@@ -1,12 +1,12 @@
+import { getConfig } from '@/lib/config';
+import { getCachedLiveChannels } from '@/lib/live';
+
 import {
   getLiveChannels,
   getLiveEpg,
   getLiveSources,
   precheckLiveStream,
 } from './service';
-
-import { getConfig } from '@/lib/config';
-import { getCachedLiveChannels } from '@/lib/live';
 
 jest.mock('@/lib/config', () => ({
   getConfig: jest.fn(),

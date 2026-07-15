@@ -2080,6 +2080,7 @@ fn spawn_background_tasks(state: AppState) {
     });
 }
 
+#[cfg(not(windows))]
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }

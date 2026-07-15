@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { AuthContextError, requireAuthContextFromRequest } from '@/lib/auth';
+import { getCacheTime } from '@/lib/config';
 import {
   ContentServiceError,
   searchContentInResource,
 } from '@/lib/core/content/service';
-import { getCacheTime } from '@/lib/config';
 import { buildQueryCacheHeaders } from '@/lib/server/http-cache';
 
 export const runtime = 'nodejs';

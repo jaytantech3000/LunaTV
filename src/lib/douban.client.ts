@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any,no-console,no-case-declarations */
 
-import { apiFetch } from './transport/api-client';
 import { isDesktopAppTarget } from './runtime-config';
+import { apiFetch } from './transport/api-client';
 import { DoubanItem, DoubanResult } from './types';
 
 interface DoubanCategoriesParams {

@@ -4205,14 +4205,6 @@ fn remove_file_if_exists(path: &Path) {
     }
 }
 
-fn remove_file_if_exists_or_error(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
-    }
-}
-
 fn sanitize_download_file_fragment(value: &str) -> String {
     let mut sanitized = String::with_capacity(value.len());
 

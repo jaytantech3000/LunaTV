@@ -30,7 +30,7 @@ describe('profile service', () => {
           UserConfig: {
             Users: [],
           },
-        } as any,
+        },
       })
     ).rejects.toMatchObject({
       message: '用户不存在',

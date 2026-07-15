@@ -3,13 +3,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { AuthContextError } from '@/lib/auth';
+import { ProfileServiceError } from '@/lib/core/profile/service';
 import {
   deleteAllPlayRecords,
   deletePlayRecord,
   getAllPlayRecords,
   savePlayRecord,
 } from '@/lib/core/profile/user-data-service';
-import { ProfileServiceError } from '@/lib/core/profile/service';
 import { requireProfileContextFromRequest } from '@/lib/server/profile-context';
 import { PlayRecord } from '@/lib/types';
 

@@ -1,15 +1,15 @@
 import {
-  DOWNLOAD_RESOURCE_DB_NAME,
-  DOWNLOAD_RESOURCE_STORE_NAME,
-  ResourceIndexRecord,
-} from './types';
-import {
   clearDesktopResourceIndexes,
   deleteDesktopResourceIndex,
   getDesktopResourceIndex,
   isDesktopLocalDownloadRuntimeEnabled,
   putDesktopResourceIndex,
 } from './desktop-runtime';
+import {
+  DOWNLOAD_RESOURCE_DB_NAME,
+  DOWNLOAD_RESOURCE_STORE_NAME,
+  ResourceIndexRecord,
+} from './types';
 
 function assertIndexedDbAvailable(): void {
   if (typeof window === 'undefined' || typeof indexedDB === 'undefined') {
