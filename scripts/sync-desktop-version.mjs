@@ -2,6 +2,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import ts from 'typescript';
 
 import {
   assertValidSemver,
@@ -10,22 +11,53 @@ import {
   readDesktopReleaseMetadata,
 } from './desktop-release-utils.mjs';
 
-async function readJson(filePath) {
-  const content = await fs.readFile(filePath, 'utf8');
-  return JSON.parse(content);
-}
+function readTopLevelJsonVersionField(filePath, content) {
+  const sourceFile = ts.parseJsonText(filePath, content);
+  if (sourceFile.parseDiagnostics.length > 0) {
+    throw new Error(`Could not parse JSON in ${filePath}`);
+  }
 
-async function writeJson(filePath, document) {
-  await fs.writeFile(
-    filePath,
-    `${JSON.stringify(document, null, 2)}\n`,
-    'utf8'
+  const rootObject = sourceFile.statements[0]?.expression;
+  if (!rootObject || !ts.isObjectLiteralExpression(rootObject)) {
+    throw new Error(`Could not find a top-level version field in ${filePath}`);
+  }
+
+  const versionProperties = rootObject.properties.filter(
+    (property) =>
+      ts.isPropertyAssignment(property) &&
+      ((ts.isIdentifier(property.name) && property.name.text === 'version') ||
+        (ts.isStringLiteral(property.name) && property.name.text === 'version'))
   );
+
+  if (
+    versionProperties.length !== 1 ||
+    !ts.isStringLiteral(versionProperties[0].initializer)
+  ) {
+    throw new Error(
+      `Could not find an unambiguous top-level version field in ${filePath}`
+    );
+  }
+
+  const versionLiteral = versionProperties[0].initializer;
+  return {
+    end: versionLiteral.end,
+    start: versionLiteral.getStart(sourceFile),
+    value: versionLiteral.text,
+  };
 }
 
-async function syncWorkspaceCargoVersion(projectRoot, version) {
-  const cargoTomlPath = path.join(projectRoot, 'Cargo.toml');
-  const content = await fs.readFile(cargoTomlPath, 'utf8');
+function planJsonVersionWrite(filePath, content, version) {
+  const versionField = readTopLevelJsonVersionField(filePath, content);
+  if (versionField.value === version) {
+    return null;
+  }
+
+  return `${content.slice(0, versionField.start)}${JSON.stringify(
+    version
+  )}${content.slice(versionField.end)}`;
+}
+
+function planWorkspaceCargoVersion(content, version) {
   const eol = content.includes('\r\n') ? '\r\n' : '\n';
   const lines = content.split(/\r?\n/);
   let inWorkspacePackage = false;
@@ -51,19 +83,84 @@ async function syncWorkspaceCargoVersion(projectRoot, version) {
     throw new Error('Could not find [workspace.package] version field');
   }
 
-  await fs.writeFile(cargoTomlPath, updatedLines.join(eol), 'utf8');
+  const updatedContent = updatedLines.join(eol);
+  return content === updatedContent ? null : updatedContent;
 }
 
-async function syncVersionModule(projectRoot, version) {
-  const versionModulePath = path.join(projectRoot, 'src', 'lib', 'version.ts');
-  const content = `/* eslint-disable no-console */\n\nconst CURRENT_VERSION = '${version}';\n\nexport { CURRENT_VERSION };\n`;
+function readVersionModuleField(filePath, content) {
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    content,
+    ts.ScriptTarget.Latest,
+    true
+  );
+  if (sourceFile.parseDiagnostics.length > 0) {
+    throw new Error(`Could not parse TypeScript in ${filePath}`);
+  }
 
-  await fs.writeFile(versionModulePath, content, 'utf8');
+  const versionDeclarations = sourceFile.statements.flatMap((statement) => {
+    if (!ts.isVariableStatement(statement)) {
+      return [];
+    }
+
+    return statement.declarationList.declarations.filter(
+      (declaration) =>
+        ts.isIdentifier(declaration.name) &&
+        declaration.name.text === 'CURRENT_VERSION'
+    );
+  });
+
+  if (
+    versionDeclarations.length !== 1 ||
+    !ts.isStringLiteral(versionDeclarations[0].initializer)
+  ) {
+    throw new Error(
+      `Could not find an unambiguous CURRENT_VERSION string in ${filePath}`
+    );
+  }
+
+  const versionLiteral = versionDeclarations[0].initializer;
+  const start = versionLiteral.getStart(sourceFile);
+  return {
+    end: versionLiteral.end,
+    quote: content[start],
+    start,
+    value: versionLiteral.text,
+  };
 }
 
-async function syncVersionText(projectRoot, version) {
-  const versionTextPath = path.join(projectRoot, 'VERSION.txt');
-  await fs.writeFile(versionTextPath, `${version}\n`, 'utf8');
+function planVersionModule(filePath, currentContent, version) {
+  let versionField;
+  try {
+    versionField = readVersionModuleField(filePath, currentContent);
+  } catch {
+    const eol = currentContent.includes('\r\n') ? '\r\n' : '\n';
+    return [
+      '/* eslint-disable no-console */',
+      '',
+      `const CURRENT_VERSION = '${version}';`,
+      '',
+      'export { CURRENT_VERSION };',
+      '',
+    ].join(eol);
+  }
+
+  if (versionField.value === version) {
+    return null;
+  }
+
+  const versionLiteral =
+    versionField.quote === "'" ? `'${version}'` : JSON.stringify(version);
+  return `${currentContent.slice(
+    0,
+    versionField.start
+  )}${versionLiteral}${currentContent.slice(versionField.end)}`;
+}
+
+function planVersionText(currentContent, version) {
+  const eol = currentContent.includes('\r\n') ? '\r\n' : '\n';
+  const content = `${version}${eol}`;
+  return currentContent === content ? null : content;
 }
 
 function resolveVersion(args, metadata) {
@@ -95,19 +192,44 @@ async function main() {
     'src-tauri',
     'tauri.conf.json'
   );
-  const packageJson = await readJson(packageJsonPath);
-  const tauriConfig = await readJson(tauriConfigPath);
-
-  packageJson.version = version;
-  tauriConfig.version = version;
-
-  await Promise.all([
-    writeJson(packageJsonPath, packageJson),
-    writeJson(tauriConfigPath, tauriConfig),
-    syncWorkspaceCargoVersion(projectRoot, version),
-    syncVersionModule(projectRoot, version),
-    syncVersionText(projectRoot, version),
+  const cargoTomlPath = path.join(projectRoot, 'Cargo.toml');
+  const versionModulePath = path.join(projectRoot, 'src', 'lib', 'version.ts');
+  const versionTextPath = path.join(projectRoot, 'VERSION.txt');
+  const [
+    packageJsonContent,
+    tauriConfigContent,
+    cargoTomlContent,
+    versionModuleContent,
+    versionTextContent,
+  ] = await Promise.all([
+    fs.readFile(packageJsonPath, 'utf8'),
+    fs.readFile(tauriConfigPath, 'utf8'),
+    fs.readFile(cargoTomlPath, 'utf8'),
+    fs.readFile(versionModulePath, 'utf8'),
+    fs.readFile(versionTextPath, 'utf8'),
   ]);
+  const plannedWrites = [
+    [
+      packageJsonPath,
+      planJsonVersionWrite(packageJsonPath, packageJsonContent, version),
+    ],
+    [
+      tauriConfigPath,
+      planJsonVersionWrite(tauriConfigPath, tauriConfigContent, version),
+    ],
+    [cargoTomlPath, planWorkspaceCargoVersion(cargoTomlContent, version)],
+    [
+      versionModulePath,
+      planVersionModule(versionModulePath, versionModuleContent, version),
+    ],
+    [versionTextPath, planVersionText(versionTextContent, version)],
+  ];
+
+  for (const [filePath, content] of plannedWrites) {
+    if (content !== null) {
+      await fs.writeFile(filePath, content, 'utf8');
+    }
+  }
 
   console.log(`Synced desktop version: ${version}`);
 }

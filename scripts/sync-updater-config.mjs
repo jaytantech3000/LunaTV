@@ -62,6 +62,16 @@ async function main() {
   );
   const content = await fs.readFile(configPath, 'utf8');
   const config = JSON.parse(content);
+  const currentEndpoints = config.plugins?.updater?.endpoints;
+
+  if (
+    Array.isArray(currentEndpoints) &&
+    currentEndpoints.length === endpoints.length &&
+    currentEndpoints.every((endpoint, index) => endpoint === endpoints[index])
+  ) {
+    console.log(`Synced updater endpoints: ${endpoints.join(', ')}`);
+    return;
+  }
 
   if (!config.plugins) {
     config.plugins = {};
