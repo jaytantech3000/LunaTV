@@ -12,6 +12,12 @@ import {
 } from './desktop-release-utils.mjs';
 
 function readTopLevelJsonVersionField(filePath, content) {
+  try {
+    JSON.parse(content);
+  } catch {
+    throw new Error(`Could not parse strict JSON in ${filePath}`);
+  }
+
   const sourceFile = ts.parseJsonText(filePath, content);
   if (sourceFile.parseDiagnostics.length > 0) {
     throw new Error(`Could not parse JSON in ${filePath}`);
@@ -61,27 +67,48 @@ function planWorkspaceCargoVersion(content, version) {
   const eol = content.includes('\r\n') ? '\r\n' : '\n';
   const lines = content.split(/\r?\n/);
   let inWorkspacePackage = false;
-  let updated = false;
+  const versionLines = [];
 
-  const updatedLines = lines.map((line) => {
+  for (const line of lines) {
     const trimmedLine = line.trim();
 
     if (/^\[.*\]$/.test(trimmedLine)) {
       inWorkspacePackage = trimmedLine === '[workspace.package]';
-      return line;
+      continue;
     }
 
-    if (inWorkspacePackage && /^\s*version\s*=\s*"/.test(line) && !updated) {
-      updated = true;
+    if (
+      inWorkspacePackage &&
+      /^\s*version\s*=/.test(line) &&
+      !/^\s*version\s*=\s*"[^"\\r\\n]*"\s*(?:#.*)?$/.test(line)
+    ) {
+      throw new Error(
+        'Could not find an unambiguous [workspace.package] version field: expected one string value'
+      );
+    }
+
+    if (
+      inWorkspacePackage &&
+      /^\s*version\s*=\s*"[^"\\r\\n]*"\s*(?:#.*)?$/.test(line)
+    ) {
+      versionLines.push(line);
+    }
+  }
+
+  if (versionLines.length !== 1) {
+    const problem = versionLines.length === 0 ? 'missing' : 'duplicate';
+    throw new Error(
+      `Could not find an unambiguous [workspace.package] version field: ${problem} version field`
+    );
+  }
+
+  const updatedLines = lines.map((line) => {
+    if (line === versionLines[0]) {
       return line.replace(/(\s*version\s*=\s*")[^"]+(".*)/, `$1${version}$2`);
     }
 
     return line;
   });
-
-  if (!updated) {
-    throw new Error('Could not find [workspace.package] version field');
-  }
 
   const updatedContent = updatedLines.join(eol);
   return content === updatedContent ? null : updatedContent;

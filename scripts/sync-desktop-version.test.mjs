@@ -176,6 +176,125 @@ await withFixture('1.2.3', async (fixtureRoot) => {
   assert.equal(await readFile(tauriConfigPath, 'utf8'), tauriConfig);
 });
 
+for (const { name, versionLines } of [
+  {
+    name: 'duplicate workspace package versions',
+    versionLines: ['version = "1.2.3"', 'version = "2.3.4"'],
+  },
+  {
+    name: 'missing workspace package version',
+    versionLines: [],
+  },
+  {
+    name: 'non-string workspace package version',
+    versionLines: ['version = 123'],
+  },
+]) {
+  await withFixture('1.2.3', async (fixtureRoot) => {
+    const cargoTomlPath = path.join(fixtureRoot, 'Cargo.toml');
+    const cargoToml = [
+      '[workspace]',
+      'members = []',
+      '',
+      '[workspace.package]',
+      ...versionLines,
+      '',
+    ].join('\r\n');
+
+    await writeFile(cargoTomlPath, cargoToml, 'utf8');
+
+    const before = await snapshotTargets(fixtureRoot);
+    const result = runSync(fixtureRoot, '2.3.4');
+    const after = await snapshotTargets(fixtureRoot);
+
+    assert.notEqual(result.status, 0, `${name} must fail closed`);
+    assert.match(
+      result.stderr,
+      /unambiguous|missing|duplicate|string|version/i
+    );
+    assert.deepEqual(
+      after,
+      before,
+      `${name} must not rewrite any target file or change mtime`
+    );
+    assert.equal(await readFile(cargoTomlPath, 'utf8'), cargoToml);
+  });
+}
+
+await withFixture('1.2.3', async (fixtureRoot) => {
+  const result = runSync(fixtureRoot, '2.3.4');
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    await readFile(path.join(fixtureRoot, 'package.json'), 'utf8'),
+    '{\n  "name": "fixture",\n  "version": "2.3.4",\n  "private": true\n}\n'
+  );
+  assert.equal(
+    await readFile(path.join(fixtureRoot, 'src-tauri/tauri.conf.json'), 'utf8'),
+    '{\n  "productName": "Fixture",\n  "version": "2.3.4"\n}\n'
+  );
+  assert.equal(
+    await readFile(path.join(fixtureRoot, 'Cargo.toml'), 'utf8'),
+    '[workspace]\nmembers = []\n\n[workspace.package]\nversion = "2.3.4"\n'
+  );
+  assert.equal(
+    await readFile(path.join(fixtureRoot, 'src/lib/version.ts'), 'utf8'),
+    "/* eslint-disable no-console */\n\nconst CURRENT_VERSION = '2.3.4';\n\nexport { CURRENT_VERSION };\n"
+  );
+  assert.equal(
+    await readFile(path.join(fixtureRoot, 'VERSION.txt'), 'utf8'),
+    '2.3.4\n'
+  );
+});
+
+for (const { name, relativePath, content } of [
+  {
+    name: 'package.json JSONC comment',
+    relativePath: 'package.json',
+    content:
+      '{"name":"fixture",/* stale JSONC comment */"version":"1.2.3"}\r\n',
+  },
+  {
+    name: 'package.json trailing comma',
+    relativePath: 'package.json',
+    content: '{"name":"fixture","version":"1.2.3",}\r\n',
+  },
+  {
+    name: 'tauri.conf.json JSONC comment',
+    relativePath: 'src-tauri/tauri.conf.json',
+    content:
+      '{"productName":"Fixture",/* stale JSONC comment */"version":"1.2.3"}\r\n',
+  },
+  {
+    name: 'tauri.conf.json trailing comma',
+    relativePath: 'src-tauri/tauri.conf.json',
+    content: '{"productName":"Fixture","version":"1.2.3",}\r\n',
+  },
+]) {
+  await withFixture('1.2.3', async (fixtureRoot) => {
+    const targetPath = path.join(fixtureRoot, relativePath);
+
+    await writeFile(targetPath, content, 'utf8');
+
+    const before = await snapshotTargets(fixtureRoot);
+    const result = runSync(fixtureRoot);
+    const after = await snapshotTargets(fixtureRoot);
+
+    assert.notEqual(result.status, 0, `${name} must fail closed`);
+    assert.match(
+      result.stderr,
+      /parse|JSON/i,
+      `${name} must report a strict JSON parse error`
+    );
+    assert.deepEqual(
+      after,
+      before,
+      `${name} must not rewrite any target file or change mtime`
+    );
+    assert.equal(await readFile(targetPath, 'utf8'), content);
+  });
+}
+
 await withFixture('1.2.3', async (fixtureRoot) => {
   const packageJsonPath = path.join(fixtureRoot, 'package.json');
   const tauriConfigPath = path.join(fixtureRoot, 'src-tauri/tauri.conf.json');
@@ -292,19 +411,22 @@ for (const { name, content } of [
 for (const { name, content } of [
   {
     name: 'duplicate endpoints',
-    content: '{"plugins":{"updater":{"endpoints":["https://obsolete.example.test/latest.json"],"endpoints":' +
+    content:
+      '{"plugins":{"updater":{"endpoints":["https://obsolete.example.test/latest.json"],"endpoints":' +
       JSON.stringify(expectedUpdaterEndpoints) +
       '}}}',
   },
   {
     name: 'duplicate plugins',
-    content: '{"plugins":{"updater":{"endpoints":["https://obsolete.example.test/latest.json"]}},"plugins":{"updater":{"endpoints":' +
+    content:
+      '{"plugins":{"updater":{"endpoints":["https://obsolete.example.test/latest.json"]}},"plugins":{"updater":{"endpoints":' +
       JSON.stringify(expectedUpdaterEndpoints) +
       '}}}',
   },
   {
     name: 'duplicate updater',
-    content: '{"plugins":{"updater":{"endpoints":["https://obsolete.example.test/latest.json"]},"updater":{"endpoints":' +
+    content:
+      '{"plugins":{"updater":{"endpoints":["https://obsolete.example.test/latest.json"]},"updater":{"endpoints":' +
       JSON.stringify(expectedUpdaterEndpoints) +
       '}}}',
   },
