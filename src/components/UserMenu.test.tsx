@@ -252,8 +252,17 @@ describe('UserMenu', () => {
       '远端 Redis',
     ]);
     expect(tags.map((tag) => tag.tagName)).toEqual(['SPAN', 'SPAN']);
-    expect(storageTagRow).toHaveClass('flex');
+    expect(storageTagRow).toHaveClass('mt-1.5', 'flex', 'gap-1');
     expect(tags.every((tag) => tag.classList.contains('flex-1'))).toBe(true);
+    tags.forEach((tag) => {
+      expect(tag).toHaveClass('min-h-6', 'rounded-md', 'px-1.5', 'gap-1');
+    });
+    expect(
+      within(tags[0]).getByTestId('user-menu-storage-status-dot-local')
+    ).toHaveClass('bg-emerald-400');
+    expect(
+      within(tags[1]).getByTestId('user-menu-storage-status-dot-remote')
+    ).toHaveClass('bg-gray-400');
     expect(tags[0]).toHaveAttribute(
       'title',
       '本地 SQLite 是日常读写主数据源。'
@@ -408,5 +417,58 @@ describe('UserMenu', () => {
       screen.getByRole('button', { name: '管理面板' })
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '登录' })).toBeInTheDocument();
+    expect(screen.getAllByText('访客')).toHaveLength(2);
+    expect(screen.queryByText('未登录')).not.toBeInTheDocument();
   });
+
+  it('shows a compact green service point with a local-service title when up to date', async () => {
+    await renderUserMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+    const servicePoint = await screen.findByTestId(
+      'user-menu-version-status-dot'
+    );
+    expect(servicePoint).toHaveClass('h-1.5', 'w-1.5', 'bg-green-400');
+    expect(servicePoint).not.toHaveClass('-translate-y-2');
+    expect(servicePoint).toHaveAttribute('title', '本地服务运行正常');
+  });
+
+  it('shows an update point without the local-service title when an update is available', async () => {
+    mockUseAppUpdateState.mockReturnValue({
+      isChecking: false,
+      updateStatus: 'has_update',
+    });
+
+    await renderUserMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+    const servicePoint = await screen.findByTestId(
+      'user-menu-version-status-dot'
+    );
+    expect(servicePoint).toHaveClass('h-1.5', 'w-1.5', 'bg-yellow-500');
+    expect(servicePoint).not.toHaveAttribute('title');
+  });
+
+  it.each([
+    ['checking', true, null],
+    ['failed', false, 'fetch_failed'],
+  ])(
+    'hides the version status point while update state is %s',
+    async (_, isChecking, updateStatus) => {
+      mockUseAppUpdateState.mockReturnValue({
+        isChecking,
+        updateStatus,
+      });
+
+      await renderUserMenu();
+
+      fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+      expect(
+        screen.queryByTestId('user-menu-version-status-dot')
+      ).not.toBeInTheDocument();
+    }
+  );
 });

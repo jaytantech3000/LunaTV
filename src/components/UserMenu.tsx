@@ -56,8 +56,8 @@ interface UserMenuProps {
 
 const STORAGE_TAG_TONE_CLASSES: Record<UserMenuStorageTag['tone'], string> = {
   green:
-    'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200',
-  gray: 'border-gray-300 bg-gray-50 text-gray-700 dark:border-gray-600 dark:bg-gray-800/70 dark:text-gray-200',
+    'border-emerald-200/70 bg-emerald-50/60 text-emerald-700 dark:border-emerald-800/70 dark:bg-emerald-950/30 dark:text-emerald-300',
+  gray: 'border-gray-200/70 bg-gray-50/60 text-gray-600 dark:border-gray-700/70 dark:bg-gray-800/50 dark:text-gray-300',
 };
 
 function StorageTag({ tag }: { tag: UserMenuStorageTag }) {
@@ -65,10 +65,16 @@ function StorageTag({ tag }: { tag: UserMenuStorageTag }) {
     <span
       data-testid={`user-menu-storage-tag-${tag.key}`}
       title={tag.detail}
-      className={`flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-lg border px-2 py-1 text-left text-[10px] font-semibold leading-tight ${
+      className={`flex min-h-6 min-w-0 flex-1 items-center gap-1 rounded-md border px-1.5 py-0.5 text-left text-[10px] font-medium leading-tight ${
         STORAGE_TAG_TONE_CLASSES[tag.tone]
       }`}
     >
+      <span
+        data-testid={`user-menu-storage-status-dot-${tag.key}`}
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+          tag.tone === 'green' ? 'bg-emerald-400' : 'bg-gray-400'
+        }`}
+      />
       <span className='truncate'>{tag.label}</span>
     </span>
   );
@@ -533,17 +539,17 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
               >
                 {isAuthenticated
                   ? getRoleText(authInfo?.role || 'user')
-                  : '未登录'}
+                  : '访客'}
               </span>
             </div>
             <div className='flex items-center justify-between'>
               <div className='truncate text-sm font-semibold text-[var(--luna-copy-strong)]'>
-                {authInfo?.username || '未登录'}
+                {authInfo?.username || '访客'}
               </div>
             </div>
             {storageTags.length > 0 ? (
               <div
-                className='mt-2 flex gap-1.5'
+                className='mt-1.5 flex gap-1'
                 data-testid='user-menu-storage-tags'
               >
                 {storageTags.map((tag) => (
@@ -684,7 +690,13 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
                 updateStatus &&
                 updateStatus !== UpdateStatus.FETCH_FAILED && (
                   <div
-                    className={`w-2 h-2 rounded-full -translate-y-2 ${
+                    data-testid='user-menu-version-status-dot'
+                    title={
+                      updateStatus === UpdateStatus.NO_UPDATE
+                        ? '本地服务运行正常'
+                        : undefined
+                    }
+                    className={`h-1.5 w-1.5 rounded-full ${
                       updateStatus === UpdateStatus.HAS_UPDATE
                         ? 'bg-yellow-500'
                         : updateStatus === UpdateStatus.NO_UPDATE
