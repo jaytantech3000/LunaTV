@@ -255,7 +255,7 @@ describe('UserMenu', () => {
     expect(storageTagRow).toHaveClass('mt-1.5', 'flex', 'gap-1');
     expect(tags.every((tag) => tag.classList.contains('flex-1'))).toBe(true);
     tags.forEach((tag) => {
-      expect(tag).toHaveClass('min-h-6', 'rounded-md', 'px-1.5', 'gap-1');
+      expect(tag).toHaveClass('min-h-7', 'rounded-md', 'px-1.5', 'gap-1');
     });
     expect(
       within(tags[0]).getByTestId('user-menu-storage-status-dot-local')

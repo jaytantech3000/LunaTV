@@ -65,7 +65,7 @@ function StorageTag({ tag }: { tag: UserMenuStorageTag }) {
     <span
       data-testid={`user-menu-storage-tag-${tag.key}`}
       title={tag.detail}
-      className={`flex min-h-6 min-w-0 flex-1 items-center gap-1 rounded-md border px-1.5 py-0.5 text-left text-[10px] font-medium leading-tight ${
+      className={`flex min-h-7 min-w-0 flex-1 items-center gap-1 rounded-md border px-1.5 py-0.5 text-left text-[10px] font-medium leading-tight ${
         STORAGE_TAG_TONE_CLASSES[tag.tone]
       }`}
     >
