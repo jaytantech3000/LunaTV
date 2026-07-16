@@ -226,6 +226,18 @@ describe('UserMenu', () => {
     });
   });
 
+  it('shows local SQLite as the primary store and Redis as the remote sync provider', async () => {
+    render(<UserMenu />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/数据存储：/)).toHaveTextContent(
+        '数据存储：本地 SQLite · 远端同步：Redis'
+      );
+    });
+  });
+
   it('keeps account sync and management discoverable for desktop guests', async () => {
     mockGetAuthInfoFromBrowserCookie.mockReturnValue(null);
 

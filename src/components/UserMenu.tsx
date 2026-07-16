@@ -26,8 +26,10 @@ import {
   getDesktopAuthRequirement,
   logoutDesktopSession,
 } from '@/lib/desktop/auth-session';
+import { getProfileStorageDisplayCopy } from '@/lib/desktop/storage-display-copy';
 import { changeDesktopPassword } from '@/lib/desktop/tauri-client';
 import { purgeOfflineDownloads } from '@/lib/download/session';
+import type { ResolvedProfileRuntime } from '@/lib/profile/contracts';
 import { resolveProfileRuntime } from '@/lib/profile/runtime';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
@@ -55,6 +57,14 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isVersionPanelOpen, setIsVersionPanelOpen] = useState(false);
   const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
+  const [profileRuntime, setProfileRuntime] = useState<ResolvedProfileRuntime>({
+    appTarget: 'web',
+    runtimeKind: 'web-local',
+    syncEnabled: false,
+    storageType: 'localstorage',
+    profileMode: 'single-user-local',
+    usesRemoteUserData: false,
+  });
   const [storageType, setStorageType] = useState<string>('localstorage');
   const [adminPanelEnabled, setAdminPanelEnabled] = useState(true);
   const [isDesktopTarget, setIsDesktopTarget] = useState(false);
@@ -106,16 +116,17 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
 
       const auth = getAuthInfoFromBrowserCookie();
       const runtimeConfig = getRuntimeConfig();
-      const profileRuntime = resolveProfileRuntime(runtimeConfig);
-      const isDesktop = profileRuntime.appTarget === 'desktop';
+      const resolvedProfileRuntime = resolveProfileRuntime(runtimeConfig);
+      const isDesktop = resolvedProfileRuntime.appTarget === 'desktop';
       const profileSyncEnabled =
-        profileRuntime.runtimeKind === 'desktop-profile-sync';
+        resolvedProfileRuntime.runtimeKind === 'desktop-profile-sync';
       if (!active) {
         return;
       }
 
       setAuthInfo(auth);
-      setStorageType(profileRuntime.storageType);
+      setProfileRuntime(resolvedProfileRuntime);
+      setStorageType(resolvedProfileRuntime.storageType);
       setAdminPanelEnabled(runtimeConfig.ENABLE_ADMIN_PANEL !== false);
       setIsDesktopTarget(isDesktop);
       setDesktopProfileSyncEnabled(profileSyncEnabled);
@@ -507,8 +518,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
                 {authInfo?.username || '未登录'}
               </div>
               <div className='text-[10px] text-[var(--luna-copy-muted)]'>
-                数据存储：
-                {storageType === 'localstorage' ? '本地' : storageType}
+                数据存储：{getProfileStorageDisplayCopy(profileRuntime)}
               </div>
             </div>
             {!isAuthenticated &&
