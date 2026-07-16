@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 
 import {
@@ -76,12 +76,98 @@ function StorageStatusTag({
   tag: UserMenuStorageStatusTag;
   tooltipId: string;
 }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [isHovered, setIsHovered] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState({
+    left: 8,
+    top: 8,
+  });
+  const isTooltipVisible = (isHovered || isFocused) && !isDismissed;
+
+  const updateTooltipPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger || typeof window === 'undefined') {
+      return;
+    }
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const tooltipWidth = 224;
+    const viewportGutter = 8;
+    const maxLeft = Math.max(
+      viewportGutter,
+      window.innerWidth - tooltipWidth - viewportGutter
+    );
+
+    setTooltipPosition({
+      left: Math.min(Math.max(triggerRect.left, viewportGutter), maxLeft),
+      top: triggerRect.bottom + 4,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isTooltipVisible) {
+      return;
+    }
+
+    updateTooltipPosition();
+    window.addEventListener('resize', updateTooltipPosition);
+    window.addEventListener('scroll', updateTooltipPosition, true);
+
+    return () => {
+      window.removeEventListener('resize', updateTooltipPosition);
+      window.removeEventListener('scroll', updateTooltipPosition, true);
+    };
+  }, [isTooltipVisible, updateTooltipPosition]);
+
+  const showTooltip = () => {
+    setIsDismissed(false);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setIsDismissed(true);
+    }
+  };
+
+  const tooltip = (
+    <span
+      id={tooltipId}
+      role='tooltip'
+      aria-hidden={!isTooltipVisible}
+      className={`pointer-events-none fixed z-[1100] w-56 rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-[10px] font-normal leading-relaxed text-gray-700 shadow-lg transition-opacity dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 ${
+        isTooltipVisible ? 'visible opacity-100' : 'invisible opacity-0'
+      }`}
+      style={{
+        left: tooltipPosition.left,
+        top: tooltipPosition.top,
+      }}
+    >
+      {tag.detail}
+    </span>
+  );
+
   return (
-    <div className='group relative min-w-0'>
+    <>
       <button
+        ref={triggerRef}
         type='button'
         aria-describedby={tooltipId}
+        aria-expanded={isTooltipVisible}
         data-testid={`user-menu-storage-status-tag-${tag.key}`}
+        onMouseEnter={() => {
+          setIsHovered(true);
+          showTooltip();
+        }}
+        onMouseLeave={() => setIsHovered(false)}
+        onFocus={() => {
+          setIsFocused(true);
+          showTooltip();
+        }}
+        onBlur={() => setIsFocused(false)}
+        onKeyDown={handleKeyDown}
         className={`flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-left text-[10px] font-semibold leading-tight transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
           STORAGE_STATUS_TAG_TONE_CLASSES[tag.tone]
         }`}
@@ -91,14 +177,10 @@ function StorageStatusTag({
         </span>
         <span className='truncate'>{tag.label}</span>
       </button>
-      <span
-        id={tooltipId}
-        role='tooltip'
-        className='pointer-events-none invisible absolute left-0 top-full z-20 mt-1 w-56 rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-[10px] font-normal leading-relaxed text-gray-700 opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'
-      >
-        {tag.detail}
-      </span>
-    </div>
+      {typeof document === 'undefined'
+        ? null
+        : createPortal(tooltip, document.body)}
+    </>
   );
 }
 
@@ -482,21 +564,27 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
   const renderStorageStatusRow = (
     tags: UserMenuStorageStatusTag[],
     rowKey: 'local' | 'remote'
-  ) => (
-    <div
-      className='grid grid-cols-2 gap-1.5'
-      data-testid={`user-menu-storage-status-${rowKey}-row`}
-    >
-      {tags.map((tag) => (
-        <StorageStatusTag
-          key={tag.key}
-          tag={tag}
-          tooltipId={`${storageStatusTooltipPrefix}-${tag.key}`}
-        />
-      ))}
-      {tags.length === 1 ? <span aria-hidden='true' /> : null}
-    </div>
-  );
+  ) => {
+    if (tags.length === 0) {
+      return null;
+    }
+
+    return (
+      <div
+        className='grid grid-cols-2 gap-1.5'
+        data-testid={`user-menu-storage-status-${rowKey}-row`}
+      >
+        {tags.map((tag) => (
+          <StorageStatusTag
+            key={tag.key}
+            tag={tag}
+            tooltipId={`${storageStatusTooltipPrefix}-${tag.key}`}
+          />
+        ))}
+        {tags.length === 1 ? <span aria-hidden='true' /> : null}
+      </div>
+    );
+  };
 
   // 检查是否显示管理面板按钮
   const isAuthenticated = Boolean(authInfo?.username);

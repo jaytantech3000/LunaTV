@@ -39,6 +39,10 @@ function resolveProviderLabel(storageType?: string | null): string {
 function buildLocalTags(
   runtime: ResolvedProfileRuntime
 ): UserMenuStorageStatusView['local'] {
+  if (runtime.runtimeKind === 'web-remote') {
+    return [];
+  }
+
   if (runtime.runtimeKind === 'desktop-profile-sync') {
     return [
       {
@@ -79,6 +83,23 @@ function buildLocalTags(
       label: '本地模式',
       tone: 'green',
       detail: '当前仅使用本机存储，数据不会自动同步到远端。',
+    },
+  ];
+}
+
+function buildWebRemoteTags(
+  runtime: ResolvedProfileRuntime
+): UserMenuStorageStatusView['remote'] {
+  const providerLabel = resolveProviderLabel(runtime.storageType);
+  const label =
+    providerLabel === '未配置' ? '远端存储' : `${providerLabel} 远端存储`;
+
+  return [
+    {
+      key: 'remote-provider',
+      label,
+      tone: 'gray',
+      detail: `${label}由服务端保存当前资料；本地浏览器和桌面 SQLite 不参与当前读写。`,
     },
   ];
 }
@@ -177,6 +198,10 @@ export function buildUserMenuStorageStatusView(
   readErrorMessage?: string | null
 ): UserMenuStorageStatusView {
   const local = buildLocalTags(runtime);
+  if (runtime.runtimeKind === 'web-remote') {
+    return { local, remote: buildWebRemoteTags(runtime) };
+  }
+
   if (runtime.runtimeKind !== 'desktop-profile-sync') {
     return { local, remote: null };
   }

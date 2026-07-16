@@ -415,6 +415,68 @@ describe('UserMenu', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('renders web-remote as a provider status tag without local-storage claims', async () => {
+    mockResolveProfileRuntime.mockReturnValue({
+      appTarget: 'web',
+      runtimeKind: 'web-remote',
+      syncEnabled: false,
+      storageType: 'upstash',
+      profileMode: 'shared-multi-user',
+      usesRemoteUserData: true,
+    });
+
+    await renderUserMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+    const remoteProviderTag = await screen.findByRole('button', {
+      name: 'Upstash 远端存储',
+    });
+    expect(remoteProviderTag).toHaveAttribute('aria-describedby');
+    expect(
+      screen.queryByRole('button', { name: '本地浏览器' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '本地模式' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '本地 SQLite' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId('user-menu-storage-status-remote-row')
+    ).toContainElement(remoteProviderTag);
+    expect(
+      screen.queryByTestId('user-menu-storage-status-local-row')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('数据存储：Upstash 远端存储')
+    ).toBeInTheDocument();
+  });
+
+  it('keeps status tooltip visible outside the clipped popover and dismissible from the keyboard', async () => {
+    await renderUserMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+    const remoteProviderTag = screen.getByTestId(
+      'user-menu-storage-status-tag-remote-provider'
+    );
+    const tooltipId = remoteProviderTag.getAttribute('aria-describedby');
+    expect(tooltipId).toBeTruthy();
+
+    const tooltip = document.getElementById(tooltipId || '');
+    expect(tooltip).toHaveAttribute('role', 'tooltip');
+    expect(tooltip).toHaveClass('fixed');
+    expect(tooltip?.parentElement).toBe(document.body);
+    expect(remoteProviderTag.closest('.w-60')).not.toContainElement(tooltip);
+
+    fireEvent.focus(remoteProviderTag);
+    expect(tooltip).toHaveClass('visible');
+
+    fireEvent.keyDown(remoteProviderTag, { key: 'Escape' });
+    expect(tooltip).toHaveClass('invisible');
+  });
+
   it('shows only the local SQLite tag for desktop-local runtime', async () => {
     mockResolveProfileRuntime.mockReturnValue({
       appTarget: 'desktop',
