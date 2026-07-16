@@ -3,6 +3,8 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import React from 'react';
 
 const mockRouter = {
@@ -459,6 +461,18 @@ describe('VideoCard', () => {
     });
 
     expect(await screen.findByText('NEW')).toBeInTheDocument();
+  });
+
+  it('gives title-only panels the comfortable bottom breathing room', () => {
+    const stylesheet = readFileSync(
+      resolve(__dirname, '../app/globals.css'),
+      'utf8'
+    );
+    const titleOnlyRule = stylesheet.match(
+      /\.luna-card-info--title-only\s*\{([^}]*)\}/
+    )?.[1];
+
+    expect(titleOnlyRule).toContain('padding-bottom: 0.68rem');
   });
 
   it('uses the title-only information-panel modifier when no metadata is visible', () => {
