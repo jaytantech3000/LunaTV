@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 
 const mockRouter = {
@@ -18,7 +19,6 @@ const mockGetAuthInfoFromBrowserCookie = jest.fn();
 const mockGetDesktopAuthRequirement = jest.fn();
 const mockGetRuntimeConfig = jest.fn();
 const mockResolveProfileRuntime = jest.fn();
-const mockReadDesktopProfileSyncStatusState = jest.fn();
 const mockUseAppUpdateState = jest.fn();
 
 let mockPendingNavigation: {
@@ -49,26 +49,6 @@ jest.mock('@/lib/desktop/auth-session', () => ({
 
 jest.mock('@/lib/desktop/runtime-config', () => ({
   DESKTOP_RUNTIME_UPDATED_EVENT: 'lunatv:desktop-runtime-updated',
-}));
-
-jest.mock('@/lib/desktop/profile-sync', () => ({
-  readDesktopProfileSyncStatusState: () =>
-    mockReadDesktopProfileSyncStatusState(),
-  resolveDesktopProfileSyncState: (status: {
-    enabled?: boolean;
-    reachable?: boolean;
-    authenticated?: boolean;
-    reauthRequired?: boolean;
-    errorKind?: string | null;
-  }) => {
-    if (!status?.enabled) return 'disabled';
-    if (!status.reachable) return 'offline';
-    if (status.reauthRequired || status.errorKind === 'unauthorized') {
-      return 'auth-expired';
-    }
-    if (status.errorKind) return 'degraded';
-    return status.authenticated ? 'ready' : 'connected';
-  },
 }));
 
 jest.mock('@/lib/desktop/tauri-client', () => ({
@@ -177,18 +157,6 @@ describe('UserMenu', () => {
       profileMode: 'shared-multi-user',
       usesRemoteUserData: true,
     });
-    mockReadDesktopProfileSyncStatusState.mockResolvedValue({
-      status: {
-        enabled: true,
-        reachable: true,
-        authenticated: true,
-        reauthRequired: false,
-        storageType: 'redis',
-        errorKind: null,
-        pendingOutboxCount: 0,
-      },
-      error: '',
-    });
     mockUseAppUpdateState.mockReturnValue({
       isChecking: false,
       updateStatus: 'no_update',
@@ -268,214 +236,63 @@ describe('UserMenu', () => {
     });
   });
 
-  it('shows local SQLite as the primary store and Redis as the remote sync provider', async () => {
+  it('renders one horizontal group of non-interactive equal-width storage tags', async () => {
     await renderUserMenu();
 
     fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
 
-    await waitFor(() => {
-      expect(screen.getByText(/数据存储：/)).toHaveTextContent(
-        '数据存储：本地 SQLite · 远端同步：Redis'
-      );
-    });
-  });
-
-  it('renders equal-width local and remote status rows with accessible details', async () => {
-    await renderUserMenu();
-
-    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
-
-    expect(
-      await screen.findByRole('button', { name: '已连接' })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByTestId('user-menu-storage-status-local-row')
-    ).toBeInTheDocument();
-    expect(
-      screen.getByTestId('user-menu-storage-status-remote-row')
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: '本地 SQLite' })
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '在使用' })).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: '远端 Redis' })
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '已连接' })).toBeInTheDocument();
-
-    const localTag = screen.getByRole('button', { name: '本地 SQLite' });
-    const tooltipId = localTag.getAttribute('aria-describedby');
-    expect(tooltipId).toBeTruthy();
-    expect(document.getElementById(tooltipId || '')).toHaveAttribute(
-      'role',
-      'tooltip'
-    );
-    expect(document.getElementById(tooltipId || '')).toHaveTextContent(
-      '本地 SQLite 是日常读写主数据源'
+    const storageTagRow = await screen.findByTestId('user-menu-storage-tags');
+    const tags = within(storageTagRow).getAllByTestId(
+      /^user-menu-storage-tag-/
     );
 
-    fireEvent.focus(localTag);
-    expect(document.getElementById(tooltipId || '')).toBeInTheDocument();
-  });
-
-  it('renders waiting login instead of disconnected for a reachable unauthenticated remote', async () => {
-    mockReadDesktopProfileSyncStatusState.mockResolvedValue({
-      status: {
-        enabled: true,
-        reachable: true,
-        authenticated: false,
-        reauthRequired: false,
-        storageType: 'redis',
-        errorKind: null,
-      },
-      error: '',
-    });
-
-    await renderUserMenu();
-
-    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
-
-    expect(
-      await screen.findByRole('button', { name: '等待登录' })
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: '未连接' })
-    ).not.toBeInTheDocument();
-  });
-
-  it('renders status exception instead of disconnected for a reachable protocol error', async () => {
-    mockReadDesktopProfileSyncStatusState.mockResolvedValue({
-      status: {
-        enabled: true,
-        reachable: true,
-        authenticated: false,
-        reauthRequired: false,
-        storageType: 'redis',
-        errorKind: 'protocol-incompatible',
-      },
-      error: '',
-    });
-
-    await renderUserMenu();
-
-    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
-
-    expect(
-      await screen.findByRole('button', { name: '状态异常' })
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: '未连接' })
-    ).not.toBeInTheDocument();
-  });
-
-  it('renders an unconfigured tag for a disabled remote without an error kind', async () => {
-    mockReadDesktopProfileSyncStatusState.mockResolvedValue({
-      status: {
-        enabled: false,
-        reachable: false,
-        authenticated: false,
-        reauthRequired: false,
-        storageType: null,
-        errorKind: null,
-      },
-      error: '',
-    });
-
-    await renderUserMenu();
-
-    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
-
-    expect(
-      await screen.findByRole('button', { name: '未配置' })
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: '未连接' })
-    ).not.toBeInTheDocument();
-  });
-
-  it('does not render a local SQLite tag for web-remote runtime', async () => {
-    mockResolveProfileRuntime.mockReturnValue({
-      appTarget: 'web',
-      runtimeKind: 'web-remote',
-      syncEnabled: false,
-      storageType: 'redis',
-      profileMode: 'shared-multi-user',
-      usesRemoteUserData: true,
-    });
-
-    await renderUserMenu();
-
-    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
-
-    await waitFor(() => {
-      expect(screen.getByText('数据存储：Redis 远端存储')).toBeInTheDocument();
-    });
-    expect(
-      screen.queryByRole('button', { name: '本地 SQLite' })
-    ).not.toBeInTheDocument();
-  });
-
-  it('renders web-remote as a provider status tag without local-storage claims', async () => {
-    mockResolveProfileRuntime.mockReturnValue({
-      appTarget: 'web',
-      runtimeKind: 'web-remote',
-      syncEnabled: false,
-      storageType: 'upstash',
-      profileMode: 'shared-multi-user',
-      usesRemoteUserData: true,
-    });
-
-    await renderUserMenu();
-
-    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
-
-    const remoteProviderTag = await screen.findByRole('button', {
-      name: 'Upstash 远端存储',
-    });
-    expect(remoteProviderTag).toHaveAttribute('aria-describedby');
-    expect(
-      screen.queryByRole('button', { name: '本地浏览器' })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: '本地模式' })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: '本地 SQLite' })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByTestId('user-menu-storage-status-remote-row')
-    ).toContainElement(remoteProviderTag);
-    expect(
-      screen.queryByTestId('user-menu-storage-status-local-row')
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByText('数据存储：Upstash 远端存储')
-    ).toBeInTheDocument();
-  });
-
-  it('keeps status tooltip visible outside the clipped popover and dismissible from the keyboard', async () => {
-    await renderUserMenu();
-
-    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
-
-    const remoteProviderTag = screen.getByTestId(
-      'user-menu-storage-status-tag-remote-provider'
+    expect(tags).toHaveLength(2);
+    expect(tags.map((tag) => tag.textContent)).toEqual([
+      '本地 SQLite',
+      '远端 Redis',
+    ]);
+    expect(tags.map((tag) => tag.tagName)).toEqual(['SPAN', 'SPAN']);
+    expect(storageTagRow).toHaveClass('flex');
+    expect(tags.every((tag) => tag.classList.contains('flex-1'))).toBe(true);
+    expect(tags[0]).toHaveAttribute(
+      'title',
+      '本地 SQLite 是日常读写主数据源。'
     );
-    const tooltipId = remoteProviderTag.getAttribute('aria-describedby');
-    expect(tooltipId).toBeTruthy();
-
-    const tooltip = document.getElementById(tooltipId || '');
-    expect(tooltip).toHaveAttribute('role', 'tooltip');
-    expect(tooltip).toHaveClass('fixed');
-    expect(tooltip?.parentElement).toBe(document.body);
-    expect(remoteProviderTag.closest('.w-60')).not.toContainElement(tooltip);
-
-    fireEvent.focus(remoteProviderTag);
-    expect(tooltip).toHaveClass('visible');
-
-    fireEvent.keyDown(remoteProviderTag, { key: 'Escape' });
-    expect(tooltip).toHaveClass('invisible');
+    expect(tags[1]).toHaveAttribute('title', '远端 Redis 仅作后台同步目标。');
+    expect(within(storageTagRow).queryAllByRole('button')).toHaveLength(0);
+    expect(screen.queryByText(/数据存储：/)).not.toBeInTheDocument();
+    expect(storageTagRow.textContent).not.toMatch(
+      /在使用|已连接|等待登录|状态异常|登录失效/
+    );
   });
+
+  it.each([
+    ['upstash', '远端 Upstash'],
+    ['custom-provider', '远端存储'],
+    ['', '远端未配置'],
+    ['localstorage', '远端未配置'],
+  ])(
+    'maps desktop profile-sync storage %s to %s',
+    async (storageType, expectedRemoteLabel) => {
+      mockResolveProfileRuntime.mockReturnValue({
+        appTarget: 'desktop',
+        runtimeKind: 'desktop-profile-sync',
+        syncEnabled: true,
+        storageType,
+        profileMode: 'shared-multi-user',
+        usesRemoteUserData: true,
+      });
+
+      await renderUserMenu();
+
+      fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+      const storageTagRow = await screen.findByTestId('user-menu-storage-tags');
+      expect(
+        within(storageTagRow).getByTestId('user-menu-storage-tag-remote')
+      ).toHaveTextContent(expectedRemoteLabel);
+    }
+  );
 
   it('shows only the local SQLite tag for desktop-local runtime', async () => {
     mockResolveProfileRuntime.mockReturnValue({
@@ -491,49 +308,80 @@ describe('UserMenu', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
 
-    expect(
-      await screen.findByRole('button', { name: '本地 SQLite' })
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /远端/ })
-    ).not.toBeInTheDocument();
-    expect(mockReadDesktopProfileSyncStatusState).not.toHaveBeenCalled();
+    const storageTagRow = await screen.findByTestId('user-menu-storage-tags');
+    const tags = within(storageTagRow).getAllByTestId(
+      /^user-menu-storage-tag-/
+    );
+
+    expect(tags).toHaveLength(1);
+    expect(tags[0]).toHaveTextContent('本地 SQLite');
+    expect(within(storageTagRow).queryByText(/远端/)).not.toBeInTheDocument();
+    expect(within(storageTagRow).queryAllByRole('button')).toHaveLength(0);
   });
 
-  it('refreshes runtime tags and profile sync status after the desktop runtime event', async () => {
-    mockReadDesktopProfileSyncStatusState
-      .mockResolvedValueOnce({
-        status: {
-          enabled: true,
-          reachable: true,
-          authenticated: true,
-          reauthRequired: false,
-          storageType: 'redis',
-          errorKind: null,
-          pendingOutboxCount: 0,
-        },
-        error: '',
+  it('does not render desktop storage tags for a web runtime', async () => {
+    mockResolveProfileRuntime.mockReturnValue({
+      appTarget: 'web',
+      runtimeKind: 'web-remote',
+      syncEnabled: false,
+      storageType: 'redis',
+      profileMode: 'shared-multi-user',
+      usesRemoteUserData: true,
+    });
+
+    await renderUserMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+    expect(
+      screen.queryByTestId('user-menu-storage-tags')
+    ).not.toBeInTheDocument();
+  });
+
+  it('does not render desktop storage tags for web-local runtime', async () => {
+    mockResolveProfileRuntime.mockReturnValue({
+      appTarget: 'web',
+      runtimeKind: 'web-local',
+      syncEnabled: false,
+      storageType: 'localstorage',
+      profileMode: 'single-user-local',
+      usesRemoteUserData: false,
+    });
+
+    await renderUserMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+
+    expect(
+      screen.queryByTestId('user-menu-storage-tags')
+    ).not.toBeInTheDocument();
+  });
+
+  it('refreshes the provider label after a desktop runtime event without status reads', async () => {
+    mockResolveProfileRuntime
+      .mockReturnValueOnce({
+        appTarget: 'desktop',
+        runtimeKind: 'desktop-profile-sync',
+        syncEnabled: true,
+        storageType: 'redis',
+        profileMode: 'shared-multi-user',
+        usesRemoteUserData: true,
       })
-      .mockResolvedValueOnce({
-        status: {
-          enabled: true,
-          reachable: true,
-          authenticated: false,
-          reauthRequired: true,
-          storageType: 'upstash',
-          errorKind: 'unauthorized',
-          error: '远端会话已过期',
-          pendingOutboxCount: 2,
-        },
-        error: '',
+      .mockReturnValueOnce({
+        appTarget: 'desktop',
+        runtimeKind: 'desktop-profile-sync',
+        syncEnabled: true,
+        storageType: 'upstash',
+        profileMode: 'shared-multi-user',
+        usesRemoteUserData: true,
       });
 
     await renderUserMenu();
 
     fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
     expect(
-      await screen.findByRole('button', { name: '远端 Redis' })
-    ).toBeInTheDocument();
+      await screen.findByTestId('user-menu-storage-tag-remote')
+    ).toHaveTextContent('远端 Redis');
 
     act(() => {
       window.dispatchEvent(new Event('lunatv:desktop-runtime-updated'));
@@ -541,13 +389,9 @@ describe('UserMenu', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole('button', { name: '远端 Upstash' })
-      ).toBeInTheDocument();
-      expect(
-        screen.getByRole('button', { name: '登录失效' })
-      ).toBeInTheDocument();
+        screen.getByTestId('user-menu-storage-tag-remote')
+      ).toHaveTextContent('远端 Upstash');
     });
-    expect(mockReadDesktopProfileSyncStatusState).toHaveBeenCalledTimes(2);
   });
 
   it('keeps account sync and management discoverable for desktop guests', async () => {

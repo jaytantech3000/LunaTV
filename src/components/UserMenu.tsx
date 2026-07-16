@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 
 import {
@@ -26,17 +26,12 @@ import {
   getDesktopAuthRequirement,
   logoutDesktopSession,
 } from '@/lib/desktop/auth-session';
-import {
-  type DesktopProfileSyncStatus,
-  readDesktopProfileSyncStatusState,
-} from '@/lib/desktop/profile-sync';
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
-import { getProfileStorageDisplayCopy } from '@/lib/desktop/storage-display-copy';
 import { changeDesktopPassword } from '@/lib/desktop/tauri-client';
 import {
-  type UserMenuStorageStatusTag,
-  buildUserMenuStorageStatusView,
-} from '@/lib/desktop/user-menu-storage-status';
+  type UserMenuStorageTag,
+  buildUserMenuStorageTags,
+} from '@/lib/desktop/user-menu-storage-tags';
 import { purgeOfflineDownloads } from '@/lib/download/session';
 import type { ResolvedProfileRuntime } from '@/lib/profile/contracts';
 import { resolveProfileRuntime } from '@/lib/profile/runtime';
@@ -59,128 +54,23 @@ interface UserMenuProps {
   variant?: 'default' | 'ghost';
 }
 
-const STORAGE_STATUS_TAG_TONE_CLASSES: Record<
-  UserMenuStorageStatusTag['tone'],
-  string
-> = {
+const STORAGE_TAG_TONE_CLASSES: Record<UserMenuStorageTag['tone'], string> = {
   green:
     'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200',
-  red: 'border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200',
   gray: 'border-gray-300 bg-gray-50 text-gray-700 dark:border-gray-600 dark:bg-gray-800/70 dark:text-gray-200',
 };
 
-function StorageStatusTag({
-  tag,
-  tooltipId,
-}: {
-  tag: UserMenuStorageStatusTag;
-  tooltipId: string;
-}) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [isHovered, setIsHovered] = useState(false);
-  const [isFocused, setIsFocused] = useState(false);
-  const [isDismissed, setIsDismissed] = useState(false);
-  const [tooltipPosition, setTooltipPosition] = useState({
-    left: 8,
-    top: 8,
-  });
-  const isTooltipVisible = (isHovered || isFocused) && !isDismissed;
-
-  const updateTooltipPosition = useCallback(() => {
-    const trigger = triggerRef.current;
-    if (!trigger || typeof window === 'undefined') {
-      return;
-    }
-
-    const triggerRect = trigger.getBoundingClientRect();
-    const tooltipWidth = 224;
-    const viewportGutter = 8;
-    const maxLeft = Math.max(
-      viewportGutter,
-      window.innerWidth - tooltipWidth - viewportGutter
-    );
-
-    setTooltipPosition({
-      left: Math.min(Math.max(triggerRect.left, viewportGutter), maxLeft),
-      top: triggerRect.bottom + 4,
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!isTooltipVisible) {
-      return;
-    }
-
-    updateTooltipPosition();
-    window.addEventListener('resize', updateTooltipPosition);
-    window.addEventListener('scroll', updateTooltipPosition, true);
-
-    return () => {
-      window.removeEventListener('resize', updateTooltipPosition);
-      window.removeEventListener('scroll', updateTooltipPosition, true);
-    };
-  }, [isTooltipVisible, updateTooltipPosition]);
-
-  const showTooltip = () => {
-    setIsDismissed(false);
-  };
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      setIsDismissed(true);
-    }
-  };
-
-  const tooltip = (
-    <span
-      id={tooltipId}
-      role='tooltip'
-      aria-hidden={!isTooltipVisible}
-      className={`pointer-events-none fixed z-[1100] w-56 rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-[10px] font-normal leading-relaxed text-gray-700 shadow-lg transition-opacity dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 ${
-        isTooltipVisible ? 'visible opacity-100' : 'invisible opacity-0'
-      }`}
-      style={{
-        left: tooltipPosition.left,
-        top: tooltipPosition.top,
-      }}
-    >
-      {tag.detail}
-    </span>
-  );
-
+function StorageTag({ tag }: { tag: UserMenuStorageTag }) {
   return (
-    <>
-      <button
-        ref={triggerRef}
-        type='button'
-        aria-describedby={tooltipId}
-        aria-expanded={isTooltipVisible}
-        data-testid={`user-menu-storage-status-tag-${tag.key}`}
-        onMouseEnter={() => {
-          setIsHovered(true);
-          showTooltip();
-        }}
-        onMouseLeave={() => setIsHovered(false)}
-        onFocus={() => {
-          setIsFocused(true);
-          showTooltip();
-        }}
-        onBlur={() => setIsFocused(false)}
-        onKeyDown={handleKeyDown}
-        className={`flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-left text-[10px] font-semibold leading-tight transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
-          STORAGE_STATUS_TAG_TONE_CLASSES[tag.tone]
-        }`}
-      >
-        <span aria-hidden='true' className='text-xs leading-none'>
-          •
-        </span>
-        <span className='truncate'>{tag.label}</span>
-      </button>
-      {typeof document === 'undefined'
-        ? null
-        : createPortal(tooltip, document.body)}
-    </>
+    <span
+      data-testid={`user-menu-storage-tag-${tag.key}`}
+      title={tag.detail}
+      className={`flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-lg border px-2 py-1 text-left text-[10px] font-semibold leading-tight ${
+        STORAGE_TAG_TONE_CLASSES[tag.tone]
+      }`}
+    >
+      <span className='truncate'>{tag.label}</span>
+    </span>
   );
 }
 
@@ -194,11 +84,6 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
   const [profileRuntime, setProfileRuntime] =
     useState<ResolvedProfileRuntime | null>(null);
   const [storageType, setStorageType] = useState<string>('localstorage');
-  const [desktopProfileSyncStatus, setDesktopProfileSyncStatus] = useState<
-    DesktopProfileSyncStatus | null | undefined
-  >(undefined);
-  const [desktopProfileSyncStatusError, setDesktopProfileSyncStatusError] =
-    useState('');
   const [adminPanelEnabled, setAdminPanelEnabled] = useState(true);
   const [isDesktopTarget, setIsDesktopTarget] = useState(false);
   const [desktopProfileSyncEnabled, setDesktopProfileSyncEnabled] =
@@ -208,7 +93,6 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
   const [desktopOwnerPasswordConfigured, setDesktopOwnerPasswordConfigured] =
     useState(false);
   const [mounted, setMounted] = useState(false);
-  const storageStatusTooltipPrefix = useId().replace(/:/g, '');
   const isGhost = variant === 'ghost';
   const buttonClassName = isGhost
     ? 'luna-toolbar-button luna-toolbar-button--ghost'
@@ -264,17 +148,6 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
       setAdminPanelEnabled(runtimeConfig.ENABLE_ADMIN_PANEL !== false);
       setIsDesktopTarget(isDesktop);
       setDesktopProfileSyncEnabled(profileSyncEnabled);
-      if (profileSyncEnabled) {
-        const statusState = await readDesktopProfileSyncStatusState();
-        if (!active) {
-          return;
-        }
-        setDesktopProfileSyncStatus(statusState.status);
-        setDesktopProfileSyncStatusError(statusState.error);
-      } else {
-        setDesktopProfileSyncStatus(null);
-        setDesktopProfileSyncStatusError('');
-      }
 
       if (!isDesktop || profileSyncEnabled) {
         setDesktopAuthRequired(false);
@@ -554,37 +427,9 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
   const isOpeningDesktopAccountSync =
     pendingNavigation?.kind === 'nav' &&
     pendingNavigation.href === '/account-sync';
-  const storageStatusView = profileRuntime
-    ? buildUserMenuStorageStatusView(
-        profileRuntime,
-        desktopProfileSyncStatus,
-        desktopProfileSyncStatusError
-      )
-    : null;
-  const renderStorageStatusRow = (
-    tags: UserMenuStorageStatusTag[],
-    rowKey: 'local' | 'remote'
-  ) => {
-    if (tags.length === 0) {
-      return null;
-    }
-
-    return (
-      <div
-        className='grid grid-cols-2 gap-1.5'
-        data-testid={`user-menu-storage-status-${rowKey}-row`}
-      >
-        {tags.map((tag) => (
-          <StorageStatusTag
-            key={tag.key}
-            tag={tag}
-            tooltipId={`${storageStatusTooltipPrefix}-${tag.key}`}
-          />
-        ))}
-        {tags.length === 1 ? <span aria-hidden='true' /> : null}
-      </div>
-    );
-  };
+  const storageTags = profileRuntime
+    ? buildUserMenuStorageTags(profileRuntime)
+    : [];
 
   // 检查是否显示管理面板按钮
   const isAuthenticated = Boolean(authInfo?.username);
@@ -695,18 +540,15 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
               <div className='truncate text-sm font-semibold text-[var(--luna-copy-strong)]'>
                 {authInfo?.username || '未登录'}
               </div>
-              {profileRuntime ? (
-                <div className='text-[10px] text-[var(--luna-copy-muted)]'>
-                  数据存储：{getProfileStorageDisplayCopy(profileRuntime)}
-                </div>
-              ) : null}
             </div>
-            {storageStatusView ? (
-              <div className='mt-2 space-y-1.5'>
-                {renderStorageStatusRow(storageStatusView.local, 'local')}
-                {storageStatusView.remote
-                  ? renderStorageStatusRow(storageStatusView.remote, 'remote')
-                  : null}
+            {storageTags.length > 0 ? (
+              <div
+                className='mt-2 flex gap-1.5'
+                data-testid='user-menu-storage-tags'
+              >
+                {storageTags.map((tag) => (
+                  <StorageTag key={tag.key} tag={tag} />
+                ))}
               </div>
             ) : null}
             {!isAuthenticated &&
