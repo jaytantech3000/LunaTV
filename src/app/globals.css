@@ -849,8 +849,7 @@ body {
     bottom: 0;
     left: 0;
     z-index: 20;
-    min-height: 28%;
-    padding: 0.72rem 0.78rem 0.8rem;
+    padding: 0.62rem 0.78rem 0.68rem;
     border: 0;
     border-radius: 0 0 0.9rem 0.9rem;
     background: linear-gradient(
@@ -860,6 +859,16 @@ body {
       var(--luna-card-info-bottom) 100%
     );
     box-shadow: none;
+  }
+
+  .luna-card-info--title-only {
+    padding-top: 0.48rem;
+    padding-bottom: 0.58rem;
+  }
+
+  .luna-card-info--with-metadata {
+    padding-top: 0.68rem;
+    padding-bottom: 0.74rem;
   }
 
   html.dark .luna-card-info {

@@ -460,4 +460,54 @@ describe('VideoCard', () => {
 
     expect(await screen.findByText('NEW')).toBeInTheDocument();
   });
+
+  it('uses the title-only information-panel modifier when no metadata is visible', () => {
+    const { container } = render(
+      <VideoCard from='douban' title='只有标题的视频' />
+    );
+
+    const infoPanel = container.querySelector('.luna-card-info');
+
+    expect(infoPanel).toContainElement(
+      screen.getByText('只有标题的视频', { selector: '.luna-card-title' })
+    );
+    expect(infoPanel).toHaveClass('luna-card-info--title-only');
+    expect(infoPanel?.querySelectorAll('.luna-chip')).toHaveLength(0);
+  });
+
+  it('uses the metadata information-panel modifier for a stable type chip', () => {
+    const { container } = render(
+      <VideoCard from='douban' title='电影视频' type='movie' />
+    );
+
+    const infoPanel = container.querySelector('.luna-card-info');
+
+    expect(screen.getByText('电影')).toBeInTheDocument();
+    expect(infoPanel).toHaveClass('luna-card-info--with-metadata');
+    expect(infoPanel?.querySelectorAll('.luna-chip')).toHaveLength(1);
+  });
+
+  it('keeps source and type chips visible when the card context enables source metadata', () => {
+    const { container } = render(
+      <VideoCard
+        from='favorite'
+        id='video-1'
+        poster='https://example.com/poster.jpg'
+        source='source-a'
+        source_name='测试源'
+        title='带来源的视频'
+        type='movie'
+        playbackMode='offline'
+      />
+    );
+
+    const infoPanel = container.querySelector('.luna-card-info');
+
+    expect(screen.getByText('测试源')).toBeInTheDocument();
+    expect(screen.getByText('电影')).toBeInTheDocument();
+    expect(screen.getByText('离线')).toBeInTheDocument();
+    expect(infoPanel).toHaveClass('luna-card-info--with-metadata');
+    expect(infoPanel?.querySelectorAll('.luna-chip')).toHaveLength(3);
+    expect(screen.queryByText('敬请期待')).not.toBeInTheDocument();
+  });
 });

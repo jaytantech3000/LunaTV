@@ -1295,6 +1295,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       source_name,
       typeLabel,
     ]);
+    const hasMetadata = metadataItems.length > 0;
     const aggregateSourceSummary = useMemo(() => {
       if (
         !isAggregate ||
@@ -1352,7 +1353,11 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
     const posterOverlayClassName = `luna-card-poster-overlay absolute inset-0 transition-opacity duration-200 ease-out ${
       isNavigating ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'
     }`;
-    const infoPanelClassName = 'luna-card-info mt-[0.38rem]';
+    const infoPanelClassName = `luna-card-info ${
+      hasMetadata
+        ? 'luna-card-info--with-metadata'
+        : 'luna-card-info--title-only'
+    }`;
     const nonSelectableStyle: React.CSSProperties = {
       WebkitUserSelect: 'none',
       userSelect: 'none',
