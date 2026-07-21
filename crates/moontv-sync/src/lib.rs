@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use reqwest::{
     Client, Method, StatusCode, Url,
-    header::{ACCEPT, CONTENT_TYPE},
+    cookie::{CookieStore, Jar},
+    header::{ACCEPT, CONTENT_TYPE, COOKIE, SET_COOKIE},
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -116,12 +119,18 @@ pub struct RemoteLoginResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileSyncCookieSnapshot {
+    header: Option<reqwest::header::HeaderValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileSyncForwardRequest {
     pub method: Method,
     pub request_path: String,
     pub accept: Option<String>,
     pub content_type: Option<String>,
     pub body: Vec<u8>,
+    cookie_snapshot: Option<ProfileSyncCookieSnapshot>,
 }
 
 impl ProfileSyncForwardRequest {
@@ -132,6 +141,7 @@ impl ProfileSyncForwardRequest {
             accept: None,
             content_type: None,
             body: Vec::new(),
+            cookie_snapshot: None,
         }
     }
 
@@ -153,6 +163,11 @@ impl ProfileSyncForwardRequest {
         self.body = body;
         self
     }
+
+    pub fn with_cookie_snapshot(mut self, snapshot: ProfileSyncCookieSnapshot) -> Self {
+        self.cookie_snapshot = Some(snapshot);
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +175,8 @@ pub struct ProfileSyncForwardResponse {
     pub status: StatusCode,
     pub content_type: Option<String>,
     pub body: Vec<u8>,
+    cookie_url: Url,
+    set_cookie_headers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,11 +195,15 @@ pub struct ProfileSyncForwardOutcome {
 #[derive(Debug, Clone)]
 pub struct ProfileSyncClient {
     client: Client,
+    cookie_jar: Arc<Jar>,
 }
 
 impl ProfileSyncClient {
     pub fn new(client: Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            cookie_jar: Arc::new(Jar::default()),
+        }
     }
 
     pub async fn send(
@@ -194,7 +215,16 @@ impl ProfileSyncClient {
             ProfileSyncError::new(ProfileSyncErrorKind::NotConfigured, "未配置账号同步后端")
         })?;
         let target_url = build_profile_sync_target_url(remote_base_url, &request.request_path)?;
+        let cookie_header = request
+            .cookie_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.header.clone())
+            .unwrap_or_else(|| self.cookie_jar.cookies(&target_url));
         let mut upstream_request = self.client.request(request.method, target_url);
+
+        if let Some(cookie_header) = cookie_header {
+            upstream_request = upstream_request.header(COOKIE, cookie_header);
+        }
 
         if let Some(content_type) = request.content_type.as_deref() {
             upstream_request = upstream_request.header(CONTENT_TYPE, content_type);
@@ -210,6 +240,23 @@ impl ProfileSyncClient {
 
         upstream_request.send().await.map_err(|error| {
             ProfileSyncError::new(ProfileSyncErrorKind::Unreachable, error.to_string())
+        })
+    }
+
+    pub fn commit_response_cookies(&self, response: &ProfileSyncForwardResponse) {
+        for cookie in &response.set_cookie_headers {
+            self.cookie_jar.add_cookie_str(cookie, &response.cookie_url);
+        }
+    }
+
+    pub fn cookie_snapshot(
+        &self,
+        remote_base_url: &str,
+        request_path: &str,
+    ) -> Result<ProfileSyncCookieSnapshot, ProfileSyncError> {
+        let target_url = build_profile_sync_target_url(remote_base_url, request_path)?;
+        Ok(ProfileSyncCookieSnapshot {
+            header: self.cookie_jar.cookies(&target_url),
         })
     }
 
@@ -382,6 +429,13 @@ async fn read_forward_response(
     response: reqwest::Response,
 ) -> Result<ProfileSyncForwardResponse, ProfileSyncError> {
     let status = response.status();
+    let cookie_url = response.url().clone();
+    let set_cookie_headers = response
+        .headers()
+        .get_all(SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok().map(str::to_owned))
+        .collect();
     let content_type = response
         .headers()
         .get(CONTENT_TYPE)
@@ -395,6 +449,8 @@ async fn read_forward_response(
         status,
         content_type,
         body: body.to_vec(),
+        cookie_url,
+        set_cookie_headers,
     })
 }
 
@@ -405,10 +461,8 @@ fn session_mutation_from_login_response(
         return ProfileSyncSessionMutation::Set(session);
     }
 
-    if response.status == StatusCode::UNAUTHORIZED {
-        return ProfileSyncSessionMutation::Clear;
-    }
-
+    // A rejected login attempt must not revoke an already valid sync session.
+    // It may be a stale form submission racing a later successful login.
     ProfileSyncSessionMutation::Keep
 }
 

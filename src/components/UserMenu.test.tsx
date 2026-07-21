@@ -20,6 +20,7 @@ const mockGetDesktopAuthRequirement = jest.fn();
 const mockGetRuntimeConfig = jest.fn();
 const mockResolveProfileRuntime = jest.fn();
 const mockUseAppUpdateState = jest.fn();
+const mockLogoutDesktopSession = jest.fn();
 
 let mockPendingNavigation: {
   href: string;
@@ -44,7 +45,8 @@ jest.mock('@/lib/desktop/auth-session', () => ({
       : '/login'
   ),
   getDesktopAuthRequirement: () => mockGetDesktopAuthRequirement(),
-  logoutDesktopSession: jest.fn(),
+  logoutDesktopSession: (...args: unknown[]) =>
+    mockLogoutDesktopSession(...args),
 }));
 
 jest.mock('@/lib/desktop/runtime-config', () => ({
@@ -419,6 +421,23 @@ describe('UserMenu', () => {
     expect(screen.getByRole('button', { name: '登录' })).toBeInTheDocument();
     expect(screen.getAllByText('访客')).toHaveLength(2);
     expect(screen.queryByText('未登录')).not.toBeInTheDocument();
+  });
+
+  it('clears local desktop auth when the user logs out with sync enabled', async () => {
+    const consoleErrorSpy = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    await renderUserMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'User Menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: '登出' }));
+
+    await waitFor(() => {
+      expect(mockLogoutDesktopSession).toHaveBeenCalledWith({
+        rememberLoggedOut: true,
+      });
+    });
+    consoleErrorSpy.mockRestore();
   });
 
   it('shows a compact green service point with a local-service title when up to date', async () => {

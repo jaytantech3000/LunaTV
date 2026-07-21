@@ -27,27 +27,25 @@ export function resolveProfileRuntime(
   const baseStorageType = resolveBaseStorageType(config);
   const syncEnabled =
     appTarget === 'desktop' && config.PROFILE_SYNC_ENABLED === true;
-  const storageType = syncEnabled
-    ? normalizeStorageType(config.PROFILE_SYNC_STORAGE_TYPE || baseStorageType)
-    : baseStorageType;
-  const profileMode = syncEnabled
-    ? config.PROFILE_SYNC_PROFILE_MODE || deriveProfileMode(storageType)
-    : config.PROFILE_MODE || deriveProfileMode(storageType);
+  // Desktop profile data always lives in the local SQLite store. Profile sync is
+  // a background replication concern, not a different request/auth runtime.
+  const storageType = baseStorageType;
+  const profileMode = config.PROFILE_MODE || deriveProfileMode(storageType);
   const runtimeKind =
     appTarget === 'desktop'
-      ? syncEnabled
-        ? 'desktop-profile-sync'
-        : 'desktop-local'
+      ? 'desktop-local'
       : storageType !== 'localstorage'
       ? 'web-remote'
       : 'web-local';
-  const usesRemoteUserData =
-    runtimeKind === 'desktop-profile-sync' || runtimeKind === 'web-remote';
+  const usesRemoteUserData = runtimeKind === 'web-remote';
 
   return {
     appTarget,
     runtimeKind,
     syncEnabled,
+    syncStorageType: syncEnabled
+      ? normalizeStorageType(config.PROFILE_SYNC_STORAGE_TYPE)
+      : undefined,
     storageType,
     profileMode,
     usesRemoteUserData,

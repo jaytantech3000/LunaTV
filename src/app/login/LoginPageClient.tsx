@@ -6,7 +6,6 @@ import { AlertCircle, CheckCircle } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
-import { setAuthInfoInBrowser } from '@/lib/auth';
 import {
   getDesktopAuthRequirement,
   hasExplicitDesktopLogout,
@@ -23,17 +22,6 @@ import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
 import { useSite } from '@/components/SiteProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
-
-function shouldAskUsernameForProfileSync(
-  profileMode?: 'single-user-local' | 'shared-multi-user' | string | null,
-  storageType?: string | null
-): boolean {
-  if (profileMode === 'single-user-local' || storageType === 'localstorage') {
-    return false;
-  }
-
-  return true;
-}
 
 function resolveLoginErrorMessage(
   error: unknown,
@@ -198,39 +186,28 @@ export function LoginPageClient() {
           bootstrapState;
         const { profileSync: profileSyncStatus } = bootstrap;
 
+        const profileSyncStatusMessage = profileSyncStatus?.enabled
+          ? buildDesktopProfileSyncLoginStatusMessage(profileSyncStatus)
+          : '';
+
         if (profileSyncStatus?.enabled) {
           if (!active) {
             return;
           }
 
-          setDesktopProfileSyncEnabled(true);
-          setShouldAskUsername(
-            shouldAskUsernameForProfileSync(
-              profileSyncStatus.profileMode,
-              profileSyncStatus.storageType
-            )
-          );
-          setStatusMessage(
-            buildDesktopProfileSyncLoginStatusMessage(profileSyncStatus)
-          );
-
-          if (profileSyncStatus.authenticated) {
-            setRedirectingDesktopSession(true);
-            const redirect = searchParams.get('redirect') || '/';
-            router.replace(redirect);
-            return;
-          }
-
-          setDesktopAuthCheckDone(true);
-          return;
+          // Sync availability is informational here. Desktop authentication always
+          // remains local; remote credentials are managed from Account Sync.
+          setDesktopProfileSyncEnabled(false);
         }
 
         if (!active) {
           return;
         }
 
-        const { didExplicitDesktopLogout } =
-          applyLocalDesktopAuthState(effectiveAuthStatus);
+        const { didExplicitDesktopLogout } = applyLocalDesktopAuthState(
+          effectiveAuthStatus,
+          profileSyncStatusMessage
+        );
 
         if (
           !effectiveAuthStatus.ownerPasswordConfigured &&
@@ -314,56 +291,6 @@ export function LoginPageClient() {
       setLoading(true);
 
       if ((window as any).RUNTIME_CONFIG?.APP_TARGET === 'desktop') {
-        if (desktopProfileSyncEnabled) {
-          const res = await apiFetch('/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              password,
-              ...(shouldAskUsername ? { username: username.trim() } : {}),
-            }),
-          });
-
-          if (res.ok) {
-            const data = (await res.json().catch(() => ({}))) as {
-              username?: string;
-              role?: 'owner' | 'admin' | 'user';
-            };
-            const resolvedUsername =
-              data.username?.trim() ||
-              (shouldAskUsername ? username.trim() : undefined);
-
-            if (resolvedUsername) {
-              setAuthInfoInBrowser({
-                username: resolvedUsername,
-                role: data.role || 'user',
-                password,
-                sessionMode: 'desktop-profile-sync',
-              });
-            }
-
-            const bootstrapState = await loadDesktopProfileBootstrapState({
-              localAuthMode: 'none',
-            });
-            if (bootstrapState) {
-              // Runtime config and sync state are already applied by the shared bootstrap loader.
-            }
-
-            const redirect = searchParams.get('redirect') || '/';
-            router.replace(redirect);
-            return;
-          }
-
-          if (res.status === 401) {
-            setError(shouldAskUsername ? '用户名或密码错误' : '密码错误');
-            return;
-          }
-
-          const data = await res.json().catch(() => ({}));
-          setError(data.error ?? '服务器错误');
-          return;
-        }
-
         await loginDesktopSession(
           shouldAskUsername ? username.trim() : undefined,
           password

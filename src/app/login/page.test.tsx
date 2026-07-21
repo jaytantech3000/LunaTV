@@ -150,7 +150,7 @@ describe('LoginPage desktop profile sync branches', () => {
     delete window.RUNTIME_CONFIG;
   });
 
-  it('shows the remote sync login branch when desktop profile sync is enabled', async () => {
+  it('keeps local desktop login as the primary login when profile sync is enabled', async () => {
     const payload = createDesktopBootstrapPayload({
       profileSyncEnabled: true,
       reachable: true,
@@ -171,9 +171,19 @@ describe('LoginPage desktop profile sync branches', () => {
       localAuthMode: 'best-effort',
       preferCachedPayload: true,
     });
-    expect(screen.getByPlaceholderText('输入用户名')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('输入用户名')).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText('输入访问密码')).toBeInTheDocument();
-    expect(mockRouter.replace).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByPlaceholderText('输入访问密码'), {
+      target: { value: 'local-secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '登录' }));
+    await waitFor(() => {
+      expect(mockLoginDesktopSession).toHaveBeenCalledWith(
+        undefined,
+        'local-secret'
+      );
+    });
+    expect(mockRouter.replace).toHaveBeenCalledWith('/');
   });
 
   it('surfaces protocol incompatibility instead of treating sync as healthy', async () => {
@@ -201,7 +211,7 @@ describe('LoginPage desktop profile sync branches', () => {
     expect(mockRouter.replace).not.toHaveBeenCalled();
   });
 
-  it('still asks for username when desktop profile sync is enabled but remote mode is unavailable', async () => {
+  it('keeps local login available when remote sync is unavailable', async () => {
     const payload = createDesktopBootstrapPayload({
       profileSyncEnabled: true,
       reachable: false,
@@ -223,7 +233,7 @@ describe('LoginPage desktop profile sync branches', () => {
         '云端账号同步服务当前不可用，请检查远端服务地址。'
       )
     ).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('输入用户名')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('输入用户名')).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText('输入访问密码')).toBeInTheDocument();
   });
 

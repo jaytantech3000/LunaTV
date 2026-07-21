@@ -212,7 +212,7 @@ export async function loadDesktopProfileBootstrapState(
 
   applyDesktopProfileBootstrap(payload, profileSyncOptions);
 
-  if (payload.profileSync.enabled || options.localAuthMode === 'none') {
+  if (options.localAuthMode === 'none') {
     return {
       payload,
       localAuth: payload.localAuth,

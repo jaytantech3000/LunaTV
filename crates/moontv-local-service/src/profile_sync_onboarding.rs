@@ -1,32 +1,33 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    str::FromStr,
-};
+use std::{collections::BTreeSet, fs, str::FromStr};
 
 use anyhow::{Context, Result};
 use axum::{
+    Json,
     extract::State,
     http::{Method, StatusCode},
     response::Response,
-    Json,
 };
-use moontv_profile::LocalProfileSnapshot;
+use moontv_profile::{LocalProfileSnapshot, ProfileDomain};
 use moontv_sync::{
-    build_profile_sync_target_url, ProfileSyncError, ProfileSyncForwardRequest, ProfileSyncSession,
-    ProfileSyncSessionMutation, ProfileSyncStatusResponse,
+    ProfileSyncError, ProfileSyncForwardRequest, ProfileSyncSession, ProfileSyncSessionMutation,
+    ProfileSyncStatusResponse, build_profile_sync_target_url,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::{
-    apply_admin_settings_to_config_file, build_admin_settings_sync_snapshot,
-    download_runtime::DesktopDownloadResourceIndexRecord, no_store_json_response,
-    normalize_owned_string, persist_admin_config_file_with_subscription,
-    profile_sync::build_profile_sync_status_payload, read_json_file, require_owned_string,
-    resolve_owner_username_for_import, sync_domains_include_adminsettings,
-    validate_profile_sync_selected_domains, AppError, AppResult, AppState, DesktopAdminConfig,
+    AppError, AppResult, AppState, DesktopAdminConfig, apply_admin_settings_to_config_file,
+    build_admin_settings_sync_snapshot,
+    download_runtime::DesktopDownloadResourceIndexRecord,
+    no_store_json_response, normalize_owned_string, persist_admin_config_file_with_subscription,
+    profile_sync::{
+        build_profile_sync_status_payload, commit_profile_sync_response_cookies_if_current,
+        commit_profile_sync_session_if_current, persist_profile_sync_account_binding,
+        reserve_profile_sync_request,
+    },
+    read_json_file, require_owned_string, resolve_owner_username_for_import,
+    sync_domains_include_adminsettings, validate_profile_sync_selected_domains,
 };
 const DEFAULT_DESKTOP_PROFILE_SYNC_API_BASE_URL: &str = "https://luna.hkcu.qzz.io";
 const AUTO_CREATED_WEB_ACCOUNT_INITIAL_PASSWORD: &str = "123456";
@@ -329,6 +330,32 @@ struct RemoteAdminConfigResponse {
 #[serde(rename_all = "camelCase")]
 struct RemoteProfileMergeResponse {
     summary: DesktopProfileSyncMergedSummary,
+    #[serde(default)]
+    merged_snapshot: Option<RemoteMergedProfileSnapshot>,
+    #[serde(default)]
+    revision: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteMergedProfileSnapshot {
+    play_records: moontv_profile::PlayRecordMap,
+    favorites: moontv_profile::FavoriteMap,
+    follows: moontv_profile::FollowRecordMap,
+    search_history: Vec<String>,
+    skip_configs: moontv_profile::SkipConfigMap,
+}
+
+impl From<RemoteMergedProfileSnapshot> for LocalProfileSnapshot {
+    fn from(snapshot: RemoteMergedProfileSnapshot) -> Self {
+        Self {
+            play_records: snapshot.play_records,
+            favorites: snapshot.favorites,
+            follow_records: snapshot.follows,
+            search_history: snapshot.search_history,
+            skip_configs: snapshot.skip_configs,
+        }
+    }
 }
 
 pub(crate) async fn preview_profile_sync_onboarding(
@@ -340,7 +367,7 @@ pub(crate) async fn preview_profile_sync_onboarding(
     let remote_base_url = resolve_remote_base_url(payload.remote_base_url)?;
     let username = require_owned_string(payload.username, "缺少 Web 用户名")?;
     let password = require_owned_string(payload.password, "缺少 Web 密码")?;
-    let remote_session =
+    let (remote_session, _login_epoch) =
         login_remote_profile_sync(&state, &remote_base_url, &username, &password).await?;
     let (local_account_summaries, owner_username) = load_local_account_summaries(&state)?;
     let current_local_username = resolve_current_local_username(
@@ -382,7 +409,7 @@ pub(crate) async fn execute_profile_sync_onboarding(
     let password = require_owned_string(payload.password, "缺少 Web 密码")?;
     let strategy = parse_required_conflict_strategy(payload.strategy)?;
     let sync_domains = validate_profile_sync_selected_domains(payload.sync_domains)?;
-    let remote_session =
+    let (remote_session, login_epoch) =
         login_remote_profile_sync(&state, &remote_base_url, &username, &password).await?;
     let (local_account_summaries, owner_username) = load_local_account_summaries(&state)?;
     let current_local_username = resolve_current_local_username(
@@ -391,7 +418,6 @@ pub(crate) async fn execute_profile_sync_onboarding(
         &local_account_summaries,
     )?;
     ensure_current_local_account(&local_account_summaries, &current_local_username)?;
-    let local_snapshot_map = load_local_snapshot_map(&state, &local_account_summaries)?;
     let should_sync_adminsettings = sync_domains_include_adminsettings(&sync_domains);
     let should_push_local_admin_config =
         should_sync_adminsettings && strategy == DesktopProfileSyncConflictStrategy::LocalFirst;
@@ -423,17 +449,12 @@ pub(crate) async fn execute_profile_sync_onboarding(
 
     let mut migrated_accounts = Vec::new();
     for (index, item) in plan.items.into_iter().enumerate() {
-        let snapshot = local_snapshot_map
-            .get(&item.local_username)
-            .cloned()
-            .ok_or_else(|| AppError::internal("missing local profile snapshot during migration"))?;
-        let filtered_snapshot = build_local_snapshot_for_sync_domains(&snapshot, &sync_domains);
-        let merged_summary = merge_remote_profile_snapshot(
+        let merged_summary = merge_and_apply_remote_profile_snapshot(
             &state,
             &remote_base_url,
+            &item.local_username,
             &item.remote_username,
             strategy,
-            &filtered_snapshot,
             &sync_domains,
             (index == 0)
                 .then_some(local_admin_config_snapshot.as_ref())
@@ -463,6 +484,16 @@ pub(crate) async fn execute_profile_sync_onboarding(
     } else {
         persist_profile_sync_settings_into_local_config(&state, &remote_base_url, &sync_domains)?;
     }
+
+    // Commit the remote session only after all configuration and migration work
+    // has completed. A failed onboarding attempt must leave no usable session.
+    if !commit_profile_sync_session_if_current(&state, remote_session.clone(), login_epoch).await {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "同步登录期间会话状态已变化，请重试",
+        ));
+    }
+    persist_profile_sync_account_binding(&state, &current_local_username, &remote_session.username);
 
     no_store_json_response(&DesktopProfileSyncOnboardingExecuteResponse {
         remote_base_url,
@@ -557,6 +588,7 @@ async fn require_profile_sync_session(state: &AppState) -> AppResult<ProfileSync
         .profile_sync_session
         .read()
         .await
+        .session
         .clone()
         .ok_or_else(|| {
             AppError::new(
@@ -573,11 +605,10 @@ async fn sync_profile_now(
     sync_domains: &[String],
     strategy: DesktopProfileSyncConflictStrategy,
 ) -> AppResult<()> {
-    let snapshot = state
-        .profile_store()
-        .load_snapshot(&remote_session.username)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let filtered_snapshot = build_local_snapshot_for_sync_domains(&snapshot, sync_domains);
+    let local_username = crate::profile_sync::read_profile_sync_account_binding(state)
+        .filter(|(_, remote_username)| remote_username == &remote_session.username)
+        .map(|(local_username, _)| local_username)
+        .unwrap_or_else(|| remote_session.username.clone());
     let should_sync_adminsettings = sync_domains_include_adminsettings(sync_domains);
     let admin_config_snapshot = if should_sync_adminsettings
         && strategy == DesktopProfileSyncConflictStrategy::LocalFirst
@@ -587,12 +618,12 @@ async fn sync_profile_now(
         None
     };
 
-    merge_remote_profile_snapshot(
+    merge_and_apply_remote_profile_snapshot(
         state,
         remote_base_url,
+        &local_username,
         &remote_session.username,
         strategy,
-        &filtered_snapshot,
         sync_domains,
         admin_config_snapshot.as_ref(),
     )
@@ -684,29 +715,40 @@ async fn login_remote_profile_sync(
     remote_base_url: &str,
     username: &str,
     password: &str,
-) -> AppResult<ProfileSyncSession> {
+) -> AppResult<(ProfileSyncSession, u64)> {
     let login_body = serde_json::to_vec(&json!({
         "username": username,
         "password": password,
     }))
     .map_err(|error| AppError::internal(error.to_string()))?;
+    let login_request = ProfileSyncForwardRequest::new(Method::POST, "/api/login")
+        .with_accept(Some("application/json".to_string()))
+        .with_content_type(Some("application/json".to_string()))
+        .with_body(login_body);
+    let (request_epoch, login_request) =
+        reserve_profile_sync_request(state, Some(remote_base_url), login_request).await?;
     let outcome = state
         .profile_sync
-        .forward_login(
-            Some(remote_base_url),
-            ProfileSyncForwardRequest::new(Method::POST, "/api/login")
-                .with_accept(Some("application/json".to_string()))
-                .with_content_type(Some("application/json".to_string()))
-                .with_body(login_body),
-        )
+        .forward_login(Some(remote_base_url), login_request)
         .await
         .map_err(map_profile_sync_error_to_app_error)?;
 
     match outcome.session_mutation {
         ProfileSyncSessionMutation::Set(session) => {
-            *state.profile_sync_session.write().await = Some(session.clone());
             ensure_remote_admin_role(&session.role)?;
-            Ok(session)
+            if !commit_profile_sync_response_cookies_if_current(
+                state,
+                &outcome.response,
+                request_epoch,
+            )
+            .await
+            {
+                return Err(AppError::new(
+                    StatusCode::CONFLICT,
+                    "同步登录期间会话状态已变化，请重试",
+                ));
+            }
+            Ok((session, request_epoch))
         }
         _ => Err(AppError::new(
             StatusCode::UNAUTHORIZED,
@@ -795,6 +837,108 @@ fn web_profile_merge_domains(sync_domains: &[String]) -> Vec<&'static str> {
         .collect()
 }
 
+fn selected_local_profile_domains(sync_domains: &[String]) -> Vec<ProfileDomain> {
+    const DOMAINS: [(&str, ProfileDomain); 5] = [
+        ("playrecords", ProfileDomain::PlayRecords),
+        ("favorites", ProfileDomain::Favorites),
+        ("follows", ProfileDomain::Follows),
+        ("searchhistory", ProfileDomain::SearchHistory),
+        ("skipconfigs", ProfileDomain::SkipConfigs),
+    ];
+
+    DOMAINS
+        .into_iter()
+        .filter(|(name, _)| sync_domains.iter().any(|domain| domain == name))
+        .map(|(_, domain)| domain)
+        .collect()
+}
+
+async fn merge_and_apply_remote_profile_snapshot(
+    state: &AppState,
+    remote_base_url: &str,
+    local_username: &str,
+    target_remote_username: &str,
+    strategy: DesktopProfileSyncConflictStrategy,
+    sync_domains: &[String],
+    admin_config_snapshot: Option<&Value>,
+) -> AppResult<DesktopProfileSyncMergedSummary> {
+    let domains = selected_local_profile_domains(sync_domains);
+    let locks = domains
+        .iter()
+        .map(|domain| state.acquire_profile_mutation_lock(local_username, *domain))
+        .collect::<Vec<_>>();
+    let mut guards = Vec::with_capacity(locks.len());
+    for lock in &locks {
+        guards.push(lock.lock().await);
+    }
+
+    let store = state.profile_store();
+    let request_snapshot = store
+        .load_snapshot(local_username)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let filtered_request_snapshot =
+        build_local_snapshot_for_sync_domains(&request_snapshot, sync_domains);
+    let checkpoint = store
+        .remote_merge_checkpoint(local_username)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    drop(guards);
+
+    let response = merge_remote_profile_snapshot(
+        state,
+        remote_base_url,
+        target_remote_username,
+        strategy,
+        &filtered_request_snapshot,
+        sync_domains,
+        admin_config_snapshot,
+    )
+    .await?;
+
+    let (Some(remote_snapshot), Some(revision)) = (response.merged_snapshot, response.revision)
+    else {
+        // Older Web deployments return summary only. Keep the current local
+        // snapshot/outbox untouched until the authoritative snapshot protocol
+        // is available, while preserving successful legacy sync behavior.
+        return Ok(response.summary);
+    };
+
+    let mut guards = Vec::with_capacity(locks.len());
+    for lock in &locks {
+        guards.push(lock.lock().await);
+    }
+    let current_snapshot = store
+        .load_snapshot(local_username)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if build_local_snapshot_for_sync_domains(&current_snapshot, sync_domains)
+        != filtered_request_snapshot
+    {
+        return Err(stale_remote_merge_error());
+    }
+
+    let merged_snapshot = LocalProfileSnapshot::from(remote_snapshot);
+    let applied = store
+        .apply_remote_merged_snapshot(
+            local_username,
+            &checkpoint,
+            &revision,
+            &merged_snapshot,
+            &domains,
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if !applied {
+        return Err(stale_remote_merge_error());
+    }
+
+    Ok(response.summary)
+}
+
+fn stale_remote_merge_error() -> AppError {
+    AppError::new(
+        StatusCode::CONFLICT,
+        "同步期间本地资料已变化，已保留本地数据，请重试同步",
+    )
+}
+
 async fn merge_remote_profile_snapshot(
     state: &AppState,
     remote_base_url: &str,
@@ -803,7 +947,7 @@ async fn merge_remote_profile_snapshot(
     snapshot: &LocalProfileSnapshot,
     sync_domains: &[String],
     admin_config_snapshot: Option<&Value>,
-) -> AppResult<DesktopProfileSyncMergedSummary> {
+) -> AppResult<RemoteProfileMergeResponse> {
     let target_url =
         build_profile_sync_target_url(remote_base_url, REMOTE_PROFILE_SYNC_MERGE_ROUTE_PATH)
             .map_err(map_profile_sync_error_to_app_error)?;
@@ -842,13 +986,11 @@ async fn merge_remote_profile_snapshot(
         )
         .await);
     }
-    let payload = decode_remote_json_response::<RemoteProfileMergeResponse>(
+    decode_remote_json_response::<RemoteProfileMergeResponse>(
         response,
         Some("只有 Web owner/admin 可以执行资料迁移"),
     )
-    .await?;
-
-    Ok(payload.summary)
+    .await
 }
 
 async fn send_remote_json_request(
@@ -874,10 +1016,6 @@ async fn send_remote_json_request(
         .send(Some(remote_base_url), request)
         .await
         .map_err(map_profile_sync_error_to_app_error)?;
-
-    if response.status() == StatusCode::UNAUTHORIZED {
-        *state.profile_sync_session.write().await = None;
-    }
 
     Ok(response)
 }
@@ -1096,23 +1234,6 @@ fn ensure_current_local_account(
     }
 
     Err(AppError::bad_request("当前本地帐号不存在于桌面帐号列表"))
-}
-
-fn load_local_snapshot_map(
-    state: &AppState,
-    local_account_summaries: &[DesktopProfileSyncLocalAccountSummary],
-) -> AppResult<BTreeMap<String, LocalProfileSnapshot>> {
-    let profile_store = state.profile_store();
-    let mut snapshots = BTreeMap::new();
-
-    for summary in local_account_summaries {
-        let snapshot = profile_store
-            .load_snapshot(&summary.username)
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        snapshots.insert(summary.username.clone(), snapshot);
-    }
-
-    Ok(snapshots)
 }
 
 fn load_local_admin_config_snapshot(state: &AppState) -> AppResult<Value> {
@@ -1383,12 +1504,12 @@ mod tests {
     use serde_json::json;
 
     use super::{
+        DesktopProfileSyncConflictStrategy, DesktopProfileSyncLocalAccountSummary,
+        DesktopProfileSyncOnboardingPlan, DesktopProfileSyncOnboardingPlanItem,
+        DesktopProfileSyncRemoteAccountState, RemoteProfileMergeResponse,
         apply_profile_sync_api_base_url_to_config_file, ensure_current_local_account,
         plan_profile_sync_onboarding, preview_onboarding_warnings,
         rebind_download_store_snapshot_owner, resolve_current_local_username,
-        DesktopProfileSyncConflictStrategy, DesktopProfileSyncLocalAccountSummary,
-        DesktopProfileSyncOnboardingPlan, DesktopProfileSyncOnboardingPlanItem,
-        DesktopProfileSyncRemoteAccountState,
     };
 
     #[test]
@@ -1584,5 +1705,23 @@ mod tests {
             "local-first".parse::<DesktopProfileSyncConflictStrategy>(),
             Ok(DesktopProfileSyncConflictStrategy::LocalFirst)
         );
+    }
+
+    #[test]
+    fn summary_only_merge_response_remains_backward_compatible() {
+        let response = serde_json::from_value::<RemoteProfileMergeResponse>(json!({
+            "summary": {
+                "playRecordCount": 1,
+                "favoriteCount": 2,
+                "followCount": 3,
+                "searchHistoryCount": 4,
+                "skipConfigCount": 5
+            }
+        }))
+        .expect("decode legacy merge response");
+
+        assert!(response.merged_snapshot.is_none());
+        assert!(response.revision.is_none());
+        assert_eq!(response.summary.favorite_count, 2);
     }
 }

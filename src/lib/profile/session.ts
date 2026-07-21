@@ -17,6 +17,7 @@ const RETRYABLE_DESKTOP_LOCAL_PROFILE_RESPONSE_STATUSES = new Set([
 
 export interface ProfileRequestInit extends RequestInit {
   redirectOnUnauthorized?: boolean;
+  authScope?: 'local' | 'sync';
 }
 
 export class ProfileRequestError extends Error {
@@ -134,6 +135,7 @@ export async function fetchProfileResponse(
 ): Promise<Response> {
   const {
     redirectOnUnauthorized = true,
+    authScope = 'local',
     credentials,
     ...requestOptions
   } = options || {};
@@ -193,7 +195,11 @@ export async function fetchProfileResponse(
   }
 
   if (response.status === 401) {
-    if (!redirectOnUnauthorized || typeof window === 'undefined') {
+    if (
+      authScope === 'sync' ||
+      !redirectOnUnauthorized ||
+      typeof window === 'undefined'
+    ) {
       throw new ProfileRequestError(
         `Request ${requestUrl} failed: ${response.status}`,
         {

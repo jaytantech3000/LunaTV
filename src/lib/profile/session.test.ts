@@ -299,6 +299,25 @@ describe('profile session helpers', () => {
     expect(clearAuthInfoInBrowser).not.toHaveBeenCalled();
   });
 
+  it('keeps local auth and does not redirect when a sync request returns 401', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 401,
+    });
+
+    const error = await fetchProfileResponse('/favorites', {
+      authScope: 'sync',
+    }).catch((caughtError) => caughtError);
+
+    expect(isUnauthorizedProfileRequestError(error)).toBe(true);
+    expect(wasProfileRequestRedirectedToLogin(error)).toBe(false);
+    expect(clearAuthInfoInBrowser).not.toHaveBeenCalled();
+    expect(purgeOfflineDownloads).not.toHaveBeenCalled();
+    expect(window.location.href).toBe(
+      'http://localhost/follow-updates?filter=new'
+    );
+  });
+
   it('clears browser auth and redirects to login after a 401 response', async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({

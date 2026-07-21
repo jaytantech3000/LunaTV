@@ -251,7 +251,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
       console.error('清理离线下载失败:', error);
     }
 
-    if (isDesktopTarget && !desktopProfileSyncEnabled) {
+    if (isDesktopTarget) {
       logoutDesktopSession({
         rememberLoggedOut: true,
       });
@@ -266,12 +266,6 @@ export const UserMenu: React.FC<UserMenuProps> = ({ variant = 'default' }) => {
       });
     } catch (error) {
       console.error('注销请求失败:', error);
-    }
-
-    if (isDesktopTarget) {
-      logoutDesktopSession();
-      window.location.href = logoutRedirectPath;
-      return;
     }
 
     window.location.href = logoutRedirectPath;

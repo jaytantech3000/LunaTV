@@ -12,6 +12,7 @@ describe('profile runtime resolver', () => {
       appTarget: 'web',
       runtimeKind: 'web-local',
       syncEnabled: false,
+      syncStorageType: undefined,
       storageType: 'localstorage',
       profileMode: 'single-user-local',
       usesRemoteUserData: false,
@@ -27,6 +28,7 @@ describe('profile runtime resolver', () => {
       appTarget: 'web',
       runtimeKind: 'web-remote',
       syncEnabled: false,
+      syncStorageType: undefined,
       storageType: 'redis',
       profileMode: 'shared-multi-user',
       usesRemoteUserData: true,
@@ -57,7 +59,7 @@ describe('profile runtime resolver', () => {
     ).toBe(true);
   });
 
-  it('prefers sync-projected storage and profile mode for desktop sync runtime', () => {
+  it('keeps desktop profile data local when sync is configured', () => {
     const config = {
       APP_TARGET: 'desktop' as const,
       STORAGE_TYPE: 'localstorage',
@@ -68,18 +70,19 @@ describe('profile runtime resolver', () => {
 
     expect(resolveProfileRuntime(config)).toEqual({
       appTarget: 'desktop',
-      runtimeKind: 'desktop-profile-sync',
+      runtimeKind: 'desktop-local',
       syncEnabled: true,
-      storageType: 'redis',
-      profileMode: 'shared-multi-user',
-      usesRemoteUserData: true,
+      syncStorageType: 'redis',
+      storageType: 'localstorage',
+      profileMode: 'single-user-local',
+      usesRemoteUserData: false,
     });
-    expect(shouldUseRemoteProfileStorage(config)).toBe(true);
+    expect(shouldUseRemoteProfileStorage(config)).toBe(false);
     expect(shouldUseProfileApiStorage(config)).toBe(true);
-    expect(isDesktopProfileSyncRuntime(config)).toBe(true);
+    expect(isDesktopProfileSyncRuntime(config)).toBe(false);
   });
 
-  it('keeps desktop profile sync on remote user-data semantics even when remote storage is localstorage', () => {
+  it('does not let sync settings change desktop local user-data semantics', () => {
     const config = {
       APP_TARGET: 'desktop' as const,
       STORAGE_TYPE: 'localstorage',
@@ -90,15 +93,16 @@ describe('profile runtime resolver', () => {
 
     expect(resolveProfileRuntime(config)).toEqual({
       appTarget: 'desktop',
-      runtimeKind: 'desktop-profile-sync',
+      runtimeKind: 'desktop-local',
       syncEnabled: true,
+      syncStorageType: 'localstorage',
       storageType: 'localstorage',
       profileMode: 'single-user-local',
-      usesRemoteUserData: true,
+      usesRemoteUserData: false,
     });
-    expect(shouldUseRemoteProfileStorage(config)).toBe(true);
+    expect(shouldUseRemoteProfileStorage(config)).toBe(false);
     expect(shouldUseProfileApiStorage(config)).toBe(true);
-    expect(isDesktopProfileSyncRuntime(config)).toBe(true);
+    expect(isDesktopProfileSyncRuntime(config)).toBe(false);
   });
 
   it('keeps local web storage on the browser fallback path', () => {

@@ -62,6 +62,23 @@ pub struct ProfileMutationWrite<'a> {
     pub timestamp_ms: i64,
 }
 
+pub struct ProfileRemoteSnapshotWrite<'a> {
+    pub domain: &'a str,
+    pub metadata_key: &'a str,
+    pub snapshot_json: &'a str,
+}
+
+pub struct ProfileRemoteMergeWrite<'a> {
+    pub username: &'a str,
+    pub device_id: &'a str,
+    pub expected_next_local_seq: Option<i64>,
+    pub expected_remote_revision_json: Option<&'a str>,
+    pub outbox_ack_before_local_seq: i64,
+    pub revision_json: &'a str,
+    pub snapshots: &'a [ProfileRemoteSnapshotWrite<'a>],
+    pub timestamp_ms: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct DesktopSqlite {
     path: PathBuf,
@@ -291,6 +308,101 @@ impl DesktopSqlite {
         tx.commit()
             .context("failed to commit profile mutation transaction")?;
         Ok(local_seq)
+    }
+
+    pub fn apply_remote_profile_merge(&self, write: ProfileRemoteMergeWrite<'_>) -> Result<bool> {
+        let mut connection = open_connection(&self.path)?;
+        let tx = connection
+            .transaction()
+            .context("failed to start remote profile merge transaction")?;
+        let current_checkpoint = tx
+            .query_row(
+                "SELECT next_local_seq, last_remote_generation_json
+                 FROM profile_sync_state WHERE username = ?1",
+                [write.username],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()
+            .context("failed to read profile sequence before remote merge")?;
+
+        let expected_checkpoint = write.expected_next_local_seq.map(|next_local_seq| {
+            (
+                next_local_seq,
+                write.expected_remote_revision_json.map(str::to_owned),
+            )
+        });
+        if current_checkpoint != expected_checkpoint {
+            return Ok(false);
+        }
+
+        let next_local_seq = current_checkpoint
+            .map(|checkpoint| checkpoint.0)
+            .unwrap_or(1);
+        tx.execute(
+            "INSERT INTO profile_sync_state (
+                username, device_id, next_local_seq, last_remote_generation_json,
+                last_sync_at_ms, last_sync_error, next_attempt_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?5)
+             ON CONFLICT(username) DO UPDATE SET
+                device_id = excluded.device_id,
+                last_remote_generation_json = excluded.last_remote_generation_json,
+                last_sync_at_ms = excluded.last_sync_at_ms,
+                last_sync_error = NULL,
+                next_attempt_at_ms = NULL,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                write.username,
+                write.device_id,
+                next_local_seq,
+                write.revision_json,
+                write.timestamp_ms
+            ],
+        )
+        .context("failed to update profile sync state after remote merge")?;
+
+        for snapshot in write.snapshots {
+            tx.execute(
+                "INSERT INTO app_metadata (metadata_key, value_json, updated_at_ms)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(metadata_key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at_ms = excluded.updated_at_ms",
+                params![
+                    snapshot.metadata_key,
+                    snapshot.snapshot_json,
+                    write.timestamp_ms
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to apply remote profile snapshot for {}",
+                    snapshot.metadata_key
+                )
+            })?;
+
+            tx.execute(
+                "UPDATE profile_outbox
+                 SET acked_at_ms = ?1, last_error = NULL, next_attempt_at_ms = ?1
+                 WHERE username = ?2 AND domain = ?3 AND local_seq < ?4
+                   AND acked_at_ms IS NULL",
+                params![
+                    write.timestamp_ms,
+                    write.username,
+                    snapshot.domain,
+                    write.outbox_ack_before_local_seq
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to rebaseline profile outbox for {}",
+                    snapshot.domain
+                )
+            })?;
+        }
+
+        tx.commit()
+            .context("failed to commit remote profile merge transaction")?;
+        Ok(true)
     }
 
     pub fn list_due_profile_outbox(
@@ -1158,6 +1270,80 @@ mod tests {
             })
             .unwrap();
         assert_eq!(next, 2);
+    }
+
+    #[test]
+    fn remote_merge_rolls_back_snapshots_and_revision_together() {
+        let temp_dir = TestDir::new();
+        let database =
+            DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite");
+        database
+            .apply_profile_mutation(ProfileMutationWrite {
+                username: "alice",
+                device_id: "device-a",
+                domain_metadata_key: "profile:alice:favorites",
+                domain: "favorites",
+                entity_key: Some("demo+1"),
+                operation: "upsert",
+                snapshot_json: r#"{"local":true}"#,
+                payload_json: None,
+                op_id: "local-op",
+                timestamp_ms: 10,
+            })
+            .expect("seed profile state");
+        let connection = open_connection(database.path()).expect("open sqlite");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_remote_follow_snapshot
+                 BEFORE INSERT ON app_metadata
+                 WHEN NEW.metadata_key = 'profile:alice:follows'
+                 BEGIN
+                    SELECT RAISE(ABORT, 'simulated snapshot failure');
+                 END;",
+            )
+            .expect("install failure trigger");
+        drop(connection);
+        let snapshots = [
+            ProfileRemoteSnapshotWrite {
+                domain: "favorites",
+                metadata_key: "profile:alice:favorites",
+                snapshot_json: r#"{"remote":true}"#,
+            },
+            ProfileRemoteSnapshotWrite {
+                domain: "follows",
+                metadata_key: "profile:alice:follows",
+                snapshot_json: r#"{"remote":true}"#,
+            },
+        ];
+
+        assert!(
+            database
+                .apply_remote_profile_merge(ProfileRemoteMergeWrite {
+                    username: "alice",
+                    device_id: "device-a",
+                    expected_next_local_seq: Some(2),
+                    expected_remote_revision_json: None,
+                    outbox_ack_before_local_seq: 2,
+                    revision_json: r#""revision-1""#,
+                    snapshots: &snapshots,
+                    timestamp_ms: 20,
+                })
+                .is_err()
+        );
+        assert_eq!(
+            database
+                .read_app_metadata::<Value>("profile:alice:favorites")
+                .expect("read rolled back snapshot"),
+            Some(serde_json::json!({"local": true}))
+        );
+        assert_eq!(
+            database
+                .profile_sync_worker_state("alice")
+                .expect("read rolled back sync state")
+                .expect("worker state")
+                .last_remote_generation_json,
+            None
+        );
     }
 
     #[test]

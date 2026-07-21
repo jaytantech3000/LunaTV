@@ -59,7 +59,6 @@ describe('desktop profile sync helpers', () => {
       APP_TARGET: 'desktop',
       PROFILE_SYNC_ENABLED: false,
     });
-    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue(null);
     window.RUNTIME_CONFIG = {
       APP_TARGET: 'desktop',
       PROFILE_SYNC_ENABLED: false,
@@ -300,13 +299,7 @@ describe('desktop profile sync helpers', () => {
     ).toBe('auth-expired');
   });
 
-  it('projects authenticated sync state into runtime config and browser auth', () => {
-    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
-      username: 'kid',
-      role: 'admin',
-      password: 'secret',
-      sessionMode: 'desktop-profile-sync',
-    });
+  it('projects authenticated sync state into runtime config without changing local auth', () => {
     const status = {
       enabled: true,
       reachable: true,
@@ -328,16 +321,9 @@ describe('desktop profile sync helpers', () => {
       PROFILE_SYNC_STORAGE_TYPE: 'redis',
       PROFILE_SYNC_PROFILE_MODE: 'shared-multi-user',
     });
-    expect(setAuthInfoInBrowser).toHaveBeenCalledWith({
-      username: 'kid',
-      role: 'admin',
-      password: 'secret',
-      sessionMode: 'desktop-profile-sync',
-    });
-    expect(clearAuthInfoInBrowser).not.toHaveBeenCalled();
   });
 
-  it('clears browser auth when sync stays enabled but the remote session is absent', () => {
+  it('keeps local auth untouched when the remote session is absent', () => {
     applyDesktopProfileSyncStatus({
       enabled: true,
       reachable: true,
@@ -351,67 +337,9 @@ describe('desktop profile sync helpers', () => {
       syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
     });
 
-    expect(clearAuthInfoInBrowser).toHaveBeenCalled();
-    expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
-  });
-
-  it('clears unauthenticated sync auth when no credential recovery exists', () => {
-    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
-      username: 'cloud-owner',
-      role: 'owner',
-      password: 'secret',
-      sessionMode: 'desktop-profile-sync',
-    });
-
-    const result = applyDesktopProfileSyncStatus(
-      {
-        enabled: true,
-        reachable: true,
-        authenticated: false,
-        username: null,
-        role: null,
-        storageType: 'redis',
-        profileMode: 'shared-multi-user',
-        error: null,
-        errorKind: null,
-        syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
-      },
-      {
-        preserveStoredCredentials: true,
-      }
-    );
-
-    expect(result).toEqual({
-      APP_TARGET: 'desktop',
+    expect(window.RUNTIME_CONFIG).toMatchObject({
       PROFILE_SYNC_ENABLED: true,
       PROFILE_SYNC_STORAGE_TYPE: 'redis',
-      PROFILE_SYNC_PROFILE_MODE: 'shared-multi-user',
     });
-    expect(clearAuthInfoInBrowser).toHaveBeenCalledTimes(1);
-    expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
-  });
-
-  it('clears stale desktop profile sync auth when remote sync is disabled', () => {
-    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
-      username: 'kid',
-      role: 'user',
-      sessionMode: 'desktop-profile-sync',
-    });
-
-    applyDesktopProfileSyncStatus({
-      enabled: false,
-      reachable: false,
-      authenticated: false,
-      username: null,
-      role: null,
-      storageType: null,
-      profileMode: null,
-      error: null,
-      errorKind: 'not-configured',
-      syncDomains: [...PROFILE_SYNC_DEFAULT_USER_DATA_DOMAINS],
-    });
-
-    expect(clearAuthInfoInBrowser).toHaveBeenCalled();
-    expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
   });
 });

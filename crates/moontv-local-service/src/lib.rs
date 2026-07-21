@@ -349,7 +349,7 @@ pub struct AppState {
     download_runtime_active_tasks: Arc<Mutex<BTreeSet<String>>>,
     download_runtime_schedule_lock: Arc<Mutex<()>>,
     profile_sync: ProfileSyncClient,
-    profile_sync_session: Arc<RwLock<Option<ProfileSyncSession>>>,
+    profile_sync_session: Arc<RwLock<ProfileSyncSessionState>>,
     profile_sync_last_username: Arc<RwLock<Option<String>>>,
     profile_sync_worker_lock: Arc<Mutex<()>>,
     profile_mutation_locks: Arc<StdMutex<HashMap<String, Weak<Mutex<()>>>>>,
@@ -360,6 +360,14 @@ pub struct AppState {
     douban_movie_api_base_url: String,
     douban_search_api_base_url: String,
     live_channels_cache: Arc<RwLock<BTreeMap<String, LiveChannelsCache>>>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ProfileSyncSessionState {
+    pub(crate) session: Option<ProfileSyncSession>,
+    /// Reserved when a session-affecting request starts. Only the response for
+    /// the current epoch may commit, so the latest initiated intent wins.
+    pub(crate) generation: u64,
 }
 
 #[derive(Debug)]
@@ -491,13 +499,8 @@ impl AppState {
             download_engine_snapshot_tx,
             download_runtime_active_tasks: Arc::new(Mutex::new(BTreeSet::new())),
             download_runtime_schedule_lock: Arc::new(Mutex::new(())),
-            profile_sync: ProfileSyncClient::new(
-                reqwest::Client::builder()
-                    .cookie_store(true)
-                    .build()
-                    .expect("failed to build profile sync http client"),
-            ),
-            profile_sync_session: Arc::new(RwLock::new(None)),
+            profile_sync: ProfileSyncClient::new(reqwest::Client::new()),
+            profile_sync_session: Arc::new(RwLock::new(ProfileSyncSessionState::default())),
             profile_sync_last_username: Arc::new(RwLock::new(None)),
             profile_sync_worker_lock: Arc::new(Mutex::new(())),
             profile_mutation_locks: Arc::new(StdMutex::new(HashMap::new())),
@@ -5126,7 +5129,9 @@ fn import_local_admin_data_migration_archive(
 
     Ok(())
 }
-pub(crate) fn resolve_owner_username_for_import(admin_config: &DesktopAdminConfig) -> Option<String> {
+pub(crate) fn resolve_owner_username_for_import(
+    admin_config: &DesktopAdminConfig,
+) -> Option<String> {
     admin_config
         .user_config
         .users
@@ -7613,6 +7618,16 @@ mod tests {
     use futures::StreamExt;
     use moontv_profile::{Favorite, FollowRecord, PlayRecord, SkipConfig};
     use tower::ServiceExt;
+
+    fn empty_remote_profile_snapshot() -> Value {
+        json!({
+            "playRecords": {},
+            "favorites": {},
+            "follows": {},
+            "searchHistory": [],
+            "skipConfigs": {}
+        })
+    }
 
     fn build_test_playback_search_result(
         id: &str,
@@ -10367,7 +10382,7 @@ segment0.ts
             temp_dir.path.join("data"),
             temp_dir.path.join("data/moontv.sqlite3"),
         );
-        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+        state.profile_sync_session.write().await.session = Some(ProfileSyncSession {
             username: "remote-user".to_string(),
             role: "user".to_string(),
         });
@@ -10517,7 +10532,14 @@ segment0.ts
             data_dir,
             sqlite_path,
         );
-        assert!(after_restart.profile_sync_session.read().await.is_none());
+        assert!(
+            after_restart
+                .profile_sync_session
+                .read()
+                .await
+                .session
+                .is_none()
+        );
         assert!(
             after_restart
                 .profile_sync_last_username
@@ -10599,7 +10621,7 @@ segment0.ts
             temp_dir.path.join("data"),
             temp_dir.path.join("data/moontv.sqlite3"),
         );
-        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+        state.profile_sync_session.write().await.session = Some(ProfileSyncSession {
             username: "remote-user".to_string(),
             role: "user".to_string(),
         });
@@ -10633,7 +10655,7 @@ segment0.ts
 
         crate::profile_sync_worker::run_profile_outbox_worker_tick(&state).await;
 
-        assert!(state.profile_sync_session.read().await.is_none());
+        assert!(state.profile_sync_session.read().await.session.is_none());
         let blocked = state
             .sqlite
             .profile_sync_worker_state("remote-user")
@@ -10709,6 +10731,9 @@ segment0.ts
         let config_path = write_test_config(
             &temp_dir,
             json!({
+              "auth": {
+                "username": "local-user"
+              },
               "profile_sync": {
                 "api_base_url": "http://127.0.0.1:1",
                 "sync_domains": ["playrecords"]
@@ -10723,13 +10748,12 @@ segment0.ts
             temp_dir.path.join("data"),
             temp_dir.path.join("data/moontv.sqlite3"),
         );
-        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+        state.profile_sync_session.write().await.session = Some(ProfileSyncSession {
             username: "remote-user".to_string(),
             role: "user".to_string(),
         });
         let app = build_router(state.clone());
-        let sync_cookie =
-            build_test_auth_cookie("ignored-cookie-user", "user", "desktop-profile-sync");
+        let sync_cookie = build_test_auth_cookie("local-user", "user", "desktop-local");
 
         let response = app
             .oneshot(
@@ -10766,7 +10790,7 @@ segment0.ts
         assert_eq!(
             state
                 .profile_store()
-                .load_favorites("remote-user")
+                .load_favorites("local-user")
                 .expect("load local-only favorite")
                 .get("demo+1")
                 .map(|favorite| favorite.title.as_str()),
@@ -10775,7 +10799,7 @@ segment0.ts
         assert_eq!(
             state
                 .profile_store()
-                .pending_outbox_count("remote-user")
+                .pending_outbox_count("local-user")
                 .expect("count local-only outbox"),
             0,
             "unselected domain must not enqueue a remote journal operation"
@@ -10788,6 +10812,9 @@ segment0.ts
         let config_path = write_test_config(
             &temp_dir,
             json!({
+              "auth": {
+                "username": "local-user"
+              },
               "profile_sync": {
                 "api_base_url": "http://127.0.0.1:1",
                 "sync_domains": ["favorites"]
@@ -10802,13 +10829,12 @@ segment0.ts
             temp_dir.path.join("data"),
             temp_dir.path.join("data/moontv.sqlite3"),
         );
-        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+        state.profile_sync_session.write().await.session = Some(ProfileSyncSession {
             username: "remote-user".to_string(),
             role: "user".to_string(),
         });
         let app = build_router(state.clone());
-        let sync_cookie =
-            build_test_auth_cookie("ignored-cookie-user", "user", "desktop-profile-sync");
+        let sync_cookie = build_test_auth_cookie("local-user", "user", "desktop-local");
         let first_request = Request::builder()
             .method(Method::POST)
             .uri("/api/favorites")
@@ -10875,7 +10901,7 @@ segment0.ts
 
         let favorites = state
             .profile_store()
-            .load_favorites("remote-user")
+            .load_favorites("local-user")
             .expect("load concurrent favorites");
         assert_eq!(favorites.len(), 2);
         assert!(favorites.contains_key("demo+1"));
@@ -10883,7 +10909,7 @@ segment0.ts
         assert_eq!(
             state
                 .profile_store()
-                .pending_outbox_count("remote-user")
+                .pending_outbox_count("local-user")
                 .expect("count concurrent outbox"),
             2
         );
@@ -10895,6 +10921,9 @@ segment0.ts
         let config_path = write_test_config(
             &temp_dir,
             json!({
+              "auth": {
+                "username": "local-user"
+              },
               "profile_sync": {
                 "api_base_url": "http://127.0.0.1:1"
               },
@@ -10908,13 +10937,12 @@ segment0.ts
             temp_dir.path.join("data"),
             temp_dir.path.join("data/moontv.sqlite3"),
         );
-        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+        state.profile_sync_session.write().await.session = Some(ProfileSyncSession {
             username: "remote-user".to_string(),
             role: "user".to_string(),
         });
         let app = build_router(state.clone());
-        let sync_cookie =
-            build_test_auth_cookie("ignored-cookie-user", "user", "desktop-profile-sync");
+        let sync_cookie = build_test_auth_cookie("local-user", "user", "desktop-local");
 
         let post_response = app
             .clone()
@@ -10982,21 +11010,21 @@ segment0.ts
         assert!(
             state
                 .profile_store()
-                .load_favorites("remote-user")
+                .load_favorites("local-user")
                 .expect("load locally persisted favorites")
                 .is_empty()
         );
         assert_eq!(
             state
                 .profile_store()
-                .pending_outbox_count("remote-user")
+                .pending_outbox_count("local-user")
                 .expect("load local profile outbox"),
             2
         );
     }
 
     #[tokio::test]
-    async fn profile_playrecords_route_proxies_profile_sync_mode() {
+    async fn profile_playrecords_route_keeps_desktop_sync_mode_local() {
         let upstream = spawn_mock_server(Router::new().route(
             "/api/playrecords",
             get(|| async move {
@@ -11043,26 +11071,20 @@ segment0.ts
                 Request::builder()
                     .uri("/api/playrecords")
                     .body(Body::empty())
-                    .expect("proxied playrecords request"),
+                    .expect("local playrecords request"),
             )
             .await
-            .expect("proxied playrecords response");
+            .expect("local playrecords response");
 
         assert_eq!(response.status(), StatusCode::OK);
         let payload = read_json_body(response).await;
-        assert_eq!(
-            payload
-                .get("demo+remote")
-                .and_then(|record| record.get("title"))
-                .and_then(Value::as_str),
-            Some("Remote Demo")
-        );
+        assert!(payload.as_object().is_some_and(|object| object.is_empty()));
 
         upstream.abort();
     }
 
     #[tokio::test]
-    async fn profile_sync_user_data_routes_proxy_all_domains() {
+    async fn profile_sync_user_data_routes_stay_local_for_all_domains() {
         let upstream = spawn_mock_server(
             Router::new()
                 .route(
@@ -11105,12 +11127,12 @@ segment0.ts
             temp_dir.path.join("data/moontv.sqlite3"),
         ));
 
-        for (path, expected_domain) in [
-            ("/api/playrecords", "playrecords"),
-            ("/api/favorites", "favorites"),
-            ("/api/follows", "follows"),
-            ("/api/searchhistory", "searchhistory"),
-            ("/api/skipconfigs", "skipconfigs"),
+        for (path, expected) in [
+            ("/api/playrecords", json!({})),
+            ("/api/favorites", json!({})),
+            ("/api/follows", json!({})),
+            ("/api/searchhistory", json!([])),
+            ("/api/skipconfigs", json!({})),
         ] {
             let response = app
                 .clone()
@@ -11124,18 +11146,14 @@ segment0.ts
                 .expect("profile sync user-data response");
 
             assert_eq!(response.status(), StatusCode::OK);
-            let payload = read_json_body(response).await;
-            assert_eq!(
-                payload.get("domain").and_then(Value::as_str),
-                Some(expected_domain)
-            );
+            assert_eq!(read_json_body(response).await, expected);
         }
 
         upstream.abort();
     }
 
     #[tokio::test]
-    async fn profile_sync_login_session_is_carried_and_cleared_after_401() {
+    async fn profile_sync_login_session_survives_local_user_data_requests() {
         let upstream = spawn_mock_server(
             Router::new()
                 .route(
@@ -11217,35 +11235,38 @@ segment0.ts
             Some("remote-user")
         );
 
-        let proxied_401_response = app
+        let local_response = app
             .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/playrecords")
                     .body(Body::empty())
-                    .expect("profile sync passthrough request"),
+                    .expect("local profile request"),
             )
             .await
-            .expect("profile sync passthrough response");
-        assert_eq!(proxied_401_response.status(), StatusCode::UNAUTHORIZED);
+            .expect("local profile response");
+        assert_eq!(local_response.status(), StatusCode::OK);
 
-        let status_after_401 = app
+        let status_after_local_request = app
             .oneshot(
                 Request::builder()
                     .uri("/api/profile-sync/status")
                     .body(Body::empty())
-                    .expect("profile sync status after 401 request"),
+                    .expect("profile sync status after local request"),
             )
             .await
-            .expect("profile sync status after 401 response");
-        let payload_after_401 = read_json_body(status_after_401).await;
+            .expect("profile sync status after local request response");
+        let payload_after_401 = read_json_body(status_after_local_request).await;
         assert_eq!(
             payload_after_401
                 .get("authenticated")
                 .and_then(Value::as_bool),
-            Some(false)
+            Some(true)
         );
-        assert_eq!(payload_after_401.get("username"), Some(&Value::Null));
+        assert_eq!(
+            payload_after_401.get("username").and_then(Value::as_str),
+            Some("remote-user")
+        );
         assert_eq!(
             payload_after_401.get("reachable").and_then(Value::as_bool),
             Some(true)
@@ -11468,7 +11489,9 @@ segment0.ts
                             "followCount": 0,
                             "searchHistoryCount": 0,
                             "skipConfigCount": 0
-                        }
+                        },
+                        "mergedSnapshot": empty_remote_profile_snapshot(),
+                        "revision": "test-revision"
                     }))
                 }
             }),
@@ -11495,7 +11518,7 @@ segment0.ts
             temp_dir.path.join("data"),
             temp_dir.path.join("data/moontv.sqlite3"),
         );
-        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+        state.profile_sync_session.write().await.session = Some(ProfileSyncSession {
             username: "kid".to_string(),
             role: "user".to_string(),
         });
@@ -11564,7 +11587,29 @@ segment0.ts
                                     "followCount": 0,
                                     "searchHistoryCount": 0,
                                     "skipConfigCount": 0
-                                }
+                                },
+                                "mergedSnapshot": {
+                                    "playRecords": {},
+                                    "favorites": {
+                                        "web-only+1": {
+                                            "title": "Web Only Favorite",
+                                            "source_name": "remote",
+                                            "year": "2026",
+                                            "cover": "remote.jpg",
+                                            "total_episodes": 1,
+                                            "save_time": 2,
+                                            "search_title": null,
+                                            "playback_mode": null,
+                                            "offline_content_id": null,
+                                            "is_adult": null,
+                                            "origin": null
+                                        }
+                                    },
+                                    "follows": {},
+                                    "searchHistory": [],
+                                    "skipConfigs": {}
+                                },
+                                "revision": "test-revision"
                             }))
                         }
                     }),
@@ -11592,7 +11637,7 @@ segment0.ts
             temp_dir.path.join("data"),
             temp_dir.path.join("data/moontv.sqlite3"),
         );
-        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+        state.profile_sync_session.write().await.session = Some(ProfileSyncSession {
             username: "remote-owner".to_string(),
             role: "owner".to_string(),
         });
@@ -11622,8 +11667,10 @@ segment0.ts
             .expect("save play records");
         state
             .profile_store()
-            .save_favorites(
+            .apply_local_mutation_and_enqueue(
                 "remote-owner",
+                "device-a",
+                moontv_profile::ProfileDomain::Favorites,
                 &BTreeMap::from([(
                     "fav+1".to_string(),
                     Favorite {
@@ -11640,8 +11687,24 @@ segment0.ts
                         origin: None,
                     },
                 )]),
+                moontv_profile::ProfileMutation::Upsert {
+                    entity_key: "fav+1".to_string(),
+                    value: json!({
+                        "title": "Demo Favorite",
+                        "source_name": "demo",
+                        "year": "2026",
+                        "cover": "",
+                        "total_episodes": 12,
+                        "save_time": 1,
+                        "search_title": null,
+                        "playback_mode": null,
+                        "offline_content_id": null,
+                        "is_adult": null,
+                        "origin": null
+                    }),
+                },
             )
-            .expect("save favorites");
+            .expect("enqueue pre-merge favorite");
         state
             .profile_store()
             .save_follow_records(
@@ -11681,6 +11744,7 @@ segment0.ts
                 )]),
             )
             .expect("save skip configs");
+        let profile_store = state.profile_store();
         let app = build_router(state);
 
         let response = app
@@ -11705,6 +11769,26 @@ segment0.ts
         assert_eq!(response.status(), StatusCode::OK);
         let payload = read_json_body(response).await;
         assert_eq!(payload.get("syncDomains"), Some(&json!(["favorites"])));
+        assert_eq!(
+            profile_store
+                .pending_outbox_count("remote-owner")
+                .expect("old selected outbox is rebaselined"),
+            0
+        );
+        assert_eq!(
+            profile_store
+                .load_favorites("remote-owner")
+                .expect("load merged favorites")
+                .get("web-only+1")
+                .map(|favorite| favorite.title.as_str()),
+            Some("Web Only Favorite")
+        );
+        assert!(
+            profile_store
+                .load_play_records("remote-owner")
+                .expect("load unselected play records")
+                .contains_key("play+1")
+        );
 
         let captured_payloads = captured_payloads.lock().expect("captured payloads");
         assert_eq!(captured_payloads.len(), 1);
@@ -11892,7 +11976,9 @@ segment0.ts
                                     "followCount": 0,
                                     "searchHistoryCount": 0,
                                     "skipConfigCount": 0
-                                }
+                                },
+                                "mergedSnapshot": empty_remote_profile_snapshot(),
+                                "revision": "test-revision"
                             }))
                         }
                     }),
@@ -11975,7 +12061,7 @@ segment0.ts
             temp_dir.path.join("data"),
             temp_dir.path.join("data/moontv.sqlite3"),
         );
-        *state.profile_sync_session.write().await = Some(ProfileSyncSession {
+        state.profile_sync_session.write().await.session = Some(ProfileSyncSession {
             username: "remote-owner".to_string(),
             role: "owner".to_string(),
         });
@@ -12116,7 +12202,9 @@ segment0.ts
                                 "followCount": 0,
                                 "searchHistoryCount": 0,
                                 "skipConfigCount": 0
-                            }
+                            },
+                            "mergedSnapshot": empty_remote_profile_snapshot(),
+                            "revision": "test-revision"
                         }))
                     }),
                 ),
@@ -12270,7 +12358,9 @@ segment0.ts
                                 "followCount": 0,
                                 "searchHistoryCount": 0,
                                 "skipConfigCount": 0
-                            }
+                            },
+                            "mergedSnapshot": empty_remote_profile_snapshot(),
+                            "revision": "test-revision"
                         }))
                     }),
                 ),
@@ -12449,7 +12539,9 @@ segment0.ts
                                 "followCount": 0,
                                 "searchHistoryCount": 0,
                                 "skipConfigCount": 0
-                            }
+                            },
+                            "mergedSnapshot": empty_remote_profile_snapshot(),
+                            "revision": "test-revision"
                         }))
                     }),
                 ),
@@ -12676,7 +12768,9 @@ segment0.ts
                                     "followCount": 0,
                                     "searchHistoryCount": 0,
                                     "skipConfigCount": 0
-                                }
+                                },
+                                "mergedSnapshot": empty_remote_profile_snapshot(),
+                                "revision": "test-revision"
                             }))
                         }
                     }),

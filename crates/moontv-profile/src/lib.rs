@@ -4,7 +4,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use moontv_storage::sqlite::{DesktopSqlite, ProfileMutationWrite};
+use moontv_storage::sqlite::{
+    DesktopSqlite, ProfileMutationWrite, ProfileRemoteMergeWrite, ProfileRemoteSnapshotWrite,
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -122,6 +124,12 @@ pub enum ProfileMutation {
 #[derive(Debug, Clone)]
 pub struct LocalDesktopProfileStore {
     sqlite: DesktopSqlite,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteProfileMergeCheckpoint {
+    pub next_local_seq: Option<i64>,
+    pub remote_revision_json: Option<String>,
 }
 
 impl LocalDesktopProfileStore {
@@ -266,6 +274,62 @@ impl LocalDesktopProfileStore {
         self.save_domain(username, domain.as_str(), snapshot)
     }
 
+    pub fn remote_merge_checkpoint(&self, username: &str) -> Result<RemoteProfileMergeCheckpoint> {
+        let state = self.sqlite.profile_sync_worker_state(username)?;
+        Ok(RemoteProfileMergeCheckpoint {
+            next_local_seq: state.as_ref().map(|state| state.next_local_seq),
+            remote_revision_json: state.and_then(|state| state.last_remote_generation_json),
+        })
+    }
+
+    pub fn apply_remote_merged_snapshot(
+        &self,
+        username: &str,
+        checkpoint: &RemoteProfileMergeCheckpoint,
+        revision: &Value,
+        snapshot: &LocalProfileSnapshot,
+        domains: &[ProfileDomain],
+    ) -> Result<bool> {
+        let mut metadata_keys = Vec::with_capacity(domains.len());
+        let mut snapshot_json = Vec::with_capacity(domains.len());
+        for domain in domains {
+            metadata_keys.push(domain_metadata_key(username, domain.as_str()));
+            snapshot_json.push(match domain {
+                ProfileDomain::PlayRecords => serde_json::to_string(&snapshot.play_records),
+                ProfileDomain::Favorites => serde_json::to_string(&snapshot.favorites),
+                ProfileDomain::Follows => serde_json::to_string(&snapshot.follow_records),
+                ProfileDomain::SearchHistory => serde_json::to_string(&snapshot.search_history),
+                ProfileDomain::SkipConfigs => serde_json::to_string(&snapshot.skip_configs),
+            }?);
+        }
+        let writes = metadata_keys
+            .iter()
+            .zip(snapshot_json.iter())
+            .enumerate()
+            .map(
+                |(index, (metadata_key, snapshot_json))| ProfileRemoteSnapshotWrite {
+                    domain: domains[index].as_str(),
+                    metadata_key,
+                    snapshot_json,
+                },
+            )
+            .collect::<Vec<_>>();
+        let device_id = self.get_or_create_device_id()?;
+        let revision_json = serde_json::to_string(revision)?;
+
+        self.sqlite
+            .apply_remote_profile_merge(ProfileRemoteMergeWrite {
+                username,
+                device_id: &device_id,
+                expected_next_local_seq: checkpoint.next_local_seq,
+                expected_remote_revision_json: checkpoint.remote_revision_json.as_deref(),
+                outbox_ack_before_local_seq: checkpoint.next_local_seq.unwrap_or(1),
+                revision_json: &revision_json,
+                snapshots: &writes,
+                timestamp_ms: current_timestamp_ms(),
+            })
+    }
+
     pub fn pending_outbox_count(&self, username: &str) -> Result<u64> {
         self.sqlite.pending_profile_outbox_count(username)
     }
@@ -343,8 +407,9 @@ mod tests {
     };
 
     use super::{
-        Favorite, FavoriteMap, FollowRecord, FollowRecordMap, LocalDesktopProfileStore, PlayRecord,
-        PlayRecordMap, ProfileDomain, ProfileMutation, SkipConfig, SkipConfigMap,
+        Favorite, FavoriteMap, FollowRecord, FollowRecordMap, LocalDesktopProfileStore,
+        LocalProfileSnapshot, PlayRecord, PlayRecordMap, ProfileDomain, ProfileMutation,
+        SkipConfig, SkipConfigMap,
     };
     use moontv_storage::sqlite::DesktopSqlite;
 
@@ -628,6 +693,274 @@ mod tests {
                 .get("demo+1")
                 .map(|record| record.title.as_str()),
             Some("Bob Demo")
+        );
+    }
+
+    #[test]
+    fn remote_merge_persists_selected_domains_and_rejects_stale_checkpoint() {
+        let temp_dir = TestDir::new();
+        let database_path = temp_dir.path.join("desktop.sqlite3");
+        let store = LocalDesktopProfileStore::new(
+            DesktopSqlite::initialize(&database_path).expect("sqlite"),
+        );
+        let local_play_record = PlayRecord {
+            title: "Local".to_string(),
+            source_name: "Source".to_string(),
+            year: "2026".to_string(),
+            cover: "local.jpg".to_string(),
+            index: 1,
+            total_episodes: 1,
+            play_time: 1,
+            total_time: 2,
+            save_time: 1,
+            search_title: None,
+            playback_mode: None,
+            offline_content_id: None,
+            is_adult: None,
+        };
+        store
+            .save_play_records(
+                "alice",
+                &PlayRecordMap::from([("local+1".to_string(), local_play_record.clone())]),
+            )
+            .expect("seed unselected domain");
+        let remote_favorite = Favorite {
+            title: "Remote".to_string(),
+            source_name: "Source".to_string(),
+            year: "2026".to_string(),
+            cover: "remote.jpg".to_string(),
+            total_episodes: 2,
+            save_time: 2,
+            search_title: None,
+            playback_mode: None,
+            offline_content_id: None,
+            is_adult: None,
+            origin: None,
+        };
+        let remote_snapshot = LocalProfileSnapshot {
+            play_records: PlayRecordMap::default(),
+            favorites: FavoriteMap::from([("remote+1".to_string(), remote_favorite.clone())]),
+            follow_records: FollowRecordMap::default(),
+            search_history: Vec::new(),
+            skip_configs: SkipConfigMap::default(),
+        };
+        let checkpoint = store.remote_merge_checkpoint("alice").expect("checkpoint");
+
+        assert!(
+            store
+                .apply_remote_merged_snapshot(
+                    "alice",
+                    &checkpoint,
+                    &serde_json::json!("revision-1"),
+                    &remote_snapshot,
+                    &[ProfileDomain::Favorites],
+                )
+                .expect("apply remote snapshot")
+        );
+        drop(store);
+
+        let store = LocalDesktopProfileStore::new(
+            DesktopSqlite::initialize(&database_path).expect("reopen sqlite"),
+        );
+        assert_eq!(
+            store.load_play_records("alice").expect("unselected domain"),
+            PlayRecordMap::from([("local+1".to_string(), local_play_record)])
+        );
+        assert_eq!(
+            store
+                .load_favorites("alice")
+                .expect("persisted remote data"),
+            FavoriteMap::from([("remote+1".to_string(), remote_favorite)])
+        );
+        assert_eq!(
+            store
+                .sqlite()
+                .profile_sync_worker_state("alice")
+                .expect("worker state")
+                .expect("worker state exists")
+                .last_remote_generation_json
+                .as_deref(),
+            Some("\"revision-1\"")
+        );
+
+        let concurrent_checkpoint = store.remote_merge_checkpoint("alice").expect("checkpoint");
+        assert!(
+            store
+                .apply_remote_merged_snapshot(
+                    "alice",
+                    &concurrent_checkpoint,
+                    &serde_json::json!("revision-2"),
+                    &remote_snapshot,
+                    &[ProfileDomain::Favorites],
+                )
+                .expect("apply newer concurrent response")
+        );
+        assert!(
+            !store
+                .apply_remote_merged_snapshot(
+                    "alice",
+                    &concurrent_checkpoint,
+                    &serde_json::json!("revision-stale"),
+                    &remote_snapshot,
+                    &[ProfileDomain::Favorites],
+                )
+                .expect("reject out-of-order remote response")
+        );
+
+        let stale_checkpoint = store.remote_merge_checkpoint("alice").expect("checkpoint");
+        store
+            .apply_local_mutation_and_enqueue(
+                "alice",
+                "device-a",
+                ProfileDomain::Favorites,
+                &FavoriteMap::default(),
+                ProfileMutation::Delete {
+                    entity_key: "remote+1".to_string(),
+                },
+            )
+            .expect("local mutation races remote response");
+        assert!(
+            !store
+                .apply_remote_merged_snapshot(
+                    "alice",
+                    &stale_checkpoint,
+                    &serde_json::json!("revision-2"),
+                    &remote_snapshot,
+                    &[ProfileDomain::Favorites],
+                )
+                .expect("reject stale remote snapshot")
+        );
+        assert_eq!(
+            store
+                .load_favorites("alice")
+                .expect("local result survives"),
+            FavoriteMap::default()
+        );
+        assert_eq!(store.pending_outbox_count("alice").expect("outbox"), 1);
+    }
+
+    #[test]
+    fn remote_merge_rebaselines_only_old_outbox_for_selected_domains() {
+        let temp_dir = TestDir::new();
+        let store = LocalDesktopProfileStore::new(
+            DesktopSqlite::initialize(temp_dir.path.join("desktop.sqlite3")).expect("sqlite"),
+        );
+        let favorite = Favorite {
+            title: "Local favorite".to_string(),
+            source_name: "Source".to_string(),
+            year: "2026".to_string(),
+            cover: String::new(),
+            total_episodes: 1,
+            save_time: 1,
+            search_title: None,
+            playback_mode: None,
+            offline_content_id: None,
+            is_adult: None,
+            origin: None,
+        };
+        let play_record = PlayRecord {
+            title: "Local play".to_string(),
+            source_name: "Source".to_string(),
+            year: "2026".to_string(),
+            cover: String::new(),
+            index: 1,
+            total_episodes: 1,
+            play_time: 1,
+            total_time: 2,
+            save_time: 1,
+            search_title: None,
+            playback_mode: None,
+            offline_content_id: None,
+            is_adult: None,
+        };
+        store
+            .apply_local_mutation_and_enqueue(
+                "alice",
+                "device-a",
+                ProfileDomain::Favorites,
+                &FavoriteMap::from([("old-favorite".to_string(), favorite.clone())]),
+                ProfileMutation::Upsert {
+                    entity_key: "old-favorite".to_string(),
+                    value: serde_json::to_value(&favorite).expect("favorite json"),
+                },
+            )
+            .expect("enqueue old selected mutation");
+        store
+            .apply_local_mutation_and_enqueue(
+                "alice",
+                "device-a",
+                ProfileDomain::PlayRecords,
+                &PlayRecordMap::from([("old-play".to_string(), play_record.clone())]),
+                ProfileMutation::Upsert {
+                    entity_key: "old-play".to_string(),
+                    value: serde_json::to_value(&play_record).expect("play record json"),
+                },
+            )
+            .expect("enqueue old unselected mutation");
+        let checkpoint = store.remote_merge_checkpoint("alice").expect("checkpoint");
+        let remote_snapshot = LocalProfileSnapshot {
+            play_records: PlayRecordMap::default(),
+            favorites: FavoriteMap::default(),
+            follow_records: FollowRecordMap::default(),
+            search_history: Vec::new(),
+            skip_configs: SkipConfigMap::default(),
+        };
+
+        assert!(
+            store
+                .apply_remote_merged_snapshot(
+                    "alice",
+                    &checkpoint,
+                    &serde_json::json!("revision-1"),
+                    &remote_snapshot,
+                    &[ProfileDomain::Favorites],
+                )
+                .expect("apply remote authority")
+        );
+        assert_eq!(
+            store.pending_outbox_count("alice").expect("pending outbox"),
+            1,
+            "old selected mutation is acknowledged while the unselected domain remains"
+        );
+
+        store
+            .apply_local_mutation_and_enqueue(
+                "alice",
+                "device-a",
+                ProfileDomain::Favorites,
+                &FavoriteMap::from([("new-favorite".to_string(), favorite.clone())]),
+                ProfileMutation::Upsert {
+                    entity_key: "new-favorite".to_string(),
+                    value: serde_json::to_value(favorite).expect("favorite json"),
+                },
+            )
+            .expect("enqueue mutation after merge");
+        let pending = store
+            .sqlite()
+            .list_due_profile_outbox("alice", i64::MAX, 10)
+            .expect("list pending outbox");
+        assert_eq!(
+            store.pending_outbox_count("alice").expect("pending count"),
+            2
+        );
+        assert_eq!(pending.len(), 1, "the worker exposes only the queue head");
+        assert_eq!(
+            (pending[0].domain.as_str(), pending[0].local_seq),
+            ("playrecords", 2)
+        );
+        assert!(
+            store
+                .sqlite()
+                .ack_profile_outbox_head("alice", &pending[0].op_id, pending[0].local_seq, 10)
+                .expect("ack unselected queue head")
+        );
+        let next_pending = store
+            .sqlite()
+            .list_due_profile_outbox("alice", i64::MAX, 10)
+            .expect("list next pending outbox");
+        assert_eq!(
+            (next_pending[0].domain.as_str(), next_pending[0].local_seq),
+            ("favorites", 3)
         );
     }
 

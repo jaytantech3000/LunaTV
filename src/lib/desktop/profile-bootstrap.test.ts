@@ -563,7 +563,7 @@ describe('desktop profile bootstrap helpers', () => {
     });
   });
 
-  it('skips local auth restore when profile sync is enabled', async () => {
+  it('restores local auth when profile sync is enabled', async () => {
     const payload = {
       appTarget: 'desktop',
       runtime: {
@@ -595,12 +595,15 @@ describe('desktop profile bootstrap helpers', () => {
       status: 200,
       json: jest.fn().mockResolvedValue(payload),
     });
+    (ensureDesktopAuthSession as jest.Mock).mockResolvedValue(
+      payload.localAuth
+    );
 
     await expect(loadDesktopProfileBootstrapState()).resolves.toEqual({
       payload,
       localAuth: payload.localAuth,
     });
 
-    expect(ensureDesktopAuthSession).not.toHaveBeenCalled();
+    expect(ensureDesktopAuthSession).toHaveBeenCalledTimes(1);
   });
 });

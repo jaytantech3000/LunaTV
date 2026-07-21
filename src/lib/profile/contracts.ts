@@ -77,6 +77,7 @@ export interface ResolvedProfileRuntime {
   appTarget: 'web' | 'desktop';
   runtimeKind: ProfileRuntimeKind;
   syncEnabled: boolean;
+  syncStorageType?: string;
   storageType: string;
   profileMode: ProfileMode;
   usesRemoteUserData: boolean;

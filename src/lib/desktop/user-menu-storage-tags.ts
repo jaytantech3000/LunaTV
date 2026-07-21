@@ -54,11 +54,13 @@ export function buildUserMenuStorageTags(
     detail: '本地 SQLite 是日常读写主数据源。',
   };
 
-  if (runtime.runtimeKind !== 'desktop-profile-sync') {
+  if (!runtime.syncEnabled) {
     return [localTag];
   }
 
-  const remoteTag = resolveRemoteTag(runtime.storageType);
+  const remoteTag = resolveRemoteTag(
+    runtime.syncStorageType || runtime.storageType
+  );
 
   return [
     localTag,

@@ -13,8 +13,8 @@ use serde_json::json;
 use url::form_urlencoded;
 
 use crate::{
-    AppError, AppResult, AppState, build_local_auth_status_payload, current_timestamp_ms,
-    no_store_json_response, resolve_owner_username_for_import, DEFAULT_DESKTOP_OWNER_USERNAME,
+    AppError, AppResult, AppState, DEFAULT_DESKTOP_OWNER_USERNAME, build_local_auth_status_payload,
+    current_timestamp_ms, no_store_json_response, resolve_owner_username_for_import,
 };
 
 const SEARCH_HISTORY_LIMIT: usize = 20;
@@ -491,26 +491,16 @@ pub(crate) async fn handle_profile_skip_configs(
     }
 }
 
-pub(crate) fn is_desktop_profile_sync_cookie(headers: &HeaderMap) -> bool {
-    extract_auth_cookie_payload(headers)
-        .and_then(|payload| payload.session_mode)
-        .as_deref()
-        == Some("desktop-profile-sync")
-}
-
 async fn resolve_local_profile_username(
     state: &AppState,
     headers: &HeaderMap,
 ) -> AppResult<String> {
     if let Some(payload) = extract_auth_cookie_payload(headers) {
         if payload.session_mode.as_deref() == Some("desktop-profile-sync") {
-            return state
-                .profile_sync_session
-                .read()
-                .await
-                .as_ref()
-                .and_then(|session| normalize_optional_string(Some(session.username.clone())))
-                .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, "Unauthorized"));
+            // Remote sync credentials are never an identity for the local SQLite
+            // profile. The caller must retain/use the independent desktop-local
+            // session so remote account changes cannot switch local namespaces.
+            return Err(AppError::new(StatusCode::UNAUTHORIZED, "Unauthorized"));
         }
 
         let username = normalize_optional_string(payload.username)

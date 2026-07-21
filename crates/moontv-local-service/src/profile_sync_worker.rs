@@ -7,7 +7,13 @@ use serde_json::{Value, json};
 use tracing::warn;
 use url::form_urlencoded;
 
-use crate::{AppState, current_timestamp_ms};
+use crate::{
+    AppState, current_timestamp_ms,
+    profile_sync::{
+        block_profile_sync_auth_if_current, profile_sync_session_snapshot,
+        read_profile_sync_account_binding,
+    },
+};
 
 const PROFILE_OUTBOX_WORKER_TICK_INTERVAL: Duration = Duration::from_secs(1);
 const PROFILE_OUTBOX_RETRY_BASE_DELAY_MS: i64 = 1_000;
@@ -107,10 +113,14 @@ async fn run_profile_outbox_worker_tick_locked(state: &AppState) -> anyhow::Resu
     let Some(remote_base_url) = config.profile_sync_api_base_url.as_deref() else {
         return Ok(());
     };
-    let Some(session) = state.profile_sync_session.read().await.clone() else {
+    let (session, session_generation) = profile_sync_session_snapshot(state).await;
+    let Some(session) = session else {
         return Ok(());
     };
-    let username = session.username;
+    let username = read_profile_sync_account_binding(state)
+        .filter(|(_, remote_username)| remote_username == &session.username)
+        .map(|(local_username, _)| local_username)
+        .unwrap_or_else(|| session.username.clone());
 
     let Some(worker_state) = state.sqlite.profile_sync_worker_state(&username)? else {
         return Ok(());
@@ -137,6 +147,17 @@ async fn run_profile_outbox_worker_tick_locked(state: &AppState) -> anyhow::Resu
         }
     };
 
+    let request = {
+        let current = state.profile_sync_session.read().await;
+        if current.generation != session_generation {
+            return Ok(());
+        }
+        let cookie_snapshot = state
+            .profile_sync
+            .cookie_snapshot(remote_base_url, &request.request_path)?;
+        request.with_cookie_snapshot(cookie_snapshot)
+    };
+
     match state
         .profile_sync
         .forward(Some(remote_base_url), request)
@@ -152,11 +173,17 @@ async fn run_profile_outbox_worker_tick_locked(state: &AppState) -> anyhow::Resu
         }
         Ok(response) if response.status == StatusCode::UNAUTHORIZED => {
             let error = "远端账号同步后端返回 401";
-            state
-                .sqlite
-                .block_profile_sync_auth(&username, now_ms, error)?;
-            *state.profile_sync_last_username.write().await = Some(username.clone());
-            *state.profile_sync_session.write().await = None;
+            if block_profile_sync_auth_if_current(
+                state,
+                session_generation,
+                &username,
+                now_ms,
+                error,
+            )
+            .await?
+            {
+                *state.profile_sync_last_username.write().await = Some(username.clone());
+            }
         }
         Ok(response)
             if response.status == StatusCode::REQUEST_TIMEOUT

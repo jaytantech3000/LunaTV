@@ -1,8 +1,3 @@
-import {
-  clearAuthInfoInBrowser,
-  getAuthInfoFromBrowserCookie,
-  setAuthInfoInBrowser,
-} from '@/lib/auth';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { apiFetch } from '@/lib/transport/api-client';
 
@@ -149,22 +144,6 @@ export type DesktopProfileSyncState =
 
 export interface ApplyDesktopProfileSyncStatusOptions {
   preserveStoredCredentials?: boolean;
-}
-
-function normalizeRole(
-  role?: DesktopProfileSyncStatus['role']
-): 'owner' | 'admin' | 'user' {
-  if (role === 'owner' || role === 'admin') {
-    return role;
-  }
-
-  return 'user';
-}
-
-function hasStoredDesktopProfileSyncCredentials(
-  _authInfo: ReturnType<typeof getAuthInfoFromBrowserCookie>
-): boolean {
-  return false;
 }
 
 export function resolveDesktopProfileSyncState(
@@ -330,9 +309,8 @@ export async function readDesktopProfileSyncStatusState(): Promise<DesktopProfil
 
 export function applyDesktopProfileSyncStatus(
   status: DesktopProfileSyncStatus,
-  options: ApplyDesktopProfileSyncStatusOptions = {}
+  _options: ApplyDesktopProfileSyncStatusOptions = {}
 ) {
-  const currentAuthInfo = getAuthInfoFromBrowserCookie();
   const currentConfig = getRuntimeConfig();
   const nextConfig = {
     ...currentConfig,
@@ -353,34 +331,6 @@ export function applyDesktopProfileSyncStatus(
   }
 
   window.RUNTIME_CONFIG = nextConfig;
-
-  if (status.enabled) {
-    if (status.authenticated && status.username?.trim()) {
-      const password =
-        currentAuthInfo?.sessionMode === 'desktop-profile-sync' &&
-        currentAuthInfo.username?.trim() === status.username.trim()
-          ? currentAuthInfo.password
-          : undefined;
-      setAuthInfoInBrowser({
-        username: status.username.trim(),
-        role: normalizeRole(status.role),
-        password,
-        sessionMode: 'desktop-profile-sync',
-      });
-    } else if (
-      !(
-        options.preserveStoredCredentials === true &&
-        hasStoredDesktopProfileSyncCredentials(currentAuthInfo) &&
-        status.errorKind !== 'unauthorized'
-      )
-    ) {
-      clearAuthInfoInBrowser();
-    }
-  } else if (
-    getAuthInfoFromBrowserCookie()?.sessionMode === 'desktop-profile-sync'
-  ) {
-    clearAuthInfoInBrowser();
-  }
 
   return window.RUNTIME_CONFIG;
 }
