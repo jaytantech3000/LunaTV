@@ -7,6 +7,7 @@ import { hashPassword, isHashed, verifyPassword } from './password';
 import {
   type ProfileSyncCommitRequest,
   type ProfileSyncCommitResult,
+  PROFILE_SYNC_ADMIN_SETTINGS_INITIAL_REVISION,
   PROFILE_SYNC_INITIAL_REVISION,
 } from './profile-sync/merge-storage';
 import {
@@ -55,6 +56,14 @@ if currentRevision ~= ARGV[1] then
   return false
 end
 
+local hasAdminSettings = ARGV[4] == '1'
+if hasAdminSettings then
+  local currentAdminRevision = redis.call('GET', KEYS[8]) or '0'
+  if currentAdminRevision ~= ARGV[5] then
+    return false
+  end
+end
+
 local domains = cjson.decode(ARGV[2])
 local snapshot = cjson.decode(ARGV[3])
 
@@ -93,7 +102,17 @@ if containsDomain('skipConfigs') then
   replaceHash(KEYS[6], snapshot.skipConfigs)
 end
 
+if hasAdminSettings then
+  redis.call('SET', KEYS[7], ARGV[6])
+  redis.call('INCR', KEYS[8])
+end
+
 return tostring(redis.call('INCR', KEYS[1]))
+`;
+
+const ADMIN_SETTINGS_MUTATION_SCRIPT = `
+redis.call('SET', KEYS[1], ARGV[1])
+return tostring(redis.call('INCR', KEYS[2]))
 `;
 
 // 数据类型转换辅助函数
@@ -103,6 +122,14 @@ function ensureString(value: any): string {
 
 function ensureStringArray(value: any[]): string[] {
   return value.map((item) => String(item));
+}
+
+function isCrossSlotError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('CROSSSLOT');
+}
+
+function crossSlotAtomicCommitError(): Error {
+  return new Error('PROFILE_SYNC_CROSS_SLOT_ATOMIC_COMMIT_UNAVAILABLE');
 }
 
 // 连接配置接口
@@ -249,6 +276,17 @@ export abstract class BaseRedisStorage implements IStorage {
     return revision ?? PROFILE_SYNC_INITIAL_REVISION;
   }
 
+  private adminSettingsRevisionKey(): string {
+    return 'admin:config-revision';
+  }
+
+  async getAdminSettingsRevision(): Promise<string> {
+    const revision = await this.withRetry(() =>
+      this.client.get(this.adminSettingsRevisionKey())
+    );
+    return revision ?? PROFILE_SYNC_ADMIN_SETTINGS_INITIAL_REVISION;
+  }
+
   private async runProfileMutation(
     dataKey: string,
     userName: string,
@@ -271,27 +309,43 @@ export abstract class BaseRedisStorage implements IStorage {
   async commitProfileSyncMerge(
     request: ProfileSyncCommitRequest
   ): Promise<ProfileSyncCommitResult | null> {
+    const keys = [
+      this.profileRevisionKey(request.username),
+      this.prHashKey(request.username),
+      this.favHashKey(request.username),
+      this.followHashKey(request.username),
+      this.shKey(request.username),
+      this.skipHashKey(request.username),
+    ];
+    const arguments_ = [
+      request.expectedRevision,
+      JSON.stringify(request.domains),
+      JSON.stringify(request.mergedSnapshot),
+    ];
+
     if (request.adminSettings) {
-      throw new Error('不支持 Redis 资料合并中的管理设置原子提交');
+      keys.push(this.adminConfigKey(), this.adminSettingsRevisionKey());
+      arguments_.push(
+        '1',
+        request.adminSettings.expectedRevision,
+        JSON.stringify(request.adminSettings.snapshot)
+      );
     }
 
-    const revision = await this.withRetry(() =>
-      this.client.eval(PROFILE_SYNC_COMMIT_SCRIPT, {
-        keys: [
-          this.profileRevisionKey(request.username),
-          this.prHashKey(request.username),
-          this.favHashKey(request.username),
-          this.followHashKey(request.username),
-          this.shKey(request.username),
-          this.skipHashKey(request.username),
-        ],
-        arguments: [
-          request.expectedRevision,
-          JSON.stringify(request.domains),
-          JSON.stringify(request.mergedSnapshot),
-        ],
-      })
-    );
+    let revision: unknown;
+    try {
+      revision = await this.withRetry(() =>
+        this.client.eval(PROFILE_SYNC_COMMIT_SCRIPT, {
+          keys,
+          arguments: arguments_,
+        })
+      );
+    } catch (error) {
+      if (isCrossSlotError(error)) {
+        throw crossSlotAtomicCommitError();
+      }
+      throw error;
+    }
 
     if (revision === null) {
       return null;
@@ -605,7 +659,10 @@ export abstract class BaseRedisStorage implements IStorage {
 
   async setAdminConfig(config: AdminConfig): Promise<void> {
     await this.withRetry(() =>
-      this.client.set(this.adminConfigKey(), JSON.stringify(config))
+      this.client.eval(ADMIN_SETTINGS_MUTATION_SCRIPT, {
+        keys: [this.adminConfigKey(), this.adminSettingsRevisionKey()],
+        arguments: [JSON.stringify(config)],
+      })
     );
   }
 

@@ -24,6 +24,7 @@ import { BaseRedisStorage } from './redis-base.db';
 import type { PlayRecord } from './types';
 
 interface ProfileSyncStorage {
+  getAdminSettingsRevision(): Promise<string>;
   commitProfileSyncMerge(
     request: ProfileSyncCommitRequest
   ): Promise<{ revision: string } | null>;
@@ -141,5 +142,111 @@ describe('BaseRedisStorage profile sync commit', () => {
       })
     );
     expect(redisClient.hSet).not.toHaveBeenCalled();
+  });
+
+  it('returns the initial string when the admin settings revision is missing', async () => {
+    redisClient.get.mockResolvedValue(null);
+    const storage = createStorage();
+
+    await expect(storage.getAdminSettingsRevision()).resolves.toBe('0');
+    expect(redisClient.get).toHaveBeenCalledWith('admin:config-revision');
+  });
+
+  it('commits selected profile domains and sanitized admin settings in one CAS script', async () => {
+    redisClient.eval.mockResolvedValue('8');
+    const storage = createStorage();
+
+    await expect(
+      storage.commitProfileSyncMerge({
+        username: 'alice',
+        expectedRevision: '7',
+        domains: ['favorites'],
+        mergedSnapshot: {
+          playRecords: {},
+          favorites: {},
+          follows: {},
+          searchHistory: [],
+          skipConfigs: {},
+        },
+        adminSettings: {
+          expectedRevision: '12',
+          snapshot: {
+            SiteConfig: {
+              SiteName: 'LunaTV',
+              Announcement: '',
+              SearchDownstreamMaxPage: 5,
+              SiteInterfaceCacheTime: 3600,
+              DoubanProxyType: 'custom',
+              DoubanProxy: '',
+              DoubanImageProxyType: 'custom',
+              DoubanImageProxy: '',
+              DisableYellowFilter: false,
+              FluidSearch: false,
+              EnableWebLive: true,
+            },
+            SourceConfig: [],
+            CustomCategories: [],
+            LiveConfig: [],
+            AdFilterConfig: { enabled: true },
+            PlayerEnhancementConfig: {
+              AudioSpikeProtection: false,
+              VisualEnhancement: false,
+            },
+          },
+        },
+      })
+    ).resolves.toEqual({ revision: '8' });
+
+    expect(redisClient.eval).toHaveBeenCalledTimes(1);
+    expect(redisClient.eval).toHaveBeenCalledWith(
+      expect.stringContaining('currentAdminRevision'),
+      expect.objectContaining({
+        keys: [
+          'u:alice:profile-sync-revision',
+          'u:alice:pr',
+          'u:alice:fav',
+          'u:alice:follow',
+          'u:alice:sh',
+          'u:alice:skip',
+          'admin:config',
+          'admin:config-revision',
+        ],
+        arguments: [
+          '7',
+          '["favorites"]',
+          expect.stringContaining('"favorites"'),
+          '1',
+          '12',
+          expect.stringContaining('"SiteName":"LunaTV"'),
+        ],
+      })
+    );
+    expect(redisClient.hSet).not.toHaveBeenCalled();
+    expect(redisClient.del).not.toHaveBeenCalled();
+  });
+
+  it('surfaces cross-slot commit failures without falling back to separate writes', async () => {
+    redisClient.eval.mockRejectedValue(
+      new Error('CROSSSLOT Keys in request do not hash to the same slot')
+    );
+    const storage = createStorage();
+
+    await expect(
+      storage.commitProfileSyncMerge({
+        username: 'alice',
+        expectedRevision: '7',
+        domains: ['favorites'],
+        mergedSnapshot: {
+          playRecords: {},
+          favorites: {},
+          follows: {},
+          searchHistory: [],
+          skipConfigs: {},
+        },
+      })
+    ).rejects.toThrow('PROFILE_SYNC_CROSS_SLOT_ATOMIC_COMMIT_UNAVAILABLE');
+
+    expect(redisClient.hSet).not.toHaveBeenCalled();
+    expect(redisClient.del).not.toHaveBeenCalled();
   });
 });
