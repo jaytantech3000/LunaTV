@@ -61,3 +61,8 @@ public/workbox-*.js
 public/workbox-*.js.map
 public/worker-*.js
 public/fallback-*.js
+
+# local tooling and generated download site
+/.codegraph/
+/.download-site-build/
+/download-site-dist/
