@@ -5,6 +5,11 @@ import { Redis } from '@upstash/redis';
 import { AdminConfig } from './admin.types';
 import { hashPassword, isHashed, verifyPassword } from './password';
 import {
+  PROFILE_SYNC_INITIAL_REVISION,
+  ProfileSyncCommitRequest,
+  ProfileSyncCommitResult,
+} from './profile-sync/merge-storage';
+import {
   Favorite,
   FollowRecord,
   IStorage,
@@ -15,6 +20,56 @@ import {
 // 搜索历史最大条数
 const SEARCH_HISTORY_LIMIT = 20;
 
+const PROFILE_MUTATION_LUA = `
+local operation = ARGV[1]
+if operation == 'hset' then
+  redis.call('HSET', KEYS[1], ARGV[2], ARGV[3])
+elseif operation == 'hdel' then
+  redis.call('HDEL', KEYS[1], ARGV[2])
+elseif operation == 'del' then
+  redis.call('DEL', KEYS[1])
+elseif operation == 'search-add' then
+  redis.call('LREM', KEYS[1], 0, ARGV[2])
+  redis.call('LPUSH', KEYS[1], ARGV[2])
+  redis.call('LTRIM', KEYS[1], 0, tonumber(ARGV[3]) - 1)
+elseif operation == 'search-delete' then
+  redis.call('LREM', KEYS[1], 0, ARGV[2])
+end
+return redis.call('INCR', KEYS[2])
+`;
+
+const PROFILE_SYNC_COMMIT_LUA = `
+local currentRevision = redis.call('GET', KEYS[6]) or '0'
+if tostring(currentRevision) ~= ARGV[1] then
+  return nil
+end
+local domains = cjson.decode(ARGV[2])
+for _, domain in ipairs(domains) do
+  if domain == 'playRecords' then
+    redis.call('DEL', KEYS[1])
+    local values = cjson.decode(ARGV[3])
+    for field, value in pairs(values) do redis.call('HSET', KEYS[1], field, cjson.encode(value)) end
+  elseif domain == 'favorites' then
+    redis.call('DEL', KEYS[2])
+    local values = cjson.decode(ARGV[4])
+    for field, value in pairs(values) do redis.call('HSET', KEYS[2], field, cjson.encode(value)) end
+  elseif domain == 'follows' then
+    redis.call('DEL', KEYS[3])
+    local values = cjson.decode(ARGV[5])
+    for field, value in pairs(values) do redis.call('HSET', KEYS[3], field, cjson.encode(value)) end
+  elseif domain == 'searchHistory' then
+    redis.call('DEL', KEYS[4])
+    local values = cjson.decode(ARGV[6])
+    for index = #values, 1, -1 do redis.call('LPUSH', KEYS[4], values[index]) end
+  elseif domain == 'skipConfigs' then
+    redis.call('DEL', KEYS[5])
+    local values = cjson.decode(ARGV[7])
+    for field, value in pairs(values) do redis.call('HSET', KEYS[5], field, cjson.encode(value)) end
+  end
+end
+return redis.call('INCR', KEYS[6])
+`;
+
 // 数据类型转换辅助函数
 function ensureString(value: any): string {
   return String(value);
@@ -22,6 +77,10 @@ function ensureString(value: any): string {
 
 function ensureStringArray(value: any[]): string[] {
   return value.map((item) => String(item));
+}
+
+function parseHashValue<T>(value: unknown): T {
+  return typeof value === 'string' ? (JSON.parse(value) as T) : (value as T);
 }
 
 type GlobalWithUpstashRedis = typeof globalThis & {
@@ -79,6 +138,61 @@ export class UpstashRedisStorage implements IStorage {
     return `u:${user}:pr`; // 一个用户的所有播放记录存在一个 Hash 中
   }
 
+  private profileRevisionKey(user: string) {
+    return `u:${user}:profile-revision`;
+  }
+
+  private async runProfileMutation(
+    key: string,
+    userName: string,
+    args: string[]
+  ): Promise<void> {
+    await withRetry(() =>
+      this.client.eval(
+        PROFILE_MUTATION_LUA,
+        [key, this.profileRevisionKey(userName)],
+        args
+      )
+    );
+  }
+
+  async getProfileSyncRevision(userName: string): Promise<string> {
+    const revision = await withRetry(() =>
+      this.client.get(this.profileRevisionKey(userName))
+    );
+    return revision === null
+      ? PROFILE_SYNC_INITIAL_REVISION
+      : ensureString(revision);
+  }
+
+  async commitProfileSyncMerge(
+    request: ProfileSyncCommitRequest
+  ): Promise<ProfileSyncCommitResult | null> {
+    const result = await withRetry(() =>
+      this.client.eval(
+        PROFILE_SYNC_COMMIT_LUA,
+        [
+          this.prHashKey(request.username),
+          this.favHashKey(request.username),
+          this.followHashKey(request.username),
+          this.shKey(request.username),
+          this.skipHashKey(request.username),
+          this.profileRevisionKey(request.username),
+        ],
+        [
+          request.expectedRevision,
+          JSON.stringify(request.domains),
+          JSON.stringify(request.mergedSnapshot.playRecords),
+          JSON.stringify(request.mergedSnapshot.favorites),
+          JSON.stringify(request.mergedSnapshot.follows),
+          JSON.stringify(request.mergedSnapshot.searchHistory),
+          JSON.stringify(request.mergedSnapshot.skipConfigs),
+        ]
+      )
+    );
+    return result === null ? null : { revision: ensureString(result) };
+  }
+
   async getPlayRecord(
     userName: string,
     key: string
@@ -86,7 +200,7 @@ export class UpstashRedisStorage implements IStorage {
     const val = await withRetry(() =>
       this.client.hget(this.prHashKey(userName), key)
     );
-    return val ? (val as PlayRecord) : null;
+    return val ? parseHashValue<PlayRecord>(val) : null;
   }
 
   async setPlayRecord(
@@ -94,9 +208,11 @@ export class UpstashRedisStorage implements IStorage {
     key: string,
     record: PlayRecord
   ): Promise<void> {
-    await withRetry(() =>
-      this.client.hset(this.prHashKey(userName), { [key]: record })
-    );
+    await this.runProfileMutation(this.prHashKey(userName), userName, [
+      'hset',
+      key,
+      JSON.stringify(record),
+    ]);
   }
 
   async getAllPlayRecords(
@@ -109,18 +225,21 @@ export class UpstashRedisStorage implements IStorage {
     const result: Record<string, PlayRecord> = {};
     for (const [field, value] of Object.entries(all)) {
       if (value) {
-        result[field] = value as PlayRecord;
+        result[field] = parseHashValue<PlayRecord>(value);
       }
     }
     return result;
   }
 
   async deletePlayRecord(userName: string, key: string): Promise<void> {
-    await withRetry(() => this.client.hdel(this.prHashKey(userName), key));
+    await this.runProfileMutation(this.prHashKey(userName), userName, [
+      'hdel',
+      key,
+    ]);
   }
 
   async deleteAllPlayRecords(userName: string): Promise<void> {
-    await withRetry(() => this.client.del(this.prHashKey(userName)));
+    await this.runProfileMutation(this.prHashKey(userName), userName, ['del']);
   }
 
   // ---------- 收藏 ----------
@@ -132,7 +251,7 @@ export class UpstashRedisStorage implements IStorage {
     const val = await withRetry(() =>
       this.client.hget(this.favHashKey(userName), key)
     );
-    return val ? (val as Favorite) : null;
+    return val ? parseHashValue<Favorite>(val) : null;
   }
 
   async setFavorite(
@@ -140,9 +259,11 @@ export class UpstashRedisStorage implements IStorage {
     key: string,
     favorite: Favorite
   ): Promise<void> {
-    await withRetry(() =>
-      this.client.hset(this.favHashKey(userName), { [key]: favorite })
-    );
+    await this.runProfileMutation(this.favHashKey(userName), userName, [
+      'hset',
+      key,
+      JSON.stringify(favorite),
+    ]);
   }
 
   async getAllFavorites(userName: string): Promise<Record<string, Favorite>> {
@@ -153,18 +274,21 @@ export class UpstashRedisStorage implements IStorage {
     const result: Record<string, Favorite> = {};
     for (const [field, value] of Object.entries(all)) {
       if (value) {
-        result[field] = value as Favorite;
+        result[field] = parseHashValue<Favorite>(value);
       }
     }
     return result;
   }
 
   async deleteFavorite(userName: string, key: string): Promise<void> {
-    await withRetry(() => this.client.hdel(this.favHashKey(userName), key));
+    await this.runProfileMutation(this.favHashKey(userName), userName, [
+      'hdel',
+      key,
+    ]);
   }
 
   async deleteAllFavorites(userName: string): Promise<void> {
-    await withRetry(() => this.client.del(this.favHashKey(userName)));
+    await this.runProfileMutation(this.favHashKey(userName), userName, ['del']);
   }
 
   // ---------- 追更 ----------
@@ -179,7 +303,7 @@ export class UpstashRedisStorage implements IStorage {
     const val = await withRetry(() =>
       this.client.hget(this.followHashKey(userName), key)
     );
-    return val ? (val as FollowRecord) : null;
+    return val ? parseHashValue<FollowRecord>(val) : null;
   }
 
   async setFollowRecord(
@@ -187,9 +311,11 @@ export class UpstashRedisStorage implements IStorage {
     key: string,
     follow: FollowRecord
   ): Promise<void> {
-    await withRetry(() =>
-      this.client.hset(this.followHashKey(userName), { [key]: follow })
-    );
+    await this.runProfileMutation(this.followHashKey(userName), userName, [
+      'hset',
+      key,
+      JSON.stringify(follow),
+    ]);
   }
 
   async getAllFollowRecords(
@@ -203,18 +329,23 @@ export class UpstashRedisStorage implements IStorage {
     const result: Record<string, FollowRecord> = {};
     for (const [field, value] of Object.entries(all)) {
       if (value) {
-        result[field] = value as FollowRecord;
+        result[field] = parseHashValue<FollowRecord>(value);
       }
     }
     return result;
   }
 
   async deleteFollowRecord(userName: string, key: string): Promise<void> {
-    await withRetry(() => this.client.hdel(this.followHashKey(userName), key));
+    await this.runProfileMutation(this.followHashKey(userName), userName, [
+      'hdel',
+      key,
+    ]);
   }
 
   async deleteAllFollowRecords(userName: string): Promise<void> {
-    await withRetry(() => this.client.del(this.followHashKey(userName)));
+    await this.runProfileMutation(this.followHashKey(userName), userName, [
+      'del',
+    ]);
   }
 
   // ---------- 用户注册 / 登录 ----------
@@ -298,19 +429,22 @@ export class UpstashRedisStorage implements IStorage {
   async addSearchHistory(userName: string, keyword: string): Promise<void> {
     const key = this.shKey(userName);
     // 先去重
-    await withRetry(() => this.client.lrem(key, 0, ensureString(keyword)));
-    // 插入到最前
-    await withRetry(() => this.client.lpush(key, ensureString(keyword)));
-    // 限制最大长度
-    await withRetry(() => this.client.ltrim(key, 0, SEARCH_HISTORY_LIMIT - 1));
+    await this.runProfileMutation(key, userName, [
+      'search-add',
+      ensureString(keyword),
+      ensureString(SEARCH_HISTORY_LIMIT),
+    ]);
   }
 
   async deleteSearchHistory(userName: string, keyword?: string): Promise<void> {
     const key = this.shKey(userName);
     if (keyword) {
-      await withRetry(() => this.client.lrem(key, 0, ensureString(keyword)));
+      await this.runProfileMutation(key, userName, [
+        'search-delete',
+        ensureString(keyword),
+      ]);
     } else {
-      await withRetry(() => this.client.del(key));
+      await this.runProfileMutation(key, userName, ['del']);
     }
   }
 
@@ -355,7 +489,7 @@ export class UpstashRedisStorage implements IStorage {
     const val = await withRetry(() =>
       this.client.hget(this.skipHashKey(userName), this.skipField(source, id))
     );
-    return val ? (val as SkipConfig) : null;
+    return val ? parseHashValue<SkipConfig>(val) : null;
   }
 
   async setSkipConfig(
@@ -364,11 +498,11 @@ export class UpstashRedisStorage implements IStorage {
     id: string,
     config: SkipConfig
   ): Promise<void> {
-    await withRetry(() =>
-      this.client.hset(this.skipHashKey(userName), {
-        [this.skipField(source, id)]: config,
-      })
-    );
+    await this.runProfileMutation(this.skipHashKey(userName), userName, [
+      'hset',
+      this.skipField(source, id),
+      JSON.stringify(config),
+    ]);
   }
 
   async deleteSkipConfig(
@@ -376,9 +510,10 @@ export class UpstashRedisStorage implements IStorage {
     source: string,
     id: string
   ): Promise<void> {
-    await withRetry(() =>
-      this.client.hdel(this.skipHashKey(userName), this.skipField(source, id))
-    );
+    await this.runProfileMutation(this.skipHashKey(userName), userName, [
+      'hdel',
+      this.skipField(source, id),
+    ]);
   }
 
   async getAllSkipConfigs(
@@ -391,7 +526,7 @@ export class UpstashRedisStorage implements IStorage {
     const configs: { [key: string]: SkipConfig } = {};
     for (const [field, value] of Object.entries(all)) {
       if (value) {
-        configs[field] = value as SkipConfig;
+        configs[field] = parseHashValue<SkipConfig>(value);
       }
     }
     return configs;

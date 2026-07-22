@@ -5,6 +5,11 @@ import { createClient, RedisClientType } from 'redis';
 import { AdminConfig } from './admin.types';
 import { hashPassword, isHashed, verifyPassword } from './password';
 import {
+  type ProfileSyncCommitRequest,
+  type ProfileSyncCommitResult,
+  PROFILE_SYNC_INITIAL_REVISION,
+} from './profile-sync/merge-storage';
+import {
   Favorite,
   FollowRecord,
   IStorage,
@@ -14,6 +19,82 @@ import {
 
 // 搜索历史最大条数
 const SEARCH_HISTORY_LIMIT = 20;
+
+const PROFILE_MUTATION_SCRIPT = `
+local operation = ARGV[1]
+local changed = 0
+
+if operation == 'hash-set' then
+  redis.call('HSET', KEYS[1], ARGV[2], ARGV[3])
+  changed = 1
+elseif operation == 'hash-delete' then
+  changed = redis.call('HDEL', KEYS[1], ARGV[2])
+elseif operation == 'key-delete' then
+  changed = redis.call('DEL', KEYS[1])
+elseif operation == 'search-add' then
+  redis.call('LREM', KEYS[1], 0, ARGV[2])
+  redis.call('LPUSH', KEYS[1], ARGV[2])
+  redis.call('LTRIM', KEYS[1], 0, tonumber(ARGV[3]) - 1)
+  changed = 1
+elseif operation == 'search-delete' then
+  changed = redis.call('LREM', KEYS[1], 0, ARGV[2])
+else
+  return redis.error_reply('Unsupported profile mutation')
+end
+
+if changed > 0 then
+  return tostring(redis.call('INCR', KEYS[2]))
+end
+
+return false
+`;
+
+const PROFILE_SYNC_COMMIT_SCRIPT = `
+local currentRevision = redis.call('GET', KEYS[1]) or '0'
+if currentRevision ~= ARGV[1] then
+  return false
+end
+
+local domains = cjson.decode(ARGV[2])
+local snapshot = cjson.decode(ARGV[3])
+
+local function containsDomain(name)
+  for _, domain in ipairs(domains) do
+    if domain == name then
+      return true
+    end
+  end
+  return false
+end
+
+local function replaceHash(key, values)
+  redis.call('DEL', key)
+  for field, value in pairs(values) do
+    redis.call('HSET', key, field, cjson.encode(value))
+  end
+end
+
+if containsDomain('playRecords') then
+  replaceHash(KEYS[2], snapshot.playRecords)
+end
+if containsDomain('favorites') then
+  replaceHash(KEYS[3], snapshot.favorites)
+end
+if containsDomain('follows') then
+  replaceHash(KEYS[4], snapshot.follows)
+end
+if containsDomain('searchHistory') then
+  redis.call('DEL', KEYS[5])
+  for index = #snapshot.searchHistory, 1, -1 do
+    redis.call('LPUSH', KEYS[5], snapshot.searchHistory[index])
+  end
+end
+if containsDomain('skipConfigs') then
+  replaceHash(KEYS[6], snapshot.skipConfigs)
+end
+
+return tostring(redis.call('INCR', KEYS[1]))
+`;
 
 // 数据类型转换辅助函数
 function ensureString(value: any): string {
@@ -157,6 +238,68 @@ export abstract class BaseRedisStorage implements IStorage {
     this.withRetry = createRetryWrapper(config.clientName, () => this.client);
   }
 
+  private profileRevisionKey(userName: string): string {
+    return `u:${userName}:profile-sync-revision`;
+  }
+
+  async getProfileSyncRevision(userName: string): Promise<string> {
+    const revision = await this.withRetry(() =>
+      this.client.get(this.profileRevisionKey(userName))
+    );
+    return revision ?? PROFILE_SYNC_INITIAL_REVISION;
+  }
+
+  private async runProfileMutation(
+    dataKey: string,
+    userName: string,
+    operation:
+      | 'hash-set'
+      | 'hash-delete'
+      | 'key-delete'
+      | 'search-add'
+      | 'search-delete',
+    arguments_: string[]
+  ): Promise<void> {
+    await this.withRetry(() =>
+      this.client.eval(PROFILE_MUTATION_SCRIPT, {
+        keys: [dataKey, this.profileRevisionKey(userName)],
+        arguments: [operation, ...arguments_],
+      })
+    );
+  }
+
+  async commitProfileSyncMerge(
+    request: ProfileSyncCommitRequest
+  ): Promise<ProfileSyncCommitResult | null> {
+    if (request.adminSettings) {
+      throw new Error('不支持 Redis 资料合并中的管理设置原子提交');
+    }
+
+    const revision = await this.withRetry(() =>
+      this.client.eval(PROFILE_SYNC_COMMIT_SCRIPT, {
+        keys: [
+          this.profileRevisionKey(request.username),
+          this.prHashKey(request.username),
+          this.favHashKey(request.username),
+          this.followHashKey(request.username),
+          this.shKey(request.username),
+          this.skipHashKey(request.username),
+        ],
+        arguments: [
+          request.expectedRevision,
+          JSON.stringify(request.domains),
+          JSON.stringify(request.mergedSnapshot),
+        ],
+      })
+    );
+
+    if (revision === null) {
+      return null;
+    }
+
+    return { revision: String(revision) };
+  }
+
   // ---------- 播放记录 ----------
   private prHashKey(user: string) {
     return `u:${user}:pr`; // 一个用户的所有播放记录存在一个 Hash 中
@@ -177,8 +320,11 @@ export abstract class BaseRedisStorage implements IStorage {
     key: string,
     record: PlayRecord
   ): Promise<void> {
-    await this.withRetry(() =>
-      this.client.hSet(this.prHashKey(userName), key, JSON.stringify(record))
+    await this.runProfileMutation(
+      this.prHashKey(userName),
+      userName,
+      'hash-set',
+      [key, JSON.stringify(record)]
     );
   }
 
@@ -198,13 +344,21 @@ export abstract class BaseRedisStorage implements IStorage {
   }
 
   async deletePlayRecord(userName: string, key: string): Promise<void> {
-    await this.withRetry(() =>
-      this.client.hDel(this.prHashKey(userName), key)
+    await this.runProfileMutation(
+      this.prHashKey(userName),
+      userName,
+      'hash-delete',
+      [key]
     );
   }
 
   async deleteAllPlayRecords(userName: string): Promise<void> {
-    await this.withRetry(() => this.client.del(this.prHashKey(userName)));
+    await this.runProfileMutation(
+      this.prHashKey(userName),
+      userName,
+      'key-delete',
+      []
+    );
   }
 
   // ---------- 收藏 ----------
@@ -224,8 +378,11 @@ export abstract class BaseRedisStorage implements IStorage {
     key: string,
     favorite: Favorite
   ): Promise<void> {
-    await this.withRetry(() =>
-      this.client.hSet(this.favHashKey(userName), key, JSON.stringify(favorite))
+    await this.runProfileMutation(
+      this.favHashKey(userName),
+      userName,
+      'hash-set',
+      [key, JSON.stringify(favorite)]
     );
   }
 
@@ -243,13 +400,21 @@ export abstract class BaseRedisStorage implements IStorage {
   }
 
   async deleteFavorite(userName: string, key: string): Promise<void> {
-    await this.withRetry(() =>
-      this.client.hDel(this.favHashKey(userName), key)
+    await this.runProfileMutation(
+      this.favHashKey(userName),
+      userName,
+      'hash-delete',
+      [key]
     );
   }
 
   async deleteAllFavorites(userName: string): Promise<void> {
-    await this.withRetry(() => this.client.del(this.favHashKey(userName)));
+    await this.runProfileMutation(
+      this.favHashKey(userName),
+      userName,
+      'key-delete',
+      []
+    );
   }
 
   // ---------- 追更 ----------
@@ -272,12 +437,11 @@ export abstract class BaseRedisStorage implements IStorage {
     key: string,
     follow: FollowRecord
   ): Promise<void> {
-    await this.withRetry(() =>
-      this.client.hSet(
-        this.followHashKey(userName),
-        key,
-        JSON.stringify(follow)
-      )
+    await this.runProfileMutation(
+      this.followHashKey(userName),
+      userName,
+      'hash-set',
+      [key, JSON.stringify(follow)]
     );
   }
 
@@ -297,13 +461,21 @@ export abstract class BaseRedisStorage implements IStorage {
   }
 
   async deleteFollowRecord(userName: string, key: string): Promise<void> {
-    await this.withRetry(() =>
-      this.client.hDel(this.followHashKey(userName), key)
+    await this.runProfileMutation(
+      this.followHashKey(userName),
+      userName,
+      'hash-delete',
+      [key]
     );
   }
 
   async deleteAllFollowRecords(userName: string): Promise<void> {
-    await this.withRetry(() => this.client.del(this.followHashKey(userName)));
+    await this.runProfileMutation(
+      this.followHashKey(userName),
+      userName,
+      'key-delete',
+      []
+    );
   }
 
   // ---------- 用户注册 / 登录 ----------
@@ -385,21 +557,29 @@ export abstract class BaseRedisStorage implements IStorage {
   }
 
   async addSearchHistory(userName: string, keyword: string): Promise<void> {
-    const key = this.shKey(userName);
-    // 先去重
-    await this.withRetry(() => this.client.lRem(key, 0, ensureString(keyword)));
-    // 插入到最前
-    await this.withRetry(() => this.client.lPush(key, ensureString(keyword)));
-    // 限制最大长度
-    await this.withRetry(() => this.client.lTrim(key, 0, SEARCH_HISTORY_LIMIT - 1));
+    await this.runProfileMutation(
+      this.shKey(userName),
+      userName,
+      'search-add',
+      [ensureString(keyword), String(SEARCH_HISTORY_LIMIT)]
+    );
   }
 
   async deleteSearchHistory(userName: string, keyword?: string): Promise<void> {
-    const key = this.shKey(userName);
     if (keyword) {
-      await this.withRetry(() => this.client.lRem(key, 0, ensureString(keyword)));
+      await this.runProfileMutation(
+        this.shKey(userName),
+        userName,
+        'search-delete',
+        [ensureString(keyword)]
+      );
     } else {
-      await this.withRetry(() => this.client.del(key));
+      await this.runProfileMutation(
+        this.shKey(userName),
+        userName,
+        'key-delete',
+        []
+      );
     }
   }
 
@@ -455,12 +635,11 @@ export abstract class BaseRedisStorage implements IStorage {
     id: string,
     config: SkipConfig
   ): Promise<void> {
-    await this.withRetry(() =>
-      this.client.hSet(
-        this.skipHashKey(userName),
-        this.skipField(source, id),
-        JSON.stringify(config)
-      )
+    await this.runProfileMutation(
+      this.skipHashKey(userName),
+      userName,
+      'hash-set',
+      [this.skipField(source, id), JSON.stringify(config)]
     );
   }
 
@@ -469,8 +648,11 @@ export abstract class BaseRedisStorage implements IStorage {
     source: string,
     id: string
   ): Promise<void> {
-    await this.withRetry(() =>
-      this.client.hDel(this.skipHashKey(userName), this.skipField(source, id))
+    await this.runProfileMutation(
+      this.skipHashKey(userName),
+      userName,
+      'hash-delete',
+      [this.skipField(source, id)]
     );
   }
 
