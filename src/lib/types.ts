@@ -1,4 +1,8 @@
 import { AdminConfig } from './admin.types';
+import type {
+  ProfileSyncCommitRequest,
+  ProfileSyncCommitResult,
+} from './profile-sync/merge-storage';
 
 // 播放记录数据结构
 export interface PlayRecord {
@@ -48,6 +52,11 @@ export interface FollowRecord {
 
 // 存储接口
 export interface IStorage {
+  getProfileSyncRevision(userName: string): Promise<string>;
+  commitProfileSyncMerge(
+    request: ProfileSyncCommitRequest
+  ): Promise<ProfileSyncCommitResult | null>;
+
   // 播放记录相关
   getPlayRecord(userName: string, key: string): Promise<PlayRecord | null>;
   setPlayRecord(

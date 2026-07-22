@@ -2,6 +2,10 @@
 
 import { AdminConfig } from './admin.types';
 import { KvrocksStorage } from './kvrocks.db';
+import type {
+  ProfileSyncCommitRequest,
+  ProfileSyncCommitResult,
+} from './profile-sync/merge-storage';
 import { RedisStorage } from './redis.db';
 import {
   Favorite,
@@ -80,6 +84,16 @@ export class DbManager {
       await this.migrationPromise;
       this.migrationPromise = null;
     }
+  }
+
+  async getProfileSyncRevision(userName: string): Promise<string> {
+    return this.storage.getProfileSyncRevision(userName);
+  }
+
+  async commitProfileSyncMerge(
+    request: ProfileSyncCommitRequest
+  ): Promise<ProfileSyncCommitResult | null> {
+    return this.storage.commitProfileSyncMerge(request);
   }
 
   // 播放记录相关方法
