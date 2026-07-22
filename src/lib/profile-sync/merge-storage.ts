@@ -1,4 +1,4 @@
-import type { AdminSettingsSyncSnapshot } from '@/lib/admin-settings-sync';
+import type { AdminConfig } from '@/lib/admin.types';
 
 import type {
   DesktopProfileDomain,
@@ -7,10 +7,21 @@ import type {
 
 export const PROFILE_SYNC_INITIAL_REVISION = '0';
 export const PROFILE_SYNC_ADMIN_SETTINGS_INITIAL_REVISION = '0';
+export const PROFILE_SYNC_CROSS_SLOT_ATOMIC_COMMIT_UNAVAILABLE =
+  'PROFILE_SYNC_CROSS_SLOT_ATOMIC_COMMIT_UNAVAILABLE';
+
+export class ProfileSyncAtomicCommitUnavailableError extends Error {
+  readonly code = PROFILE_SYNC_CROSS_SLOT_ATOMIC_COMMIT_UNAVAILABLE;
+
+  constructor() {
+    super(PROFILE_SYNC_CROSS_SLOT_ATOMIC_COMMIT_UNAVAILABLE);
+    this.name = 'ProfileSyncAtomicCommitUnavailableError';
+  }
+}
 
 export interface ProfileSyncAdminSettingsCommit {
   expectedRevision: string;
-  snapshot: AdminSettingsSyncSnapshot;
+  config: AdminConfig;
 }
 
 export interface ProfileSyncCommitRequest {

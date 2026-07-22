@@ -5,7 +5,9 @@ import { Redis } from '@upstash/redis';
 import { AdminConfig } from './admin.types';
 import { hashPassword, isHashed, verifyPassword } from './password';
 import {
+  PROFILE_SYNC_ADMIN_SETTINGS_INITIAL_REVISION,
   PROFILE_SYNC_INITIAL_REVISION,
+  ProfileSyncAtomicCommitUnavailableError,
   ProfileSyncCommitRequest,
   ProfileSyncCommitResult,
 } from './profile-sync/merge-storage';
@@ -43,6 +45,12 @@ local currentRevision = redis.call('GET', KEYS[6]) or '0'
 if tostring(currentRevision) ~= ARGV[1] then
   return nil
 end
+if ARGV[8] then
+  local currentAdminRevision = redis.call('GET', KEYS[8]) or '0'
+  if tostring(currentAdminRevision) ~= ARGV[8] then
+    return nil
+  end
+end
 local domains = cjson.decode(ARGV[2])
 for _, domain in ipairs(domains) do
   if domain == 'playRecords' then
@@ -67,7 +75,16 @@ for _, domain in ipairs(domains) do
     for field, value in pairs(values) do redis.call('HSET', KEYS[5], field, cjson.encode(value)) end
   end
 end
+if ARGV[8] then
+  redis.call('SET', KEYS[7], ARGV[9])
+  redis.call('INCR', KEYS[8])
+end
 return redis.call('INCR', KEYS[6])
+`;
+
+const ADMIN_SETTINGS_MUTATION_LUA = `
+redis.call('SET', KEYS[1], ARGV[1])
+return redis.call('INCR', KEYS[2])
 `;
 
 // 数据类型转换辅助函数
@@ -81,6 +98,14 @@ function ensureStringArray(value: any[]): string[] {
 
 function parseHashValue<T>(value: unknown): T {
   return typeof value === 'string' ? (JSON.parse(value) as T) : (value as T);
+}
+
+function throwAtomicCommitUnavailable(error: unknown): never {
+  if (error instanceof Error && /CROSSSLOT|same slot/i.test(error.message)) {
+    throw new ProfileSyncAtomicCommitUnavailableError();
+  }
+
+  throw error;
 }
 
 type GlobalWithUpstashRedis = typeof globalThis & {
@@ -142,18 +167,26 @@ export class UpstashRedisStorage implements IStorage {
     return `u:${user}:profile-revision`;
   }
 
+  private adminSettingsRevisionKey() {
+    return 'admin:config-revision';
+  }
+
   private async runProfileMutation(
     key: string,
     userName: string,
     args: string[]
   ): Promise<void> {
-    await withRetry(() =>
-      this.client.eval(
-        PROFILE_MUTATION_LUA,
-        [key, this.profileRevisionKey(userName)],
-        args
-      )
-    );
+    try {
+      await withRetry(() =>
+        this.client.eval(
+          PROFILE_MUTATION_LUA,
+          [key, this.profileRevisionKey(userName)],
+          args
+        )
+      );
+    } catch (error) {
+      throwAtomicCommitUnavailable(error);
+    }
   }
 
   async getProfileSyncRevision(userName: string): Promise<string> {
@@ -165,31 +198,51 @@ export class UpstashRedisStorage implements IStorage {
       : ensureString(revision);
   }
 
+  async getAdminSettingsRevision(): Promise<string> {
+    const revision = await withRetry(() =>
+      this.client.get(this.adminSettingsRevisionKey())
+    );
+    return revision === null
+      ? PROFILE_SYNC_ADMIN_SETTINGS_INITIAL_REVISION
+      : ensureString(revision);
+  }
+
   async commitProfileSyncMerge(
     request: ProfileSyncCommitRequest
   ): Promise<ProfileSyncCommitResult | null> {
-    const result = await withRetry(() =>
-      this.client.eval(
-        PROFILE_SYNC_COMMIT_LUA,
-        [
-          this.prHashKey(request.username),
-          this.favHashKey(request.username),
-          this.followHashKey(request.username),
-          this.shKey(request.username),
-          this.skipHashKey(request.username),
-          this.profileRevisionKey(request.username),
-        ],
-        [
-          request.expectedRevision,
-          JSON.stringify(request.domains),
-          JSON.stringify(request.mergedSnapshot.playRecords),
-          JSON.stringify(request.mergedSnapshot.favorites),
-          JSON.stringify(request.mergedSnapshot.follows),
-          JSON.stringify(request.mergedSnapshot.searchHistory),
-          JSON.stringify(request.mergedSnapshot.skipConfigs),
-        ]
-      )
-    );
+    const keys = [
+      this.prHashKey(request.username),
+      this.favHashKey(request.username),
+      this.followHashKey(request.username),
+      this.shKey(request.username),
+      this.skipHashKey(request.username),
+      this.profileRevisionKey(request.username),
+    ];
+    const args = [
+      request.expectedRevision,
+      JSON.stringify(request.domains),
+      JSON.stringify(request.mergedSnapshot.playRecords),
+      JSON.stringify(request.mergedSnapshot.favorites),
+      JSON.stringify(request.mergedSnapshot.follows),
+      JSON.stringify(request.mergedSnapshot.searchHistory),
+      JSON.stringify(request.mergedSnapshot.skipConfigs),
+    ];
+    if (request.adminSettings) {
+      keys.push(this.adminConfigKey(), this.adminSettingsRevisionKey());
+      args.push(
+        request.adminSettings.expectedRevision,
+        JSON.stringify(request.adminSettings.config)
+      );
+    }
+
+    let result: unknown;
+    try {
+      result = await withRetry(() =>
+        this.client.eval(PROFILE_SYNC_COMMIT_LUA, keys, args)
+      );
+    } catch (error) {
+      throwAtomicCommitUnavailable(error);
+    }
     return result === null ? null : { revision: ensureString(result) };
   }
 
@@ -469,7 +522,17 @@ export class UpstashRedisStorage implements IStorage {
   }
 
   async setAdminConfig(config: AdminConfig): Promise<void> {
-    await withRetry(() => this.client.set(this.adminConfigKey(), config));
+    try {
+      await withRetry(() =>
+        this.client.eval(
+          ADMIN_SETTINGS_MUTATION_LUA,
+          [this.adminConfigKey(), this.adminSettingsRevisionKey()],
+          [JSON.stringify(config)]
+        )
+      );
+    } catch (error) {
+      throwAtomicCommitUnavailable(error);
+    }
   }
 
   // ---------- 跳过片头片尾配置 ----------

@@ -9,6 +9,7 @@ import {
   type ProfileSyncCommitResult,
   PROFILE_SYNC_ADMIN_SETTINGS_INITIAL_REVISION,
   PROFILE_SYNC_INITIAL_REVISION,
+  ProfileSyncAtomicCommitUnavailableError,
 } from './profile-sync/merge-storage';
 import {
   Favorite,
@@ -128,8 +129,12 @@ function isCrossSlotError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('CROSSSLOT');
 }
 
-function crossSlotAtomicCommitError(): Error {
-  return new Error('PROFILE_SYNC_CROSS_SLOT_ATOMIC_COMMIT_UNAVAILABLE');
+function throwAtomicCommitError(error: unknown): never {
+  if (isCrossSlotError(error)) {
+    throw new ProfileSyncAtomicCommitUnavailableError();
+  }
+
+  throw error;
 }
 
 // 连接配置接口
@@ -298,12 +303,16 @@ export abstract class BaseRedisStorage implements IStorage {
       | 'search-delete',
     arguments_: string[]
   ): Promise<void> {
-    await this.withRetry(() =>
-      this.client.eval(PROFILE_MUTATION_SCRIPT, {
-        keys: [dataKey, this.profileRevisionKey(userName)],
-        arguments: [operation, ...arguments_],
-      })
-    );
+    try {
+      await this.withRetry(() =>
+        this.client.eval(PROFILE_MUTATION_SCRIPT, {
+          keys: [dataKey, this.profileRevisionKey(userName)],
+          arguments: [operation, ...arguments_],
+        })
+      );
+    } catch (error) {
+      throwAtomicCommitError(error);
+    }
   }
 
   async commitProfileSyncMerge(
@@ -328,7 +337,7 @@ export abstract class BaseRedisStorage implements IStorage {
       arguments_.push(
         '1',
         request.adminSettings.expectedRevision,
-        JSON.stringify(request.adminSettings.snapshot)
+        JSON.stringify(request.adminSettings.config)
       );
     }
 
@@ -341,10 +350,7 @@ export abstract class BaseRedisStorage implements IStorage {
         })
       );
     } catch (error) {
-      if (isCrossSlotError(error)) {
-        throw crossSlotAtomicCommitError();
-      }
-      throw error;
+      throwAtomicCommitError(error);
     }
 
     if (revision === null) {
@@ -658,12 +664,16 @@ export abstract class BaseRedisStorage implements IStorage {
   }
 
   async setAdminConfig(config: AdminConfig): Promise<void> {
-    await this.withRetry(() =>
-      this.client.eval(ADMIN_SETTINGS_MUTATION_SCRIPT, {
-        keys: [this.adminConfigKey(), this.adminSettingsRevisionKey()],
-        arguments: [JSON.stringify(config)],
-      })
-    );
+    try {
+      await this.withRetry(() =>
+        this.client.eval(ADMIN_SETTINGS_MUTATION_SCRIPT, {
+          keys: [this.adminConfigKey(), this.adminSettingsRevisionKey()],
+          arguments: [JSON.stringify(config)],
+        })
+      );
+    } catch (error) {
+      throwAtomicCommitError(error);
+    }
   }
 
   // ---------- 跳过片头片尾配置 ----------
