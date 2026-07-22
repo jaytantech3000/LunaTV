@@ -90,6 +90,10 @@ export class DbManager {
     return this.storage.getProfileSyncRevision(userName);
   }
 
+  async getAdminSettingsRevision(): Promise<string> {
+    return this.storage.getAdminSettingsRevision();
+  }
+
   async commitProfileSyncMerge(
     request: ProfileSyncCommitRequest
   ): Promise<ProfileSyncCommitResult | null> {

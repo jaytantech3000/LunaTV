@@ -5,6 +5,7 @@ import type {
   ProfileSyncCommitRequest,
   ProfileSyncCommitResult,
 } from './merge-storage';
+import { PROFILE_SYNC_ADMIN_SETTINGS_INITIAL_REVISION } from './merge-storage';
 
 function createCommitRequest(): ProfileSyncCommitRequest {
   return {
@@ -60,5 +61,19 @@ describe('profile sync merge storage contract', () => {
 
     await expect(manager.commitProfileSyncMerge(request)).resolves.toBeNull();
     expect(storage.commitProfileSyncMerge).toHaveBeenCalledWith(request);
+  });
+
+  it('forwards the missing admin settings revision default unchanged', async () => {
+    const storage = {
+      getAdminSettingsRevision: jest
+        .fn()
+        .mockResolvedValue(PROFILE_SYNC_ADMIN_SETTINGS_INITIAL_REVISION),
+    } as unknown as IStorage;
+    const manager = createDbManager(storage);
+
+    await expect(manager.getAdminSettingsRevision()).resolves.toBe(
+      PROFILE_SYNC_ADMIN_SETTINGS_INITIAL_REVISION
+    );
+    expect(storage.getAdminSettingsRevision).toHaveBeenCalledTimes(1);
   });
 });

@@ -53,6 +53,7 @@ export interface FollowRecord {
 // 存储接口
 export interface IStorage {
   getProfileSyncRevision(userName: string): Promise<string>;
+  getAdminSettingsRevision(): Promise<string>;
   commitProfileSyncMerge(
     request: ProfileSyncCommitRequest
   ): Promise<ProfileSyncCommitResult | null>;
