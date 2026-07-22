@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { AdminConfigResult } from '@/lib/admin.types';
+import { redactAdminConfigForAdminRole } from '@/lib/admin-settings-sync';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 
@@ -27,23 +28,27 @@ export async function GET(request: NextRequest) {
 
   try {
     const config = await getConfig();
-    const result: AdminConfigResult = {
-      Role: 'owner',
-      Config: config,
-    };
+    let role: AdminConfigResult['Role'] | null = null;
     if (username === process.env.USERNAME) {
-      result.Role = 'owner';
+      role = 'owner';
     } else {
       const user = config.UserConfig.Users.find((u) => u.username === username);
       if (user && user.role === 'admin' && !user.banned) {
-        result.Role = 'admin';
-      } else {
-        return NextResponse.json(
-          { error: '你是管理员吗你就访问？' },
-          { status: 401 }
-        );
+        role = 'admin';
       }
     }
+
+    if (!role) {
+      return NextResponse.json(
+        { error: '你是管理员吗你就访问？' },
+        { status: 401 }
+      );
+    }
+
+    const result: AdminConfigResult = {
+      Role: role,
+      Config: role === 'owner' ? config : redactAdminConfigForAdminRole(config),
+    };
 
     return NextResponse.json(result, {
       headers: {

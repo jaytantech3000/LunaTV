@@ -160,6 +160,52 @@ describe('desktop profile sync merge helpers', () => {
     ]);
   });
 
+  it('merges only selected domains and leaves every unselected domain empty', () => {
+    const merged = mergeDesktopProfileSnapshot(
+      {
+        playRecords: {
+          'remote+1': buildPlayRecord('remote play', 1),
+        },
+        favorites: {
+          'remote+1': buildFavorite('remote favorite', 2),
+        },
+        follows: {
+          'remote+1': buildFollow('remote follow', 3),
+        },
+        searchHistory: ['remote search'],
+        skipConfigs: {
+          'remote+1': buildSkipConfig(4),
+        },
+      },
+      {
+        playRecords: {
+          'local+1': buildPlayRecord('local play', 5),
+        },
+        favorites: {
+          'local+1': buildFavorite('local favorite', 6),
+        },
+        follows: {
+          'local+1': buildFollow('local follow', 7),
+        },
+        searchHistory: ['local search'],
+        skipConfigs: {
+          'local+1': buildSkipConfig(8),
+        },
+      },
+      'local-first',
+      ['favorites']
+    );
+
+    expect(merged.favorites).toEqual({
+      'remote+1': buildFavorite('remote favorite', 2),
+      'local+1': buildFavorite('local favorite', 6),
+    });
+    expect(merged.playRecords).toEqual({});
+    expect(merged.follows).toEqual({});
+    expect(merged.searchHistory).toEqual([]);
+    expect(merged.skipConfigs).toEqual({});
+  });
+
   it('dedupes search history, trims blanks, and enforces the limit', () => {
     expect(
       mergeSearchHistory(
