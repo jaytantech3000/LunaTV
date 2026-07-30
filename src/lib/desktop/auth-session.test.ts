@@ -13,8 +13,13 @@ import {
   hasExplicitDesktopLogout,
   loginDesktopSession,
   logoutDesktopSession,
+  restoreVerifiedDesktopAuthSession,
 } from '@/lib/desktop/auth-session';
-import { desktopLogin, getDesktopAuthStatus } from '@/lib/desktop/tauri-client';
+import {
+  desktopLogin,
+  getDesktopAuthSession,
+  getDesktopAuthStatus,
+} from '@/lib/desktop/tauri-client';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
 jest.mock('@/lib/auth', () => ({
@@ -29,6 +34,7 @@ jest.mock('@/lib/runtime-config', () => ({
 
 jest.mock('@/lib/desktop/tauri-client', () => ({
   desktopLogin: jest.fn(),
+  getDesktopAuthSession: jest.fn(),
   getDesktopAuthStatus: jest.fn(),
   isDesktopTauriRuntimeAvailable: jest.fn(() => true),
 }));
@@ -52,9 +58,16 @@ describe('desktop auth session helpers', () => {
       ownerPasswordConfigured: false,
     };
     (getDesktopAuthStatus as jest.Mock).mockResolvedValue(authStatus);
+    (desktopLogin as jest.Mock).mockResolvedValue({
+      username: 'owner',
+      role: 'owner',
+      adminCapability: 'owner-capability',
+    });
 
     await expect(ensureDesktopAuthSession()).resolves.toEqual(authStatus);
 
+    expect(desktopLogin).toHaveBeenCalledWith('owner', '');
+    expect(getDesktopAdminCapability()).toBe('owner-capability');
     expect(setAuthInfoInBrowser).toHaveBeenCalledWith({
       username: 'owner',
       role: 'owner',
@@ -119,6 +132,50 @@ describe('desktop auth session helpers', () => {
     expect(getDesktopAdminCapability()).toBe('owner-capability');
   });
 
+  it('restores a verified native admin session after a page reload', async () => {
+    (getDesktopAuthSession as jest.Mock).mockResolvedValue({
+      username: 'desktop-admin',
+      role: 'admin',
+      adminCapability: 'restored-capability',
+    });
+
+    await expect(restoreVerifiedDesktopAuthSession()).resolves.toEqual({
+      username: 'desktop-admin',
+      role: 'admin',
+      adminCapability: 'restored-capability',
+    });
+
+    expect(getDesktopAdminCapability()).toBe('restored-capability');
+    expect(setAuthInfoInBrowser).toHaveBeenCalledWith({
+      username: 'desktop-admin',
+      role: 'admin',
+      sessionMode: 'desktop-local',
+    });
+  });
+
+  it('does not restore the native session after an explicit logout', async () => {
+    localStorage.setItem(DESKTOP_AUTH_LOGOUT_MARKER_KEY, '1');
+
+    await expect(restoreVerifiedDesktopAuthSession()).resolves.toBeNull();
+
+    expect(getDesktopAuthSession).not.toHaveBeenCalled();
+  });
+
+  it('does not promote a verified regular user while checking admin access', async () => {
+    (getDesktopAuthSession as jest.Mock).mockResolvedValue({
+      username: 'kid',
+      role: 'user',
+    });
+
+    await expect(restoreVerifiedDesktopAuthSession()).resolves.toEqual({
+      username: 'kid',
+      role: 'user',
+    });
+
+    expect(getDesktopAdminCapability()).toBeNull();
+    expect(setAuthInfoInBrowser).not.toHaveBeenCalled();
+  });
+
   it('does not retain a native admin capability for a regular user login', async () => {
     (desktopLogin as jest.Mock).mockResolvedValue({
       username: 'kid',
@@ -152,14 +209,46 @@ describe('desktop auth session helpers', () => {
       ownerPasswordConfigured: false,
     };
     (getDesktopAuthStatus as jest.Mock).mockResolvedValue(authStatus);
+    (desktopLogin as jest.Mock).mockResolvedValue({
+      username: 'owner',
+      role: 'owner',
+      adminCapability: 'owner-capability',
+    });
 
     await expect(ensureDesktopAuthSession()).resolves.toEqual(authStatus);
 
+    expect(desktopLogin).toHaveBeenCalledWith('owner', '');
+    expect(getDesktopAdminCapability()).toBe('owner-capability');
     expect(setAuthInfoInBrowser).toHaveBeenCalledWith({
       username: 'owner',
       role: 'owner',
       sessionMode: 'desktop-local',
     });
+  });
+
+  it('reacquires the native capability for a persisted passwordless owner', async () => {
+    const authStatus = {
+      username: 'owner',
+      passwordRequired: false,
+      multiUser: false,
+      ownerPasswordConfigured: false,
+    };
+    (getDesktopAuthStatus as jest.Mock).mockResolvedValue(authStatus);
+    (getAuthInfoFromBrowserCookie as jest.Mock).mockReturnValue({
+      username: 'owner',
+      role: 'owner',
+      sessionMode: 'desktop-local',
+    });
+    (desktopLogin as jest.Mock).mockResolvedValue({
+      username: 'owner',
+      role: 'owner',
+      adminCapability: 'owner-capability',
+    });
+
+    await ensureDesktopAuthSession();
+
+    expect(desktopLogin).toHaveBeenCalledWith('owner', '');
+    expect(getDesktopAdminCapability()).toBe('owner-capability');
   });
 
   it('preserves an existing local user session when owner password is empty', async () => {

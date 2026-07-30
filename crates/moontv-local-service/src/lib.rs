@@ -124,6 +124,7 @@ const DEFAULT_CONFIG_FILE_NAME: &str = "config.example.json";
 const DEFAULT_DATA_DIR_NAME: &str = ".lunatv-desktop";
 const DEFAULT_SQLITE_FILE_NAME: &str = "moontv-desktop.sqlite3";
 const ADMIN_PERSISTENCE_FILE_NAME: &str = "desktop-admin-state.json";
+const ADMIN_PERSISTENCE_METADATA_KEY: &str = "desktop:admin-persistence";
 const DEFAULT_DESKTOP_OWNER_USERNAME: &str = "admin";
 const DOWNLOAD_RUNTIME_DIR_NAME: &str = "download-runtime";
 const DOWNLOAD_RUNTIME_CACHE_BODY_DIR_NAME: &str = "cache-body";
@@ -480,7 +481,7 @@ impl AppState {
             )
         })?;
 
-        Ok(Self {
+        let state = Self {
             host,
             port,
             public_base_url,
@@ -511,7 +512,11 @@ impl AppState {
             douban_movie_api_base_url: DEFAULT_DOUBAN_MOVIE_API_BASE_URL.to_string(),
             douban_search_api_base_url: DEFAULT_DOUBAN_SEARCH_API_BASE_URL.to_string(),
             live_channels_cache: Arc::new(RwLock::new(BTreeMap::new())),
-        })
+        };
+        if state.config_path.is_file() {
+            state.load_admin_persistence()?;
+        }
+        Ok(state)
     }
 
     fn bind_addr(&self) -> String {
@@ -859,11 +864,39 @@ impl AppState {
     }
 
     fn load_admin_persistence(&self) -> Result<DesktopAdminPersistence> {
-        load_admin_persistence(&self.config_path, &self.admin_persistence_path())
+        let (raw_contents, raw_config) = read_raw_service_config(&self.config_path)?;
+        if let Some(persistence) = self
+            .sqlite
+            .read_app_metadata::<DesktopAdminPersistence>(ADMIN_PERSISTENCE_METADATA_KEY)?
+        {
+            delete_if_exists(&self.admin_persistence_path())?;
+            return Ok(normalize_sqlite_admin_persistence(
+                persistence,
+                raw_contents,
+                &raw_config,
+            ));
+        }
+
+        let persistence =
+            load_admin_persistence(&self.config_path, &self.admin_persistence_path())?;
+        self.sqlite
+            .write_app_metadata(ADMIN_PERSISTENCE_METADATA_KEY, &persistence)?;
+        let legacy_path = self.admin_persistence_path();
+        if delete_if_exists(&legacy_path)? {
+            info!(
+                "migrated legacy desktop admin persistence from {} into {}",
+                legacy_path.display(),
+                self.sqlite.path().display()
+            );
+        }
+        Ok(persistence)
     }
 
     fn save_admin_persistence(&self, persistence: &DesktopAdminPersistence) -> Result<()> {
-        save_admin_persistence(&self.admin_persistence_path(), persistence)
+        self.sqlite
+            .write_app_metadata(ADMIN_PERSISTENCE_METADATA_KEY, persistence)?;
+        delete_if_exists(&self.admin_persistence_path())?;
+        Ok(())
     }
 
     fn write_raw_config(&self, contents: &str) -> Result<()> {
@@ -2840,7 +2873,13 @@ fn persist_admin_config_file_with_subscription(
     validate_admin_config_file_contents(config_file)?;
     state.write_raw_config(config_file)?;
 
-    let mut persistence = state.load_admin_persistence()?;
+    let persistence = state.load_admin_persistence()?;
+    let (_, raw_config) = read_raw_service_config(&state.config_path)?;
+    let mut persistence = merge_admin_persistence_with_raw(
+        persistence,
+        config_file.to_string(),
+        &raw_config,
+    );
     persistence.config.config_subscribtion.url = subscription_url;
     persistence.config.config_subscribtion.auto_update = auto_update;
     persistence.config.config_subscribtion.last_check = last_check;
@@ -4160,15 +4199,33 @@ fn load_admin_persistence(
     ))
 }
 
-fn save_admin_persistence(path: &Path, persistence: &DesktopAdminPersistence) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-
-    let contents = serde_json::to_string_pretty(persistence)
-        .context("failed to serialize desktop admin persistence")?;
-    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
+fn normalize_sqlite_admin_persistence(
+    mut persistence: DesktopAdminPersistence,
+    raw_contents: String,
+    raw_config: &RawServiceConfig,
+) -> DesktopAdminPersistence {
+    persistence.config.config_file = raw_contents;
+    persistence.config.site_config =
+        normalize_desktop_site_config(persistence.config.site_config);
+    let owner_username = persistence
+        .config
+        .user_config
+        .users
+        .iter()
+        .find(|user| user.role == "owner")
+        .map(|user| user.username.clone())
+        .or_else(|| normalize_optional_string(raw_config.auth.username.clone()))
+        .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
+    persistence.config.user_config = normalize_user_config(
+        persistence.config.user_config,
+        &owner_username,
+    );
+    persistence.profile_sync_api_base_url =
+        normalize_optional_string(persistence.profile_sync_api_base_url);
+    persistence.profile_sync_sync_domains = normalize_profile_sync_selected_domains(Some(
+        persistence.profile_sync_sync_domains,
+    ));
+    persistence
 }
 
 fn build_default_admin_config(
@@ -7770,6 +7827,77 @@ mod tests {
                 .expect("read sqlite snapshot")
                 .expect("sqlite snapshot should exist"),
             legacy_snapshot
+        );
+    }
+
+    #[test]
+    fn legacy_admin_persistence_is_migrated_and_sqlite_remains_authoritative() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+                "auth": {
+                    "username": "owner",
+                    "password": "owner-secret"
+                }
+            }),
+        );
+        let legacy_path = write_test_admin_persistence(
+            &temp_dir,
+            json!({
+                "config": {
+                    "SiteConfig": {
+                        "SiteName": "SQLite LunaTV"
+                    },
+                    "UserConfig": {
+                        "Users": [
+                            {
+                                "username": "owner",
+                                "role": "owner"
+                            }
+                        ]
+                    }
+                },
+                "userPasswords": {}
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+
+        assert!(!legacy_path.exists());
+        assert!(
+            state
+                .sqlite
+                .read_app_metadata::<DesktopAdminPersistence>(
+                    ADMIN_PERSISTENCE_METADATA_KEY
+                )
+                .expect("read sqlite admin persistence")
+                .is_some()
+        );
+
+        write_test_admin_persistence(
+            &temp_dir,
+            json!({
+                "config": {
+                    "SiteConfig": {
+                        "SiteName": "Stale Legacy LunaTV"
+                    }
+                }
+            }),
+        );
+        let persistence = state
+            .load_admin_persistence()
+            .expect("load sqlite admin persistence");
+
+        assert!(!legacy_path.exists());
+        assert_eq!(
+            persistence.config.site_config.site_name,
+            "SQLite LunaTV"
         );
     }
 
@@ -12522,6 +12650,38 @@ segment0.ts
                         assert_eq!(
                             payload
                                 .get("adminConfig")
+                                .and_then(|value| value.get("CustomCategories"))
+                                .and_then(Value::as_array)
+                                .map(Vec::len),
+                            Some(1)
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("LiveConfig"))
+                                .and_then(Value::as_array)
+                                .map(Vec::len),
+                            Some(1)
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("AdFilterConfig"))
+                                .and_then(|value| value.get("enabled"))
+                                .and_then(Value::as_bool),
+                            Some(false)
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
+                                .and_then(|value| value.get("PlayerEnhancementConfig"))
+                                .and_then(|value| value.get("VisualEnhancement"))
+                                .and_then(Value::as_bool),
+                            Some(true)
+                        );
+                        assert_eq!(
+                            payload
+                                .get("adminConfig")
                                 .and_then(|value| value.get("ConfigFile")),
                             None
                         );
@@ -12607,8 +12767,32 @@ segment0.ts
                     "disable_ad_filter": false
                   }
                 ],
-                "CustomCategories": [],
-                "LiveConfig": []
+                "CustomCategories": [
+                  {
+                    "name": "Desktop Movies",
+                    "type": "movie",
+                    "query": "desktop-movies",
+                    "from": "custom",
+                    "disabled": false
+                  }
+                ],
+                "LiveConfig": [
+                  {
+                    "key": "desktop-live",
+                    "name": "Desktop Live",
+                    "url": "https://desktop.example/live.m3u",
+                    "from": "custom",
+                    "channelNumber": 0,
+                    "disabled": false
+                  }
+                ],
+                "AdFilterConfig": {
+                  "enabled": false
+                },
+                "PlayerEnhancementConfig": {
+                  "AudioSpikeProtection": true,
+                  "VisualEnhancement": true
+                }
               },
               "userPasswords": {}
             }),

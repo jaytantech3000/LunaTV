@@ -8,6 +8,7 @@ import { getDesktopAdminCapability } from '@/lib/desktop/admin-capability';
 import {
   getDesktopAuthRequirement,
   loginDesktopSession,
+  restoreVerifiedDesktopAuthSession,
 } from '@/lib/desktop/auth-session';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
@@ -45,12 +46,25 @@ export default function DesktopPrivilegeGate({
       }
 
       try {
+        const session = await restoreVerifiedDesktopAuthSession();
+        if (
+          session &&
+          (session.role === 'owner' || session.role === 'admin') &&
+          session.adminCapability
+        ) {
+          setAuthorized(true);
+          setReady(true);
+          return;
+        }
+
         const requirement = await getDesktopAuthRequirement();
         setUsernameRequired(Boolean(requirement?.multiUser));
-      } finally {
-        setAuthorized(false);
-        setReady(true);
+      } catch (_) {
+        setError('无法恢复桌面管理员会话，请重新验证身份');
       }
+
+      setAuthorized(false);
+      setReady(true);
     };
 
     void refresh();

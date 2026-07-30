@@ -303,7 +303,7 @@ describe('DesktopProfileSyncOnboardingCard', () => {
       screen.getByRole('heading', { name: '选择同步优先级' })
     ).toBeInTheDocument();
     expect(mockExecuteDesktopProfileSyncOnboarding).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText('本地为主'));
+    expect(screen.getByLabelText('本地为主')).toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: '确认并开启同步' }));
 
     await waitFor(() => {

@@ -233,7 +233,7 @@ function SyncStrategyDialog({
             </AppIconBadge>
             <AppDialogTitleBlock
               title={<h2>选择同步优先级</h2>}
-              subtitle='遇到同键冲突时，决定优先保留云端还是本地结果。'
+              subtitle='桌面数据始终先写入本地；遇到同键冲突时，默认保留本地结果。'
             />
           </div>
           <AppIconButton onClick={onClose} aria-label='关闭同步优先级弹窗'>
@@ -242,6 +242,22 @@ function SyncStrategyDialog({
         </AppDialogHeader>
 
         <div className='space-y-4 px-5 py-5 sm:px-6'>
+          <label className='flex cursor-pointer items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-4 text-sm text-gray-700 dark:border-emerald-900/60 dark:bg-emerald-900/10 dark:text-gray-200'>
+            <input
+              type='radio'
+              name='desktop-profile-sync-confirm-strategy'
+              aria-label='本地为主'
+              checked={strategy === 'local-first'}
+              onChange={() => onStrategyChange('local-first')}
+            />
+            <span>
+              本地为主（推荐）
+              <span className='block text-xs leading-6 text-gray-500 dark:text-gray-400'>
+                本地 SQLite / 本地配置是权威数据；提交成功后再同步到云端。
+              </span>
+            </span>
+          </label>
+
           <label className='flex cursor-pointer items-start gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'>
             <input
               type='radio'
@@ -251,25 +267,9 @@ function SyncStrategyDialog({
               onChange={() => onStrategyChange('web-first')}
             />
             <span>
-              云端为主
+              从云端恢复
               <span className='block text-xs leading-6 text-gray-500 dark:text-gray-400'>
-                保留远端已有资料，本地同键冲突项只补缺。
-              </span>
-            </span>
-          </label>
-
-          <label className='flex cursor-pointer items-start gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'>
-            <input
-              type='radio'
-              name='desktop-profile-sync-confirm-strategy'
-              aria-label='本地为主'
-              checked={strategy === 'local-first'}
-              onChange={() => onStrategyChange('local-first')}
-            />
-            <span>
-              本地为主
-              <span className='block text-xs leading-6 text-gray-500 dark:text-gray-400'>
-                用当前桌面资料覆盖同键远端项，适合把本机现状完整推上去。
+                仅在恢复或导入时使用；同键冲突项采用云端结果。
               </span>
             </span>
           </label>
@@ -410,7 +410,7 @@ export default function DesktopProfileSyncOnboardingCard({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [strategy, setStrategy] =
-    useState<DesktopProfileSyncConflictStrategy>('web-first');
+    useState<DesktopProfileSyncConflictStrategy>('local-first');
   const [syncStrategyDialogMode, setSyncStrategyDialogMode] =
     useState<SyncStrategyDialogMode | null>(null);
   const [preview, setPreview] =

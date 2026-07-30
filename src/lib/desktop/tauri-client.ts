@@ -185,6 +185,12 @@ export function getDesktopAuthStatus(): Promise<DesktopAuthStatus> {
   return invokeDesktopCommand<DesktopAuthStatus>('get_desktop_auth_status');
 }
 
+export function getDesktopAuthSession(): Promise<DesktopAuthSession | null> {
+  return invokeDesktopCommand<DesktopAuthSession | null>(
+    'get_desktop_auth_session'
+  );
+}
+
 export function desktopLogin(
   username?: string,
   password?: string

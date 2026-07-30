@@ -613,6 +613,17 @@ fn get_desktop_auth_status(app: AppHandle) -> Result<DesktopAuthStatus, String> 
 }
 
 #[tauri::command]
+fn get_desktop_auth_session(
+    state: State<'_, DesktopRuntimeState>,
+) -> Result<Option<DesktopAuthSession>, String> {
+    state
+        .verified_desktop_auth_session
+        .lock()
+        .map(|session| session.clone())
+        .map_err(|_| "failed to lock desktop authentication state".to_string())
+}
+
+#[tauri::command]
 fn desktop_login(
     app: AppHandle,
     state: State<'_, DesktopRuntimeState>,
@@ -838,6 +849,7 @@ pub fn run() {
             write_app_config,
             get_local_service_access_token,
             get_desktop_auth_status,
+            get_desktop_auth_session,
             desktop_login,
             change_desktop_password,
             check_desktop_update,

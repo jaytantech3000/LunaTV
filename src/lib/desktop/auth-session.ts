@@ -13,6 +13,7 @@ import {
   DesktopAuthSession,
   DesktopAuthStatus,
   desktopLogin,
+  getDesktopAuthSession,
   getDesktopAuthStatus,
   isDesktopTauriRuntimeAvailable,
 } from './tauri-client';
@@ -110,7 +111,12 @@ export async function ensureDesktopAuthSession(): Promise<DesktopAuthStatus | nu
     currentAuthInfo?.sessionMode === 'desktop-local' &&
     currentAuthInfo.username?.trim()
   ) {
-    return authStatus;
+    const isCurrentOwner =
+      currentAuthInfo.username === authStatus.username &&
+      (currentAuthInfo.role === 'owner' || currentAuthInfo.role === 'admin');
+    if (!isCurrentOwner || authStatus.ownerPasswordConfigured) {
+      return authStatus;
+    }
   }
 
   if (hasExplicitDesktopLogout()) {
@@ -121,7 +127,8 @@ export async function ensureDesktopAuthSession(): Promise<DesktopAuthStatus | nu
     return authStatus;
   }
 
-  setAuthInfoInBrowser(buildDesktopAuthPayload(authStatus.username, 'owner'));
+  const session = await desktopLogin(authStatus.username, '');
+  applyDesktopAuthSession(session);
   return authStatus;
 }
 
@@ -130,6 +137,11 @@ export async function loginDesktopSession(
   password: string
 ): Promise<DesktopAuthSession> {
   const session = await desktopLogin(username, password);
+  applyDesktopAuthSession(session);
+  return session;
+}
+
+function applyDesktopAuthSession(session: DesktopAuthSession) {
   if (
     (session.role === 'owner' || session.role === 'admin') &&
     session.adminCapability
@@ -140,6 +152,31 @@ export async function loginDesktopSession(
   }
   clearExplicitDesktopLogout();
   setAuthInfoInBrowser(buildDesktopAuthPayload(session.username, session.role));
+}
+
+export async function restoreVerifiedDesktopAuthSession(): Promise<DesktopAuthSession | null> {
+  if (
+    !isDesktopTarget() ||
+    !isDesktopTauriRuntimeAvailable() ||
+    hasExplicitDesktopLogout()
+  ) {
+    return null;
+  }
+
+  const session = await getDesktopAuthSession();
+  if (!session) {
+    return null;
+  }
+
+  if (
+    (session.role !== 'owner' && session.role !== 'admin') ||
+    !session.adminCapability
+  ) {
+    clearDesktopAdminCapability();
+    return session;
+  }
+
+  applyDesktopAuthSession(session);
   return session;
 }
 

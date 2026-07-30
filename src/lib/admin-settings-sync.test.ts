@@ -88,14 +88,44 @@ describe('admin-settings-sync', () => {
 
   it('applies only allowlisted fields when merging a sync snapshot', () => {
     const current = buildAdminConfig();
-    const merged = applyAdminSettingsSyncSnapshot(current, {
-      SiteConfig: {
-        ...current.SiteConfig,
-        SiteName: 'Desktop LunaTV',
+    const remote = buildAdminConfig();
+    remote.SiteConfig.SiteName = 'Desktop LunaTV';
+    remote.SourceConfig[0].name = 'Desktop Source';
+    remote.CustomCategories = [
+      {
+        name: 'Desktop Movies',
+        type: 'movie',
+        query: 'desktop-movies',
+        from: 'custom',
       },
+    ];
+    remote.LiveConfig = [
+      {
+        key: 'desktop-live',
+        name: 'Desktop Live',
+        url: 'https://desktop.example/live.m3u',
+        from: 'custom',
+      },
+    ];
+    remote.AdFilterConfig = { enabled: true };
+    remote.PlayerEnhancementConfig = {
+      AudioSpikeProtection: false,
+      VisualEnhancement: false,
+    };
+    const merged = applyAdminSettingsSyncSnapshot(current, {
+      ...pickAdminSettingsSyncSnapshot(remote),
     });
 
     expect(merged.SiteConfig.SiteName).toBe('Desktop LunaTV');
+    expect(merged.SourceConfig[0].name).toBe('Desktop Source');
+    expect(merged.CustomCategories[0].query).toBe('desktop-movies');
+    expect(merged.LiveConfig?.[0].key).toBe('desktop-live');
+    expect(merged.AdFilterConfig).toEqual({ enabled: true });
+    expect(merged.PlayerEnhancementConfig).toEqual({
+      AudioSpikeProtection: false,
+      VisualEnhancement: false,
+    });
+    expect(merged.ConfigSubscribtion).toEqual(current.ConfigSubscribtion);
     expect(merged.ConfigFile).toBe(current.ConfigFile);
     expect(merged.UserConfig).toEqual(current.UserConfig);
   });

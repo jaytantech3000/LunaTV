@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 const mockGetAuthInfoFromBrowserCookie = jest.fn();
 const mockGetDesktopAuthRequirement = jest.fn();
 const mockLoginDesktopSession = jest.fn();
+const mockRestoreVerifiedDesktopAuthSession = jest.fn();
 const mockGetRuntimeConfig = jest.fn();
 const mockGetDesktopAdminCapability = jest.fn();
 
@@ -14,6 +15,8 @@ jest.mock('@/lib/auth', () => ({
 jest.mock('@/lib/desktop/auth-session', () => ({
   getDesktopAuthRequirement: () => mockGetDesktopAuthRequirement(),
   loginDesktopSession: (...args: unknown[]) => mockLoginDesktopSession(...args),
+  restoreVerifiedDesktopAuthSession: () =>
+    mockRestoreVerifiedDesktopAuthSession(),
 }));
 
 jest.mock('@/lib/runtime-config', () => ({
@@ -35,6 +38,7 @@ describe('DesktopPrivilegeGate', () => {
     });
     mockGetAuthInfoFromBrowserCookie.mockReturnValue(null);
     mockGetDesktopAdminCapability.mockReturnValue(null);
+    mockRestoreVerifiedDesktopAuthSession.mockResolvedValue(null);
     mockGetDesktopAuthRequirement.mockResolvedValue({
       username: 'admin',
       passwordRequired: true,
@@ -105,6 +109,24 @@ describe('DesktopPrivilegeGate', () => {
 
     expect(await screen.findByText('管理内容')).toBeInTheDocument();
     await waitFor(() => expect(onAuthorized).toHaveBeenCalledTimes(1));
+  });
+
+  it('restores a verified native admin session without asking again', async () => {
+    mockRestoreVerifiedDesktopAuthSession.mockResolvedValue({
+      username: 'admin',
+      role: 'admin',
+      adminCapability: 'admin-capability',
+    });
+
+    render(
+      <DesktopPrivilegeGate>
+        <div>管理内容</div>
+      </DesktopPrivilegeGate>
+    );
+
+    expect(await screen.findByText('管理内容')).toBeInTheDocument();
+    expect(screen.queryByText('验证管理员身份')).not.toBeInTheDocument();
+    expect(mockGetDesktopAuthRequirement).not.toHaveBeenCalled();
   });
 
   it('rejects a verified non-admin desktop account', async () => {
