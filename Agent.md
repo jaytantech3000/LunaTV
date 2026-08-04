@@ -4,6 +4,10 @@
 
 新功能开发记录不要继续堆在这里，统一写入根目录的 `FeatureLog.md`。`Agent.md` 只保留相对稳定的项目指引、约束和回归要求。
 
+## Working language
+
+- Use English for project communication, documentation, code comments, and commit messages unless the user explicitly requests Chinese.
+
 ## 项目概览
 
 - 技术栈：Next.js 14 App Router、React 18、TypeScript、Tailwind CSS、Zustand、ArtPlayer、HLS.js、next-pwa。
