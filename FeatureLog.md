@@ -11,6 +11,33 @@
 
 ---
 
+## 2026-08-06 - Desktop online VOD cache / 桌面端在线 VOD 缓存
+
+- Branch / 分支：`desktop`
+- Related files / 相关文件：
+  - `crates/moontv-local-service/src/online_vod_cache.rs`
+  - `crates/moontv-local-service/src/vod_proxy.rs`
+  - `crates/moontv-local-service/src/lib.rs`
+
+### Goal / 目标
+
+- Add a desktop-only, disk-backed VOD cache to reduce repeat upstream reads during online playback.
+- 为桌面版在线播放增加磁盘 VOD 缓存，减少同一资源的重复上游请求。
+
+### Core behavior / 核心行为
+
+- Full successful VOD segments are streamed to the player immediately and written to a separate cache asynchronously. Cache I/O failures never interrupt playback.
+- 成功的完整 VOD 分片会先实时转发给播放器，再异步写入独立缓存；缓存 I/O 失败不会中断播放。
+- Cached full segments satisfy later Range requests. Manifests use a 15-second TTL; keys use one hour; segments use 24 hours subject to LRU eviction.
+- 已缓存的完整分片可响应后续 Range 请求；清单 TTL 为 15 秒，密钥为 1 小时，分片为 24 小时，均受 LRU 淘汰控制。
+- The cache is isolated from offline downloads and is capped at 512 MiB total, 32 MiB per asset, and four simultaneous writers.
+- 缓存与离线下载隔离；总容量上限 512 MiB，单资源上限 32 MiB，并发写入器最多四个。
+
+### Verification / 验证
+
+- `cargo test -p moontv-local-service --lib` — 106 passed.
+- `cargo test -p moontv-local-service --lib` — 106 项通过。
+
 ## 2026-06-10 - 桌面本地下载运行时 v0
 
 - 分支：`desktop-foundation`

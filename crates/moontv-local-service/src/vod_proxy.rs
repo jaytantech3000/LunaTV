@@ -1,9 +1,17 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc::sync_channel,
+};
+
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::{OriginalUri, Query, State},
-    http::{HeaderMap, Method, StatusCode},
+    http::{HeaderMap, Method, StatusCode, header::RANGE},
     response::Response,
 };
+use futures::{Stream, StreamExt, stream};
+use tracing::warn;
 use url::Url;
 
 use crate::{AppError, AppResult, AppState, VodProxyQueryParams};
@@ -13,6 +21,90 @@ pub(crate) struct VodProxyFetchedAsset {
     pub(crate) status: StatusCode,
     pub(crate) content_type: Option<String>,
     pub(crate) body: Vec<u8>,
+}
+
+const ONLINE_VOD_CACHE_WRITE_CHANNEL_CAPACITY: usize = 32;
+
+enum OnlineVodCacheWriteMessage {
+    Chunk(Bytes),
+    Complete,
+}
+
+fn stream_with_online_vod_cache<S>(
+    upstream_stream: S,
+    writer: crate::OnlineVodCacheWriter,
+) -> impl Stream<Item = Result<Bytes, reqwest::Error>>
+where
+    S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + Unpin + 'static,
+{
+    let (sender, receiver) = sync_channel(ONLINE_VOD_CACHE_WRITE_CHANNEL_CAPACITY);
+    let caching_aborted = Arc::new(AtomicBool::new(false));
+    let writer_aborted = Arc::clone(&caching_aborted);
+
+    let _ = tokio::task::spawn_blocking(move || {
+        let mut writer = writer;
+        let mut completed = false;
+
+        while let Ok(message) = receiver.recv() {
+            match message {
+                OnlineVodCacheWriteMessage::Chunk(chunk) => {
+                    if writer_aborted.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    if let Err(error) = writer.write_chunk(&chunk) {
+                        writer_aborted.store(true, Ordering::Relaxed);
+                        warn!(
+                            "online VOD segment cache write failed; continuing the playback stream: {error}"
+                        );
+                    }
+                }
+                OnlineVodCacheWriteMessage::Complete => {
+                    completed = true;
+                    break;
+                }
+            }
+        }
+
+        if completed && !writer_aborted.load(Ordering::Relaxed) {
+            if let Err(error) = writer.finish() {
+                warn!(
+                    "online VOD segment cache finalize failed; playback stream was already delivered: {error}"
+                );
+            }
+        }
+    });
+
+    stream::unfold(
+        (upstream_stream, sender, caching_aborted),
+        |(mut upstream_stream, sender, caching_aborted)| async move {
+            match upstream_stream.next().await {
+                Some(Ok(chunk)) => {
+                    if !caching_aborted.load(Ordering::Relaxed)
+                        && sender
+                            .try_send(OnlineVodCacheWriteMessage::Chunk(chunk.clone()))
+                            .is_err()
+                    {
+                        caching_aborted.store(true, Ordering::Relaxed);
+                    }
+                    Some((Ok(chunk), (upstream_stream, sender, caching_aborted)))
+                }
+                Some(Err(error)) => {
+                    caching_aborted.store(true, Ordering::Relaxed);
+                    Some((Err(error), (upstream_stream, sender, caching_aborted)))
+                }
+                None => {
+                    if !caching_aborted.load(Ordering::Relaxed)
+                        && sender
+                            .try_send(OnlineVodCacheWriteMessage::Complete)
+                            .is_err()
+                    {
+                        caching_aborted.store(true, Ordering::Relaxed);
+                    }
+                    None
+                }
+            }
+        },
+    )
 }
 
 pub(crate) fn parse_vod_proxy_url(request_url: &str) -> Option<(String, VodProxyQueryParams)> {
@@ -163,9 +255,20 @@ pub(crate) async fn get_vod_m3u8(
     Query(params): Query<VodProxyQueryParams>,
     request_headers: HeaderMap,
 ) -> AppResult<Response> {
-    if let Some(response) =
-        crate::try_build_cached_vod_proxy_response(&state, &method, &original_uri, &request_headers)?
-    {
+    if let Some(response) = crate::try_build_cached_vod_proxy_response(
+        &state,
+        &method,
+        &original_uri,
+        &request_headers,
+    )? {
+        return Ok(response);
+    }
+    if let Some(response) = crate::try_build_cached_online_vod_proxy_response(
+        &state,
+        &method,
+        &original_uri,
+        &request_headers,
+    ) {
         return Ok(response);
     }
 
@@ -219,6 +322,22 @@ pub(crate) async fn get_vod_m3u8(
     } else {
         rewritten_content.clone()
     };
+    if method == Method::GET {
+        let cache_state = state.clone();
+        let cache_request_url =
+            crate::build_local_request_url(&state.public_base_url, &original_uri);
+        let cache_content_type = meta.content_type.clone();
+        let cache_content = response_content.clone().into_bytes();
+        let _ = tokio::task::spawn_blocking(move || {
+            cache_state.cache_online_vod_asset(
+                &cache_request_url,
+                meta.status,
+                cache_content_type.as_deref(),
+                &cache_content,
+                crate::OnlineVodCachePolicy::Manifest,
+            );
+        });
+    }
     let mut response = if method == Method::HEAD {
         Response::new(Body::empty())
     } else {
@@ -245,9 +364,20 @@ pub(crate) async fn get_vod_segment(
     Query(params): Query<VodProxyQueryParams>,
     request_headers: HeaderMap,
 ) -> AppResult<Response> {
-    if let Some(response) =
-        crate::try_build_cached_vod_proxy_response(&state, &method, &original_uri, &request_headers)?
-    {
+    if let Some(response) = crate::try_build_cached_vod_proxy_response(
+        &state,
+        &method,
+        &original_uri,
+        &request_headers,
+    )? {
+        return Ok(response);
+    }
+    if let Some(response) = crate::try_build_cached_online_vod_proxy_response(
+        &state,
+        &method,
+        &original_uri,
+        &request_headers,
+    ) {
         return Ok(response);
     }
 
@@ -272,8 +402,31 @@ pub(crate) async fn get_vod_segment(
 
     let meta = crate::upstream_response_meta(&upstream_response);
     let stream = upstream_response.bytes_stream();
+    let cache_writer = (method == Method::GET
+        && !request_headers.contains_key(RANGE)
+        && meta.status == StatusCode::OK)
+        .then(|| {
+            let cache_request_url =
+                crate::build_local_request_url(&state.public_base_url, &original_uri);
+            let expected_body_len = meta
+                .content_length
+                .as_deref()
+                .and_then(|value| value.parse::<u64>().ok());
+            state.begin_online_vod_cache_write(
+                &cache_request_url,
+                meta.status,
+                meta.content_type.as_deref(),
+                expected_body_len,
+                crate::OnlineVodCachePolicy::Segment,
+            )
+        })
+        .flatten();
     let mut response = if method == Method::HEAD {
         Response::new(Body::empty())
+    } else if let Some(writer) = cache_writer {
+        Response::new(Body::from_stream(stream_with_online_vod_cache(
+            stream, writer,
+        )))
     } else {
         Response::new(Body::from_stream(stream))
     };
@@ -297,9 +450,20 @@ pub(crate) async fn get_vod_key(
     Query(params): Query<VodProxyQueryParams>,
     request_headers: HeaderMap,
 ) -> AppResult<Response> {
-    if let Some(response) =
-        crate::try_build_cached_vod_proxy_response(&state, &method, &original_uri, &request_headers)?
-    {
+    if let Some(response) = crate::try_build_cached_vod_proxy_response(
+        &state,
+        &method,
+        &original_uri,
+        &request_headers,
+    )? {
+        return Ok(response);
+    }
+    if let Some(response) = crate::try_build_cached_online_vod_proxy_response(
+        &state,
+        &method,
+        &original_uri,
+        &request_headers,
+    ) {
         return Ok(response);
     }
 
@@ -327,6 +491,22 @@ pub(crate) async fn get_vod_key(
         .bytes()
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    if method == Method::GET {
+        let cache_state = state.clone();
+        let cache_request_url =
+            crate::build_local_request_url(&state.public_base_url, &original_uri);
+        let cache_content_type = meta.content_type.clone();
+        let cache_body = key_bytes.to_vec();
+        let _ = tokio::task::spawn_blocking(move || {
+            cache_state.cache_online_vod_asset(
+                &cache_request_url,
+                meta.status,
+                cache_content_type.as_deref(),
+                &cache_body,
+                crate::OnlineVodCachePolicy::Key,
+            );
+        });
+    }
     let mut response = if method == Method::HEAD {
         Response::new(Body::empty())
     } else {

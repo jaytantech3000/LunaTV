@@ -76,6 +76,7 @@ mod download_runtime;
 mod image_cache;
 mod image_proxy;
 mod live_proxy;
+mod online_vod_cache;
 mod playback_prefetch;
 mod profile_local;
 mod profile_sync;
@@ -104,6 +105,9 @@ use download_runtime::{
 use image_cache::{CachedImage, ImageCache};
 use image_proxy::get_image_proxy;
 use live_proxy::{get_live_key, get_live_logo, get_live_m3u8, get_live_precheck, get_live_segment};
+use online_vod_cache::{
+    CachedOnlineVodAsset, OnlineVodCache, OnlineVodCachePolicy, OnlineVodCacheWriter,
+};
 use profile_sync::{
     build_profile_sync_status_payload, get_profile_bootstrap, get_profile_sync_server_config,
     get_profile_sync_status, proxy_profile_sync_change_password, proxy_profile_sync_favorites,
@@ -344,6 +348,7 @@ pub struct AppState {
     client: reqwest::Client,
     image_client: reqwest::Client,
     image_cache: ImageCache,
+    online_vod_cache: OnlineVodCache,
     image_flights: Arc<Mutex<HashMap<String, Arc<ImageFlight>>>>,
     download_engine: Arc<RwLock<DesktopDownloadEngine>>,
     download_engine_snapshot_tx: watch::Sender<DesktopDownloadEngineSnapshot>,
@@ -480,6 +485,12 @@ impl AppState {
                 data_dir.display()
             )
         })?;
+        let online_vod_cache = OnlineVodCache::new(&data_dir).with_context(|| {
+            format!(
+                "failed to initialize online VOD cache under {}",
+                data_dir.display()
+            )
+        })?;
 
         let state = Self {
             host,
@@ -495,6 +506,7 @@ impl AppState {
                 .build()
                 .expect("failed to build image proxy http client"),
             image_cache,
+            online_vod_cache,
             image_flights: Arc::new(Mutex::new(HashMap::new())),
             download_engine: Arc::new(RwLock::new(download_engine)),
             download_engine_snapshot_tx,
@@ -539,6 +551,63 @@ impl AppState {
                 format!("failed to write image cache: {error}"),
             )
         })
+    }
+
+    fn read_cached_online_vod_asset(&self, request_url: &str) -> Option<CachedOnlineVodAsset> {
+        match self
+            .online_vod_cache
+            .get(request_url, current_timestamp_ms())
+        {
+            Ok(asset) => asset,
+            Err(error) => {
+                warn!("online VOD cache read failed; falling back to upstream: {error}");
+                None
+            }
+        }
+    }
+
+    fn begin_online_vod_cache_write(
+        &self,
+        request_url: &str,
+        status: StatusCode,
+        content_type: Option<&str>,
+        expected_body_len: Option<u64>,
+        policy: OnlineVodCachePolicy,
+    ) -> Option<OnlineVodCacheWriter> {
+        match self.online_vod_cache.begin_write(
+            request_url,
+            status.as_u16(),
+            content_type,
+            expected_body_len,
+            policy,
+            current_timestamp_ms(),
+        ) {
+            Ok(writer) => writer,
+            Err(error) => {
+                warn!("online VOD cache initialization failed; continuing without cache: {error}");
+                None
+            }
+        }
+    }
+
+    fn cache_online_vod_asset(
+        &self,
+        request_url: &str,
+        status: StatusCode,
+        content_type: Option<&str>,
+        body: &[u8],
+        policy: OnlineVodCachePolicy,
+    ) {
+        if let Err(error) = self.online_vod_cache.store(
+            request_url,
+            status.as_u16(),
+            content_type,
+            body,
+            policy,
+            current_timestamp_ms(),
+        ) {
+            warn!("online VOD cache write failed; playback response was preserved: {error}");
+        }
     }
 
     async fn acquire_image_flight(
@@ -4048,6 +4117,31 @@ fn try_build_cached_vod_proxy_response(
         &entry,
         body,
     )))
+}
+
+fn try_build_cached_online_vod_proxy_response(
+    state: &AppState,
+    method: &Method,
+    original_uri: &OriginalUri,
+    request_headers: &HeaderMap,
+) -> Option<Response> {
+    let request_url = build_local_request_url(&state.public_base_url, original_uri);
+    let asset = state.read_cached_online_vod_asset(&request_url)?;
+    let entry = DesktopDownloadCacheEntry {
+        url: request_url,
+        status: asset.status,
+        content_type: asset.content_type,
+        size_bytes: asset.body.len() as u64,
+        created_at: 0,
+        updated_at: 0,
+    };
+
+    Some(build_cached_download_response(
+        method,
+        request_headers,
+        &entry,
+        asset.body,
+    ))
 }
 
 fn default_cache_time() -> u64 {
@@ -13676,6 +13770,100 @@ segment0.ts
     }
 
     #[tokio::test]
+    async fn vod_m3u8_endpoint_reuses_the_short_ttl_online_cache() {
+        let upstream_request_count = Arc::new(AtomicU64::new(0));
+        let upstream_request_count_for_route = Arc::clone(&upstream_request_count);
+        let upstream = spawn_mock_server(Router::new().route(
+            "/upstream/cacheable.m3u8",
+            get(move || {
+                let upstream_request_count = Arc::clone(&upstream_request_count_for_route);
+                async move {
+                    upstream_request_count.fetch_add(1, Ordering::SeqCst);
+                    (
+                        [(CONTENT_TYPE, "application/vnd.apple.mpegurl")],
+                        "#EXTM3U\n#EXTINF:4.0,\nsegment.ts\n",
+                    )
+                }
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Resource"
+                }
+              }
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        let app = build_router(state.clone());
+        let manifest_url = format!("{}/upstream/cacheable.m3u8", upstream.base_url());
+        let service_url = format!(
+            "/media/vod/m3u8?source=mock&url={}",
+            form_urlencoded::byte_serialize(manifest_url.as_bytes()).collect::<String>()
+        );
+
+        let first_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&service_url)
+                    .body(Body::empty())
+                    .expect("first manifest request"),
+            )
+            .await
+            .expect("first manifest response");
+        assert_eq!(first_response.status(), StatusCode::OK);
+        let first_body = to_bytes(first_response.into_body(), usize::MAX)
+            .await
+            .expect("first manifest body");
+
+        let cache_request_url = format!("{}{}", state.public_base_url, service_url);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while state
+            .read_cached_online_vod_asset(&cache_request_url)
+            .is_none()
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "online VOD manifest cache did not finish"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let cached_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(&service_url)
+                    .body(Body::empty())
+                    .expect("cached manifest request"),
+            )
+            .await
+            .expect("cached manifest response");
+        assert_eq!(cached_response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(cached_response.into_body(), usize::MAX)
+                .await
+                .expect("cached manifest body"),
+            first_body
+        );
+        assert_eq!(upstream_request_count.load(Ordering::SeqCst), 1);
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
     async fn vod_segment_endpoint_preserves_range_headers() {
         let upstream = spawn_mock_server(mock_upstream_router()).await;
         let temp_dir = TestDir::new();
@@ -13730,6 +13918,118 @@ segment0.ts
                 .and_then(|value| value.to_str().ok()),
             Some("bytes")
         );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn vod_segment_endpoint_reuses_the_completed_online_cache_for_range_requests() {
+        let upstream_request_count = Arc::new(AtomicU64::new(0));
+        let upstream_request_count_for_route = Arc::clone(&upstream_request_count);
+        let upstream = spawn_mock_server(Router::new().route(
+            "/upstream/cacheable.ts",
+            get(move || {
+                let upstream_request_count = Arc::clone(&upstream_request_count_for_route);
+                async move {
+                    upstream_request_count.fetch_add(1, Ordering::SeqCst);
+                    (
+                        StatusCode::OK,
+                        [
+                            (CONTENT_TYPE, "video/mp2t"),
+                            (CONTENT_LENGTH, "8"),
+                            (ACCEPT_RANGES, "bytes"),
+                        ],
+                        "mockdata",
+                    )
+                }
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Resource"
+                }
+              }
+            }),
+        );
+        let state = AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        );
+        let app = build_router(state.clone());
+        let segment_url = format!("{}/upstream/cacheable.ts", upstream.base_url());
+        let service_url = format!(
+            "/media/vod/segment?source=mock&url={}",
+            form_urlencoded::byte_serialize(segment_url.as_bytes()).collect::<String>()
+        );
+
+        let first_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&service_url)
+                    .body(Body::empty())
+                    .expect("first segment request"),
+            )
+            .await
+            .expect("first segment response");
+        assert_eq!(first_response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(first_response.into_body(), usize::MAX)
+                .await
+                .expect("first segment body")
+                .as_ref(),
+            b"mockdata"
+        );
+
+        let cache_request_url = format!("{}{}", state.public_base_url, service_url);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while state
+            .read_cached_online_vod_asset(&cache_request_url)
+            .is_none()
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "online VOD segment cache did not finish"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let cached_range_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(&service_url)
+                    .header(RANGE, "bytes=0-3")
+                    .body(Body::empty())
+                    .expect("cached range request"),
+            )
+            .await
+            .expect("cached range response");
+        assert_eq!(cached_range_response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            cached_range_response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok()),
+            Some("bytes 0-3/8")
+        );
+        assert_eq!(
+            to_bytes(cached_range_response.into_body(), usize::MAX)
+                .await
+                .expect("cached range body")
+                .as_ref(),
+            b"mock"
+        );
+        assert_eq!(upstream_request_count.load(Ordering::SeqCst), 1);
 
         upstream.abort();
     }
