@@ -38,6 +38,42 @@
 - `cargo test -p moontv-local-service --lib` — 106 passed.
 - `cargo test -p moontv-local-service --lib` — 106 项通过。
 
+## 2026-08-06 - Desktop active VOD prefetch / 桌面端 VOD 主动预取
+
+- Branch / 分支：`desktop`
+- Related files / 相关文件：
+  - `crates/moontv-local-service/src/vod_prefetch.rs`
+  - `crates/moontv-local-service/src/online_vod_cache.rs`
+  - `src/lib/online-vod-prefetch.ts`
+  - `src/app/play/page.tsx`
+
+### Goal / 目标
+
+- Add a desktop-only, user-controlled VOD prefetch layer that warms the existing online cache without changing passive cache behavior.
+- 为桌面版增加用户可控的 VOD 主动预取层，在不改变既有被动缓存行为的前提下提前填充在线缓存。
+
+### Core behavior / 核心行为
+
+- The persistent player setting defaults to off and offers 30 seconds, one minute, and full-episode modes. Changing an episode or source replaces only the stale task; it never turns the setting off.
+- 播放器常驻开关默认关闭，提供后续 30 秒、后续 1 分钟和整集模式。切集或换源只替换过期任务，不会关闭该开关。
+- The HLS loader reports the media playlist actually selected by playback and loaded segments, so prefetch follows the active rendition instead of guessing a bitrate.
+- HLS Loader 上报播放器实际选择的媒体清单和已加载分片，因此预取跟随当前清晰度，而不是猜测码率。
+- Two consecutive resource failures pause the task and expose manual retry and stop controls. Stop ends only the current task and keeps the preference enabled.
+- 单资源连续两次失败会暂停任务，并提供手动重试和停止操作；停止仅结束当前任务，不会关闭偏好开关。
+- Full-episode sessions temporarily raise online-cache capacity from 512 MiB to 1 GiB, use normal LRU eviction at the hard limit, and delete only session-tagged assets when playback ends, changes, or recovers after an unclean exit.
+- 整集会话会临时将在线缓存容量从 512 MiB 提升至 1 GiB，到达硬上限后继续按普通 LRU 淘汰；播放结束、切换或异常退出后的恢复只删除该会话标记的资产。
+
+### Verification / 验证
+
+- `cargo test -p moontv-local-service --lib` — 111 passed.
+- `pnpm test -- --runInBand src/lib/online-vod-prefetch.test.ts` — 3 passed.
+- `pnpm typecheck` — passed.
+- Windows desktop playback comparison with prefetch disabled and enabled remains required before release.
+- `cargo test -p moontv-local-service --lib` — 111 项通过。
+- `pnpm test -- --runInBand src/lib/online-vod-prefetch.test.ts` — 3 项通过。
+- `pnpm typecheck` — 通过。
+- 发布前仍需在 Windows 桌面端对比关闭和开启预取时的实际播放表现。
+
 ## 2026-06-10 - 桌面本地下载运行时 v0
 
 - 分支：`desktop-foundation`

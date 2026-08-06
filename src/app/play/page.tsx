@@ -48,6 +48,18 @@ import {
   mergeLatestEpisodeCountWithoutRegression,
 } from '@/lib/follow-updates';
 import {
+  advanceOnlineVodPrefetch,
+  getOnlineVodPrefetchStatus,
+  ONLINE_VOD_PREFETCH_UPDATED_EVENT,
+  OnlineVodPrefetchStatus,
+  OnlineVodPrefetchWindowMode,
+  readOnlineVodPrefetchPreferences,
+  retryOnlineVodPrefetch,
+  startOnlineVodPrefetch,
+  stopOnlineVodPrefetch,
+  updateOnlineVodPrefetchPreferences,
+} from '@/lib/online-vod-prefetch';
+import {
   preferBestPlaybackSource,
   searchPlaybackSources,
 } from '@/lib/playback-source-client';
@@ -493,6 +505,14 @@ function PlayPageClient() {
     });
   const [audioEnhancementStatus, setAudioEnhancementStatus] =
     useState<AudioSpikeProtectionStatus | null>(null);
+  const [onlineVodPrefetchEnabled, setOnlineVodPrefetchEnabled] =
+    useState<boolean>(() => readOnlineVodPrefetchPreferences().enabled);
+  const [onlineVodPrefetchWindowMode, setOnlineVodPrefetchWindowMode] =
+    useState<OnlineVodPrefetchWindowMode>(
+      () => readOnlineVodPrefetchPreferences().windowMode
+    );
+  const [onlineVodPrefetchStatus, setOnlineVodPrefetchStatus] =
+    useState<OnlineVodPrefetchStatus | null>(null);
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
@@ -525,6 +545,27 @@ function PlayPageClient() {
       window.removeEventListener(
         DESKTOP_RUNTIME_UPDATED_EVENT,
         syncPlayerEnhancementPreferences
+      );
+    };
+  }, []);
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const syncOnlineVodPrefetchPreferences = () => {
+      const preferences = readOnlineVodPrefetchPreferences();
+      setOnlineVodPrefetchEnabled(preferences.enabled);
+      setOnlineVodPrefetchWindowMode(preferences.windowMode);
+    };
+    window.addEventListener(
+      ONLINE_VOD_PREFETCH_UPDATED_EVENT,
+      syncOnlineVodPrefetchPreferences
+    );
+    return () => {
+      window.removeEventListener(
+        ONLINE_VOD_PREFETCH_UPDATED_EVENT,
+        syncOnlineVodPrefetchPreferences
       );
     };
   }, []);
@@ -667,6 +708,16 @@ function PlayPageClient() {
   const initStartedRef = useRef(false);
   const enhancementManagerRef = useRef<PlayerEnhancementManager | null>(null);
   const removeDesktopFullscreenListenerRef = useRef<(() => void) | null>(null);
+  const onlineVodPrefetchEnabledRef = useRef(onlineVodPrefetchEnabled);
+  const onlineVodPrefetchWindowModeRef = useRef(onlineVodPrefetchWindowMode);
+  const onlineVodPrefetchSessionIdRef = useRef('');
+  const onlineVodPrefetchManifestUrlRef = useRef('');
+  const manuallyStoppedOnlineVodPrefetchSessionRef = useRef('');
+
+  useEffect(() => {
+    onlineVodPrefetchEnabledRef.current = onlineVodPrefetchEnabled;
+    onlineVodPrefetchWindowModeRef.current = onlineVodPrefetchWindowMode;
+  }, [onlineVodPrefetchEnabled, onlineVodPrefetchWindowMode]);
 
   // Wake Lock 相关
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
@@ -1079,11 +1130,81 @@ function PlayPageClient() {
         return handleVisualEnhancementLevelChange(item.value);
       },
     });
+    if (getRuntimeConfig().APP_TARGET === 'desktop') {
+      artPlayerRef.current.setting.update({
+        name: '在线预取',
+        html: '在线预取',
+        tooltip: getOnlineVodPrefetchStatusLabel(),
+        switch: onlineVodPrefetchEnabled,
+        onSwitch: function (item: any) {
+          return handleOnlineVodPrefetchEnabledChange(!item.switch);
+        },
+      });
+      artPlayerRef.current.setting.update({
+        name: '预取范围',
+        html: '预取范围',
+        tooltip:
+          onlineVodPrefetchWindowMode === 'episode'
+            ? '整集'
+            : onlineVodPrefetchWindowMode === '60s'
+            ? '后续 1 分钟'
+            : '后续 30 秒',
+        selector: [
+          { value: '30s', name: 'online-vod-prefetch-30s', html: '后续 30 秒' },
+          {
+            value: '60s',
+            name: 'online-vod-prefetch-60s',
+            html: '后续 1 分钟',
+          },
+          {
+            value: 'episode',
+            name: 'online-vod-prefetch-episode',
+            html: '整集',
+          },
+        ].map((option) => ({
+          ...option,
+          default: option.value === onlineVodPrefetchWindowMode,
+        })),
+        onSelect: function (item: any) {
+          return handleOnlineVodPrefetchWindowModeChange(item.value);
+        },
+      });
+      artPlayerRef.current.setting.update({
+        name: '在线预取状态',
+        html: '在线预取状态',
+        tooltip: getOnlineVodPrefetchStatusLabel(),
+        onClick: function () {
+          return (
+            onlineVodPrefetchStatus?.failureReason ||
+            getOnlineVodPrefetchStatusLabel()
+          );
+        },
+      });
+      artPlayerRef.current.setting.update({
+        name: '重试在线预取',
+        html: '重试在线预取',
+        tooltip: onlineVodPrefetchStatus?.canRetry ? '可重试' : '任务未暂停',
+        onClick: function () {
+          return retryCurrentOnlineVodPrefetch();
+        },
+      });
+      artPlayerRef.current.setting.update({
+        name: '停止当前预取',
+        html: '停止当前预取',
+        tooltip: '不关闭常驻开关',
+        onClick: function () {
+          return manuallyStopCurrentOnlineVodPrefetch();
+        },
+      });
+    }
   }, [
     audioDynamicProtectionEnabled,
     audioFixedCeilingEnabled,
     audioSpikeProtectionLevel,
     visualEnhancementLevel,
+    onlineVodPrefetchEnabled,
+    onlineVodPrefetchStatus,
+    onlineVodPrefetchWindowMode,
   ]);
 
   const formatTime = (seconds: number): string => {
@@ -1105,6 +1226,195 @@ function PlayPageClient() {
         .padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
     }
   };
+
+  const isDesktopOnlineVodPrefetchAvailable =
+    !isOfflineMode && getRuntimeConfig().APP_TARGET === 'desktop';
+
+  const getOnlineVodPrefetchStatusLabel = () => {
+    if (!onlineVodPrefetchEnabled) {
+      return '当前关闭';
+    }
+    if (!onlineVodPrefetchStatus) {
+      return '等待媒体清单';
+    }
+    if (onlineVodPrefetchStatus.state === 'paused') {
+      return '已暂停，需手动处理';
+    }
+    if (onlineVodPrefetchStatus.state === 'completed') {
+      return `已完成 ${onlineVodPrefetchStatus.completedCount} 个资源`;
+    }
+    return `预取 ${onlineVodPrefetchStatus.completedCount}/${onlineVodPrefetchStatus.queuedCount}`;
+  };
+
+  const createOnlineVodPrefetchSessionId = () =>
+    `vod-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  const startOnlineVodPrefetchForManifest = (manifestUrl: string) => {
+    if (
+      !isDesktopOnlineVodPrefetchAvailable ||
+      !onlineVodPrefetchEnabledRef.current ||
+      !onlineVodPrefetchSessionIdRef.current ||
+      manuallyStoppedOnlineVodPrefetchSessionRef.current ===
+        onlineVodPrefetchSessionIdRef.current
+    ) {
+      return;
+    }
+    onlineVodPrefetchManifestUrlRef.current = manifestUrl;
+    void startOnlineVodPrefetch(
+      onlineVodPrefetchSessionIdRef.current,
+      manifestUrl,
+      onlineVodPrefetchWindowModeRef.current
+    )
+      .then(setOnlineVodPrefetchStatus)
+      .catch((error: unknown) => {
+        console.warn('启动在线 VOD 预取失败:', error);
+      });
+  };
+
+  const advanceOnlineVodPrefetchForSegment = (segmentUrl: string) => {
+    if (
+      !isDesktopOnlineVodPrefetchAvailable ||
+      !onlineVodPrefetchEnabledRef.current ||
+      !onlineVodPrefetchSessionIdRef.current ||
+      manuallyStoppedOnlineVodPrefetchSessionRef.current ===
+        onlineVodPrefetchSessionIdRef.current
+    ) {
+      return;
+    }
+    void advanceOnlineVodPrefetch(
+      onlineVodPrefetchSessionIdRef.current,
+      segmentUrl
+    )
+      .then(setOnlineVodPrefetchStatus)
+      .catch((error: unknown) => {
+        console.warn('推进在线 VOD 预取失败:', error);
+      });
+  };
+
+  const stopCurrentOnlineVodPrefetch = (manuallyStopped = false) => {
+    const sessionId = onlineVodPrefetchSessionIdRef.current;
+    if (!isDesktopOnlineVodPrefetchAvailable || !sessionId) {
+      return;
+    }
+    if (manuallyStopped) {
+      manuallyStoppedOnlineVodPrefetchSessionRef.current = sessionId;
+    }
+    void stopOnlineVodPrefetch(sessionId)
+      .then((status) => {
+        setOnlineVodPrefetchStatus(status);
+      })
+      .catch((error: unknown) => {
+        console.warn('停止在线 VOD 预取失败:', error);
+      });
+  };
+
+  const handleOnlineVodPrefetchEnabledChange = (enabled: boolean) => {
+    setOnlineVodPrefetchEnabled(enabled);
+    onlineVodPrefetchEnabledRef.current = enabled;
+    updateOnlineVodPrefetchPreferences({ enabled });
+    if (!enabled) {
+      stopCurrentOnlineVodPrefetch();
+      setOnlineVodPrefetchStatus(null);
+      return '当前关闭';
+    }
+    manuallyStoppedOnlineVodPrefetchSessionRef.current = '';
+    if (onlineVodPrefetchManifestUrlRef.current) {
+      startOnlineVodPrefetchForManifest(
+        onlineVodPrefetchManifestUrlRef.current
+      );
+    }
+    return '当前开启';
+  };
+
+  const handleOnlineVodPrefetchWindowModeChange = (
+    windowMode: OnlineVodPrefetchWindowMode
+  ) => {
+    setOnlineVodPrefetchWindowMode(windowMode);
+    onlineVodPrefetchWindowModeRef.current = windowMode;
+    updateOnlineVodPrefetchPreferences({ windowMode });
+    if (
+      onlineVodPrefetchEnabledRef.current &&
+      onlineVodPrefetchManifestUrlRef.current
+    ) {
+      startOnlineVodPrefetchForManifest(
+        onlineVodPrefetchManifestUrlRef.current
+      );
+    }
+    return windowMode === 'episode'
+      ? '当前整集预取'
+      : windowMode === '60s'
+      ? '当前后续 1 分钟'
+      : '当前后续 30 秒';
+  };
+
+  const retryCurrentOnlineVodPrefetch = () => {
+    const sessionId = onlineVodPrefetchSessionIdRef.current;
+    if (!sessionId) {
+      return '当前没有可重试的预取任务';
+    }
+    void retryOnlineVodPrefetch(sessionId)
+      .then((status) => {
+        setOnlineVodPrefetchStatus(status);
+        artPlayerRef.current?.notice &&
+          (artPlayerRef.current.notice.show = '在线预取已重试');
+      })
+      .catch((error: unknown) => {
+        console.warn('重试在线 VOD 预取失败:', error);
+        artPlayerRef.current?.notice &&
+          (artPlayerRef.current.notice.show = '在线预取重试失败');
+      });
+    return '正在重试';
+  };
+
+  const manuallyStopCurrentOnlineVodPrefetch = () => {
+    stopCurrentOnlineVodPrefetch(true);
+    return '已停止当前预取任务';
+  };
+
+  useEffect(() => {
+    if (!isDesktopOnlineVodPrefetchAvailable || !videoUrl) {
+      return;
+    }
+    const sessionId = createOnlineVodPrefetchSessionId();
+    onlineVodPrefetchSessionIdRef.current = sessionId;
+    onlineVodPrefetchManifestUrlRef.current = '';
+    manuallyStoppedOnlineVodPrefetchSessionRef.current = '';
+    setOnlineVodPrefetchStatus(null);
+
+    return () => {
+      void stopOnlineVodPrefetch(sessionId).catch((error: unknown) => {
+        console.warn('结束在线 VOD 预取会话失败:', error);
+      });
+    };
+  }, [isDesktopOnlineVodPrefetchAvailable, videoUrl]);
+
+  useEffect(() => {
+    if (
+      !isDesktopOnlineVodPrefetchAvailable ||
+      !onlineVodPrefetchEnabled ||
+      !onlineVodPrefetchSessionIdRef.current
+    ) {
+      return;
+    }
+    let disposed = false;
+    const refreshStatus = () => {
+      void getOnlineVodPrefetchStatus(onlineVodPrefetchSessionIdRef.current)
+        .then((status) => {
+          if (!disposed && status) {
+            setOnlineVodPrefetchStatus(status);
+          }
+        })
+        .catch((error: unknown) => {
+          console.warn('读取在线 VOD 预取状态失败:', error);
+        });
+    };
+    refreshStatus();
+    const timer = window.setInterval(refreshStatus, 2000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [isDesktopOnlineVodPrefetchAvailable, onlineVodPrefetchEnabled, videoUrl]);
 
   class CustomHlsJsLoader extends Hls.DefaultConfig.loader {
     private cacheAbortController: AbortController | null = null;
@@ -1140,12 +1450,34 @@ function PlayPageClient() {
           successContext: any,
           networkDetails: any
         ) => {
+          const responseUrl =
+            typeof successContext?.url === 'string'
+              ? successContext.url
+              : typeof context?.url === 'string'
+              ? context.url
+              : '';
           if (
             blockAdEnabledRef.current &&
             response.data &&
             typeof response.data === 'string'
           ) {
             response.data = filterAdsFromM3U8(response.data);
+          }
+
+          if (
+            typeof response.data === 'string' &&
+            response.data.trimStart().startsWith('#EXTM3U')
+          ) {
+            const isMediaPlaylist = !response.data
+              .trimStart()
+              .includes('#EXT-X-STREAM-INF:');
+            if (isMediaPlaylist && responseUrl) {
+              startOnlineVodPrefetchForManifest(responseUrl);
+            }
+          } else if (
+            /\/(?:media|api\/proxy)\/vod\/segment(?:\?|$)/.test(responseUrl)
+          ) {
+            advanceOnlineVodPrefetchForSegment(responseUrl);
           }
 
           return callbacks.onSuccess(
@@ -3006,6 +3338,81 @@ function PlayPageClient() {
               return handleVisualEnhancementLevelChange(item.value);
             },
           },
+          ...(isDesktopPlayer
+            ? [
+                {
+                  name: '在线预取',
+                  html: '在线预取',
+                  tooltip: getOnlineVodPrefetchStatusLabel(),
+                  switch: onlineVodPrefetchEnabled,
+                  onSwitch: function (item: any) {
+                    return handleOnlineVodPrefetchEnabledChange(!item.switch);
+                  },
+                },
+                {
+                  name: '预取范围',
+                  html: '预取范围',
+                  tooltip:
+                    onlineVodPrefetchWindowMode === 'episode'
+                      ? '整集'
+                      : onlineVodPrefetchWindowMode === '60s'
+                      ? '后续 1 分钟'
+                      : '后续 30 秒',
+                  selector: [
+                    {
+                      value: '30s',
+                      name: 'online-vod-prefetch-30s',
+                      default: onlineVodPrefetchWindowMode === '30s',
+                      html: '后续 30 秒',
+                    },
+                    {
+                      value: '60s',
+                      name: 'online-vod-prefetch-60s',
+                      default: onlineVodPrefetchWindowMode === '60s',
+                      html: '后续 1 分钟',
+                    },
+                    {
+                      value: 'episode',
+                      name: 'online-vod-prefetch-episode',
+                      default: onlineVodPrefetchWindowMode === 'episode',
+                      html: '整集',
+                    },
+                  ],
+                  onSelect: function (item: any) {
+                    return handleOnlineVodPrefetchWindowModeChange(item.value);
+                  },
+                },
+                {
+                  name: '在线预取状态',
+                  html: '在线预取状态',
+                  tooltip: getOnlineVodPrefetchStatusLabel(),
+                  onClick: function () {
+                    return (
+                      onlineVodPrefetchStatus?.failureReason ||
+                      getOnlineVodPrefetchStatusLabel()
+                    );
+                  },
+                },
+                {
+                  name: '重试在线预取',
+                  html: '重试在线预取',
+                  tooltip: onlineVodPrefetchStatus?.canRetry
+                    ? '可重试'
+                    : '任务未暂停',
+                  onClick: function () {
+                    return retryCurrentOnlineVodPrefetch();
+                  },
+                },
+                {
+                  name: '停止当前预取',
+                  html: '停止当前预取',
+                  tooltip: '不关闭常驻开关',
+                  onClick: function () {
+                    return manuallyStopCurrentOnlineVodPrefetch();
+                  },
+                },
+              ]
+            : []),
           {
             name: '跳过片头片尾',
             html: '跳过片头片尾',
@@ -3260,6 +3667,8 @@ function PlayPageClient() {
           setTimeout(() => {
             switchEpisode(idx + 1);
           }, 1000);
+        } else {
+          stopCurrentOnlineVodPrefetch();
         }
       });
 

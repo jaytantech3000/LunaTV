@@ -82,6 +82,7 @@ mod profile_local;
 mod profile_sync;
 mod profile_sync_onboarding;
 mod profile_sync_worker;
+mod vod_prefetch;
 mod vod_proxy;
 
 pub(crate) use content_search::{search_all_sites, search_site};
@@ -117,6 +118,10 @@ use profile_sync::{
 };
 use profile_sync_onboarding::{
     execute_profile_sync_onboarding, post_profile_sync_sync_now, preview_profile_sync_onboarding,
+};
+use vod_prefetch::{
+    VodPrefetchManager, get_vod_prefetch_session, post_vod_prefetch_advance,
+    post_vod_prefetch_retry, post_vod_prefetch_session, stop_vod_prefetch_session,
 };
 use vod_proxy::{get_vod_key, get_vod_m3u8, get_vod_segment};
 
@@ -349,6 +354,7 @@ pub struct AppState {
     image_client: reqwest::Client,
     image_cache: ImageCache,
     online_vod_cache: OnlineVodCache,
+    vod_prefetch: VodPrefetchManager,
     image_flights: Arc<Mutex<HashMap<String, Arc<ImageFlight>>>>,
     download_engine: Arc<RwLock<DesktopDownloadEngine>>,
     download_engine_snapshot_tx: watch::Sender<DesktopDownloadEngineSnapshot>,
@@ -491,6 +497,21 @@ impl AppState {
                 data_dir.display()
             )
         })?;
+        let vod_prefetch = VodPrefetchManager::new(&data_dir, online_vod_cache.clone())
+            .with_context(|| {
+                format!(
+                    "failed to initialize VOD prefetch state under {}",
+                    data_dir.display()
+                )
+            })?;
+        vod_prefetch
+            .recover_stale_full_episode_session()
+            .with_context(|| {
+                format!(
+                    "failed to recover stale VOD prefetch state under {}",
+                    data_dir.display()
+                )
+            })?;
 
         let state = Self {
             host,
@@ -507,6 +528,7 @@ impl AppState {
                 .expect("failed to build image proxy http client"),
             image_cache,
             online_vod_cache,
+            vod_prefetch,
             image_flights: Arc::new(Mutex::new(HashMap::new())),
             download_engine: Arc::new(RwLock::new(download_engine)),
             download_engine_snapshot_tx,
@@ -535,6 +557,10 @@ impl AppState {
         format!("{}:{}", effective_bind_host(&self.host), self.port)
     }
 
+    pub(crate) fn public_base_url(&self) -> &str {
+        &self.public_base_url
+    }
+
     fn read_cached_image(&self, url: &str) -> AppResult<Option<CachedImage>> {
         self.image_cache.get(url).map_err(|error| {
             AppError::new(
@@ -553,7 +579,10 @@ impl AppState {
         })
     }
 
-    fn read_cached_online_vod_asset(&self, request_url: &str) -> Option<CachedOnlineVodAsset> {
+    pub(crate) fn read_cached_online_vod_asset(
+        &self,
+        request_url: &str,
+    ) -> Option<CachedOnlineVodAsset> {
         match self
             .online_vod_cache
             .get(request_url, current_timestamp_ms())
@@ -581,6 +610,7 @@ impl AppState {
             expected_body_len,
             policy,
             current_timestamp_ms(),
+            None,
         ) {
             Ok(writer) => writer,
             Err(error) => {
@@ -608,6 +638,33 @@ impl AppState {
         ) {
             warn!("online VOD cache write failed; playback response was preserved: {error}");
         }
+    }
+
+    pub(crate) fn cache_online_vod_prefetch_asset(
+        &self,
+        request_url: &str,
+        status: StatusCode,
+        content_type: Option<&str>,
+        body: &[u8],
+        policy: OnlineVodCachePolicy,
+        prefetch_session_id: Option<&str>,
+    ) -> AppResult<()> {
+        self.online_vod_cache
+            .store_for_prefetch_session(
+                request_url,
+                status.as_u16(),
+                content_type,
+                body,
+                policy,
+                current_timestamp_ms(),
+                prefetch_session_id,
+            )
+            .map_err(|error| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("failed to write online VOD cache: {error}"),
+                )
+            })
     }
 
     async fn acquire_image_flight(
@@ -2156,6 +2213,20 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/proxy/vod/m3u8", get(get_vod_m3u8))
         .route("/api/proxy/vod/segment", get(get_vod_segment))
         .route("/api/proxy/vod/key", get(get_vod_key))
+        .route(
+            "/api/vod-prefetch/session",
+            get(get_vod_prefetch_session)
+                .post(post_vod_prefetch_session)
+                .delete(stop_vod_prefetch_session),
+        )
+        .route(
+            "/api/vod-prefetch/session/advance",
+            post(post_vod_prefetch_advance),
+        )
+        .route(
+            "/api/vod-prefetch/session/retry",
+            post(post_vod_prefetch_retry),
+        )
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state,
@@ -2292,6 +2363,9 @@ fn requires_local_service_access_token(path: &str) -> bool {
             | "/api/change-password"
             | "/api/profile-sync/status"
             | "/api/profile-sync/sync-now"
+            | "/api/vod-prefetch/session"
+            | "/api/vod-prefetch/session/advance"
+            | "/api/vod-prefetch/session/retry"
     ) || path.starts_with("/api/admin/")
         || matches!(
             path,
@@ -8120,6 +8194,18 @@ mod tests {
             .expect("unauthorized response");
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
 
+        let unauthorized_prefetch = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/vod-prefetch/session")
+                    .body(Body::empty())
+                    .expect("unauthorized VOD prefetch request"),
+            )
+            .await
+            .expect("unauthorized VOD prefetch response");
+        assert_eq!(unauthorized_prefetch.status(), StatusCode::UNAUTHORIZED);
+
         let authorized = app
             .oneshot(
                 Request::builder()
@@ -8131,6 +8217,46 @@ mod tests {
             .await
             .expect("authorized response");
         assert_ne!(authorized.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn vod_prefetch_rejects_non_local_proxy_urls() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "cache_time": 7200,
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/vod-prefetch/session")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                          "sessionId": "vod-session",
+                          "manifestUrl": "https://example.invalid/playlist.m3u8",
+                          "windowMode": "30s"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("VOD prefetch request"),
+            )
+            .await
+            .expect("VOD prefetch response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

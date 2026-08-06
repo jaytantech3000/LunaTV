@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
@@ -13,6 +14,7 @@ use sha2::{Digest, Sha256};
 
 const ONLINE_VOD_CACHE_DIR_NAME: &str = "online-vod-cache";
 const ONLINE_VOD_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const ONLINE_VOD_CACHE_FULL_EPISODE_MAX_BYTES: u64 = ONLINE_VOD_CACHE_MAX_BYTES * 2;
 const ONLINE_VOD_CACHE_MAX_ENTRY_BYTES: u64 = 32 * 1024 * 1024;
 const ONLINE_VOD_CACHE_MAX_ACTIVE_WRITERS: usize = 4;
 
@@ -53,6 +55,8 @@ pub(crate) struct OnlineVodCache {
     max_entry_bytes: u64,
     access_lock: Arc<Mutex<()>>,
     active_writers: Arc<AtomicUsize>,
+    temporary_max_bytes: Arc<AtomicU64>,
+    retired_prefetch_sessions: Arc<Mutex<BTreeSet<String>>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -64,6 +68,8 @@ struct OnlineVodCacheMeta {
     created_at_ms: u64,
     last_accessed_at_ms: u64,
     expires_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prefetch_session_id: Option<String>,
 }
 
 pub(crate) struct OnlineVodCacheWriter {
@@ -80,6 +86,7 @@ pub(crate) struct OnlineVodCacheWriter {
     file: Option<File>,
     _writer_slot: OnlineVodCacheWriterSlot,
     committed: bool,
+    prefetch_session_id: Option<String>,
 }
 
 struct OnlineVodCacheWriterSlot {
@@ -96,6 +103,8 @@ impl OnlineVodCache {
             max_entry_bytes: ONLINE_VOD_CACHE_MAX_ENTRY_BYTES,
             access_lock: Arc::new(Mutex::new(())),
             active_writers: Arc::new(AtomicUsize::new(0)),
+            temporary_max_bytes: Arc::new(AtomicU64::new(0)),
+            retired_prefetch_sessions: Arc::new(Mutex::new(BTreeSet::new())),
         })
     }
 
@@ -148,6 +157,27 @@ impl OnlineVodCache {
         policy: OnlineVodCachePolicy,
         now_ms: u64,
     ) -> io::Result<()> {
+        self.store_for_prefetch_session(
+            request_url,
+            status,
+            content_type,
+            body,
+            policy,
+            now_ms,
+            None,
+        )
+    }
+
+    pub(crate) fn store_for_prefetch_session(
+        &self,
+        request_url: &str,
+        status: u16,
+        content_type: Option<&str>,
+        body: &[u8],
+        policy: OnlineVodCachePolicy,
+        now_ms: u64,
+        prefetch_session_id: Option<&str>,
+    ) -> io::Result<()> {
         let Some(mut writer) = self.begin_write(
             request_url,
             status,
@@ -155,6 +185,7 @@ impl OnlineVodCache {
             Some(body.len() as u64),
             policy,
             now_ms,
+            prefetch_session_id,
         )?
         else {
             return Ok(());
@@ -172,6 +203,7 @@ impl OnlineVodCache {
         expected_body_len: Option<u64>,
         policy: OnlineVodCachePolicy,
         now_ms: u64,
+        prefetch_session_id: Option<&str>,
     ) -> io::Result<Option<OnlineVodCacheWriter>> {
         if expected_body_len.is_some_and(|length| length > self.max_entry_bytes) {
             return Ok(None);
@@ -201,11 +233,20 @@ impl OnlineVodCache {
             file: Some(file),
             _writer_slot: writer_slot,
             committed: false,
+            prefetch_session_id: normalize_optional_text(prefetch_session_id),
         }))
     }
 
     fn commit(&self, writer: &OnlineVodCacheWriter) -> io::Result<()> {
         let _access_lock = self.lock_access()?;
+        if writer
+            .prefetch_session_id
+            .as_deref()
+            .is_some_and(|session_id| self.is_prefetch_session_retired(session_id))
+        {
+            let _ = fs::remove_file(&writer.temp_body_path);
+            return Ok(());
+        }
         self.evict_to_fit(writer.body_len, &writer.body_path)?;
         self.remove_entry(&writer.body_path, &writer.meta_path);
         fs::rename(&writer.temp_body_path, &writer.body_path)?;
@@ -218,6 +259,7 @@ impl OnlineVodCache {
             created_at_ms: writer.created_at_ms,
             last_accessed_at_ms: writer.created_at_ms,
             expires_at_ms: writer.expires_at_ms,
+            prefetch_session_id: writer.prefetch_session_id.clone(),
         };
         if let Err(error) = self.write_meta(&writer.meta_path, &meta) {
             self.remove_entry(&writer.body_path, &writer.meta_path);
@@ -282,7 +324,8 @@ impl OnlineVodCache {
     }
 
     fn evict_to_fit(&self, incoming_bytes: u64, preserve_body_path: &Path) -> io::Result<()> {
-        if incoming_bytes > self.max_bytes {
+        let max_bytes = self.effective_max_bytes();
+        if incoming_bytes > max_bytes {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "online VOD asset exceeds cache byte limit",
@@ -327,7 +370,7 @@ impl OnlineVodCache {
 
         entries.sort_by_key(|(last_accessed_at_ms, _, _, _)| *last_accessed_at_ms);
         for (_, body_len, body_path, meta_path) in entries {
-            if total_bytes.saturating_add(incoming_bytes) <= self.max_bytes {
+            if total_bytes.saturating_add(incoming_bytes) <= max_bytes {
                 break;
             }
             if body_path == preserve_body_path {
@@ -338,6 +381,92 @@ impl OnlineVodCache {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn set_temporary_max_bytes(&self, max_bytes: u64) {
+        self.temporary_max_bytes.store(max_bytes, Ordering::Release);
+    }
+
+    pub(crate) fn activate_prefetch_session(&self, session_id: &str) -> io::Result<()> {
+        self.retired_prefetch_sessions
+            .lock()
+            .map_err(|_| io::Error::other("online VOD cache session lock poisoned"))?
+            .remove(session_id);
+        Ok(())
+    }
+
+    pub(crate) fn clear_temporary_max_bytes(&self) {
+        self.temporary_max_bytes.store(0, Ordering::Release);
+    }
+
+    pub(crate) fn remove_prefetch_session_entries(&self, session_id: &str) -> io::Result<u64> {
+        let _access_lock = self.lock_access()?;
+        self.retire_prefetch_session(session_id)?;
+        let mut removed = 0_u64;
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            let body_path = entry.path();
+            if body_path
+                .extension()
+                .is_none_or(|extension| extension != "body")
+            {
+                continue;
+            }
+
+            let Some(key) = body_path.file_stem().and_then(|key| key.to_str()) else {
+                continue;
+            };
+            let meta_path = self.root.join(format!("{key}.meta.json"));
+            let matches_session = fs::read(&meta_path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<OnlineVodCacheMeta>(&bytes).ok())
+                .is_some_and(|meta| meta.prefetch_session_id.as_deref() == Some(session_id));
+            if matches_session {
+                removed = removed.saturating_add(entry.metadata()?.len());
+                self.remove_entry(&body_path, &meta_path);
+            }
+        }
+        Ok(removed)
+    }
+
+    pub(crate) fn byte_len(&self) -> io::Result<u64> {
+        let _access_lock = self.lock_access()?;
+        fs::read_dir(&self.root)?.try_fold(0_u64, |total, entry| {
+            let entry = entry?;
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "body")
+            {
+                Ok(total.saturating_add(entry.metadata()?.len()))
+            } else {
+                Ok(total)
+            }
+        })
+    }
+
+    fn effective_max_bytes(&self) -> u64 {
+        let temporary_max_bytes = self.temporary_max_bytes.load(Ordering::Acquire);
+        if temporary_max_bytes == 0 {
+            self.max_bytes
+        } else {
+            temporary_max_bytes
+        }
+    }
+
+    fn retire_prefetch_session(&self, session_id: &str) -> io::Result<()> {
+        self.retired_prefetch_sessions
+            .lock()
+            .map_err(|_| io::Error::other("online VOD cache session lock poisoned"))?
+            .insert(session_id.to_string());
+        Ok(())
+    }
+
+    fn is_prefetch_session_retired(&self, session_id: &str) -> bool {
+        self.retired_prefetch_sessions
+            .lock()
+            .map(|sessions| sessions.contains(session_id))
+            .unwrap_or(true)
     }
 }
 
@@ -516,6 +645,105 @@ mod tests {
     }
 
     #[test]
+    fn full_episode_session_cleanup_preserves_passive_cache_entries() {
+        let temp_dir = TestDir::new();
+        let cache = OnlineVodCache::new(&temp_dir.path).expect("create online VOD cache");
+        let passive_url = "http://127.0.0.1:8787/media/vod/segment?url=passive";
+        let prefetched_url = "http://127.0.0.1:8787/media/vod/segment?url=prefetched";
+
+        cache
+            .store(
+                passive_url,
+                200,
+                Some("video/mp2t"),
+                b"passive",
+                OnlineVodCachePolicy::Segment,
+                1,
+            )
+            .expect("store passive cache entry");
+        cache
+            .store_for_prefetch_session(
+                prefetched_url,
+                200,
+                Some("video/mp2t"),
+                b"prefetched",
+                OnlineVodCachePolicy::Segment,
+                2,
+                Some("vod-session"),
+            )
+            .expect("store full episode prefetch entry");
+
+        assert_eq!(
+            cache
+                .remove_prefetch_session_entries("vod-session")
+                .expect("remove full episode session entries"),
+            b"prefetched".len() as u64
+        );
+        assert!(
+            cache
+                .get(passive_url, 3)
+                .expect("read passive entry")
+                .is_some()
+        );
+        assert!(
+            cache
+                .get(prefetched_url, 3)
+                .expect("read prefetch entry")
+                .is_none()
+        );
+        cache
+            .store_for_prefetch_session(
+                prefetched_url,
+                200,
+                Some("video/mp2t"),
+                b"late-write",
+                OnlineVodCachePolicy::Segment,
+                4,
+                Some("vod-session"),
+            )
+            .expect("ignore retired full episode write");
+        assert!(
+            cache
+                .get(prefetched_url, 5)
+                .expect("read retired prefetch entry")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn temporary_limit_allows_full_episode_prefetch_to_exceed_the_baseline() {
+        let temp_dir = TestDir::new();
+        let mut cache = OnlineVodCache::new(&temp_dir.path).expect("create online VOD cache");
+        cache.max_bytes = 8;
+        cache.set_temporary_max_bytes(16);
+        for (request_url, body) in [
+            (
+                "http://127.0.0.1:8787/media/vod/segment?url=first",
+                b"12345678".as_slice(),
+            ),
+            (
+                "http://127.0.0.1:8787/media/vod/segment?url=second",
+                b"abcdefgh".as_slice(),
+            ),
+        ] {
+            cache
+                .store_for_prefetch_session(
+                    request_url,
+                    200,
+                    Some("video/mp2t"),
+                    body,
+                    OnlineVodCachePolicy::Segment,
+                    1,
+                    Some("vod-session"),
+                )
+                .expect("store full episode entry within temporary limit");
+        }
+
+        assert_eq!(cache.byte_len().expect("read cache byte length"), 16);
+        cache.clear_temporary_max_bytes();
+    }
+
+    #[test]
     fn cache_drops_expired_manifests() {
         let temp_dir = TestDir::new();
         let cache = OnlineVodCache::new(&temp_dir.path).expect("create online VOD cache");
@@ -560,6 +788,7 @@ mod tests {
                 Some(8),
                 OnlineVodCachePolicy::Segment,
                 100,
+                None,
             )
             .expect("start cache write")
             .expect("cache write should be accepted");
