@@ -25,9 +25,9 @@ use axum::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
         header::{
             ACCEPT_RANGES, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-            ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, CACHE_CONTROL,
-            CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ORIGIN, RANGE,
-            REFERER, USER_AGENT,
+            ACCEPT_ENCODING, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
+            CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE,
+            CONTENT_TYPE, ORIGIN, RANGE, REFERER, USER_AGENT,
         },
     },
     middleware::{self, Next},
@@ -147,6 +147,8 @@ const DEFAULT_SEARCH_TIMEOUT_MS: u64 = 8_000;
 const DEFAULT_DETAIL_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PROXY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+pub(crate) const DOWNLOAD_RUNTIME_ERROR_RESOURCE_RESPONSE_READ_FAILED: &str =
+    "download_runtime_resource_response_read_failed";
 const DESKTOP_CONFIG_SUBSCRIPTION_REFRESH_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const DESKTOP_CONFIG_SUBSCRIPTION_REFRESH_MIN_INTERVAL: TimeDuration = TimeDuration::hours(1);
 const DESKTOP_LOCAL_DATA_MIGRATION_NOTE: &str = "桌面本地模式仅迁移管理员配置和本地账号密码；播放记录、收藏、搜索历史与跳过片头片尾等浏览器本地数据不会导入或导出。";
@@ -351,6 +353,7 @@ pub struct AppState {
     sqlite_path: PathBuf,
     sqlite: DesktopSqlite,
     client: reqwest::Client,
+    download_client: reqwest::Client,
     image_client: reqwest::Client,
     image_cache: ImageCache,
     online_vod_cache: OnlineVodCache,
@@ -512,6 +515,13 @@ impl AppState {
                     data_dir.display()
                 )
             })?;
+        let download_client = reqwest::Client::builder()
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            .no_zstd()
+            .build()
+            .context("failed to build download http client")?;
 
         let state = Self {
             host,
@@ -522,6 +532,7 @@ impl AppState {
             sqlite_path,
             sqlite,
             client: reqwest::Client::new(),
+            download_client,
             image_client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
@@ -6918,17 +6929,59 @@ async fn fetch_vod_proxy_upstream(
     upstream_url: &str,
     request_headers: &HeaderMap,
 ) -> AppResult<reqwest::Response> {
+    fetch_vod_proxy_upstream_with_encoding(
+        client,
+        api_site,
+        upstream_url,
+        request_headers,
+        false,
+    )
+    .await
+}
+
+async fn fetch_vod_proxy_upstream_with_identity_encoding(
+    client: &reqwest::Client,
+    api_site: &ApiSite,
+    upstream_url: &str,
+    request_headers: &HeaderMap,
+) -> AppResult<reqwest::Response> {
+    fetch_vod_proxy_upstream_with_encoding(client, api_site, upstream_url, request_headers, true)
+        .await
+}
+
+async fn fetch_vod_proxy_upstream_with_encoding(
+    client: &reqwest::Client,
+    api_site: &ApiSite,
+    upstream_url: &str,
+    request_headers: &HeaderMap,
+    request_identity_encoding: bool,
+) -> AppResult<reqwest::Response> {
+    let mut headers = build_downstream_headers(api_site, DEFAULT_WEB_UA, Some(request_headers));
+    if request_identity_encoding {
+        headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
+    }
+
     client
         .get(upstream_url)
-        .headers(build_downstream_headers(
-            api_site,
-            DEFAULT_WEB_UA,
-            Some(request_headers),
-        ))
+        .headers(headers)
         .timeout(Duration::from_millis(DEFAULT_PROXY_TIMEOUT_MS))
         .send()
         .await
         .map_err(|error| AppError::internal(error.to_string()))
+}
+
+fn upstream_response_uses_non_identity_encoding(response: &reqwest::Response) -> bool {
+    response
+        .headers()
+        .get(CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .any(|encoding| !encoding.is_empty() && !encoding.eq_ignore_ascii_case("identity"))
+        })
+        .unwrap_or(false)
 }
 
 fn upstream_response_meta(response: &reqwest::Response) -> UpstreamResponseMeta {
@@ -14809,6 +14862,370 @@ segment0.ts
             .await
             .expect("download runtime cached fetch body");
         assert_eq!(cached_body.as_ref(), b"mockdata");
+    }
+
+    #[tokio::test]
+    async fn download_runtime_direct_resource_requests_identity_encoding() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/segment.ts",
+            get(|headers: HeaderMap| async move {
+                if headers
+                    .get(ACCEPT_ENCODING)
+                    .and_then(|value| value.to_str().ok())
+                    == Some("identity")
+                {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "video/mp2t")
+                        .body(Body::from("identity-segment"))
+                        .expect("identity segment response");
+                }
+
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "video/mp2t")
+                    .header(CONTENT_ENCODING, "gzip")
+                    .body(Body::from("not-gzip"))
+                    .expect("unexpected encoded segment response")
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(&temp_dir, json!({ "api_site": {} }));
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let resource_url = format!("{}/segment.ts", upstream.base_url());
+        let encoded_resource_url =
+            form_urlencoded::byte_serialize(resource_url.as_bytes()).collect::<String>();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/cache/fetch?url={encoded_resource_url}"
+                    ))
+                    .body(Body::empty())
+                    .expect("identity resource request"),
+            )
+            .await
+            .expect("identity resource response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("identity resource body");
+        assert_eq!(body.as_ref(), b"identity-segment");
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn download_runtime_vod_proxy_manifest_requests_identity_encoding() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/playlist.m3u8",
+            get(|headers: HeaderMap| async move {
+                if headers
+                    .get(ACCEPT_ENCODING)
+                    .and_then(|value| value.to_str().ok())
+                    == Some("identity")
+                {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "application/vnd.apple.mpegurl")
+                        .body(Body::from("#EXTM3U\n#EXTINF:4.0,\nsegment.ts\n"))
+                        .expect("identity manifest response");
+                }
+
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "application/vnd.apple.mpegurl")
+                    .header(CONTENT_ENCODING, "gzip")
+                    .body(Body::from("not-gzip"))
+                    .expect("unexpected encoded manifest response")
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Resource"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let candidate_url = format!(
+            "/media/vod/m3u8?source=mock&url={}",
+            form_urlencoded::byte_serialize(
+                format!("{}/playlist.m3u8", upstream.base_url()).as_bytes()
+            )
+            .collect::<String>()
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/manifest/resolve")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "entryManifestUrls": [candidate_url] }).to_string(),
+                    ))
+                    .expect("identity manifest resolve request"),
+            )
+            .await
+            .expect("identity manifest resolve response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(
+            payload
+                .get("resourceUrls")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn download_runtime_vod_proxy_resource_requests_identity_encoding() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/segment.ts",
+            get(|headers: HeaderMap| async move {
+                if headers
+                    .get(ACCEPT_ENCODING)
+                    .and_then(|value| value.to_str().ok())
+                    == Some("identity")
+                {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "video/mp2t")
+                        .body(Body::from("proxy-identity-segment"))
+                        .expect("proxy identity segment response");
+                }
+
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "video/mp2t")
+                    .header(CONTENT_ENCODING, "gzip")
+                    .body(Body::from("not-gzip"))
+                    .expect("unexpected proxy encoded segment response")
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Resource"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let runtime_url = format!(
+            "http://127.0.0.1:8787/media/vod/segment?source=mock&url={}",
+            form_urlencoded::byte_serialize(
+                format!("{}/segment.ts", upstream.base_url()).as_bytes()
+            )
+            .collect::<String>()
+        );
+        let encoded_runtime_url =
+            form_urlencoded::byte_serialize(runtime_url.as_bytes()).collect::<String>();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/cache/fetch?url={encoded_runtime_url}"
+                    ))
+                    .body(Body::empty())
+                    .expect("proxy identity resource request"),
+            )
+            .await
+            .expect("proxy identity resource response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("proxy identity resource body");
+        assert_eq!(body.as_ref(), b"proxy-identity-segment");
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn download_runtime_retries_valid_encoded_resource_with_default_client() {
+        let request_count = Arc::new(AtomicU64::new(0));
+        let upstream_request_count = Arc::clone(&request_count);
+        let compressed_body = gzip_bytes(b"gzip-segment").expect("gzip segment body");
+        let upstream = spawn_mock_server(Router::new().route(
+            "/segment.ts",
+            get(move || {
+                let request_count = Arc::clone(&upstream_request_count);
+                let compressed_body = compressed_body.clone();
+                async move {
+                    request_count.fetch_add(1, Ordering::SeqCst);
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "video/mp2t")
+                        .header(CONTENT_ENCODING, "gzip")
+                        .body(Body::from(compressed_body))
+                        .expect("gzip segment response")
+                }
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(&temp_dir, json!({ "api_site": {} }));
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let resource_url = format!("{}/segment.ts", upstream.base_url());
+        let encoded_resource_url =
+            form_urlencoded::byte_serialize(resource_url.as_bytes()).collect::<String>();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/cache/fetch?url={encoded_resource_url}"
+                    ))
+                    .body(Body::empty())
+                    .expect("gzip fallback resource request"),
+            )
+            .await
+            .expect("gzip fallback resource response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("gzip fallback resource body");
+        assert_eq!(body.as_ref(), b"gzip-segment");
+        assert_eq!(request_count.load(Ordering::SeqCst), 2);
+
+        upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn download_runtime_vod_proxy_does_not_cache_malformed_encoded_resource() {
+        let upstream = spawn_mock_server(Router::new().route(
+            "/segment.ts",
+            get(|| async {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "video/mp2t")
+                    .header(CONTENT_ENCODING, "gzip")
+                    .body(Body::from("not-gzip"))
+                    .expect("malformed encoded segment response")
+            }),
+        ))
+        .await;
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {
+                "mock": {
+                  "api": format!("{}/api.php/provide/vod", upstream.base_url()),
+                  "name": "Mock Resource"
+                }
+              }
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let runtime_url = format!(
+            "http://127.0.0.1:8787/media/vod/segment?source=mock&url={}",
+            form_urlencoded::byte_serialize(
+                format!("{}/segment.ts", upstream.base_url()).as_bytes()
+            )
+            .collect::<String>()
+        );
+        let encoded_runtime_url =
+            form_urlencoded::byte_serialize(runtime_url.as_bytes()).collect::<String>();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/cache/fetch?url={encoded_runtime_url}"
+                    ))
+                    .body(Body::empty())
+                    .expect("malformed resource request"),
+            )
+            .await
+            .expect("malformed resource response");
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let error_payload = read_json_body(response).await;
+        assert_eq!(
+            error_payload.get("code").and_then(Value::as_str),
+            Some("download_runtime_resource_response_read_failed")
+        );
+        assert!(
+            error_payload
+                .get("error")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("identity-encoding fallback"))
+        );
+
+        let cache_meta_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/download-runtime/cache/meta?url={encoded_runtime_url}"
+                    ))
+                    .body(Body::empty())
+                    .expect("malformed resource cache meta request"),
+            )
+            .await
+            .expect("malformed resource cache meta response");
+
+        assert_eq!(cache_meta_response.status(), StatusCode::OK);
+        let cache_meta_payload = read_json_body(cache_meta_response).await;
+        assert_eq!(
+            cache_meta_payload.get("exists").and_then(Value::as_bool),
+            Some(false)
+        );
+
+        upstream.abort();
     }
 
     #[tokio::test]

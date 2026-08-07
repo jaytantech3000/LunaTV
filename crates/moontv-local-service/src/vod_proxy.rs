@@ -164,28 +164,47 @@ pub(crate) async fn fetch_vod_proxy_asset_bytes(
     path: &str,
     params: VodProxyQueryParams,
     request_headers: &HeaderMap,
+    prefer_identity_encoding: bool,
 ) -> AppResult<VodProxyFetchedAsset> {
     let config = state
         .load_config()
         .map_err(|error| AppError::internal(error.to_string()))?;
     let ad_filter_query_mode = crate::parse_bool_flag(params.adfilter.as_deref());
     let resolved = crate::resolve_vod_proxy_request(&config, params)?;
-    let upstream_response = crate::fetch_vod_proxy_upstream(
-        &state.client,
-        &resolved.api_site,
-        &resolved.upstream_url,
-        request_headers,
-    )
-    .await?;
+    let upstream_response = if prefer_identity_encoding {
+        let response = crate::fetch_vod_proxy_upstream_with_identity_encoding(
+            &state.download_client,
+            &resolved.api_site,
+            &resolved.upstream_url,
+            request_headers,
+        )
+        .await?;
+        if crate::upstream_response_uses_non_identity_encoding(&response) {
+            crate::fetch_vod_proxy_upstream(
+                &state.client,
+                &resolved.api_site,
+                &resolved.upstream_url,
+                request_headers,
+            )
+            .await?
+        } else {
+            response
+        }
+    } else {
+        crate::fetch_vod_proxy_upstream(
+            &state.client,
+            &resolved.api_site,
+            &resolved.upstream_url,
+            request_headers,
+        )
+        .await?
+    };
     let meta = crate::upstream_response_meta(&upstream_response);
 
     match path {
         "/api/proxy/vod/segment" | "/media/vod/segment" => {
-            let body = upstream_response
-                .bytes()
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?
-                .to_vec();
+            let body =
+                read_vod_proxy_asset_body(upstream_response, prefer_identity_encoding).await?;
             Ok(VodProxyFetchedAsset {
                 status: meta.status,
                 content_type: meta.content_type,
@@ -193,11 +212,8 @@ pub(crate) async fn fetch_vod_proxy_asset_bytes(
             })
         }
         "/api/proxy/vod/key" | "/media/vod/key" => {
-            let body = upstream_response
-                .bytes()
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?
-                .to_vec();
+            let body =
+                read_vod_proxy_asset_body(upstream_response, prefer_identity_encoding).await?;
             Ok(VodProxyFetchedAsset {
                 status: meta.status,
                 content_type: meta.content_type,
@@ -205,10 +221,10 @@ pub(crate) async fn fetch_vod_proxy_asset_bytes(
             })
         }
         "/api/proxy/vod/m3u8" | "/media/vod/m3u8" => {
-            let manifest_content = upstream_response
-                .text()
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            let manifest_content = String::from_utf8(
+                read_vod_proxy_asset_body(upstream_response, prefer_identity_encoding).await?,
+            )
+            .map_err(|_| AppError::internal("VOD manifest is not valid UTF-8"))?;
             let rewritten_content = crate::rewrite_vod_manifest_content(
                 &manifest_content,
                 &meta.final_url,
@@ -246,6 +262,25 @@ pub(crate) async fn fetch_vod_proxy_asset_bytes(
         }
         _ => Err(AppError::bad_request("unsupported vod proxy fetch path")),
     }
+}
+
+async fn read_vod_proxy_asset_body(
+    response: reqwest::Response,
+    prefer_identity_encoding: bool,
+) -> AppResult<Vec<u8>> {
+    response.bytes().await.map(|body| body.to_vec()).map_err(|error| {
+        if prefer_identity_encoding {
+            AppError::with_code(
+                StatusCode::BAD_GATEWAY,
+                crate::DOWNLOAD_RUNTIME_ERROR_RESOURCE_RESPONSE_READ_FAILED,
+                format!(
+                    "failed to read VOD proxy asset response after identity-encoding fallback: {error}"
+                ),
+            )
+        } else {
+            AppError::internal(error.to_string())
+        }
+    })
 }
 
 pub(crate) async fn get_vod_m3u8(

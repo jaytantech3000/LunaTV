@@ -127,8 +127,6 @@ const BACKGROUND_DOWNLOAD_REQUEST_INTENT: &str = "background";
 const DOWNLOAD_RUNTIME_ERROR_STORAGE: &str = "download_runtime_storage_error";
 const DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED: &str =
     "download_runtime_resource_fetch_failed";
-const DOWNLOAD_RUNTIME_ERROR_RESOURCE_RESPONSE_READ_FAILED: &str =
-    "download_runtime_resource_response_read_failed";
 const DOWNLOAD_RUNTIME_ERROR_CACHE_NOT_FOUND: &str = "download_runtime_cache_not_found";
 const DOWNLOAD_RUNTIME_ERROR_CACHE_BODY_NOT_FOUND: &str =
     "download_runtime_cache_body_not_found";
@@ -466,6 +464,7 @@ async fn fetch_runtime_download_response(
             &path,
             proxy_params,
             request_headers,
+            true,
         )
         .await?;
 
@@ -476,15 +475,12 @@ async fn fetch_runtime_download_response(
         });
     }
 
-    let response = state
-        .client
-        .get(url)
-        .header(
-            HeaderName::from_static(DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER),
-            HeaderValue::from_static(BACKGROUND_DOWNLOAD_REQUEST_INTENT),
-        )
-        .timeout(Duration::from_millis(DOWNLOAD_RESOURCE_FETCH_TIMEOUT_MS))
-        .send()
+    let response = send_download_request(
+        &state.download_client,
+        url,
+        DOWNLOAD_RESOURCE_FETCH_TIMEOUT_MS,
+        true,
+    )
         .await
         .map_err(|error| {
             AppError::with_code(
@@ -493,6 +489,24 @@ async fn fetch_runtime_download_response(
                 format!("failed to fetch download resource: {url} ({error})"),
             )
         })?;
+    let response = if crate::upstream_response_uses_non_identity_encoding(&response) {
+        send_download_request(
+            &state.client,
+            url,
+            DOWNLOAD_RESOURCE_FETCH_TIMEOUT_MS,
+            false,
+        )
+        .await
+        .map_err(|error| {
+            AppError::with_code(
+                StatusCode::BAD_GATEWAY,
+                DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED,
+                format!("failed to retry encoded download resource: {url} ({error})"),
+            )
+        })?
+    } else {
+        response
+    };
     let status = response.status();
     let content_type = response
         .headers()
@@ -505,8 +519,10 @@ async fn fetch_runtime_download_response(
         .map_err(|error| {
             AppError::with_code(
                 StatusCode::BAD_GATEWAY,
-                DOWNLOAD_RUNTIME_ERROR_RESOURCE_RESPONSE_READ_FAILED,
-                format!("failed to read download resource response: {url} ({error})"),
+                crate::DOWNLOAD_RUNTIME_ERROR_RESOURCE_RESPONSE_READ_FAILED,
+                format!(
+                    "failed to read download resource response after identity-encoding fallback: {url} ({error})"
+                ),
             )
         })?
         .to_vec();
@@ -516,6 +532,28 @@ async fn fetch_runtime_download_response(
         content_type,
         body,
     })
+}
+
+async fn send_download_request(
+    client: &reqwest::Client,
+    url: &str,
+    timeout_ms: u64,
+    request_identity_encoding: bool,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let request = client
+        .get(url)
+        .header(
+            HeaderName::from_static(DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER),
+            HeaderValue::from_static(BACKGROUND_DOWNLOAD_REQUEST_INTENT),
+        )
+        .timeout(Duration::from_millis(timeout_ms));
+    let request = if request_identity_encoding {
+        request.header("accept-encoding", "identity")
+    } else {
+        request
+    };
+
+    request.send().await
 }
 
 fn build_download_runtime_fetched_response(
@@ -870,14 +908,27 @@ async fn fetch_download_manifest_text_via_proxy(
         },
     )
     .map_err(|error| DownloadManifestError::invalid(request_url, error.message))?;
-    let upstream_response = crate::fetch_vod_proxy_upstream(
-        &state.client,
+    let upstream_response = crate::fetch_vod_proxy_upstream_with_identity_encoding(
+        &state.download_client,
         &resolved.api_site,
         &resolved.upstream_url,
         &HeaderMap::new(),
     )
     .await
     .map_err(|error| DownloadManifestError::network(request_url, error.message))?;
+    let upstream_response = if crate::upstream_response_uses_non_identity_encoding(&upstream_response)
+    {
+        crate::fetch_vod_proxy_upstream(
+            &state.client,
+            &resolved.api_site,
+            &resolved.upstream_url,
+            &HeaderMap::new(),
+        )
+        .await
+        .map_err(|error| DownloadManifestError::network(request_url, error.message))?
+    } else {
+        upstream_response
+    };
     let status = upstream_response.status();
     let meta = crate::upstream_response_meta(&upstream_response);
     let manifest_content = upstream_response.text().await.map_err(|error| {
@@ -939,15 +990,12 @@ async fn fetch_download_manifest_text_direct(
     request_url: &str,
 ) -> Result<String, DownloadManifestError> {
     let fetch_url = resolve_download_manifest_fetch_url(&state.public_base_url, request_url)?;
-    let response = state
-        .client
-        .get(&fetch_url)
-        .header(
-            HeaderName::from_static(DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER),
-            HeaderValue::from_static(BACKGROUND_DOWNLOAD_REQUEST_INTENT),
-        )
-        .timeout(Duration::from_millis(DOWNLOAD_MANIFEST_FETCH_TIMEOUT_MS))
-        .send()
+    let response = send_download_request(
+        &state.download_client,
+        &fetch_url,
+        DOWNLOAD_MANIFEST_FETCH_TIMEOUT_MS,
+        true,
+    )
         .await
         .map_err(|error| {
             if error.is_timeout() {
@@ -962,6 +1010,30 @@ async fn fetch_download_manifest_text_direct(
                 )
             }
         })?;
+    let response = if crate::upstream_response_uses_non_identity_encoding(&response) {
+        send_download_request(
+            &state.client,
+            &fetch_url,
+            DOWNLOAD_MANIFEST_FETCH_TIMEOUT_MS,
+            false,
+        )
+        .await
+        .map_err(|error| {
+            if error.is_timeout() {
+                DownloadManifestError::timeout(
+                    request_url,
+                    format!("Failed to retry encoded manifest: {request_url} (timeout)"),
+                )
+            } else {
+                DownloadManifestError::network(
+                    request_url,
+                    format!("Failed to retry encoded manifest: {request_url} ({error})"),
+                )
+            }
+        })?
+    } else {
+        response
+    };
     let status = response.status();
     let content_type = response
         .headers()

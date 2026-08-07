@@ -676,7 +676,8 @@ async fn fetch_or_read_vod_asset(
         });
     }
     let (path, params) = validate_local_vod_asset_url(state, request_url)?;
-    let fetched = fetch_vod_proxy_asset_bytes(state, &path, params, &HeaderMap::new()).await?;
+    let fetched =
+        fetch_vod_proxy_asset_bytes(state, &path, params, &HeaderMap::new(), false).await?;
     if !fetched.status.is_success() {
         return Err(AppError::internal(format!(
             "VOD 预取请求失败: {}",
