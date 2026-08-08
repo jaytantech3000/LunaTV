@@ -1,6 +1,7 @@
 /* eslint-disable no-console, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
 
 import { AdminConfig } from './admin.types';
+import { D1Storage } from './d1.db';
 import { KvrocksStorage } from './kvrocks.db';
 import type {
   ProfileSyncCommitRequest,
@@ -16,13 +17,14 @@ import {
 } from './types';
 import { UpstashRedisStorage } from './upstash.db';
 
-// storage type 常量: 'localstorage' | 'redis' | 'upstash'，默认 'localstorage'
+// storage type 常量: 'localstorage' | 'redis' | 'upstash' | 'd1'，默认 'localstorage'
 const STORAGE_TYPE =
   (process.env.NEXT_PUBLIC_STORAGE_TYPE as
     | 'localstorage'
     | 'redis'
     | 'upstash'
     | 'kvrocks'
+    | 'd1'
     | undefined) || 'localstorage';
 
 // 创建存储实例
@@ -32,6 +34,8 @@ function createStorage(): IStorage {
       return new RedisStorage();
     case 'upstash':
       return new UpstashRedisStorage();
+    case 'd1':
+      return new D1Storage();
     case 'kvrocks':
       return new KvrocksStorage();
     case 'localstorage':

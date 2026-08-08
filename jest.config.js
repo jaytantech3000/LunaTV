@@ -21,6 +21,7 @@ const customJestConfig = {
     '<rootDir>/.next-build/',
     '<rootDir>/.next-desktop/',
     '<rootDir>/.next-web-sync/',
+    '<rootDir>/.open-next/',
   ],
 
   /**

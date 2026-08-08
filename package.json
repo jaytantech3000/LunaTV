@@ -6,6 +6,10 @@
     "dev": "pnpm gen:manifest && next dev -H 0.0.0.0",
     "dev:pwa": "ENABLE_PWA_DEV=true pnpm dev",
     "build": "pnpm gen:manifest && next build",
+    "cf:build": "pnpm gen:manifest && NEXT_DIST_DIR=.next NEXT_PUBLIC_STORAGE_TYPE=d1 opennextjs-cloudflare build",
+    "cf:preview": "pnpm cf:build && opennextjs-cloudflare preview",
+    "cf:deploy": "pnpm cf:build && opennextjs-cloudflare deploy",
+    "cf:typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
     "preview:offline": "pnpm build && sh scripts/start-standalone-preview.sh",
     "start": "next start",
     "lint": "next lint",
@@ -43,7 +47,7 @@
     "hls.js": "^1.6.10",
     "lucide-react": "^0.438.0",
     "media-icons": "^1.1.5",
-    "next": "^14.2.23",
+    "next": "^14.2.35",
     "next-pwa": "^5.6.0",
     "next-themes": "^0.4.6",
     "react": "^18.2.0",
@@ -57,6 +61,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "1.15.1",
     "@commitlint/cli": "^16.3.0",
     "@commitlint/config-conventional": "^16.2.4",
     "@svgr/webpack": "^8.1.0",
@@ -74,7 +79,7 @@
     "autoprefixer": "^10.4.20",
     "babel-loader": "^10.1.1",
     "eslint": "^8.57.1",
-    "eslint-config-next": "^14.2.23",
+    "eslint-config-next": "^14.2.35",
     "eslint-config-prettier": "^8.10.0",
     "eslint-plugin-simple-import-sort": "^7.0.0",
     "eslint-plugin-unused-imports": "^2.0.0",
@@ -87,7 +92,8 @@
     "prettier-plugin-tailwindcss": "^0.5.0",
     "tailwindcss": "^3.4.17",
     "typescript": "^4.9.5",
-    "webpack-obfuscator": "^3.5.1"
+    "webpack-obfuscator": "^3.5.1",
+    "wrangler": "^4.59.2"
   },
   "lint-staged": {
     "**/*.{js,jsx,ts,tsx}": [

@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "luna-up",
+  "account_id": "d16de10582d2b53ea1096b51926f5a85",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-07",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "MOONTV_DB",
+      "database_name": "luna-up-data",
+      "database_id": "2d1cf30f-31ac-45c4-a78e-a6eefd4f3fe0",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "routes": [
+    {
+      "pattern": "luna.hkcu.cc.cd",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "NEXT_PUBLIC_STORAGE_TYPE": "d1",
+    "SITE_BASE": "https://luna.hkcu.cc.cd",
+    "TRUSTED_ROOT_DOMAIN": "hkcu.cc.cd"
+  }
+}

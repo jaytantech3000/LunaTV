@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
 
-const ROOT_DOMAIN = 'hkcu.qzz.io';
+const DEFAULT_TRUSTED_ROOT_DOMAIN = 'hkcu.qzz.io';
 
 export async function middleware(request: NextRequest) {
   const host = normalizeHost(request.headers.get('host'));
@@ -125,15 +125,19 @@ function handleAuthFailure(
   return NextResponse.redirect(loginUrl);
 }
 
-function normalizeHost(host: string | null): string {
+function normalizeHost(host: string | null | undefined): string {
   return host?.split(':')[0].trim().toLowerCase() || '';
 }
 
 function isAllowedHost(host: string): boolean {
+  const trustedRootDomain =
+    normalizeHost(process.env.TRUSTED_ROOT_DOMAIN) ||
+    DEFAULT_TRUSTED_ROOT_DOMAIN;
+
   return (
     Boolean(host) &&
     !host.includes('vercel.app') &&
-    (host === ROOT_DOMAIN || host.endsWith(`.${ROOT_DOMAIN}`))
+    (host === trustedRootDomain || host.endsWith(`.${trustedRootDomain}`))
   );
 }
 

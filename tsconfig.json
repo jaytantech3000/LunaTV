@@ -32,6 +32,6 @@
     ".next/types/**/*.ts",
     ".next-build/types/**/*.ts"
   ],
-  "exclude": ["node_modules"],
+  "exclude": ["node_modules", "open-next.config.ts"],
   "moduleResolution": ["node_modules", ".next", "node"]
 }
