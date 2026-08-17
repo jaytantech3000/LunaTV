@@ -16,6 +16,7 @@ jest.mock('@/lib/playback-source-client', () => ({
 
 jest.mock('./cache', () => ({
   deleteCachedDownloads: jest.fn().mockResolvedValue(undefined),
+  getCachedDownloadSizeBytes: jest.fn().mockResolvedValue(0),
   getOfflineDownloadSupportState: jest.fn(() => ({
     supported: true,
   })),
@@ -46,7 +47,7 @@ jest.mock('./desktop-engine-sync', () => ({
   upsertDesktopDownloadEngineTask: jest.fn().mockResolvedValue(undefined),
 }));
 
-import { hasCachedDownload } from './cache';
+import { getCachedDownloadSizeBytes, hasCachedDownload } from './cache';
 import { upsertDesktopDownloadEngineTask } from './desktop-engine-sync';
 import {
   fetchDesktopDownloadCacheResponse,
@@ -134,6 +135,16 @@ describe('downloadManager cache lookup fallback', () => {
   beforeEach(() => {
     jest.useRealTimers();
     mockedHasCachedDownload.mockReset();
+    (
+      getCachedDownloadSizeBytes as jest.MockedFunction<
+        typeof getCachedDownloadSizeBytes
+      >
+    ).mockReset();
+    (
+      getCachedDownloadSizeBytes as jest.MockedFunction<
+        typeof getCachedDownloadSizeBytes
+      >
+    ).mockResolvedValue(0);
     mockedParseManifestForDownloadWithFallback.mockReset();
     mockIsDesktopLocalDownloadRuntimeEnabled.mockReturnValue(false);
     mockUpsertDesktopDownloadEngineTask.mockReset();
@@ -210,5 +221,73 @@ describe('downloadManager cache lookup fallback', () => {
     expect(fetchDesktopDownloadCacheResponse).not.toHaveBeenCalled();
     expect(mockUpsertDesktopDownloadEngineTask).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it('counts cached resource sizes when resuming a partially downloaded task', async () => {
+    const mockedGetCachedDownloadSizeBytes =
+      getCachedDownloadSizeBytes as jest.MockedFunction<
+        typeof getCachedDownloadSizeBytes
+      >;
+    mockedHasCachedDownload.mockImplementation(async (url) => {
+      return url === 'https://example.com/cached.ts';
+    });
+    mockedGetCachedDownloadSizeBytes.mockImplementation(async (url) => {
+      return url === 'https://example.com/cached.ts' ? 8 : 0;
+    });
+    mockedParseManifestForDownloadWithFallback.mockResolvedValue({
+      rootManifestUrl: 'https://example.com/root.m3u8',
+      playbackManifestUrl: 'https://example.com/root.m3u8',
+      resources: [
+        {
+          url: 'https://example.com/cached.ts',
+          type: 'segment',
+        },
+        {
+          url: 'https://example.com/fresh.ts',
+          type: 'segment',
+        },
+      ],
+      resourceUrls: [
+        'https://example.com/cached.ts',
+        'https://example.com/fresh.ts',
+      ],
+      isMasterPlaylist: false,
+    });
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      expect(url).toBe('https://example.com/fresh.ts');
+      return new Response(null, {
+        status: 200,
+        headers: {
+          'content-length': '12',
+          'content-type': 'video/mp2t',
+        },
+      });
+    });
+
+    const task = await downloadManager.startEpisodeDownload({
+      detail: buildSearchResult(),
+      episodeIndex: 0,
+    });
+
+    await waitFor(() => {
+      expect(useDownloadStore.getState().tasks[task.id]?.status).toBe('done');
+    });
+
+    expect(useDownloadStore.getState().tasks[task.id]).toMatchObject({
+      status: 'done',
+      totalResources: 2,
+      downloadedResources: 2,
+      progress: 100,
+      sizeBytes: 20,
+    });
+    expect(
+      useDownloadStore.getState().library[task.contentId]?.episodes[0]
+    ).toEqual(
+      expect.objectContaining({
+        sizeBytes: 20,
+        resourceCount: 2,
+      })
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 });

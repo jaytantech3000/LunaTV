@@ -24,10 +24,10 @@ use axum::{
     http::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
         header::{
-            ACCEPT_RANGES, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-            ACCEPT_ENCODING, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
-            CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE,
-            CONTENT_TYPE, ORIGIN, RANGE, REFERER, USER_AGENT,
+            ACCEPT_ENCODING, ACCEPT_RANGES, ACCESS_CONTROL_ALLOW_HEADERS,
+            ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+            ACCESS_CONTROL_EXPOSE_HEADERS, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING,
+            CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ORIGIN, RANGE, REFERER, USER_AGENT,
         },
     },
     middleware::{self, Next},
@@ -3029,11 +3029,8 @@ fn persist_admin_config_file_with_subscription(
 
     let persistence = state.load_admin_persistence()?;
     let (_, raw_config) = read_raw_service_config(&state.config_path)?;
-    let mut persistence = merge_admin_persistence_with_raw(
-        persistence,
-        config_file.to_string(),
-        &raw_config,
-    );
+    let mut persistence =
+        merge_admin_persistence_with_raw(persistence, config_file.to_string(), &raw_config);
     persistence.config.config_subscribtion.url = subscription_url;
     persistence.config.config_subscribtion.auto_update = auto_update;
     persistence.config.config_subscribtion.last_check = last_check;
@@ -4384,8 +4381,7 @@ fn normalize_sqlite_admin_persistence(
     raw_config: &RawServiceConfig,
 ) -> DesktopAdminPersistence {
     persistence.config.config_file = raw_contents;
-    persistence.config.site_config =
-        normalize_desktop_site_config(persistence.config.site_config);
+    persistence.config.site_config = normalize_desktop_site_config(persistence.config.site_config);
     let owner_username = persistence
         .config
         .user_config
@@ -4395,15 +4391,12 @@ fn normalize_sqlite_admin_persistence(
         .map(|user| user.username.clone())
         .or_else(|| normalize_optional_string(raw_config.auth.username.clone()))
         .unwrap_or_else(|| DEFAULT_DESKTOP_OWNER_USERNAME.to_string());
-    persistence.config.user_config = normalize_user_config(
-        persistence.config.user_config,
-        &owner_username,
-    );
+    persistence.config.user_config =
+        normalize_user_config(persistence.config.user_config, &owner_username);
     persistence.profile_sync_api_base_url =
         normalize_optional_string(persistence.profile_sync_api_base_url);
-    persistence.profile_sync_sync_domains = normalize_profile_sync_selected_domains(Some(
-        persistence.profile_sync_sync_domains,
-    ));
+    persistence.profile_sync_sync_domains =
+        normalize_profile_sync_selected_domains(Some(persistence.profile_sync_sync_domains));
     persistence
 }
 
@@ -6929,14 +6922,8 @@ async fn fetch_vod_proxy_upstream(
     upstream_url: &str,
     request_headers: &HeaderMap,
 ) -> AppResult<reqwest::Response> {
-    fetch_vod_proxy_upstream_with_encoding(
-        client,
-        api_site,
-        upstream_url,
-        request_headers,
-        false,
-    )
-    .await
+    fetch_vod_proxy_upstream_with_encoding(client, api_site, upstream_url, request_headers, false)
+        .await
 }
 
 async fn fetch_vod_proxy_upstream_with_identity_encoding(
@@ -8094,9 +8081,7 @@ mod tests {
         assert!(
             state
                 .sqlite
-                .read_app_metadata::<DesktopAdminPersistence>(
-                    ADMIN_PERSISTENCE_METADATA_KEY
-                )
+                .read_app_metadata::<DesktopAdminPersistence>(ADMIN_PERSISTENCE_METADATA_KEY)
                 .expect("read sqlite admin persistence")
                 .is_some()
         );
@@ -8116,10 +8101,7 @@ mod tests {
             .expect("load sqlite admin persistence");
 
         assert!(!legacy_path.exists());
-        assert_eq!(
-            persistence.config.site_config.site_name,
-            "SQLite LunaTV"
-        );
+        assert_eq!(persistence.config.site_config.site_name, "SQLite LunaTV");
     }
 
     #[tokio::test]
@@ -14451,6 +14433,74 @@ segment0.ts
                 .and_then(Value::as_u64),
             Some(5)
         );
+        let restored_status = snapshot_payload
+            .get("tasks")
+            .and_then(|tasks| tasks.get(task_id))
+            .and_then(|task| task.get("status"))
+            .and_then(Value::as_str);
+        assert!(
+            restored_status == Some("queued") || restored_status == Some("downloading"),
+            "interrupted downloads should auto-resume after restart, got {restored_status:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_runtime_keeps_explicitly_paused_tasks_across_restart() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {}
+            }),
+        );
+        let data_dir = temp_dir.path.join("data");
+        let sqlite_path = temp_dir.path.join("data/moontv.sqlite3");
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path.clone(),
+            data_dir.clone(),
+            sqlite_path.clone(),
+        ));
+        let task_id = "task-paused-keep";
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        build_download_runtime_task_payload(task_id, "paused").to_string(),
+                    ))
+                    .expect("download runtime create request"),
+            )
+            .await
+            .expect("download runtime create response");
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+
+        let restarted_app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            data_dir,
+            sqlite_path,
+        ));
+
+        let snapshot_response = restarted_app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/download-runtime/tasks")
+                    .body(Body::empty())
+                    .expect("download runtime snapshot request"),
+            )
+            .await
+            .expect("download runtime snapshot response");
+
+        assert_eq!(snapshot_response.status(), StatusCode::OK);
+        let snapshot_payload = read_json_body(snapshot_response).await;
         assert_eq!(
             snapshot_payload
                 .get("tasks")
@@ -15226,6 +15276,83 @@ segment0.ts
         );
 
         upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn download_runtime_upsert_keeps_live_downloading_task() {
+        let temp_dir = TestDir::new();
+        let config_path = write_test_config(
+            &temp_dir,
+            json!({
+              "api_site": {}
+            }),
+        );
+        let app = build_router(AppState::new(
+            DEFAULT_HOST.to_string(),
+            DEFAULT_PORT,
+            config_path,
+            temp_dir.path.join("data"),
+            temp_dir.path.join("data/moontv.sqlite3"),
+        ));
+        let task_id = "task-live-keep";
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        build_download_runtime_task_payload(task_id, "downloading").to_string(),
+                    ))
+                    .expect("download runtime create request"),
+            )
+            .await
+            .expect("download runtime create response");
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+
+        let mut stale_payload = build_download_runtime_task_payload(task_id, "paused");
+        stale_payload["progress"] = json!(0);
+        stale_payload["downloadedResources"] = json!(0);
+        stale_payload["sizeBytes"] = json!(0);
+        stale_payload["currentSizeBytes"] = json!(0);
+        stale_payload["searchTitle"] = json!("Updated Search");
+        stale_payload["updatedAt"] = json!(50);
+
+        let stale_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/download-runtime/tasks")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(stale_payload.to_string()))
+                    .expect("download runtime stale upsert request"),
+            )
+            .await
+            .expect("download runtime stale upsert response");
+
+        assert_eq!(stale_response.status(), StatusCode::OK);
+        let stale_snapshot = read_json_body(stale_response).await;
+        let task = stale_snapshot
+            .get("tasks")
+            .and_then(|tasks| tasks.get(task_id))
+            .expect("live task should remain");
+        assert_eq!(
+            task.get("status").and_then(Value::as_str),
+            Some("downloading")
+        );
+        assert_eq!(task.get("progress").and_then(Value::as_u64), Some(12));
+        assert_eq!(
+            task.get("downloadedResources").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            task.get("searchTitle").and_then(Value::as_str),
+            Some("Updated Search")
+        );
     }
 
     #[tokio::test]

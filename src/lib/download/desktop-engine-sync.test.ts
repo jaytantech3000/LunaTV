@@ -128,28 +128,28 @@ describe('desktop download engine sync', () => {
     expect(deleteDesktopDownloadTask).not.toHaveBeenCalled();
   });
 
-  it('updates settings, upserts changed tasks and removes stale remote tasks', async () => {
+  it('updates settings and upserts changed tasks without deleting engine-only tasks', async () => {
     const nextTask = buildDownloadTask({
       id: 'task-next',
       cacheIndexId: 'cache:task-next',
       status: 'paused',
       progress: 25,
     });
-    const staleTask = buildDownloadTask({
-      id: 'task-stale',
-      cacheIndexId: 'cache:task-stale',
+    const engineOnlyTask = buildDownloadTask({
+      id: 'task-engine-only',
+      cacheIndexId: 'cache:task-engine-only',
     });
     const initialSnapshot = {
       maxConcurrentTasks: 1,
       tasks: {
-        [staleTask.id]: staleTask,
+        [engineOnlyTask.id]: engineOnlyTask,
       },
       lastEvent: null,
     };
     const settingsSnapshot = {
       maxConcurrentTasks: 5,
       tasks: {
-        [staleTask.id]: staleTask,
+        [engineOnlyTask.id]: engineOnlyTask,
       },
       lastEvent: {
         type: 'maxConcurrentTasksChanged',
@@ -159,7 +159,7 @@ describe('desktop download engine sync', () => {
     const upsertSnapshot = {
       maxConcurrentTasks: 5,
       tasks: {
-        [staleTask.id]: staleTask,
+        [engineOnlyTask.id]: engineOnlyTask,
         [nextTask.id]: nextTask,
       },
       lastEvent: {
@@ -168,23 +168,11 @@ describe('desktop download engine sync', () => {
         status: nextTask.status,
       },
     };
-    const finalSnapshot = {
-      maxConcurrentTasks: 5,
-      tasks: {
-        [nextTask.id]: nextTask,
-      },
-      lastEvent: {
-        type: 'taskRemoved',
-        taskId: staleTask.id,
-        reason: 'deleted',
-      },
-    };
 
     (putDesktopDownloadEngineSettings as jest.Mock).mockResolvedValue(
       settingsSnapshot
     );
     (postDesktopDownloadTask as jest.Mock).mockResolvedValue(upsertSnapshot);
-    (deleteDesktopDownloadTask as jest.Mock).mockResolvedValue(finalSnapshot);
 
     await expect(
       syncDesktopDownloadEngineState(
@@ -196,13 +184,178 @@ describe('desktop download engine sync', () => {
         },
         initialSnapshot
       )
-    ).resolves.toEqual(finalSnapshot);
+    ).resolves.toEqual(upsertSnapshot);
 
     expect(getDesktopDownloadEngineSnapshot).not.toHaveBeenCalled();
     expect(putDesktopDownloadEngineSettings).toHaveBeenCalledWith({
       maxConcurrentTasks: 5,
     });
     expect(postDesktopDownloadTask).toHaveBeenCalledWith(nextTask);
+    expect(deleteDesktopDownloadTask).not.toHaveBeenCalled();
+  });
+
+  it('does not delete engine tasks when the local store is empty', async () => {
+    const engineTask = buildDownloadTask({
+      id: 'task-engine',
+      cacheIndexId: 'cache:task-engine',
+      status: 'downloading',
+    });
+    const engineSnapshot = {
+      maxConcurrentTasks: 3,
+      tasks: {
+        [engineTask.id]: engineTask,
+      },
+      lastEvent: null,
+    };
+
+    (getDesktopDownloadEngineSnapshot as jest.Mock).mockResolvedValue(
+      engineSnapshot
+    );
+
+    await expect(
+      syncDesktopDownloadEngineState({
+        maxConcurrentTasks: 3,
+        tasks: {},
+      })
+    ).resolves.toEqual(engineSnapshot);
+
+    expect(postDesktopDownloadTask).not.toHaveBeenCalled();
+    expect(deleteDesktopDownloadTask).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite a requeued task with a stale paused persist snapshot', async () => {
+    const liveTask = buildDownloadTask({
+      id: 'task-requeued',
+      cacheIndexId: 'cache:task-requeued',
+      status: 'queued',
+      progress: 40,
+      updatedAt: 20,
+    });
+    const stalePausedTask = buildDownloadTask({
+      id: liveTask.id,
+      cacheIndexId: liveTask.cacheIndexId,
+      status: 'paused',
+      progress: 0,
+      updatedAt: 5,
+    });
+    const engineSnapshot = {
+      maxConcurrentTasks: 3,
+      tasks: {
+        [liveTask.id]: liveTask,
+      },
+      lastEvent: null,
+    };
+
+    await expect(
+      syncDesktopDownloadEngineState(
+        {
+          maxConcurrentTasks: 3,
+          tasks: {
+            [stalePausedTask.id]: stalePausedTask,
+          },
+        },
+        engineSnapshot
+      )
+    ).resolves.toEqual(engineSnapshot);
+
+    expect(postDesktopDownloadTask).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite a live downloading task with a stale paused persist snapshot', async () => {
+    const liveTask = buildDownloadTask({
+      id: 'task-live',
+      cacheIndexId: 'cache:task-live',
+      status: 'downloading',
+      progress: 60,
+      updatedAt: 20,
+    });
+    const stalePausedTask = buildDownloadTask({
+      id: liveTask.id,
+      cacheIndexId: liveTask.cacheIndexId,
+      status: 'paused',
+      progress: 0,
+      updatedAt: 5,
+    });
+    const engineSnapshot = {
+      maxConcurrentTasks: 3,
+      tasks: {
+        [liveTask.id]: liveTask,
+      },
+      lastEvent: null,
+    };
+
+    await expect(
+      syncDesktopDownloadEngineState(
+        {
+          maxConcurrentTasks: 3,
+          tasks: {
+            [stalePausedTask.id]: stalePausedTask,
+          },
+        },
+        engineSnapshot
+      )
+    ).resolves.toEqual(engineSnapshot);
+
+    expect(postDesktopDownloadTask).not.toHaveBeenCalled();
+    expect(deleteDesktopDownloadTask).not.toHaveBeenCalled();
+  });
+
+  it('removes missing tasks only when explicitly requested against a trusted snapshot', async () => {
+    const nextTask = buildDownloadTask({
+      id: 'task-next',
+      cacheIndexId: 'cache:task-next',
+    });
+    const staleTask = buildDownloadTask({
+      id: 'task-stale',
+      cacheIndexId: 'cache:task-stale',
+    });
+    const initialSnapshot = {
+      maxConcurrentTasks: 3,
+      tasks: {
+        [staleTask.id]: staleTask,
+      },
+      lastEvent: null,
+    };
+    const upsertSnapshot = {
+      maxConcurrentTasks: 3,
+      tasks: {
+        [staleTask.id]: staleTask,
+        [nextTask.id]: nextTask,
+      },
+      lastEvent: {
+        type: 'taskUpserted',
+        taskId: nextTask.id,
+        status: nextTask.status,
+      },
+    };
+    const finalSnapshot = {
+      maxConcurrentTasks: 3,
+      tasks: {
+        [nextTask.id]: nextTask,
+      },
+      lastEvent: {
+        type: 'taskRemoved',
+        taskId: staleTask.id,
+        reason: 'deleted',
+      },
+    };
+
+    (postDesktopDownloadTask as jest.Mock).mockResolvedValue(upsertSnapshot);
+    (deleteDesktopDownloadTask as jest.Mock).mockResolvedValue(finalSnapshot);
+
+    await expect(
+      syncDesktopDownloadEngineState(
+        {
+          maxConcurrentTasks: 3,
+          tasks: {
+            [nextTask.id]: nextTask,
+          },
+        },
+        initialSnapshot,
+        { removeMissingTasks: true }
+      )
+    ).resolves.toEqual(finalSnapshot);
+
     expect(deleteDesktopDownloadTask).toHaveBeenCalledWith(staleTask.id);
   });
 

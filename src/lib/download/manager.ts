@@ -6,6 +6,7 @@ import { useDownloadStore } from '@/stores/downloadStore';
 
 import {
   deleteCachedDownloads,
+  getCachedDownloadSizeBytes,
   getOfflineDownloadSupportState,
   hasCachedDownload,
   putDownloadResponse,
@@ -1253,12 +1254,19 @@ class DownloadManager {
           ensureRunnerActive();
 
           if (isCached) {
+            const cachedSizeBytes = await getCachedDownloadSizeBytes(
+              resource.url
+            ).catch(() => 0);
             resolvedResources += 1;
+            if (cachedSizeBytes > 0) {
+              completedSizeBytes += cachedSizeBytes;
+              completedSizedResourcesCount += 1;
+            }
             if (
               resolvedResources === totalResources ||
               resolvedResources % 25 === 0
             ) {
-              flushProgress();
+              flushProgress(true);
             }
             continue;
           }

@@ -208,7 +208,7 @@ impl DesktopDownloadEngine {
             .map(|(task_id, task)| {
                 let mut normalized_task = task.normalize();
                 if normalized_task.status == DesktopDownloadTaskStatus::Downloading {
-                    normalized_task.status = DesktopDownloadTaskStatus::Paused;
+                    normalized_task.status = DesktopDownloadTaskStatus::Queued;
                 }
                 (task_id, normalized_task)
             })
@@ -247,7 +247,18 @@ impl DesktopDownloadEngine {
         task: DesktopDownloadTask,
     ) -> Result<&DesktopDownloadEngineSnapshot, String> {
         task.validate()?;
-        let normalized_task = task.normalize();
+        let mut normalized_task = task.normalize();
+        if let Some(existing_task) = self.snapshot.tasks.get(&normalized_task.id) {
+            if existing_task.status == DesktopDownloadTaskStatus::Downloading
+                && matches!(
+                    normalized_task.status,
+                    DesktopDownloadTaskStatus::Queued | DesktopDownloadTaskStatus::Paused
+                )
+            {
+                normalized_task =
+                    merge_live_download_task_metadata(existing_task.clone(), normalized_task);
+            }
+        }
         let task_id = normalized_task.id.clone();
         let status = normalized_task.status;
         self.snapshot.tasks.insert(task_id.clone(), normalized_task);
@@ -366,6 +377,52 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
     })
 }
 
+fn merge_live_download_task_metadata(
+    existing_task: DesktopDownloadTask,
+    incoming_task: DesktopDownloadTask,
+) -> DesktopDownloadTask {
+    DesktopDownloadTask {
+        id: existing_task.id,
+        content_id: incoming_task.content_id,
+        source: incoming_task.source,
+        source_name: incoming_task.source_name,
+        vod_id: incoming_task.vod_id,
+        episode_index: incoming_task.episode_index,
+        title: incoming_task.title,
+        search_title: incoming_task.search_title,
+        search_type: incoming_task.search_type,
+        poster: incoming_task.poster,
+        remarks: incoming_task.remarks,
+        year: incoming_task.year,
+        desc: incoming_task.desc,
+        type_name: incoming_task.type_name,
+        douban_id: incoming_task.douban_id,
+        episode_title: incoming_task.episode_title,
+        original_m3u8_url: incoming_task.original_m3u8_url,
+        entry_manifest_url: incoming_task.entry_manifest_url,
+        manifest_candidate_urls: if incoming_task.manifest_candidate_urls.is_empty() {
+            existing_task.manifest_candidate_urls
+        } else {
+            incoming_task.manifest_candidate_urls
+        },
+        playback_manifest_url: incoming_task
+            .playback_manifest_url
+            .or(existing_task.playback_manifest_url),
+        cache_index_id: existing_task.cache_index_id,
+        status: existing_task.status,
+        progress: existing_task.progress,
+        total_resources: existing_task.total_resources,
+        downloaded_resources: existing_task.downloaded_resources,
+        size_bytes: existing_task.size_bytes,
+        current_size_bytes: existing_task.current_size_bytes,
+        estimated_total_size_bytes: existing_task.estimated_total_size_bytes,
+        download_speed_bytes_per_second: existing_task.download_speed_bytes_per_second,
+        created_at: existing_task.created_at,
+        updated_at: existing_task.updated_at,
+        error_message: existing_task.error_message,
+    }
+}
+
 fn normalize_text_list(values: Vec<String>) -> Vec<String> {
     let mut normalized_values = Vec::new();
 
@@ -434,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_snapshot_pauses_in_progress_downloads_and_normalizes_fields() {
+    fn restore_snapshot_requeues_in_progress_downloads_and_normalizes_fields() {
         let mut tasks = BTreeMap::new();
         tasks.insert(
             "task:demo:1".to_string(),
@@ -453,11 +510,78 @@ mod tests {
             .expect("task should exist");
 
         assert_eq!(snapshot.max_concurrent_tasks, MAX_CONCURRENT_DOWNLOAD_TASKS);
-        assert_eq!(task.status, DesktopDownloadTaskStatus::Paused);
+        assert_eq!(task.status, DesktopDownloadTaskStatus::Queued);
         assert_eq!(task.progress, 100);
         assert_eq!(task.manifest_candidate_urls.len(), 1);
         assert_eq!(task.updated_at, 10);
         assert_eq!(task.error_message, None);
+    }
+
+    #[test]
+    fn restore_snapshot_keeps_explicitly_paused_tasks() {
+        let mut tasks = BTreeMap::new();
+        tasks.insert(
+            "task:demo:1".to_string(),
+            build_task(DesktopDownloadTaskStatus::Paused),
+        );
+        let engine = DesktopDownloadEngine::from_snapshot(DesktopDownloadEngineSnapshot {
+            max_concurrent_tasks: 3,
+            tasks,
+            last_event: None,
+        });
+
+        assert_eq!(
+            engine
+                .snapshot()
+                .tasks
+                .get("task:demo:1")
+                .expect("task should exist")
+                .status,
+            DesktopDownloadTaskStatus::Paused
+        );
+    }
+
+    #[test]
+    fn upsert_preserves_live_downloading_status_from_stale_queue_or_pause() {
+        let mut engine = DesktopDownloadEngine::new();
+        let mut live_task = build_task(DesktopDownloadTaskStatus::Downloading);
+        live_task.progress = 40;
+        live_task.downloaded_resources = 2;
+        live_task.size_bytes = 80;
+        live_task.current_size_bytes = 120;
+        live_task.updated_at = 40;
+        engine
+            .upsert_task(live_task.clone())
+            .expect("live task should upsert");
+
+        let mut stale_task = live_task.clone();
+        stale_task.status = DesktopDownloadTaskStatus::Paused;
+        stale_task.progress = 0;
+        stale_task.downloaded_resources = 0;
+        stale_task.size_bytes = 0;
+        stale_task.current_size_bytes = 0;
+        stale_task.search_title = Some("Updated Search".to_string());
+        stale_task.updated_at = 10;
+        engine
+            .upsert_task(stale_task)
+            .expect("stale pause should merge metadata only");
+
+        let snapshot_task = engine
+            .snapshot()
+            .tasks
+            .get("task:demo:1")
+            .cloned()
+            .expect("task should exist");
+        assert_eq!(snapshot_task.status, DesktopDownloadTaskStatus::Downloading);
+        assert_eq!(snapshot_task.progress, 40);
+        assert_eq!(snapshot_task.downloaded_resources, 2);
+        assert_eq!(snapshot_task.size_bytes, 80);
+        assert_eq!(snapshot_task.current_size_bytes, 120);
+        assert_eq!(snapshot_task.updated_at, 40);
+        assert_eq!(
+            snapshot_task.search_title.as_deref(),
+            Some("Updated Search")
+        );
     }
 
     #[test]

@@ -125,11 +125,9 @@ const MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES: usize = 2;
 const DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER: &str = "x-moontv-download-intent";
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT: &str = "background";
 const DOWNLOAD_RUNTIME_ERROR_STORAGE: &str = "download_runtime_storage_error";
-const DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED: &str =
-    "download_runtime_resource_fetch_failed";
+const DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED: &str = "download_runtime_resource_fetch_failed";
 const DOWNLOAD_RUNTIME_ERROR_CACHE_NOT_FOUND: &str = "download_runtime_cache_not_found";
-const DOWNLOAD_RUNTIME_ERROR_CACHE_BODY_NOT_FOUND: &str =
-    "download_runtime_cache_body_not_found";
+const DOWNLOAD_RUNTIME_ERROR_CACHE_BODY_NOT_FOUND: &str = "download_runtime_cache_body_not_found";
 const DOWNLOAD_RUNTIME_ERROR_MANIFEST_INVALID: &str = "download_runtime_manifest_invalid";
 const DOWNLOAD_RUNTIME_ERROR_MANIFEST_UPSTREAM: &str = "download_runtime_manifest_upstream";
 const DOWNLOAD_RUNTIME_ERROR_MANIFEST_TIMEOUT: &str = "download_runtime_manifest_timeout";
@@ -147,10 +145,7 @@ fn download_runtime_storage_error(message: impl Into<String>) -> AppError {
     AppError::internal_with_code(DOWNLOAD_RUNTIME_ERROR_STORAGE, message)
 }
 
-fn download_runtime_validation_error(
-    code: &'static str,
-    message: impl Into<String>,
-) -> AppError {
+fn download_runtime_validation_error(code: &'static str, message: impl Into<String>) -> AppError {
     AppError::bad_request_with_code(code, message)
 }
 
@@ -158,10 +153,7 @@ fn download_runtime_task_invalid(message: impl Into<String>) -> AppError {
     AppError::bad_request_with_code(DOWNLOAD_RUNTIME_ERROR_TASK_INVALID, message)
 }
 
-fn download_runtime_upstream_error(
-    code: &'static str,
-    message: impl Into<String>,
-) -> AppError {
+fn download_runtime_upstream_error(code: &'static str, message: impl Into<String>) -> AppError {
     AppError::with_code(StatusCode::BAD_GATEWAY, code, message)
 }
 
@@ -278,10 +270,9 @@ impl DownloadManifestError {
                 DOWNLOAD_RUNTIME_ERROR_MANIFEST_TIMEOUT,
                 self.message,
             ),
-            DownloadManifestErrorKind::Internal => AppError::internal_with_code(
-                DOWNLOAD_RUNTIME_ERROR_MANIFEST_INTERNAL,
-                self.message,
-            ),
+            DownloadManifestErrorKind::Internal => {
+                AppError::internal_with_code(DOWNLOAD_RUNTIME_ERROR_MANIFEST_INTERNAL, self.message)
+            }
         }
     }
 }
@@ -481,14 +472,14 @@ async fn fetch_runtime_download_response(
         DOWNLOAD_RESOURCE_FETCH_TIMEOUT_MS,
         true,
     )
-        .await
-        .map_err(|error| {
-            AppError::with_code(
-                StatusCode::BAD_GATEWAY,
-                DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED,
-                format!("failed to fetch download resource: {url} ({error})"),
-            )
-        })?;
+    .await
+    .map_err(|error| {
+        AppError::with_code(
+            StatusCode::BAD_GATEWAY,
+            DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED,
+            format!("failed to fetch download resource: {url} ({error})"),
+        )
+    })?;
     let response = if crate::upstream_response_uses_non_identity_encoding(&response) {
         send_download_request(
             &state.client,
@@ -916,19 +907,19 @@ async fn fetch_download_manifest_text_via_proxy(
     )
     .await
     .map_err(|error| DownloadManifestError::network(request_url, error.message))?;
-    let upstream_response = if crate::upstream_response_uses_non_identity_encoding(&upstream_response)
-    {
-        crate::fetch_vod_proxy_upstream(
-            &state.client,
-            &resolved.api_site,
-            &resolved.upstream_url,
-            &HeaderMap::new(),
-        )
-        .await
-        .map_err(|error| DownloadManifestError::network(request_url, error.message))?
-    } else {
-        upstream_response
-    };
+    let upstream_response =
+        if crate::upstream_response_uses_non_identity_encoding(&upstream_response) {
+            crate::fetch_vod_proxy_upstream(
+                &state.client,
+                &resolved.api_site,
+                &resolved.upstream_url,
+                &HeaderMap::new(),
+            )
+            .await
+            .map_err(|error| DownloadManifestError::network(request_url, error.message))?
+        } else {
+            upstream_response
+        };
     let status = upstream_response.status();
     let meta = crate::upstream_response_meta(&upstream_response);
     let manifest_content = upstream_response.text().await.map_err(|error| {
@@ -996,20 +987,20 @@ async fn fetch_download_manifest_text_direct(
         DOWNLOAD_MANIFEST_FETCH_TIMEOUT_MS,
         true,
     )
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                DownloadManifestError::timeout(
-                    request_url,
-                    format!("Failed to fetch manifest: {request_url} (timeout)"),
-                )
-            } else {
-                DownloadManifestError::network(
-                    request_url,
-                    format!("Failed to fetch manifest: {request_url} ({error})"),
-                )
-            }
-        })?;
+    .await
+    .map_err(|error| {
+        if error.is_timeout() {
+            DownloadManifestError::timeout(
+                request_url,
+                format!("Failed to fetch manifest: {request_url} (timeout)"),
+            )
+        } else {
+            DownloadManifestError::network(
+                request_url,
+                format!("Failed to fetch manifest: {request_url} ({error})"),
+            )
+        }
+    })?;
     let response = if crate::upstream_response_uses_non_identity_encoding(&response) {
         send_download_request(
             &state.client,
@@ -1700,10 +1691,45 @@ async fn activate_queued_download_runtime_task(state: &AppState, task_id: &str) 
             .lock()
             .await
             .remove(task_id);
+        rollback_download_runtime_activation(state, task_id).await;
         return Err(error);
     }
 
     Ok(true)
+}
+
+async fn rollback_download_runtime_activation(state: &AppState, task_id: &str) {
+    let snapshot = {
+        let mut engine = state.download_engine.write().await;
+        let Some(mut task) = engine.snapshot().tasks.get(task_id).cloned() else {
+            return;
+        };
+        if task.status != DesktopDownloadTaskStatus::Downloading {
+            return;
+        }
+
+        task.status = DesktopDownloadTaskStatus::Queued;
+        task.error_message = None;
+        task.download_speed_bytes_per_second = 0;
+        task.updated_at = crate::current_timestamp_ms();
+        match engine.upsert_task(task) {
+            Ok(snapshot) => snapshot.clone(),
+            Err(error) => {
+                warn!(
+                    "desktop download runtime failed to roll back task {} after activate persist error: {}",
+                    task_id, error
+                );
+                return;
+            }
+        }
+    };
+
+    if let Err(error) = persist_download_engine_snapshot(state, snapshot).await {
+        warn!(
+            "desktop download runtime failed to persist rolled-back task {}: {}",
+            task_id, error.message
+        );
+    }
 }
 
 async fn process_download_runtime_queue(state: AppState) -> AppResult<()> {
@@ -1827,11 +1853,6 @@ async fn execute_download_runtime_task(state: &AppState, task_id: &str) -> Resul
         task.manifest_candidate_urls = manifest_candidate_urls.clone();
         task.playback_manifest_url = Some(manifest_result.playback_manifest_url.clone());
         task.total_resources = manifest_result.resources.len() as u32;
-        task.downloaded_resources = 0;
-        task.progress = 0;
-        task.size_bytes = 0;
-        task.current_size_bytes = 0;
-        task.estimated_total_size_bytes = 0;
         task.download_speed_bytes_per_second = 0;
         task.error_message = None;
         task.updated_at = crate::current_timestamp_ms();
@@ -2158,13 +2179,12 @@ pub(crate) async fn delete_download_runtime_task(
 }
 
 fn require_download_runtime_url(value: Option<&str>) -> AppResult<String> {
-    let url = normalize_optional_text(value)
-        .ok_or_else(|| {
-            download_runtime_validation_error(
-                DOWNLOAD_RUNTIME_ERROR_MISSING_URL,
-                "missing download runtime url",
-            )
-        })?;
+    let url = normalize_optional_text(value).ok_or_else(|| {
+        download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_MISSING_URL,
+            "missing download runtime url",
+        )
+    })?;
     Url::parse(&url).map_err(|_| {
         download_runtime_validation_error(
             DOWNLOAD_RUNTIME_ERROR_INVALID_URL,
@@ -2175,13 +2195,12 @@ fn require_download_runtime_url(value: Option<&str>) -> AppResult<String> {
 }
 
 fn require_download_runtime_index_id(value: Option<&str>) -> AppResult<String> {
-    normalize_optional_string(value.map(|item| item.to_string()))
-        .ok_or_else(|| {
-            download_runtime_validation_error(
-                DOWNLOAD_RUNTIME_ERROR_MISSING_INDEX_ID,
-                "missing download runtime index id",
-            )
-        })
+    normalize_optional_string(value.map(|item| item.to_string())).ok_or_else(|| {
+        download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_MISSING_INDEX_ID,
+            "missing download runtime index id",
+        )
+    })
 }
 
 fn parse_download_runtime_status(headers: &HeaderMap) -> AppResult<StatusCode> {
@@ -2190,62 +2209,55 @@ fn parse_download_runtime_status(headers: &HeaderMap) -> AppResult<StatusCode> {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("200")
         .trim();
-    let numeric_status = raw_status
-        .parse::<u16>()
-        .map_err(|_| {
-            download_runtime_validation_error(
-                DOWNLOAD_RUNTIME_ERROR_INVALID_STATUS,
-                "invalid download runtime status",
-            )
-        })?;
-    StatusCode::from_u16(numeric_status)
-        .map_err(|_| {
-            download_runtime_validation_error(
-                DOWNLOAD_RUNTIME_ERROR_INVALID_STATUS,
-                "invalid download runtime status",
-            )
-        })
+    let numeric_status = raw_status.parse::<u16>().map_err(|_| {
+        download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_STATUS,
+            "invalid download runtime status",
+        )
+    })?;
+    StatusCode::from_u16(numeric_status).map_err(|_| {
+        download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_STATUS,
+            "invalid download runtime status",
+        )
+    })
 }
 
 fn normalize_download_runtime_resource_index(
     record: DesktopDownloadResourceIndexRecord,
 ) -> AppResult<DesktopDownloadResourceIndexRecord> {
     let id = require_download_runtime_index_id(Some(&record.id))?;
-    let owner_username = normalize_optional_string(Some(record.owner_username))
-        .ok_or_else(|| {
+    let owner_username =
+        normalize_optional_string(Some(record.owner_username)).ok_or_else(|| {
             download_runtime_validation_error(
                 DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
                 "missing download runtime ownerUsername",
             )
         })?;
-    let task_id = normalize_optional_string(Some(record.task_id))
-        .ok_or_else(|| {
-            download_runtime_validation_error(
-                DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
-                "missing download runtime taskId",
-            )
-        })?;
-    let content_id = normalize_optional_string(Some(record.content_id))
-        .ok_or_else(|| {
-            download_runtime_validation_error(
-                DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
-                "missing download runtime contentId",
-            )
-        })?;
-    let source = normalize_optional_string(Some(record.source))
-        .ok_or_else(|| {
-            download_runtime_validation_error(
-                DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
-                "missing download runtime source",
-            )
-        })?;
-    let vod_id = normalize_optional_string(Some(record.vod_id))
-        .ok_or_else(|| {
-            download_runtime_validation_error(
-                DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
-                "missing download runtime vodId",
-            )
-        })?;
+    let task_id = normalize_optional_string(Some(record.task_id)).ok_or_else(|| {
+        download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
+            "missing download runtime taskId",
+        )
+    })?;
+    let content_id = normalize_optional_string(Some(record.content_id)).ok_or_else(|| {
+        download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
+            "missing download runtime contentId",
+        )
+    })?;
+    let source = normalize_optional_string(Some(record.source)).ok_or_else(|| {
+        download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
+            "missing download runtime source",
+        )
+    })?;
+    let vod_id = normalize_optional_string(Some(record.vod_id)).ok_or_else(|| {
+        download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX,
+            "missing download runtime vodId",
+        )
+    })?;
     let urls = record
         .urls
         .into_iter()

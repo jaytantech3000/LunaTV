@@ -165,6 +165,45 @@ export async function matchDownloadResponse(
   return undefined;
 }
 
+export async function getCachedDownloadSizeBytes(
+  input: Request | string
+): Promise<number> {
+  if (isDesktopLocalDownloadRuntimeEnabled()) {
+    for (const candidate of buildCacheLookupCandidates(input)) {
+      const meta = await getDesktopDownloadCacheMeta(candidate).catch(
+        () => undefined
+      );
+      if (!meta?.exists) {
+        continue;
+      }
+
+      return typeof meta.sizeBytes === 'number' &&
+        Number.isFinite(meta.sizeBytes)
+        ? Math.max(0, meta.sizeBytes)
+        : 0;
+    }
+
+    return 0;
+  }
+
+  const matched = await matchDownloadResponse(input);
+  if (!matched) {
+    return 0;
+  }
+
+  const headerSize = Number(matched.headers.get('content-length') || 0);
+  if (Number.isFinite(headerSize) && headerSize > 0) {
+    return headerSize;
+  }
+
+  try {
+    const buffer = await matched.clone().arrayBuffer();
+    return buffer.byteLength;
+  } catch {
+    return 0;
+  }
+}
+
 export async function hasCachedDownload(
   input: Request | string
 ): Promise<boolean> {

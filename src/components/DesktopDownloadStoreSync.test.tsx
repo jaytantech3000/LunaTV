@@ -4,6 +4,12 @@ import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 
 import { useDownloadStore } from '@/stores/downloadStore';
 
+jest.mock('@/lib/auth', () => ({
+  getAuthInfoFromBrowserCookie: jest.fn(() => ({
+    username: 'monica',
+  })),
+}));
+
 jest.mock('@/lib/download/desktop-runtime', () => ({
   clearDesktopDownloadStoreSnapshot: jest.fn().mockResolvedValue(undefined),
   getDesktopDownloadEngineSnapshot: jest.fn(),
@@ -466,6 +472,58 @@ describe('DesktopDownloadStoreSync', () => {
         },
       })
     );
+  });
+
+  it('hydrates done engine tasks into the library when persist has no owner', async () => {
+    const { getAuthInfoFromBrowserCookie } = jest.requireMock('@/lib/auth') as {
+      getAuthInfoFromBrowserCookie: jest.Mock;
+    };
+    getAuthInfoFromBrowserCookie.mockReturnValueOnce(null);
+
+    const doneTask = buildDownloadTask({
+      id: 'demo:done:unowned',
+      contentId: 'demo:unowned',
+      cacheIndexId: 'cache:demo:unowned',
+      status: 'done',
+      progress: 100,
+      totalResources: 1,
+      downloadedResources: 1,
+      sizeBytes: 4096,
+      currentSizeBytes: 4096,
+      estimatedTotalSizeBytes: 4096,
+    });
+
+    useDownloadStore.setState({
+      hasHydrated: true,
+      maxConcurrentTasks: 3,
+      ownerUsername: null,
+      tasks: {},
+      library: {},
+    });
+
+    mockGetDesktopDownloadStoreSnapshot.mockResolvedValue(null);
+    mockGetDesktopDownloadEngineSnapshot.mockResolvedValue({
+      maxConcurrentTasks: 3,
+      tasks: {
+        [doneTask.id]: doneTask,
+      },
+      lastEvent: null,
+    });
+
+    render(<DesktopDownloadStoreSync />);
+
+    await waitFor(() => {
+      const libraryItem =
+        useDownloadStore.getState().library[doneTask.contentId];
+      expect(libraryItem).toEqual(
+        expect.objectContaining({
+          ownerUsername: 'desktop-local',
+          contentId: doneTask.contentId,
+          totalSizeBytes: 4096,
+        })
+      );
+      expect(useDownloadStore.getState().ownerUsername).toBe('desktop-local');
+    });
   });
 
   it('reloads the desktop snapshot after runtime refresh events to finish owner handoff', async () => {

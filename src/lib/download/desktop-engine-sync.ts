@@ -20,6 +20,29 @@ export interface DesktopDownloadEngineSyncState {
   tasks: Record<string, DownloadTask>;
 }
 
+export interface DesktopDownloadEngineSyncOptions {
+  removeMissingTasks?: boolean;
+}
+
+function shouldPreserveLiveDesktopDownloadTask(
+  existing?: DownloadTask,
+  incoming?: DownloadTask
+): boolean {
+  if (!existing || !incoming) {
+    return false;
+  }
+
+  if (existing.status === 'downloading') {
+    if (incoming.status === 'downloading' || incoming.status === 'done') {
+      return incoming.updatedAt < existing.updatedAt;
+    }
+
+    return true;
+  }
+
+  return existing.status === 'queued' && incoming.status === 'paused';
+}
+
 let desktopDownloadEngineSnapshotCache: DesktopDownloadEngineSnapshot | null =
   null;
 
@@ -229,8 +252,10 @@ export async function postDesktopDownloadEngineTaskBulkCommand(
 
 export async function syncDesktopDownloadEngineState(
   nextState: DesktopDownloadEngineSyncState,
-  previousSnapshot?: DesktopDownloadEngineSnapshot | null
+  previousSnapshot?: DesktopDownloadEngineSnapshot | null,
+  options: DesktopDownloadEngineSyncOptions = {}
 ): Promise<DesktopDownloadEngineSnapshot> {
+  const trustedEngineSnapshot = previousSnapshot ?? null;
   let snapshot = await resolveDesktopDownloadEngineSnapshot(previousSnapshot);
 
   if (snapshot.maxConcurrentTasks !== nextState.maxConcurrentTasks) {
@@ -240,13 +265,25 @@ export async function syncDesktopDownloadEngineState(
   }
 
   for (const task of Object.values(nextState.tasks)) {
-    if (areDesktopDownloadTasksEquivalent(task, snapshot.tasks[task.id])) {
+    const existingTask = snapshot.tasks[task.id];
+    if (areDesktopDownloadTasksEquivalent(task, existingTask)) {
+      continue;
+    }
+
+    if (shouldPreserveLiveDesktopDownloadTask(existingTask, task)) {
       continue;
     }
 
     snapshot = await mutateDesktopDownloadEngineSnapshot(() =>
       postDesktopDownloadTask(task)
     );
+  }
+
+  const canRemoveMissingTasks =
+    options.removeMissingTasks === true && trustedEngineSnapshot !== null;
+
+  if (!canRemoveMissingTasks) {
+    return snapshot;
   }
 
   const staleTaskIds = Object.keys(snapshot.tasks).filter(

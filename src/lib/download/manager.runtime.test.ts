@@ -14,6 +14,7 @@ jest.mock('@/lib/playback-source-client', () => ({
 
 jest.mock('./cache', () => ({
   deleteCachedDownloads: jest.fn().mockResolvedValue(undefined),
+  getCachedDownloadSizeBytes: jest.fn().mockResolvedValue(0),
   getOfflineDownloadSupportState: jest.fn(() => ({
     supported: true,
   })),

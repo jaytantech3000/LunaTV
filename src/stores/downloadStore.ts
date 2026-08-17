@@ -156,6 +156,34 @@ function normalizeTask(
   };
 }
 
+export function preferLiveDownloadTasks(
+  currentTasks: Record<string, DownloadTask>,
+  persistedTasks: Record<string, DownloadTask>
+): Record<string, DownloadTask> {
+  const nextTasks = { ...persistedTasks };
+
+  Object.entries(currentTasks).forEach(([taskId, currentTask]) => {
+    const persistedTask = persistedTasks[taskId];
+    if (!persistedTask) {
+      nextTasks[taskId] = currentTask;
+      return;
+    }
+
+    const persistLooksStale =
+      ((currentTask.status === 'downloading' ||
+        currentTask.status === 'queued') &&
+        persistedTask.status === 'paused') ||
+      (currentTask.status === 'downloading' &&
+        persistedTask.updatedAt < currentTask.updatedAt);
+
+    if (persistLooksStale) {
+      nextTasks[taskId] = currentTask;
+    }
+  });
+
+  return nextTasks;
+}
+
 function normalizeTasks(
   tasks?: Record<string, DownloadTask>,
   options?: {
@@ -311,8 +339,8 @@ export const useDownloadStore = create<DownloadStoreState>()(
         return {
           ...currentState,
           maxConcurrentTasks: nextState.maxConcurrentTasks,
-          ownerUsername: nextState.ownerUsername,
-          tasks: nextState.tasks,
+          ownerUsername: nextState.ownerUsername || currentState.ownerUsername,
+          tasks: preferLiveDownloadTasks(currentState.tasks, nextState.tasks),
           library: nextState.library,
         };
       },

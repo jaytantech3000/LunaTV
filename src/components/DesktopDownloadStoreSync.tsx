@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { DESKTOP_RUNTIME_UPDATED_EVENT } from '@/lib/desktop/runtime-config';
 import {
   areDesktopDownloadTaskCollectionsEquivalent,
@@ -117,6 +118,35 @@ function shouldHydrateDesktopPersistedSnapshot(
   );
 }
 
+const FALLBACK_DESKTOP_DOWNLOAD_OWNER = 'desktop-local';
+
+function resolveDownloadOwnerUsername(): string | null {
+  const storeOwner = useDownloadStore.getState().ownerUsername?.trim();
+  if (storeOwner) {
+    return storeOwner;
+  }
+
+  const cookieOwner = getAuthInfoFromBrowserCookie()?.username?.trim();
+  if (cookieOwner) {
+    return cookieOwner;
+  }
+
+  return null;
+}
+
+function ensureDownloadOwnerUsername(fallbackOwner?: string | null): string {
+  const resolvedOwner =
+    resolveDownloadOwnerUsername() ||
+    fallbackOwner?.trim() ||
+    FALLBACK_DESKTOP_DOWNLOAD_OWNER;
+
+  if (useDownloadStore.getState().ownerUsername !== resolvedOwner) {
+    useDownloadStore.getState().setOwnerUsername(resolvedOwner);
+  }
+
+  return resolvedOwner;
+}
+
 function shouldUpsertRuntimeLibraryItem(
   task: DownloadTask,
   ownerUsername: string,
@@ -166,13 +196,16 @@ function syncRuntimeCompletedTaskToLibrary(task: DownloadTask): void {
     return;
   }
 
-  const ownerUsername = useDownloadStore.getState().ownerUsername;
   const playbackManifestUrl = task.playbackManifestUrl?.trim();
-  if (!ownerUsername || !playbackManifestUrl) {
+  if (!playbackManifestUrl) {
     return;
   }
 
   const previousItem = useDownloadStore.getState().library[task.contentId];
+  const ownerUsername = ensureDownloadOwnerUsername(
+    previousItem?.ownerUsername
+  );
+
   if (!shouldUpsertRuntimeLibraryItem(task, ownerUsername, previousItem)) {
     return;
   }
