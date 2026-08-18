@@ -1,7 +1,73 @@
 {
-  "generatedAt": "2026-08-07T15:39:20.597Z",
+  "generatedAt": "2026-08-18T06:23:00.745Z",
   "repository": "jaytantech3000/LunaTV",
   "releases": [
+    {
+      "id": "371800120",
+      "tagName": "desktop-v200.0.1-beta.46",
+      "version": "200.0.1-beta.46",
+      "name": "LunaTV Desktop 200.0.1 Beta 46",
+      "prerelease": true,
+      "publishedAt": "2026-08-17T15:11:44Z",
+      "htmlUrl": "https://github.com/jaytantech3000/LunaTV/releases/tag/desktop-v200.0.1-beta.46",
+      "notes": "**Full Changelog**: https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.45...desktop-v200.0.1-beta.46",
+      "changeSummary": {
+        "en": {
+          "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.45...desktop-v200.0.1-beta.46",
+          "added": [],
+          "changed": [],
+          "fixed": [
+            "desktop: stabilize offline download sync and resume"
+          ],
+          "other": [
+            "ignore OpenNext and Wrangler local artifacts"
+          ]
+        },
+        "zh-CN": {
+          "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.45...desktop-v200.0.1-beta.46",
+          "added": [],
+          "changed": [],
+          "fixed": [
+            "桌面端：stabilize offline download sync and resume"
+          ],
+          "other": [
+            "ignore OpenNext and Wrangler local artifacts"
+          ]
+        }
+      },
+      "assets": [
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.46_windows-x64-setup.exe",
+          "platformLabel": "Windows x64",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.46/LunaTV.Desktop_200.0.1-beta.46_windows-x64-setup.exe",
+          "size": 32598411
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.46_macos-arm64.app.tar.gz",
+          "platformLabel": "macOS Apple Silicon",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.46/LunaTV.Desktop_200.0.1-beta.46_macos-arm64.app.tar.gz",
+          "size": 37903059
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.46_macos-arm64.dmg",
+          "platformLabel": "macOS Apple Silicon",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.46/LunaTV.Desktop_200.0.1-beta.46_macos-arm64.dmg",
+          "size": 38374412
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.46_macos-x64.app.tar.gz",
+          "platformLabel": "macOS Intel",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.46/LunaTV.Desktop_200.0.1-beta.46_macos-x64.app.tar.gz",
+          "size": 38528279
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.46_macos-x64.dmg",
+          "platformLabel": "macOS Intel",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.46/LunaTV.Desktop_200.0.1-beta.46_macos-x64.dmg",
+          "size": 39123040
+        }
+      ]
+    },
     {
       "id": "366836942",
       "tagName": "desktop-v200.0.1-beta.45",
@@ -3506,18 +3572,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.12...desktop-v200.0.0-beta.13",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: stabilize windows local service and updater UX"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.12...desktop-v200.0.0-beta.13",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：stabilize windows local service and updater UX"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3562,18 +3624,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.11...desktop-v200.0.0-beta.12",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: harden windows local service launch"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.11...desktop-v200.0.0-beta.12",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：harden windows local service launch"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3624,18 +3682,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.10...desktop-v200.0.0-beta.11",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: avoid stalled windows local service startup"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.10...desktop-v200.0.0-beta.11",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：避免 stalled windows local service startup"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3686,18 +3740,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.9...desktop-v200.0.0-beta.10",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: use raw tcp health checks for local service"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.9...desktop-v200.0.0-beta.10",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：use raw tcp health checks for local service"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3748,18 +3798,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.8...desktop-v200.0.0-beta.9",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: bypass proxy for local service health checks"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.8...desktop-v200.0.0-beta.9",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：bypass proxy for local service health checks"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3872,18 +3918,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.5...desktop-v200.0.0-beta.7",
           "added": [],
           "changed": [],
-          "fixed": [
-            "simplify desktop updater panel actions"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.5...desktop-v200.0.0-beta.7",
           "added": [],
           "changed": [],
-          "fixed": [
-            "simplify 桌面更新器 panel actions"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3934,18 +3976,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.5...desktop-v200.0.0-beta.6",
           "added": [],
           "changed": [],
-          "fixed": [
-            "simplify desktop updater panel actions"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.5...desktop-v200.0.0-beta.6",
           "added": [],
           "changed": [],
-          "fixed": [
-            "simplify 桌面更新器 panel actions"
-          ],
+          "fixed": [],
           "other": []
         }
       },
