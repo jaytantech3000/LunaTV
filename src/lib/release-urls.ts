@@ -8,6 +8,8 @@ import { getRuntimeConfig } from '@/lib/runtime-config';
 const DEFAULT_RELEASE_REPOSITORY = DESKTOP_RELEASE_REPOSITORY;
 const DEFAULT_RELEASE_BRANCH = DESKTOP_RELEASE_BRANCH;
 const DEFAULT_UPDATER_BRANCH = DESKTOP_UPDATER_BRANCH;
+const DEFAULT_DESKTOP_DOWNLOAD_SITE_URL =
+  'https://jaytantech3000.github.io/LunaTV/';
 const DESKTOP_RELEASE_PROXY_PATHS = {
   releases: '/api/desktop/releases',
   updaterVersion: '/api/desktop/updater/version',
@@ -90,6 +92,13 @@ export function getProjectPageUrl(repository = getReleaseRepository()) {
 
 export function getReleasePageUrl(repository = getReleaseRepository()) {
   return `${getProjectPageUrl(repository)}/releases`;
+}
+
+export function getDesktopDownloadSiteUrl() {
+  return (
+    readNextPublicEnvValue('NEXT_PUBLIC_DESKTOP_DOWNLOAD_SITE_URL') ||
+    DEFAULT_DESKTOP_DOWNLOAD_SITE_URL
+  );
 }
 
 export function getVersionFileUrl(

@@ -16,6 +16,7 @@ Local publishing no longer needs `gh release create` or a logged-in `gh` session
 
 ## Download Site
 
+- The desktop version panel links directly to `https://jaytantech3000.github.io/LunaTV/` as its download-platform entry.
 - Static source lives in `download-site/`
 - Build output lives in `download-site-dist/`
 - Release data is exported by `scripts/export-download-site-data.mjs`

@@ -59,6 +59,9 @@ jest.mock('@/lib/desktop-release', () => ({
 
 jest.mock('@/lib/release-urls', () => ({
   getChangelogFileUrl: jest.fn(() => 'https://example.com/CHANGELOG'),
+  getDesktopDownloadSiteUrl: jest.fn(
+    () => 'https://jaytantech3000.github.io/LunaTV/'
+  ),
 }));
 
 jest.mock('@/lib/open-external-url', () => ({
@@ -297,6 +300,18 @@ describe('VersionPanel', () => {
     await waitFor(() => {
       expect(mockOpenExternalUrl).toHaveBeenCalledWith(
         'https://example.com/releases'
+      );
+    });
+  });
+
+  it('opens the desktop download platform through the shared external-url helper', async () => {
+    render(<VersionPanel isOpen={true} onClose={jest.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '下载平台' }));
+
+    await waitFor(() => {
+      expect(mockOpenExternalUrl).toHaveBeenCalledWith(
+        'https://jaytantech3000.github.io/LunaTV/'
       );
     });
   });

@@ -48,7 +48,10 @@ import {
 } from '@/lib/changelog-locale';
 import { DESKTOP_UPSTREAM_VERSION } from '@/lib/desktop-release';
 import { openExternalUrl } from '@/lib/open-external-url';
-import { getChangelogFileUrl } from '@/lib/release-urls';
+import {
+  getChangelogFileUrl,
+  getDesktopDownloadSiteUrl,
+} from '@/lib/release-urls';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { acquireScrollLock } from '@/lib/scroll-lock';
 import { useAppUpdateState } from '@/lib/use-app-update';
@@ -101,6 +104,7 @@ type ReleaseNotesBlock =
 const INLINE_MARKDOWN_PATTERN =
   /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|\*\*([^*]+)\*\*|(https?:\/\/[^\s<]+)/g;
 const FULL_CHANGELOG_LINE_PATTERN = /^\**\s*full changelog\s*\**\s*:?\s*/i;
+const DESKTOP_DOWNLOAD_SITE_URL = getDesktopDownloadSiteUrl();
 
 const CHANGELOG_COPY: Record<
   ChangelogLocale,
@@ -970,6 +974,10 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
     void openExternalUrl(updateState.releasePageUrl);
   };
 
+  const openDownloadSite = () => {
+    void openExternalUrl(DESKTOP_DOWNLOAD_SITE_URL);
+  };
+
   const handleCheckUpdate = () => {
     void checkForAppUpdates({
       force: true,
@@ -1242,7 +1250,7 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                   </div>
                 ) : null}
 
-                <div className='flex flex-col gap-2 sm:flex-row'>
+                <div className='flex flex-col gap-2 sm:flex-row sm:flex-wrap'>
                   <AppButton
                     onClick={handleCheckUpdate}
                     disabled={updateState.isBusy}
@@ -1287,6 +1295,16 @@ export function VersionPanel({ isOpen, onClose }: VersionPanelProps) {
                         <CheckCircle2 className='h-4 w-4' />
                       )}
                       安装更新
+                    </AppButton>
+                  ) : null}
+
+                  {isDesktopTarget ? (
+                    <AppButton
+                      onClick={openDownloadSite}
+                      className='w-full sm:w-auto'
+                    >
+                      <ExternalLink className='h-4 w-4' />
+                      下载平台
                     </AppButton>
                   ) : null}
 

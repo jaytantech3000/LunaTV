@@ -1,4 +1,5 @@
 import {
+  getDesktopDownloadSiteUrl,
   getDesktopReleaseHistoryProxyUrl,
   getDesktopUpdaterManifestProxyUrl,
   getDesktopUpdaterVersionProxyUrl,
@@ -7,6 +8,12 @@ import {
 describe('release url helpers', () => {
   afterEach(() => {
     delete window.RUNTIME_CONFIG;
+  });
+
+  it('uses the public desktop download site by default', () => {
+    expect(getDesktopDownloadSiteUrl()).toBe(
+      'https://jaytantech3000.github.io/LunaTV/'
+    );
   });
 
   it('builds desktop release proxy urls from runtime config', () => {
