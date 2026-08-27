@@ -8,6 +8,7 @@ import type { AppUpdateState } from '@/lib/app-update';
 const mockInstallDesktopReleaseVersion = jest.fn();
 const mockOpenExternalUrl = jest.fn();
 const mockFetchDesktopReleaseHistory = jest.fn();
+const mockFetchDesktopReleaseCompare = jest.fn();
 const mockIsDesktopTauriRuntimeAvailable = jest.fn(() => true);
 
 jest.mock('@/lib/app-update', () => ({
@@ -24,6 +25,8 @@ jest.mock('@/lib/open-external-url', () => ({
 }));
 
 jest.mock('@/lib/desktop/tauri-client', () => ({
+  fetchDesktopReleaseCompare: (...args: unknown[]) =>
+    mockFetchDesktopReleaseCompare(...args),
   fetchDesktopReleaseHistory: (...args: unknown[]) =>
     mockFetchDesktopReleaseHistory(...args),
   isDesktopTauriRuntimeAvailable: () => mockIsDesktopTauriRuntimeAvailable(),
@@ -236,12 +239,14 @@ describe('DesktopReleaseHistoryDialog', () => {
     localStorage.clear();
     mockInstallDesktopReleaseVersion.mockReset();
     mockOpenExternalUrl.mockReset();
+    mockFetchDesktopReleaseCompare.mockReset();
     mockFetchDesktopReleaseHistory.mockReset();
     mockIsDesktopTauriRuntimeAvailable.mockReset();
     mockOpenExternalUrl.mockResolvedValue(undefined);
     mockFetchDesktopReleaseHistory.mockResolvedValue(
       createDesktopReleaseHistoryItems()
     );
+    mockFetchDesktopReleaseCompare.mockResolvedValue({ commits: [] });
     mockIsDesktopTauriRuntimeAvailable.mockReturnValue(true);
     delete window.RUNTIME_CONFIG;
     global.fetch = jest.fn(async () =>
@@ -465,23 +470,20 @@ describe('DesktopReleaseHistoryDialog', () => {
         manifestUrl: 'https://example.com/beta-16/latest.json',
       },
     ]);
-    const fetchMock = jest.fn(async () =>
-      createJsonFetchResponse({
-        commits: [
-          {
-            commit: {
-              message: 'feat: compact desktop release cards',
-            },
+    mockFetchDesktopReleaseCompare.mockResolvedValueOnce({
+      commits: [
+        {
+          commit: {
+            message: 'feat: compact desktop release cards',
           },
-          {
-            commit: {
-              message: 'fix: avoid stale release compare cache',
-            },
+        },
+        {
+          commit: {
+            message: 'fix: avoid stale release compare cache',
           },
-        ],
-      })
-    );
-    global.fetch = fetchMock as unknown as typeof fetch;
+        },
+      ],
+    });
 
     renderDialog({
       currentVersion: '200.0.0-beta.15',
@@ -499,15 +501,61 @@ describe('DesktopReleaseHistoryDialog', () => {
       expect(releaseCard).toHaveTextContent('避免旧的版本对比缓存');
     });
 
-    expect(global.fetch).toHaveBeenCalledWith(
-      'https://api.github.com/repos/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.15...desktop-v200.0.0-beta.16',
-      expect.objectContaining({
-        cache: 'no-store',
-        headers: expect.objectContaining({
-          Accept: 'application/vnd.github+json',
-        }),
+    expect(mockFetchDesktopReleaseCompare).toHaveBeenCalledWith(compareUrl);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('caps compare prefetches so release history stays below the GitHub hourly limit', async () => {
+    window.RUNTIME_CONFIG = {
+      APP_TARGET: 'desktop',
+    };
+    mockFetchDesktopReleaseHistory.mockResolvedValueOnce(
+      Array.from({ length: 30 }, (_, index) => {
+        const buildNumber = 30 - index;
+        const compareUrl = `https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.2-beta.${
+          buildNumber - 1
+        }...desktop-v200.0.2-beta.${buildNumber}`;
+        return {
+          id: `beta-${buildNumber}`,
+          version: `200.0.2-beta.${buildNumber}`,
+          tagName: `desktop-v200.0.2-beta.${buildNumber}`,
+          name: `Beta ${buildNumber}`,
+          notes: `**Full Changelog**: ${compareUrl}`,
+          prerelease: true,
+          publishedAt: `2026-08-${String(buildNumber).padStart(
+            2,
+            '0'
+          )}T00:00:00Z`,
+          htmlUrl: `https://example.com/beta-${buildNumber}`,
+          manifestUrl: `https://example.com/beta-${buildNumber}/latest.json`,
+        };
       })
     );
+    mockFetchDesktopReleaseCompare.mockResolvedValue({ commits: [] });
+
+    const view = renderDialog({
+      currentVersion: '200.0.2-beta.1',
+      changelogLocale: 'zh-CN',
+    });
+
+    await waitFor(() => {
+      expect(mockFetchDesktopReleaseCompare).toHaveBeenCalledTimes(24);
+    });
+
+    view.rerender(
+      <DesktopReleaseHistoryDialog
+        isOpen={true}
+        onClose={jest.fn()}
+        currentVersion='200.0.2-beta.1'
+        updateState={createUpdateState()}
+        changelogLocale='en'
+      />
+    );
+    await waitFor(() => {
+      expect(screen.getByText('Version history')).toBeInTheDocument();
+    });
+    expect(mockFetchDesktopReleaseCompare).toHaveBeenCalledTimes(24);
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('rebuilds compare summaries when switching changelog locales', async () => {
@@ -529,18 +577,15 @@ describe('DesktopReleaseHistoryDialog', () => {
         manifestUrl: 'https://example.com/beta-8/latest.json',
       },
     ]);
-    const fetchMock = jest.fn(async () =>
-      createJsonFetchResponse({
-        commits: [
-          {
-            commit: {
-              message: 'fix(desktop): restore beta release summaries',
-            },
+    mockFetchDesktopReleaseCompare.mockResolvedValueOnce({
+      commits: [
+        {
+          commit: {
+            message: 'fix(desktop): restore beta release summaries',
           },
-        ],
-      })
-    );
-    global.fetch = fetchMock as unknown as typeof fetch;
+        },
+      ],
+    });
 
     const view = renderDialog({
       currentVersion: '200.0.1-beta.7',
@@ -571,7 +616,7 @@ describe('DesktopReleaseHistoryDialog', () => {
       );
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(mockFetchDesktopReleaseCompare).toHaveBeenCalledTimes(1);
   });
 
   it('prefers localized changelog summaries when a release version matches the local changelog', async () => {
@@ -635,23 +680,20 @@ describe('DesktopReleaseHistoryDialog', () => {
         manifestUrl: 'https://example.com/beta-5/latest.json',
       },
     ]);
-    const fetchMock = jest.fn(async () =>
-      createJsonFetchResponse({
-        commits: [
-          {
-            commit: {
-              message: 'feat: add bilingual beta release summaries',
-            },
+    mockFetchDesktopReleaseCompare.mockResolvedValueOnce({
+      commits: [
+        {
+          commit: {
+            message: 'feat: add bilingual beta release summaries',
           },
-          {
-            commit: {
-              message: 'fix: avoid startup follow record toast',
-            },
+        },
+        {
+          commit: {
+            message: 'fix: avoid startup follow record toast',
           },
-        ],
-      })
-    );
-    global.fetch = fetchMock as unknown as typeof fetch;
+        },
+      ],
+    });
 
     renderDialog({
       currentVersion: '200.0.1-beta.4',
@@ -670,15 +712,8 @@ describe('DesktopReleaseHistoryDialog', () => {
       );
     });
 
-    expect(global.fetch).toHaveBeenCalledWith(
-      'https://api.github.com/repos/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.4...desktop-v200.0.1-beta.5',
-      expect.objectContaining({
-        cache: 'no-store',
-        headers: expect.objectContaining({
-          Accept: 'application/vnd.github+json',
-        }),
-      })
-    );
+    expect(mockFetchDesktopReleaseCompare).toHaveBeenCalledWith(compareUrl);
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('forwards changelog locale switch events', async () => {

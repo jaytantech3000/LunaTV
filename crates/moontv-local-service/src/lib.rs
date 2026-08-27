@@ -2378,6 +2378,7 @@ fn requires_local_service_access_token(path: &str) -> bool {
             | "/api/vod-prefetch/session/advance"
             | "/api/vod-prefetch/session/retry"
     ) || path.starts_with("/api/admin/")
+        || path.starts_with("/api/download-runtime/")
         || matches!(
             path,
             "/api/playrecords"
@@ -8240,6 +8241,34 @@ mod tests {
             .await
             .expect("unauthorized VOD prefetch response");
         assert_eq!(unauthorized_prefetch.status(), StatusCode::UNAUTHORIZED);
+
+        let unauthorized_download_runtime = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/download-runtime/tasks")
+                    .body(Body::empty())
+                    .expect("unauthorized download runtime request"),
+            )
+            .await
+            .expect("unauthorized download runtime response");
+        assert_eq!(
+            unauthorized_download_runtime.status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let authorized_download_runtime = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/download-runtime/tasks")
+                    .header("X-MoonTV-Local-Token", "test-access-token")
+                    .body(Body::empty())
+                    .expect("authorized download runtime request"),
+            )
+            .await
+            .expect("authorized download runtime response");
+        assert_eq!(authorized_download_runtime.status(), StatusCode::OK);
 
         let authorized = app
             .oneshot(

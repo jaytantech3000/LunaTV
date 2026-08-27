@@ -7,7 +7,7 @@
 - `dev-plan/desktop-foundation/desktop-rust-evolution-execution-plan.md`
 - `dev-plan/desktop-foundation/desktop-profile-sync-execution-plan.md`
 
-> 最新进展（2026-06-25）：
+> 最新进展（2026-08-27）：
 >
 > - Phase 3 的 profile / sync 主线验收现已满足：`moontv-profile`、`moontv-sync`、local-service profile facade 与桌面前端 profile SDK 都已落地，并已通过 `desktop-profile-sync-execution-plan.md` 收口到完成态。
 > - 桌面本地五个 profile 域已经从浏览器 `localStorage` 真源切到 Rust 本地 store，并带有旧数据兼容迁移。
@@ -27,11 +27,13 @@
 > - Phase 2B 继续补上了图片代理入口：local service 新增 `/api/image-proxy`（兼容 `/image-proxy`），桌面端 `buildApiUrl('/image-proxy')` 在 `server` 模式下已可直接由 Rust 本地服务代抓 Douban 图片，不再只依赖 Next route。
 > - 桌面管理后台与导入导出链路也已统一复用本地服务协议：`/api/admin/config`、`/api/admin/config_subscription/fetch`、`/api/admin/data_migration/*` 等入口均由 `moontv-local-service` 提供，桌面前端通过共享 transport 命中本地服务，而不是直接依赖 Next route 实现。
 > - Phase 1 已从“下载引擎骨架”推进到“桌面 runtime 主执行器闭环”：`moontv-download` crate、`/api/download-runtime/tasks*` 协议、SQLite `app_metadata` 快照，以及 Rust worker 调度 / 执行链路都已落地。
-> - Phase 1 的下载状态面也已从“启动拉取 + 命令桥接”推进到“Rust 持续推送 + 前端实时订阅”：local service 新增 `/api/download-runtime/tasks/stream`，桌面 store 会直接消费 Rust download engine snapshot；SSE 不可用或断流时，桌面 SDK 会回退到 `/api/download-runtime/tasks` 轻量轮询。
+> - Phase 1 的下载状态面由 Rust snapshot 作为真源；桌面 SDK 固定通过带本地访问令牌的 `/api/download-runtime/tasks` 轻量轮询更新 store，避免原生 `EventSource` 无法附加鉴权 Header 而形成未保护入口。
 > - Phase 1 又补齐了一组关键控制面：local service 现已新增 `GET /api/download-runtime/tasks/:taskId`、`POST /api/download-runtime/tasks/:taskId/retry` 与 `POST /api/download-runtime/tasks/bulk`；桌面 `manager` 在 runtime 模式下也已把单任务 `error -> retry` 与 `pauseAll / resumeAll / cancelAll` 切到这组新接口。
 > - Phase 1 在桌面 runtime 模式下已由 Rust 接手 queued 任务调度、manifest candidate fallback、`/media/vod/*` 资源抓取与 cache/resource-index 写入；前端 `src/lib/download/manager.ts` 不再启动浏览器侧任务 runner。
 > - Phase 1 的灰度 / 回退窗口已完成历史任务并在迁移稳定后删除：桌面构建不再暴露 TS 兼容执行器开关或 legacy 下载脚本，下载设置页也不再展示 compat 模式，桌面下载主路径固定为 Rust 本地运行时。
 > - Phase 1 也已开始统一 download runtime 的结构化错误：local service HTTP 错误会返回稳定 `code`，桌面 SDK 会抛出 `DownloadDomainError`，`manager` 与 runtime 镜像同步不再依赖中文字符串猜测。
+> - Phase 1 的命令一致性与访问边界已补齐：任务创建、暂停、恢复、重试、取消和删除均等待 Rust 返回确认 snapshot 后才更新前端状态；失败会沿现有 UI 错误路径显式返回。整个 `/api/download-runtime/*` 前缀要求 Tauri 生成的本地访问令牌。
+> - Phase 4 的 release compare 详情也已收回 Tauri / Rust 网络边界；前端只预取最近 24 个 compare、并发上限为 3，并按 compare URL 缓存原始提交数据，语言切换不再重复请求 GitHub。
 > - `src/components/DesktopDownloadStoreSync.tsx` 现在也会把 runtime `done` 任务回填到 `library`，避免已完成任务只停留在 snapshot 而不生成离线片库条目。
 > - 基于 2026-06-25 的代码审计，Phase 1-4 的验收标准均已满足，M1-M4 里程碑已达成；本文转入完成态。Phase 5 继续作为后续演进时的边界约束，而不再是本轮 Rust 化的阻塞项。
 
@@ -242,9 +244,9 @@ Rust Shared Crates
 - `src/lib/download/desktop-runtime.ts` 已补齐对应的桌面 SDK 封装，前端可以开始逐步改为消费这组新边界。
 - `src/components/DesktopDownloadStoreSync.tsx` 已开始把当前 TS 下载 store 中的 `tasks` / `maxConcurrentTasks` 镜像回 Rust download engine，形成“TS 执行 + Rust 状态面并行”的过渡态。
 - `src/lib/download/manager.ts` 的 `pause / resume / retry / cancel`、`pauseAll / resumeAll / cancelAll` 与 `src/components/DownloadsClient.tsx` 的并发设置调整，已经开始显式命中 Rust runtime 命令边界；其中 runtime 模式下的批量控制已优先走 `/api/download-runtime/tasks/bulk`，镜像同步现在主要承担兜底与快照修复角色。
-- `src/lib/download/manager.ts` 现在也开始在任务创建、重新排队、运行中进度刷新、完成与失败这些生命周期节点上显式 upsert Rust runtime task snapshot，而不再只依赖 `DesktopDownloadStoreSync.tsx` 对整个 store 做旁路镜像。
+- `src/lib/download/manager.ts` 在任务创建、重新排队和控制命令上等待 Rust runtime 返回确认 snapshot 后再更新前端 store；运行中进度、完成与失败由 Rust worker snapshot 回流，不再由前端乐观镜像。
 - 桌面启动时也开始优先读取 Rust download engine snapshot 回填任务状态与并发设置；这意味着 Rust 状态面已经不只是写入目标，也开始成为桌面下载 UI 的读端输入。
-- `crates/moontv-local-service` 现已新增 `/api/download-runtime/tasks/stream` SSE 订阅入口；`src/components/DesktopDownloadStoreSync.tsx` 会持续消费 Rust snapshot，把任务状态 / 进度实时合并回前端 store，同时避免把订阅回流再次镜像写回 Rust。
+- `crates/moontv-local-service` 保留 `/api/download-runtime/tasks/stream` SSE 能力，但桌面前端使用带本地访问令牌的 snapshot 轮询，把任务状态 / 进度持续合并回 store；整个 `/api/download-runtime/*` 前缀统一经过访问令牌校验。
 - `src/lib/download/session.ts` 的 purge / logout 清理现在也会显式命中 `DELETE /api/download-runtime/tasks`，把 Rust runtime 的任务快照与前端内存缓存一起清空，避免旧任务继续依赖页面存活期间的整库镜像才被被动删掉。
 - `src/lib/download/client.ts` 现已作为统一桌面下载入口落地，`DownloadsClient`、`CurrentEpisodeDownloadControl`、`BatchEpisodeDownloadDialog` 与会话清理路径都改为消费这层 facade，而不再直接 import `downloadManager`。
 - ESLint 现已禁止 `src/app/*` 与 `src/components/*` 在非测试代码中直接依赖 `@/lib/download/manager`，防止桌面下载 UI 再次绕过统一下载 SDK 回连 TS 执行器细节。
@@ -368,6 +370,7 @@ Rust Shared Crates
 
 - 桌面模式下的远程 `VERSION.txt` 检查与 GitHub desktop release history 获取，不再优先依赖前端 `fetch`，而是通过 Tauri 命令转到 Rust 执行。
 - release history 的桌面主路径已经进一步收口：release 过滤、`latest.json` manifest 解析和版本排序都在 Rust 完成，前端不再在桌面模式下重复做这一层归一化。
+- release compare 详情同样通过 Tauri 命令由 Rust 请求 GitHub；前端最多预取最近 24 个版本、并发上限为 3，并缓存语言无关的原始 compare payload，切换中英文时只重新生成本地摘要。
 - `DesktopSettingsSection` 已通过 Tauri IPC 统一承接本地服务启停、配置读写、诊断与诊断日志导出 / 上传；这组桌面后台能力不再需要浏览器侧调用 Next route 兜底。
 - `DataMigration`、管理页配置订阅拉取，以及其它 `/api/admin/*` 桌面后台请求都通过共享 transport 命中 `API_BASE_URL`；桌面 dev/build 默认把该地址指向 `http://127.0.0.1:8787`，因此实际后端入口已经是 `moontv-local-service` 而不是 `src/app/api/*`。
 - Web 路径、浏览器预览态与桌面 release proxy 地址仍保留兼容 fallback，但它们只服务于 Web / preview / 远程代理场景；不再构成桌面版后台主路径依赖。

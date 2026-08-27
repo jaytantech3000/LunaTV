@@ -13,13 +13,13 @@ export interface DesktopReleaseChangeSummary {
   other: string[];
 }
 
-interface GithubCompareCommitPayload {
+export interface GithubCompareCommitPayload {
   commit?: {
     message?: string | null;
   } | null;
 }
 
-interface GithubComparePayload {
+export interface GithubComparePayload {
   commits?: GithubCompareCommitPayload[] | null;
 }
 
@@ -56,7 +56,15 @@ const EXACT_RELEASE_CHANGE_TRANSLATIONS_ZH = new Map([
   ['avoid stale release compare cache', '避免旧的版本对比缓存'],
   ['avoid startup follow record toast', '避免启动时出现追更记录错误提示'],
   ['compact desktop release cards', '精简桌面版本卡片'],
+  [
+    'ignore opennext and wrangler local artifacts',
+    '忽略 OpenNext 与 Wrangler 本地产物',
+  ],
   ['restore beta release summaries', '恢复 Beta 版本摘要'],
+  [
+    'stabilize offline download sync and resume',
+    '提升离线下载同步与恢复稳定性',
+  ],
   ['startup local auth flows', '启动阶段的本地登录流程'],
 ]);
 
@@ -358,6 +366,41 @@ function classifyReleaseChangeText(text: string): DesktopReleaseChangeBucket {
   return 'changed';
 }
 
+function buildGenericChineseChangeText(
+  type: string | null,
+  bucket: DesktopReleaseChangeBucket
+): string {
+  switch (type) {
+    case 'feat':
+      return '新增相关能力';
+    case 'fix':
+      return '修复相关问题';
+    case 'perf':
+      return '优化运行性能';
+    case 'refactor':
+      return '重构相关实现';
+    case 'style':
+      return '调整界面与代码样式';
+    case 'docs':
+      return '更新项目文档';
+    case 'test':
+      return '补充测试覆盖';
+    case 'build':
+    case 'ci':
+      return '调整构建与发布流程';
+    case 'chore':
+      return '工程维护与配置调整';
+    case 'revert':
+      return '回退相关变更';
+    default:
+      return bucket === 'fixed'
+        ? '修复相关问题'
+        : bucket === 'added'
+        ? '新增相关能力'
+        : '调整相关实现';
+  }
+}
+
 function summarizeCommitMessage(
   message: string,
   locale: ChangelogLocale
@@ -372,9 +415,14 @@ function summarizeCommitMessage(
 
   const conventionalCommitMatch = subject.match(CONVENTIONAL_COMMIT_PATTERN);
   if (!conventionalCommitMatch) {
+    const bucket = classifyReleaseChangeText(subject);
+    const localizedText = localizeReleaseChangeText(subject, locale);
     return {
-      bucket: classifyReleaseChangeText(subject),
-      text: localizeReleaseChangeText(subject, locale),
+      bucket,
+      text:
+        locale === 'zh-CN' && !containsCjkText(localizedText)
+          ? buildGenericChineseChangeText(null, bucket)
+          : localizedText,
     };
   }
 
@@ -382,10 +430,14 @@ function summarizeCommitMessage(
   const type = rawType.toLowerCase();
   const description = rawDescription.trim();
   const localizedScope = localizeReleaseChangeScope(rawScope?.trim(), locale);
-  const prefix = localizedScope
+  const safeLocalizedScope =
+    locale === 'zh-CN' && localizedScope && !containsCjkText(localizedScope)
+      ? null
+      : localizedScope;
+  const prefix = safeLocalizedScope
     ? locale === 'en'
-      ? `${localizedScope}: `
-      : `${localizedScope}：`
+      ? `${safeLocalizedScope}: `
+      : `${safeLocalizedScope}：`
     : '';
 
   let bucket: DesktopReleaseChangeBucket = 'other';
@@ -414,9 +466,14 @@ function summarizeCommitMessage(
       break;
   }
 
+  const localizedDescription = localizeReleaseChangeText(description, locale);
   return {
     bucket,
-    text: `${prefix}${localizeReleaseChangeText(description, locale)}`,
+    text: `${prefix}${
+      locale === 'zh-CN' && !containsCjkText(localizedDescription)
+        ? buildGenericChineseChangeText(type, bucket)
+        : localizedDescription
+    }`,
   };
 }
 
@@ -628,20 +685,26 @@ export function buildDesktopReleaseChangeSummaryFromNotes(
     if (listItemMatch) {
       const itemText = listItemMatch[1].trim();
       const bucket = currentBucket || classifyReleaseChangeText(itemText);
+      const localizedText = localizeReleaseChangeText(itemText, locale);
       pushUniqueChange(
         summary,
         bucket,
-        localizeReleaseChangeText(itemText, locale)
+        locale === 'zh-CN' && !containsCjkText(localizedText)
+          ? buildGenericChineseChangeText(null, bucket)
+          : localizedText
       );
       continue;
     }
 
     if (!GITHUB_COMPARE_URL_PATTERN.test(line)) {
       const bucket = currentBucket || classifyReleaseChangeText(line);
+      const localizedText = localizeReleaseChangeText(line, locale);
       pushUniqueChange(
         summary,
         bucket,
-        localizeReleaseChangeText(line, locale)
+        locale === 'zh-CN' && !containsCjkText(localizedText)
+          ? buildGenericChineseChangeText(null, bucket)
+          : localizedText
       );
     }
   }
@@ -711,9 +774,24 @@ export async function fetchDesktopReleaseChangeSummaryFromCompareUrl(
     locale?: ChangelogLocale;
   } = {}
 ): Promise<DesktopReleaseChangeSummary | null> {
+  const payload = await fetchDesktopReleaseComparePayloadFromGithub(
+    compareUrl,
+    options.signal
+  );
+  return buildDesktopReleaseChangeSummaryFromComparePayload(
+    payload,
+    compareUrl,
+    options.locale ?? 'en'
+  );
+}
+
+export async function fetchDesktopReleaseComparePayloadFromGithub(
+  compareUrl: string,
+  signal?: AbortSignal
+): Promise<GithubComparePayload> {
   const apiUrl = getDesktopReleaseCompareApiUrl(compareUrl);
   if (!apiUrl) {
-    return null;
+    throw new Error('Invalid GitHub release compare URL.');
   }
 
   const response = await fetch(apiUrl, {
@@ -721,7 +799,7 @@ export async function fetchDesktopReleaseChangeSummaryFromCompareUrl(
     headers: {
       Accept: 'application/vnd.github+json',
     },
-    signal: options.signal,
+    signal,
   });
 
   if (!response.ok) {
@@ -730,10 +808,5 @@ export async function fetchDesktopReleaseChangeSummaryFromCompareUrl(
     );
   }
 
-  const payload = (await response.json()) as GithubComparePayload;
-  return buildDesktopReleaseChangeSummaryFromComparePayload(
-    payload,
-    compareUrl,
-    options.locale ?? 'en'
-  );
+  return (await response.json()) as GithubComparePayload;
 }

@@ -199,6 +199,21 @@ struct GithubReleasePayload {
     assets: Option<Vec<GithubReleaseAssetPayload>>,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct GithubCompareCommitDetailPayload {
+    message: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct GithubCompareCommitPayload {
+    commit: Option<GithubCompareCommitDetailPayload>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct GithubComparePayload {
+    commits: Option<Vec<GithubCompareCommitPayload>>,
+}
+
 #[derive(Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct DesktopReleaseHistoryItem {
@@ -733,6 +748,15 @@ async fn fetch_desktop_release_history(
 }
 
 #[tauri::command]
+async fn fetch_desktop_release_compare(
+    compare_url: String,
+) -> Result<GithubComparePayload, String> {
+    fetch_desktop_release_compare_impl(compare_url)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn download_desktop_release(
     app: AppHandle,
     state: State<'_, DesktopRuntimeState>,
@@ -855,6 +879,7 @@ pub fn run() {
             check_desktop_update,
             fetch_latest_remote_version,
             fetch_desktop_release_history,
+            fetch_desktop_release_compare,
             download_desktop_release,
             download_latest_desktop_update,
             install_downloaded_desktop_update,
@@ -4716,6 +4741,33 @@ fn build_release_history_api_url(repository: &str) -> String {
     format!("{GITHUB_API_BASE_URL}/repos/{repository}/releases?per_page=100")
 }
 
+fn build_release_compare_api_url(compare_url: &str) -> Result<Url> {
+    let parsed_url = Url::parse(compare_url.trim()).context("invalid release compare URL")?;
+    if parsed_url.scheme() != "https" || parsed_url.host_str() != Some("github.com") {
+        anyhow::bail!("release compare URL must use https://github.com");
+    }
+
+    let path_segments = parsed_url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+    if path_segments.len() < 4 || path_segments[2] != "compare" {
+        anyhow::bail!("invalid GitHub release compare URL");
+    }
+
+    let owner = path_segments[0];
+    let repository = path_segments[1];
+    let range = path_segments[3..].join("/");
+    if owner.is_empty() || repository.is_empty() || range.is_empty() {
+        anyhow::bail!("invalid GitHub release compare URL");
+    }
+
+    Url::parse(&format!(
+        "{GITHUB_API_BASE_URL}/repos/{owner}/{repository}/compare/{range}"
+    ))
+    .context("failed to build GitHub release compare API URL")
+}
+
 fn normalize_optional_trimmed_string(value: Option<&str>) -> Option<String> {
     let normalized = value?.trim();
     if normalized.is_empty() {
@@ -4945,6 +4997,37 @@ async fn fetch_desktop_release_history_impl(
         .context("unexpected desktop release payload")?;
 
     Ok(normalize_desktop_release_history(payload))
+}
+
+async fn fetch_desktop_release_compare_impl(compare_url: String) -> Result<GithubComparePayload> {
+    let api_url = build_release_compare_api_url(&compare_url)?;
+    let client = reqwest::Client::builder()
+        .timeout(DESKTOP_UPDATER_NETWORK_TIMEOUT)
+        .build()
+        .context("failed to build desktop release compare client")?;
+    let response = client
+        .get(api_url)
+        .header(ACCEPT, "application/vnd.github+json")
+        .header(reqwest::header::USER_AGENT, DESKTOP_UPDATER_USER_AGENT)
+        .send()
+        .await
+        .context("failed to fetch desktop release compare")?;
+    let status = response.status();
+    let body_text = response
+        .text()
+        .await
+        .context("failed to read desktop release compare response")?;
+
+    if !status.is_success() {
+        anyhow::bail!(
+            "GitHub API error {}: {}",
+            status,
+            read_github_api_error_message(&body_text)
+                .unwrap_or_else(|| build_github_api_error_fallback(&body_text, status))
+        );
+    }
+
+    serde_json::from_str(&body_text).context("unexpected desktop release compare payload")
 }
 
 async fn load_latest_desktop_update(app: &AppHandle) -> Result<Option<DesktopUpdateHandle>> {
@@ -5482,7 +5565,8 @@ mod tests {
         LOCAL_SERVICE_HEALTH_READ_TIMEOUT, LocalProfileSyncStatus, LocalServiceHealthCheck,
         LocalServiceStartupFailure, PortOccupant, SidecarBinaryVersionProbe,
         SidecarTrialResult, append_cache_busting_query,
-        build_profile_sync_status_diagnostic_detail, collect_diagnostics_error_text,
+        build_profile_sync_status_diagnostic_detail, build_release_compare_api_url,
+        collect_diagnostics_error_text,
         describe_primary_port_issue, ensure_default_desktop_owner_auth_value,
         extract_desktop_release_version, extract_profile_sync_api_base_url,
         fetch_local_profile_sync_status, find_desktop_release_manifest_url, local_service_health_check,
@@ -5509,6 +5593,30 @@ mod tests {
         assert_ne!(
             state.local_service_access_token,
             state.local_service_admin_capability
+        );
+    }
+
+    #[test]
+    fn accepts_only_https_github_release_compare_urls() {
+        assert_eq!(
+            build_release_compare_api_url(
+                "https://github.com/jaytantech3000/LunaTV/compare/desktop-v1...desktop-v2"
+            )
+            .expect("valid GitHub compare URL")
+            .as_str(),
+            "https://api.github.com/repos/jaytantech3000/LunaTV/compare/desktop-v1...desktop-v2"
+        );
+        assert!(
+            build_release_compare_api_url(
+                "https://example.com/jaytantech3000/LunaTV/compare/a...b"
+            )
+            .is_err()
+        );
+        assert!(
+            build_release_compare_api_url(
+                "http://github.com/jaytantech3000/LunaTV/compare/a...b"
+            )
+            .is_err()
         );
     }
 

@@ -593,71 +593,10 @@ export function subscribeToDesktopDownloadEngineSnapshots({
   onError,
 }: DesktopDownloadEngineSnapshotSubscriptionOptions): () => void {
   ensureDesktopLocalDownloadRuntime();
-
-  if (typeof EventSource === 'undefined') {
-    return subscribeToDesktopDownloadEngineSnapshotsByPolling({
-      onSnapshot,
-      onError,
-    });
-  }
-
-  const eventSource = new EventSource(
-    buildDesktopDownloadRuntimeUrl('/tasks/stream')
-  );
-  let unsubscribePolling: (() => void) | null = null;
-  let active = true;
-
-  const switchToPolling = (error: Error) => {
-    if (!active || unsubscribePolling) {
-      return;
-    }
-
-    active = false;
-    eventSource.onmessage = null;
-    eventSource.onerror = null;
-    eventSource.close();
-    onError?.(error);
-    unsubscribePolling = subscribeToDesktopDownloadEngineSnapshotsByPolling({
-      onSnapshot,
-      onError,
-    });
-  };
-
-  eventSource.onmessage = (event) => {
-    if (!event.data) {
-      return;
-    }
-
-    try {
-      onSnapshot(JSON.parse(event.data) as DesktopDownloadEngineSnapshot);
-    } catch (error) {
-      onError?.(
-        error instanceof Error
-          ? error
-          : new Error(
-              'Failed to parse a desktop download runtime snapshot event.'
-            )
-      );
-    }
-  };
-
-  eventSource.onerror = () => {
-    switchToPolling(
-      new Error('Desktop download runtime snapshot stream disconnected.')
-    );
-  };
-
-  return () => {
-    if (unsubscribePolling) {
-      unsubscribePolling();
-      return;
-    }
-
-    active = false;
-    eventSource.onmessage = null;
-    eventSource.onerror = null;
-    eventSource.close();
-  };
+  return subscribeToDesktopDownloadEngineSnapshotsByPolling({
+    onSnapshot,
+    onError,
+  });
 }
 
 export async function putDesktopDownloadEngineSettings(

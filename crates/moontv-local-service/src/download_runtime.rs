@@ -2185,12 +2185,20 @@ fn require_download_runtime_url(value: Option<&str>) -> AppResult<String> {
             "missing download runtime url",
         )
     })?;
-    Url::parse(&url).map_err(|_| {
+    let parsed_url = Url::parse(&url).map_err(|_| {
         download_runtime_validation_error(
             DOWNLOAD_RUNTIME_ERROR_INVALID_URL,
             "invalid download runtime url",
         )
     })?;
+
+    if !matches!(parsed_url.scheme(), "http" | "https") {
+        return Err(download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_URL,
+            "download runtime url must use http or https",
+        ));
+    }
+
     Ok(url)
 }
 

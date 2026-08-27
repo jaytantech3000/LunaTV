@@ -1,4 +1,5 @@
 import type { DesktopReleaseHistoryItem } from '@/lib/desktop-release-history';
+import type { GithubComparePayload } from '@/lib/desktop-release-notes';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 
 import { loadTauriCoreModule } from './tauri-runtime';
@@ -232,6 +233,17 @@ export function fetchDesktopReleaseHistory(
     'fetch_desktop_release_history',
     {
       repository,
+    }
+  );
+}
+
+export function fetchDesktopReleaseCompare(
+  compareUrl: string
+): Promise<GithubComparePayload> {
+  return invokeDesktopCommand<GithubComparePayload>(
+    'fetch_desktop_release_compare',
+    {
+      compareUrl,
     }
   );
 }

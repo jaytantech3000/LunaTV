@@ -104,28 +104,8 @@ const MAX_RESOURCE_DOWNLOAD_RETRIES = 2;
 const RESOURCE_DOWNLOAD_TIMEOUT_MS = 45_000;
 const RESOURCE_CACHE_LOOKUP_TIMEOUT_MS = 8_000;
 const PROGRESS_FLUSH_INTERVAL_MS = 250;
-const DESKTOP_RUNTIME_TASK_UPSERT_DEBOUNCE_MS = 200;
 const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
-
-interface TaskRuntimeSyncOptions {
-  syncDesktopRuntime?: 'upsert' | 'none';
-  immediate?: boolean;
-}
-
-const pendingDesktopTaskUpsertTimers = new Map<
-  string,
-  ReturnType<typeof setTimeout>
->();
-
-function cloneDownloadTaskForRuntime(task: DownloadTask): DownloadTask {
-  return {
-    ...task,
-    manifestCandidateUrls: task.manifestCandidateUrls
-      ? [...task.manifestCandidateUrls]
-      : undefined,
-  };
-}
 
 function getCurrentOwnerUsername(): string {
   const username = getAuthInfoFromBrowserCookie()?.username?.trim();
@@ -180,104 +160,31 @@ function calculateProgress(
   );
 }
 
-function syncDesktopDownloadEngineCommand(
-  operation: () => Promise<unknown>
-): void {
-  if (!isDesktopLocalDownloadRuntimeEnabled()) {
-    return;
-  }
-
-  void operation().catch(() => undefined);
-}
-
-function clearScheduledDesktopTaskUpsert(taskId: string): void {
-  const timer = pendingDesktopTaskUpsertTimers.get(taskId);
-  if (!timer) {
-    return;
-  }
-
-  clearTimeout(timer);
-  pendingDesktopTaskUpsertTimers.delete(taskId);
-}
-
-function clearAllScheduledDesktopTaskUpserts(): void {
-  pendingDesktopTaskUpsertTimers.forEach((timer) => {
-    clearTimeout(timer);
-  });
-  pendingDesktopTaskUpsertTimers.clear();
-}
-
-function scheduleDesktopTaskUpsert(
-  task: DownloadTask,
-  options: {
-    immediate?: boolean;
-  } = {}
-): void {
-  if (!isDesktopLocalDownloadRuntimeEnabled()) {
-    return;
-  }
-
-  clearScheduledDesktopTaskUpsert(task.id);
-  const runtimeTask = cloneDownloadTaskForRuntime(task);
-  const submit = () => {
-    pendingDesktopTaskUpsertTimers.delete(runtimeTask.id);
-    void upsertDesktopDownloadEngineTask(runtimeTask).catch(() => undefined);
-  };
-
-  if (options.immediate) {
-    submit();
-    return;
-  }
-
-  const timer = setTimeout(() => {
-    submit();
-  }, DESKTOP_RUNTIME_TASK_UPSERT_DEBOUNCE_MS);
-
-  pendingDesktopTaskUpsertTimers.set(runtimeTask.id, timer);
-}
-
-function upsertTask(
-  task: DownloadTask,
-  options: TaskRuntimeSyncOptions = {}
-): void {
+function upsertTask(task: DownloadTask): void {
   useDownloadStore.getState().upsertTask(task);
-  if (options.syncDesktopRuntime !== 'none') {
-    scheduleDesktopTaskUpsert(task, {
-      immediate: options.immediate,
-    });
-  }
 }
 
 function patchTask(
   taskId: string,
-  updater: (task: DownloadTask) => DownloadTask,
-  options: TaskRuntimeSyncOptions = {}
+  updater: (task: DownloadTask) => DownloadTask
 ): void {
-  let nextTask: DownloadTask | undefined;
   useDownloadStore.getState().patchTask(taskId, (task) => {
     if (!task) {
       return undefined;
     }
 
-    nextTask = updater(task);
-    return nextTask;
+    return updater(task);
   });
-
-  if (!nextTask) {
-    clearScheduledDesktopTaskUpsert(taskId);
-    return;
-  }
-
-  if (options.syncDesktopRuntime !== 'none') {
-    scheduleDesktopTaskUpsert(nextTask, {
-      immediate: options.immediate,
-    });
-  }
 }
 
 function removeTask(taskId: string): void {
-  clearScheduledDesktopTaskUpsert(taskId);
   useDownloadStore.getState().removeTask(taskId);
+}
+
+function applyDesktopDownloadEngineSnapshot(
+  snapshot: Awaited<ReturnType<typeof upsertDesktopDownloadEngineTask>>
+): void {
+  useDownloadStore.getState().replaceRuntimeState(snapshot);
 }
 
 function mergeManifestCandidateUrls(...candidateLists: string[][]): string[] {
@@ -660,38 +567,28 @@ class DownloadManager {
   private setTaskStatus(
     taskId: string,
     status: DownloadTaskStatus,
-    extra: Partial<DownloadTask> = {},
-    options: TaskRuntimeSyncOptions = {}
+    extra: Partial<DownloadTask> = {}
   ): void {
-    patchTask(
-      taskId,
-      (task) => ({
-        ...task,
-        ...(status === 'downloading'
-          ? {}
-          : {
-              currentSizeBytes:
-                typeof extra.currentSizeBytes === 'number'
-                  ? extra.currentSizeBytes
-                  : typeof extra.sizeBytes === 'number'
-                  ? extra.sizeBytes
-                  : task.sizeBytes,
-              downloadSpeedBytesPerSecond:
-                typeof extra.downloadSpeedBytesPerSecond === 'number'
-                  ? extra.downloadSpeedBytesPerSecond
-                  : 0,
-            }),
-        ...extra,
-        status,
-        updatedAt: now(),
-      }),
-      {
-        syncDesktopRuntime: options.syncDesktopRuntime ?? 'upsert',
-        immediate:
-          options.immediate ??
-          (status === 'done' || status === 'error' || status === 'queued'),
-      }
-    );
+    patchTask(taskId, (task) => ({
+      ...task,
+      ...(status === 'downloading'
+        ? {}
+        : {
+            currentSizeBytes:
+              typeof extra.currentSizeBytes === 'number'
+                ? extra.currentSizeBytes
+                : typeof extra.sizeBytes === 'number'
+                ? extra.sizeBytes
+                : task.sizeBytes,
+            downloadSpeedBytesPerSecond:
+              typeof extra.downloadSpeedBytesPerSecond === 'number'
+                ? extra.downloadSpeedBytesPerSecond
+                : 0,
+          }),
+      ...extra,
+      status,
+      updatedAt: now(),
+    }));
   }
 
   private async ensureStoragePersistence(): Promise<void> {
@@ -806,7 +703,10 @@ class DownloadManager {
   }
 
   private queueCacheCleanup(cacheIndexId: string): void {
-    void this.ensureCleanupJob(cacheIndexId).catch(() => undefined);
+    void this.ensureCleanupJob(cacheIndexId).catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error('清理离线下载缓存失败:', error);
+    });
   }
 
   private async removeTaskResources(
@@ -838,9 +738,9 @@ class DownloadManager {
     });
   }
 
-  private queueEpisodeDownload(
+  private async queueEpisodeDownload(
     params: StartEpisodeDownloadParams
-  ): QueueEpisodeDownloadResult {
+  ): Promise<QueueEpisodeDownloadResult> {
     this.ensureSupport();
     const ownerUsername = this.ensureOwner();
     const task = buildInitialTask(
@@ -895,27 +795,34 @@ class DownloadManager {
         pickPreferredOptionalTextValue(existingTask.remarks, task.remarks) !==
           existingTask.remarks
       ) {
-        patchTask(existingTask.id, (currentTask) => ({
-          ...currentTask,
+        const updatedTask: DownloadTask = {
+          ...existingTask,
           manifestCandidateUrls: mergedManifestCandidateUrls,
           searchTitle: pickPreferredOptionalTextValue(
-            currentTask.searchTitle,
+            existingTask.searchTitle,
             task.searchTitle
           ),
           searchType: pickPreferredOptionalTextValue(
-            currentTask.searchType,
+            existingTask.searchType,
             task.searchType
           ),
           remarks: pickPreferredOptionalTextValue(
-            currentTask.remarks,
+            existingTask.remarks,
             task.remarks
           ),
           updatedAt: now(),
-        }));
+        };
+
+        if (isDesktopLocalDownloadRuntimeEnabled()) {
+          const snapshot = await upsertDesktopDownloadEngineTask(updatedTask);
+          applyDesktopDownloadEngineSnapshot(snapshot);
+        } else {
+          upsertTask(updatedTask);
+        }
       }
 
       return {
-        task: existingTask,
+        task: this.getTask(existingTask.id) || existingTask,
         queued: false,
       };
     }
@@ -923,7 +830,9 @@ class DownloadManager {
     useDownloadStore.getState().setOwnerUsername(ownerUsername);
 
     if (existingTask && ['paused', 'error'].includes(existingTask.status)) {
-      this.setTaskStatus(existingTask.id, 'queued', {
+      const requeuedTask: DownloadTask = {
+        ...existingTask,
+        status: 'queued',
         errorMessage: undefined,
         manifestCandidateUrls: mergeManifestCandidateUrls(
           existingTask.manifestCandidateUrls || [existingTask.entryManifestUrl],
@@ -941,35 +850,31 @@ class DownloadManager {
           existingTask.remarks,
           task.remarks
         ),
-      });
+        updatedAt: now(),
+      };
+
+      if (isDesktopLocalDownloadRuntimeEnabled()) {
+        const snapshot = await upsertDesktopDownloadEngineTask(requeuedTask);
+        applyDesktopDownloadEngineSnapshot(snapshot);
+      } else {
+        upsertTask(requeuedTask);
+      }
+
       return {
-        task: this.getTask(existingTask.id) || {
-          ...existingTask,
-          status: 'queued',
-          errorMessage: undefined,
-          searchTitle: pickPreferredOptionalTextValue(
-            existingTask.searchTitle,
-            task.searchTitle
-          ),
-          searchType: pickPreferredOptionalTextValue(
-            existingTask.searchType,
-            task.searchType
-          ),
-          remarks: pickPreferredOptionalTextValue(
-            existingTask.remarks,
-            task.remarks
-          ),
-        },
+        task: this.getTask(existingTask.id) || requeuedTask,
         queued: true,
       };
     }
 
-    upsertTask(nextTask, {
-      syncDesktopRuntime: 'upsert',
-      immediate: true,
-    });
+    if (isDesktopLocalDownloadRuntimeEnabled()) {
+      const snapshot = await upsertDesktopDownloadEngineTask(nextTask);
+      applyDesktopDownloadEngineSnapshot(snapshot);
+    } else {
+      upsertTask(nextTask);
+    }
+
     return {
-      task: nextTask,
+      task: this.getTask(nextTask.id) || nextTask,
       queued: true,
     };
   }
@@ -1439,7 +1344,7 @@ class DownloadManager {
     await this.waitForTaskCleanup(
       buildDownloadTaskId(contentId, params.episodeIndex)
     );
-    const result = this.queueEpisodeDownload(params);
+    const result = await this.queueEpisodeDownload(params);
     this.schedulePendingTasks();
     return result.task;
   }
@@ -1516,7 +1421,7 @@ class DownloadManager {
           );
         }
 
-        const result = this.queueEpisodeDownload({
+        const result = await this.queueEpisodeDownload({
           detail: params.detail,
           episodeIndex,
           availableSources: params.availableSources,
@@ -1576,10 +1481,12 @@ class DownloadManager {
     const content = library[contentId];
 
     if (!content) {
-      removeTask(taskId);
-      syncDesktopDownloadEngineCommand(() =>
-        deleteMirroredDesktopDownloadTask(taskId)
-      );
+      if (isDesktopLocalDownloadRuntimeEnabled()) {
+        const snapshot = await deleteMirroredDesktopDownloadTask(taskId);
+        applyDesktopDownloadEngineSnapshot(snapshot);
+      } else {
+        removeTask(taskId);
+      }
       return;
     }
 
@@ -1590,10 +1497,12 @@ class DownloadManager {
       (episode) => episode.episodeIndex !== episodeIndex
     );
 
-    removeTask(taskId);
-    syncDesktopDownloadEngineCommand(() =>
-      deleteMirroredDesktopDownloadTask(taskId)
-    );
+    if (isDesktopLocalDownloadRuntimeEnabled()) {
+      const snapshot = await deleteMirroredDesktopDownloadTask(taskId);
+      applyDesktopDownloadEngineSnapshot(snapshot);
+    } else {
+      removeTask(taskId);
+    }
 
     if (targetEpisode) {
       await this.removeTaskResources(targetEpisode);
@@ -1621,27 +1530,22 @@ class DownloadManager {
       return;
     }
 
+    if (isDesktopLocalDownloadRuntimeEnabled()) {
+      const snapshot = await pauseDesktopDownloadEngineTask(taskId);
+      applyDesktopDownloadEngineSnapshot(snapshot);
+      return;
+    }
+
     const runner = this.runners.get(taskId);
     if (runner) {
       runner.mode = 'paused';
       runner.controllers.forEach((controller) => controller.abort());
     }
 
-    clearScheduledDesktopTaskUpsert(taskId);
-    this.setTaskStatus(
-      taskId,
-      'paused',
-      {
-        errorMessage: undefined,
-      },
-      {
-        syncDesktopRuntime: 'none',
-      }
-    );
+    this.setTaskStatus(taskId, 'paused', {
+      errorMessage: undefined,
+    });
     this.schedulePendingTasks();
-    syncDesktopDownloadEngineCommand(() =>
-      pauseDesktopDownloadEngineTask(taskId)
-    );
   }
 
   async resumeTask(taskId: string): Promise<void> {
@@ -1654,23 +1558,18 @@ class DownloadManager {
       return;
     }
 
-    clearScheduledDesktopTaskUpsert(taskId);
-    this.setTaskStatus(
-      taskId,
-      'queued',
-      {
-        errorMessage: undefined,
-      },
-      {
-        syncDesktopRuntime: 'none',
-      }
-    );
-    this.schedulePendingTasks();
-    syncDesktopDownloadEngineCommand(() =>
-      task.status === 'error'
+    if (isDesktopLocalDownloadRuntimeEnabled()) {
+      const snapshot = await (task.status === 'error'
         ? retryDesktopDownloadEngineTask(taskId)
-        : resumeDesktopDownloadEngineTask(taskId)
-    );
+        : resumeDesktopDownloadEngineTask(taskId));
+      applyDesktopDownloadEngineSnapshot(snapshot);
+      return;
+    }
+
+    this.setTaskStatus(taskId, 'queued', {
+      errorMessage: undefined,
+    });
+    this.schedulePendingTasks();
   }
 
   refreshScheduling(): void {
@@ -1693,29 +1592,11 @@ class DownloadManager {
       return;
     }
 
-    candidateTaskIds.forEach((taskId) => {
-      const runner = this.runners.get(taskId);
-      if (runner) {
-        runner.mode = 'paused';
-        runner.controllers.forEach((controller) => controller.abort());
-      }
-
-      clearScheduledDesktopTaskUpsert(taskId);
-      this.setTaskStatus(
-        taskId,
-        'paused',
-        {
-          errorMessage: undefined,
-        },
-        {
-          syncDesktopRuntime: 'none',
-        }
-      );
-    });
-    this.schedulePendingTasks();
-    syncDesktopDownloadEngineCommand(() =>
-      postDesktopDownloadEngineTaskBulkCommand('pause', candidateTaskIds)
+    const snapshot = await postDesktopDownloadEngineTaskBulkCommand(
+      'pause',
+      candidateTaskIds
     );
+    applyDesktopDownloadEngineSnapshot(snapshot);
   }
 
   async resumeAllTasks(): Promise<void> {
@@ -1741,34 +1622,35 @@ class DownloadManager {
       } else {
         pausedTaskIds.push(task.id);
       }
+    });
 
-      clearScheduledDesktopTaskUpsert(task.id);
-      this.setTaskStatus(
-        task.id,
-        'queued',
-        {
-          errorMessage: undefined,
-        },
-        {
-          syncDesktopRuntime: 'none',
-        }
+    if (pausedTaskIds.length > 0) {
+      const snapshot = await postDesktopDownloadEngineTaskBulkCommand(
+        'resume',
+        pausedTaskIds
       );
-    });
-    this.schedulePendingTasks();
-    syncDesktopDownloadEngineCommand(async () => {
-      if (pausedTaskIds.length > 0) {
-        await postDesktopDownloadEngineTaskBulkCommand('resume', pausedTaskIds);
-      }
+      applyDesktopDownloadEngineSnapshot(snapshot);
+    }
 
-      if (errorTaskIds.length > 0) {
-        await postDesktopDownloadEngineTaskBulkCommand('retry', errorTaskIds);
-      }
-    });
+    if (errorTaskIds.length > 0) {
+      const snapshot = await postDesktopDownloadEngineTaskBulkCommand(
+        'retry',
+        errorTaskIds
+      );
+      applyDesktopDownloadEngineSnapshot(snapshot);
+    }
   }
 
   async cancelTask(taskId: string): Promise<void> {
     const task = this.getTask(taskId);
     if (!task) {
+      return;
+    }
+
+    if (isDesktopLocalDownloadRuntimeEnabled()) {
+      const snapshot = await cancelDesktopDownloadEngineTask(taskId);
+      applyDesktopDownloadEngineSnapshot(snapshot);
+      this.removeTaskResourcesInBackground(task);
       return;
     }
 
@@ -1778,18 +1660,12 @@ class DownloadManager {
       runner.controllers.forEach((controller) => controller.abort());
       removeTask(taskId);
       this.schedulePendingTasks();
-      syncDesktopDownloadEngineCommand(() =>
-        cancelDesktopDownloadEngineTask(taskId)
-      );
       return;
     }
 
     removeTask(taskId);
     this.removeTaskResourcesInBackground(task);
     this.schedulePendingTasks();
-    syncDesktopDownloadEngineCommand(() =>
-      cancelDesktopDownloadEngineTask(taskId)
-    );
   }
 
   async cancelAllTasks(): Promise<void> {
@@ -1808,25 +1684,14 @@ class DownloadManager {
       return;
     }
 
+    const snapshot = await postDesktopDownloadEngineTaskBulkCommand(
+      'cancel',
+      candidateTasks.map((task) => task.id)
+    );
+    applyDesktopDownloadEngineSnapshot(snapshot);
     candidateTasks.forEach((task) => {
-      const runner = this.runners.get(task.id);
-      if (runner) {
-        runner.mode = 'cancelled';
-        runner.controllers.forEach((controller) => controller.abort());
-        removeTask(task.id);
-        return;
-      }
-
-      removeTask(task.id);
       this.removeTaskResourcesInBackground(task);
     });
-    this.schedulePendingTasks();
-    syncDesktopDownloadEngineCommand(() =>
-      postDesktopDownloadEngineTaskBulkCommand(
-        'cancel',
-        candidateTasks.map((task) => task.id)
-      )
-    );
   }
 
   async deleteEpisode(contentId: string, episodeIndex: number): Promise<void> {
@@ -1842,10 +1707,12 @@ class DownloadManager {
       useDownloadStore.getState();
     const content = library[contentId];
     if (!content) {
-      removeTask(taskId);
-      syncDesktopDownloadEngineCommand(() =>
-        deleteMirroredDesktopDownloadTask(taskId)
-      );
+      if (isDesktopLocalDownloadRuntimeEnabled()) {
+        const snapshot = await deleteMirroredDesktopDownloadTask(taskId);
+        applyDesktopDownloadEngineSnapshot(snapshot);
+      } else {
+        removeTask(taskId);
+      }
       return;
     }
 
@@ -1856,10 +1723,12 @@ class DownloadManager {
       (episode) => episode.episodeIndex !== episodeIndex
     );
 
-    removeTask(taskId);
-    syncDesktopDownloadEngineCommand(() =>
-      deleteMirroredDesktopDownloadTask(taskId)
-    );
+    if (isDesktopLocalDownloadRuntimeEnabled()) {
+      const snapshot = await deleteMirroredDesktopDownloadTask(taskId);
+      applyDesktopDownloadEngineSnapshot(snapshot);
+    } else {
+      removeTask(taskId);
+    }
 
     if (targetEpisode) {
       this.removeTaskResourcesInBackground(targetEpisode);
@@ -1882,7 +1751,6 @@ class DownloadManager {
   }
 
   abortAll(): void {
-    clearAllScheduledDesktopTaskUpserts();
     Array.from(this.runners.keys()).forEach((taskId) => {
       this.stopRunner(taskId);
     });

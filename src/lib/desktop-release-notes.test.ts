@@ -40,6 +40,27 @@ describe('desktop release notes helpers', () => {
     });
   });
 
+  it('does not expose untranslated English release-note items in Chinese mode', () => {
+    expect(
+      buildDesktopReleaseChangeSummaryFromNotes(
+        `
+## Fixed
+- stabilize an undocumented edge case
+
+## Changed
+- reshape internal coordinator
+`,
+        'zh-CN'
+      )
+    ).toEqual({
+      compareUrl: null,
+      added: [],
+      changed: ['调整相关实现'],
+      fixed: ['修复相关问题'],
+      other: [],
+    });
+  });
+
   it('builds localized summaries from changelog entries', () => {
     expect(
       buildDesktopReleaseChangeSummaryFromChangelogEntry(
@@ -161,6 +182,45 @@ describe('desktop release notes helpers', () => {
       changed: [],
       fixed: ['桌面端：恢复 Beta 版本摘要'],
       other: [],
+    });
+  });
+
+  it('keeps current and unknown commit summaries fully localized in Chinese', () => {
+    const compareUrl =
+      'https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.45...desktop-v200.0.1-beta.46';
+
+    expect(
+      buildDesktopReleaseChangeSummaryFromComparePayload(
+        {
+          commits: [
+            {
+              commit: {
+                message:
+                  'fix(desktop): stabilize offline download sync and resume',
+              },
+            },
+            {
+              commit: {
+                message: 'chore: ignore OpenNext and Wrangler local artifacts',
+              },
+            },
+            {
+              commit: {
+                message:
+                  'refactor(unknown-scope): reshape internal coordinator',
+              },
+            },
+          ],
+        },
+        compareUrl,
+        'zh-CN'
+      )
+    ).toEqual({
+      compareUrl,
+      added: [],
+      changed: ['重构相关实现'],
+      fixed: ['桌面端：提升离线下载同步与恢复稳定性'],
+      other: ['忽略 OpenNext 与 Wrangler 本地产物'],
     });
   });
 });

@@ -23,6 +23,7 @@ import {
   normalizeChangelogLocale,
 } from '@/lib/changelog-locale';
 import {
+  fetchDesktopReleaseCompare,
   fetchDesktopReleaseHistory,
   isDesktopTauriRuntimeAvailable,
 } from '@/lib/desktop/tauri-client';
@@ -33,9 +34,11 @@ import {
 } from '@/lib/desktop-release-history';
 import {
   type DesktopReleaseChangeSummary,
+  type GithubComparePayload,
   buildDesktopReleaseChangeSummaryFromChangelogEntry,
+  buildDesktopReleaseChangeSummaryFromComparePayload,
   buildDesktopReleaseChangeSummaryFromNotes,
-  fetchDesktopReleaseChangeSummaryFromCompareUrl,
+  fetchDesktopReleaseComparePayloadFromGithub,
   findDesktopReleaseChangelogEntry,
   getDesktopReleaseBaseVersion,
   hasDesktopReleaseChangeItems,
@@ -81,6 +84,15 @@ const releaseChangeSummaryCache = new Map<
   string,
   DesktopReleaseChangeSummary | null
 >();
+const releaseComparePayloadCache = new Map<string, GithubComparePayload>();
+const releaseComparePayloadPromiseCache = new Map<
+  string,
+  Promise<GithubComparePayload>
+>();
+const releaseCompareFailureCache = new Map<string, number>();
+const MAX_RELEASE_COMPARE_PREFETCH_COUNT = 24;
+const RELEASE_COMPARE_FETCH_CONCURRENCY = 3;
+const RELEASE_COMPARE_FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
 
 function getReleaseChangeSummaryCacheKey(
   release: Pick<DesktopReleaseHistoryItem, 'tagName' | 'notes'>,
@@ -893,7 +905,9 @@ export function DesktopReleaseHistoryDialog({
 
         setReleases([]);
         setErrorMessage(
-          error instanceof Error ? error.message : '获取版本列表失败。'
+          error instanceof Error
+            ? error.message
+            : 'Unable to load version history / 无法获取版本列表。'
         );
       } finally {
         if (!controller.signal.aborted) {
@@ -930,6 +944,7 @@ export function DesktopReleaseHistoryDialog({
       compareUrl: string;
       fallbackSummary: DesktopReleaseChangeSummary;
     }> = [];
+    let compareSummaryCandidateCount = 0;
 
     releases.forEach((release) => {
       const exactChangelogSummary =
@@ -963,9 +978,45 @@ export function DesktopReleaseHistoryDialog({
       }
 
       if (initialSummary) {
-        nextReleaseChangeSummaries[release.tagName] = initialSummary;
+        const shouldPrefetchCompare =
+          shouldLoadReleaseCompareSummary(initialSummary);
+        const isWithinComparePrefetchWindow =
+          compareSummaryCandidateCount < MAX_RELEASE_COMPARE_PREFETCH_COUNT;
+        if (shouldPrefetchCompare) {
+          compareSummaryCandidateCount += 1;
+        }
 
-        if (shouldLoadReleaseCompareSummary(initialSummary)) {
+        const compareUrl = initialSummary.compareUrl || '';
+        const lastFailureAt = compareUrl
+          ? releaseCompareFailureCache.get(compareUrl)
+          : undefined;
+        const canPrefetchCompare =
+          shouldPrefetchCompare &&
+          isWithinComparePrefetchWindow &&
+          (lastFailureAt === undefined ||
+            Date.now() - lastFailureAt >= RELEASE_COMPARE_FAILURE_COOLDOWN_MS);
+        const cachedComparePayload = compareUrl
+          ? releaseComparePayloadCache.get(compareUrl)
+          : undefined;
+        const localizedCachedSummary = cachedComparePayload
+          ? buildDesktopReleaseChangeSummaryFromComparePayload(
+              cachedComparePayload,
+              compareUrl,
+              effectiveChangelogLocale
+            )
+          : null;
+        nextReleaseChangeSummaries[release.tagName] =
+          localizedCachedSummary || initialSummary;
+
+        if (cachedComparePayload) {
+          releaseChangeSummaryCache.set(
+            cacheKey,
+            localizedCachedSummary || initialSummary
+          );
+          return;
+        }
+
+        if (canPrefetchCompare) {
           compareSummaryTargets.push({
             cacheKey,
             tagName: release.tagName,
@@ -1005,46 +1056,91 @@ export function DesktopReleaseHistoryDialog({
       )
     );
 
-    compareSummaryTargets.forEach((target) => {
+    const loadCompareSummary = async (
+      target: (typeof compareSummaryTargets)[number]
+    ) => {
+      try {
+        let payloadPromise = releaseComparePayloadPromiseCache.get(
+          target.compareUrl
+        );
+        if (!payloadPromise) {
+          payloadPromise =
+            isDesktopAppTarget() && isDesktopTauriRuntimeAvailable()
+              ? fetchDesktopReleaseCompare(target.compareUrl)
+              : fetchDesktopReleaseComparePayloadFromGithub(
+                  target.compareUrl,
+                  controller.signal
+                );
+          releaseComparePayloadPromiseCache.set(
+            target.compareUrl,
+            payloadPromise
+          );
+        }
+
+        const payload = await payloadPromise;
+        if (
+          releaseComparePayloadPromiseCache.get(target.compareUrl) ===
+          payloadPromise
+        ) {
+          releaseComparePayloadPromiseCache.delete(target.compareUrl);
+        }
+        releaseComparePayloadCache.set(target.compareUrl, payload);
+        releaseCompareFailureCache.delete(target.compareUrl);
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        const fetchedSummary =
+          buildDesktopReleaseChangeSummaryFromComparePayload(
+            payload,
+            target.compareUrl,
+            effectiveChangelogLocale
+          );
+        const nextSummary = fetchedSummary || target.fallbackSummary;
+        releaseChangeSummaryCache.set(target.cacheKey, nextSummary);
+        setReleaseChangeSummaries((current) => ({
+          ...current,
+          [target.tagName]: nextSummary,
+        }));
+      } catch {
+        releaseComparePayloadPromiseCache.delete(target.compareUrl);
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        releaseCompareFailureCache.set(target.compareUrl, Date.now());
+        setReleaseChangeSummaries((current) => ({
+          ...current,
+          [target.tagName]: target.fallbackSummary,
+        }));
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoadingReleaseChangeSummaries((current) => ({
+            ...current,
+            [target.tagName]: false,
+          }));
+        }
+      }
+    };
+
+    const workerCount = Math.min(
+      RELEASE_COMPARE_FETCH_CONCURRENCY,
+      compareSummaryTargets.length
+    );
+    for (let workerIndex = 0; workerIndex < workerCount; workerIndex += 1) {
       void (async () => {
-        try {
-          const fetchedSummary =
-            await fetchDesktopReleaseChangeSummaryFromCompareUrl(
-              target.compareUrl,
-              {
-                signal: controller.signal,
-                locale: effectiveChangelogLocale,
-              }
-            );
+        for (
+          let targetIndex = workerIndex;
+          targetIndex < compareSummaryTargets.length;
+          targetIndex += workerCount
+        ) {
           if (controller.signal.aborted) {
             return;
           }
-
-          const nextSummary = fetchedSummary || target.fallbackSummary;
-          releaseChangeSummaryCache.set(target.cacheKey, nextSummary);
-          setReleaseChangeSummaries((current) => ({
-            ...current,
-            [target.tagName]: nextSummary,
-          }));
-        } catch {
-          if (controller.signal.aborted) {
-            return;
-          }
-
-          setReleaseChangeSummaries((current) => ({
-            ...current,
-            [target.tagName]: target.fallbackSummary,
-          }));
-        } finally {
-          if (!controller.signal.aborted) {
-            setLoadingReleaseChangeSummaries((current) => ({
-              ...current,
-              [target.tagName]: false,
-            }));
-          }
+          await loadCompareSummary(compareSummaryTargets[targetIndex]);
         }
       })();
-    });
+    }
 
     return () => {
       controller.abort();

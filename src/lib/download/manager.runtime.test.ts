@@ -179,6 +179,111 @@ describe('download manager desktop runtime command bridge', () => {
           });
         }) as ReturnType<typeof parseManifestForDownloadWithFallback>
     );
+
+    jest
+      .mocked(upsertDesktopDownloadEngineTask)
+      .mockImplementation(async (task) => ({
+        maxConcurrentTasks: useDownloadStore.getState().maxConcurrentTasks,
+        tasks: {
+          ...useDownloadStore.getState().tasks,
+          [task.id]: task,
+        },
+      }));
+    jest
+      .mocked(pauseDesktopDownloadEngineTask)
+      .mockImplementation(async (taskId) => {
+        const tasks = { ...useDownloadStore.getState().tasks };
+        const task = tasks[taskId];
+        if (task) {
+          tasks[taskId] = {
+            ...task,
+            status: 'paused',
+            errorMessage: undefined,
+          };
+        }
+        return {
+          maxConcurrentTasks: useDownloadStore.getState().maxConcurrentTasks,
+          tasks,
+        };
+      });
+    jest
+      .mocked(resumeDesktopDownloadEngineTask)
+      .mockImplementation(async (taskId) => {
+        const tasks = { ...useDownloadStore.getState().tasks };
+        const task = tasks[taskId];
+        if (task) {
+          tasks[taskId] = {
+            ...task,
+            status: 'queued',
+            errorMessage: undefined,
+          };
+        }
+        return {
+          maxConcurrentTasks: useDownloadStore.getState().maxConcurrentTasks,
+          tasks,
+        };
+      });
+    jest
+      .mocked(retryDesktopDownloadEngineTask)
+      .mockImplementation(async (taskId) => {
+        const tasks = { ...useDownloadStore.getState().tasks };
+        const task = tasks[taskId];
+        if (task) {
+          tasks[taskId] = {
+            ...task,
+            status: 'queued',
+            errorMessage: undefined,
+          };
+        }
+        return {
+          maxConcurrentTasks: useDownloadStore.getState().maxConcurrentTasks,
+          tasks,
+        };
+      });
+    jest
+      .mocked(cancelDesktopDownloadEngineTask)
+      .mockImplementation(async (taskId) => {
+        const tasks = { ...useDownloadStore.getState().tasks };
+        delete tasks[taskId];
+        return {
+          maxConcurrentTasks: useDownloadStore.getState().maxConcurrentTasks,
+          tasks,
+        };
+      });
+    jest
+      .mocked(deleteMirroredDesktopDownloadTask)
+      .mockImplementation(async (taskId) => {
+        const tasks = { ...useDownloadStore.getState().tasks };
+        delete tasks[taskId];
+        return {
+          maxConcurrentTasks: useDownloadStore.getState().maxConcurrentTasks,
+          tasks,
+        };
+      });
+    mockPostDesktopDownloadEngineTaskBulkCommand.mockImplementation(
+      async (command, taskIds) => {
+        const tasks = { ...useDownloadStore.getState().tasks };
+        taskIds.forEach((taskId) => {
+          const task = tasks[taskId];
+          if (!task) {
+            return;
+          }
+          if (command === 'cancel') {
+            delete tasks[taskId];
+            return;
+          }
+          tasks[taskId] = {
+            ...task,
+            status: command === 'pause' ? 'paused' : 'queued',
+            errorMessage: undefined,
+          };
+        });
+        return {
+          maxConcurrentTasks: useDownloadStore.getState().maxConcurrentTasks,
+          tasks,
+        };
+      }
+    );
   });
 
   afterEach(() => {
@@ -414,6 +519,48 @@ describe('download manager desktop runtime command bridge', () => {
       })
     );
     expect(mockParseManifestForDownloadWithFallback).not.toHaveBeenCalled();
+  });
+
+  it('does not publish a queued task when the desktop runtime rejects submission', async () => {
+    jest
+      .mocked(upsertDesktopDownloadEngineTask)
+      .mockRejectedValueOnce(new Error('desktop runtime unavailable'));
+
+    await expect(
+      downloadManager.startEpisodeDownload({
+        detail: buildSearchResult(),
+        episodeIndex: 0,
+      })
+    ).rejects.toThrow('desktop runtime unavailable');
+
+    expect(useDownloadStore.getState().tasks).toEqual({});
+  });
+
+  it('keeps the confirmed task state when a desktop control command fails', async () => {
+    const task = buildDownloadTask({ status: 'downloading' });
+    useDownloadStore.setState({
+      tasks: {
+        [task.id]: task,
+      },
+    });
+    jest
+      .mocked(pauseDesktopDownloadEngineTask)
+      .mockRejectedValueOnce(new Error('pause rejected'));
+
+    await expect(downloadManager.pauseTask(task.id)).rejects.toThrow(
+      'pause rejected'
+    );
+    expect(useDownloadStore.getState().tasks[task.id]?.status).toBe(
+      'downloading'
+    );
+
+    jest
+      .mocked(cancelDesktopDownloadEngineTask)
+      .mockRejectedValueOnce(new Error('cancel rejected'));
+    await expect(downloadManager.cancelTask(task.id)).rejects.toThrow(
+      'cancel rejected'
+    );
+    expect(useDownloadStore.getState().tasks[task.id]).toEqual(task);
   });
 
   it('upserts re-queued paused tasks into the desktop runtime without waiting for store sync', async () => {
