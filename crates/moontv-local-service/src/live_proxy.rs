@@ -89,7 +89,11 @@ pub(crate) async fn get_live_m3u8(
 
     let meta = crate::upstream_response_meta(&upstream_response);
 
-    if crate::should_rewrite_live_manifest(meta.content_type.as_deref(), &meta.final_url, &upstream_url) {
+    if crate::should_rewrite_live_manifest(
+        meta.content_type.as_deref(),
+        &meta.final_url,
+        &upstream_url,
+    ) {
         let manifest_content = upstream_response
             .text()
             .await

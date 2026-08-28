@@ -249,7 +249,8 @@ export function getAdultRelatedOfflineVideoEntries(params: {
       return left.sourceName.localeCompare(right.sourceName, 'zh-CN');
     })
     .filter((content) => {
-      const titleKey = getOfflineTitleGroupingKey(content.title) || content.contentId;
+      const titleKey =
+        getOfflineTitleGroupingKey(content.title) || content.contentId;
       if (seenTitleKeys.has(titleKey)) {
         return false;
       }
@@ -284,7 +285,8 @@ function buildOfflinePlaybackDetailWithOwner(params: {
     poster: ownerContent.poster,
     episodes: episodeEntries.map((episode) => episode.playbackManifestUrl),
     episodes_titles: episodeEntries.map((episode) => {
-      const duplicateCount = duplicateEpisodeCounts.get(episode.episodeIndex) || 0;
+      const duplicateCount =
+        duplicateEpisodeCounts.get(episode.episodeIndex) || 0;
       if (duplicateCount <= 1) {
         return episode.episodeTitle;
       }
@@ -334,11 +336,17 @@ export function buildGroupedOfflinePlaybackDetail(params: {
         return left.episodeIndex - right.episodeIndex;
       }
 
-      if (left.contentId === activeContentId && right.contentId !== activeContentId) {
+      if (
+        left.contentId === activeContentId &&
+        right.contentId !== activeContentId
+      ) {
         return -1;
       }
 
-      if (right.contentId === activeContentId && left.contentId !== activeContentId) {
+      if (
+        right.contentId === activeContentId &&
+        left.contentId !== activeContentId
+      ) {
         return 1;
       }
 
@@ -442,7 +450,9 @@ async function fetchAndCacheOfflineResource(url: string): Promise<boolean> {
 
     await putDownloadResponse(url, response.clone());
     return true;
-  } catch (_) {
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn('回源补全离线资源失败:', error);
     return false;
   }
 }
@@ -457,7 +467,9 @@ async function readCachedManifestTextFromCache(
     }
 
     return await cachedResponse.text();
-  } catch (_) {
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn('读取已缓存 manifest 文本失败:', error);
     return null;
   }
 }
@@ -480,7 +492,9 @@ async function readCachedManifestText(url: string): Promise<string | null> {
 
   try {
     return await cachedResponse.text();
-  } catch (_) {
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn('读取已缓存 manifest 文本失败:', error);
     return null;
   }
 }
@@ -525,7 +539,10 @@ function parseManifestDurationSeconds(manifestText: string): number | null {
 }
 
 export async function getDownloadedEpisodeDurationSeconds(
-  episode: Pick<DownloadedEpisodeMeta, 'playbackManifestUrl' | 'rootManifestUrl'>
+  episode: Pick<
+    DownloadedEpisodeMeta,
+    'playbackManifestUrl' | 'rootManifestUrl'
+  >
 ): Promise<number | null> {
   const playbackManifestText = await readCachedManifestTextFromCache(
     episode.playbackManifestUrl
@@ -563,75 +580,6 @@ export async function getDownloadedEpisodeDurationSeconds(
     : null;
 }
 
-function resolveOfflineBootstrapResourceUrls(params: {
-  manifestText: string;
-  episode: DownloadedEpisodeMeta;
-  resourceUrls: string[];
-}): string[] {
-  const { manifestText, episode, resourceUrls } = params;
-  const bootstrapUrls: string[] = [];
-  const playbackResources = collectMediaPlaylistResources(manifestText).filter(
-    (resource) => resource.type !== 'manifest'
-  );
-
-  for (const resource of playbackResources) {
-    bootstrapUrls.push(resource.url);
-    if (resource.type === 'segment') {
-      break;
-    }
-  }
-
-  if (bootstrapUrls.length > 0) {
-    return Array.from(new Set(bootstrapUrls));
-  }
-
-  return resourceUrls
-    .filter((url) => {
-      return (
-        url !== episode.rootManifestUrl && url !== episode.playbackManifestUrl
-      );
-    })
-    .slice(0, 3);
-}
-
-async function ensureOfflineBootstrapResources(
-  episode: DownloadedEpisodeMeta
-): Promise<boolean> {
-  const resourceIndex = await getResourceIndex(episode.cacheIndexId);
-  if (!resourceIndex || resourceIndex.urls.length === 0) {
-    return false;
-  }
-
-  const manifestText = await readCachedManifestText(episode.playbackManifestUrl);
-  if (!manifestText) {
-    return false;
-  }
-
-  const bootstrapUrls = resolveOfflineBootstrapResourceUrls({
-    manifestText,
-    episode,
-    resourceUrls: resourceIndex.urls,
-  });
-
-  if (bootstrapUrls.length === 0) {
-    return true;
-  }
-
-  for (const url of bootstrapUrls) {
-    const hasCachedResource = await hasCachedDownload(url);
-    if (hasCachedResource) {
-      continue;
-    }
-
-    const repaired = await fetchAndCacheOfflineResource(url);
-    if (!repaired) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 export async function validateDownloadedEpisode(
   episode: DownloadedEpisodeMeta
 ): Promise<boolean> {
@@ -640,9 +588,22 @@ export async function validateDownloadedEpisode(
     return false;
   }
 
-  const bootstrapReady = await ensureOfflineBootstrapResources(episode);
-  if (!bootstrapReady) {
+  const manifestText = await readCachedManifestText(
+    episode.playbackManifestUrl
+  );
+  if (!manifestText) {
     return false;
+  }
+
+  const resourceUrls = collectMediaPlaylistResources(manifestText).filter(
+    (resource) => resource.type !== 'manifest'
+  );
+
+  for (const resource of resourceUrls) {
+    const hasCachedResource = await hasCachedDownload(resource.url);
+    if (!hasCachedResource) {
+      return false;
+    }
   }
 
   const hasManifest = await hasCachedDownload(episode.playbackManifestUrl);

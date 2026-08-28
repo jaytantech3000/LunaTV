@@ -2,7 +2,7 @@ import { localServiceFetch } from '@/lib/desktop/local-service-access';
 import { getRuntimeConfig } from '@/lib/runtime-config';
 import { buildApiUrl } from '@/lib/transport/endpoint';
 
-import { DownloadDomainError } from './request';
+import { createTimeoutAbortSignal, DownloadDomainError } from './request';
 import {
   DownloadTask,
   ManifestParseResult,
@@ -83,10 +83,28 @@ export const DESKTOP_DOWNLOAD_RUNTIME_ERROR_TASK_NOT_FOUND =
   'download_runtime_task_not_found';
 
 const DESKTOP_DOWNLOAD_RUNTIME_POLL_INTERVAL_MS = 2_000;
+const DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS = 15_000;
 
 interface DesktopDownloadRuntimeErrorPayload {
   error?: string;
   code?: string;
+}
+
+function createCallTimeoutSignal(timeoutMs: number): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+    },
+  };
 }
 
 function ensureDesktopLocalDownloadRuntime(): void {
@@ -183,16 +201,26 @@ export function getDesktopDownloadRuntimeLabel(): string {
 
 export async function getDesktopDownloadRuntimeStorageInfo(): Promise<DesktopDownloadRuntimeStorageInfoResponse> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/storage-info'),
-    {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/storage-info'),
+      {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<DesktopDownloadRuntimeStorageInfoResponse>(response);
+    return parseJsonResponse<DesktopDownloadRuntimeStorageInfoResponse>(
+      response
+    );
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function putDesktopDownloadCacheEntry(
@@ -201,69 +229,93 @@ export async function putDesktopDownloadCacheEntry(
 ): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
   const body = await response.arrayBuffer();
-
-  const uploadResponse = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/cache', {
-      url,
-    }),
-    {
-      method: 'PUT',
-      headers: {
-        'Content-Type':
-          response.headers.get('content-type') || 'application/octet-stream',
-        'X-MoonTV-Response-Status': String(response.status),
-      },
-      body,
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
 
-  await parseJsonResponse(uploadResponse);
+  try {
+    const uploadResponse = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/cache', {
+        url,
+      }),
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type':
+            response.headers.get('content-type') || 'application/octet-stream',
+          'X-MoonTV-Response-Status': String(response.status),
+        },
+        body,
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
+
+    await parseJsonResponse(uploadResponse);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function getDesktopDownloadCacheMeta(
   url: string
 ): Promise<DesktopDownloadCacheMetaResponse> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/cache/meta', {
-      url,
-    }),
-    {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/cache/meta', {
+        url,
+      }),
+      {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<DesktopDownloadCacheMetaResponse>(response);
+    return parseJsonResponse<DesktopDownloadCacheMetaResponse>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function getDesktopDownloadCachedResponse(
   url: string
 ): Promise<Response | undefined> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/cache/response', {
-      url,
-    }),
-    {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/cache/response', {
+        url,
+      }),
+      {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  if (response.status === 404) {
-    return undefined;
+    if (response.status === 404) {
+      return undefined;
+    }
+
+    if (!response.ok) {
+      throw await buildDesktopDownloadRuntimeError(response);
+    }
+
+    return response;
+  } finally {
+    timeoutSignal.cleanup();
   }
-
-  if (!response.ok) {
-    throw await buildDesktopDownloadRuntimeError(response);
-  }
-
-  return response;
 }
 
 export async function fetchDesktopDownloadCacheResponse(
@@ -290,151 +342,223 @@ export async function deleteDesktopDownloadCacheEntry(
   url: string
 ): Promise<boolean> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/cache/delete', {
-      url,
-    }),
-    {
-      method: 'DELETE',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/cache/delete', {
+        url,
+      }),
+      {
+        method: 'DELETE',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  const payload = (await parseJsonResponse(response)) as {
-    deleted?: boolean;
-  };
-  return Boolean(payload.deleted);
+    const payload = (await parseJsonResponse(response)) as {
+      deleted?: boolean;
+    };
+    return Boolean(payload.deleted);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function clearDesktopDownloadCache(): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/cache/all'),
-    {
-      method: 'DELETE',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/cache/all'),
+      {
+        method: 'DELETE',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  await parseJsonResponse(response);
+    await parseJsonResponse(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function putDesktopResourceIndex(
   record: ResourceIndexRecord
 ): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/resource-index'),
-    {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(record),
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/resource-index'),
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(record),
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  await parseJsonResponse(response);
+    await parseJsonResponse(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function getDesktopResourceIndex(
   id: string
 ): Promise<ResourceIndexRecord | null> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/resource-index', {
-      id,
-    }),
-    {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/resource-index', {
+        id,
+      }),
+      {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<ResourceIndexRecord | null>(response);
+    return parseJsonResponse<ResourceIndexRecord | null>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function deleteDesktopResourceIndex(id: string): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/resource-index', {
-      id,
-    }),
-    {
-      method: 'DELETE',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/resource-index', {
+        id,
+      }),
+      {
+        method: 'DELETE',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  await parseJsonResponse(response);
+    await parseJsonResponse(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function clearDesktopResourceIndexes(): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/resource-index/all'),
-    {
-      method: 'DELETE',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/resource-index/all'),
+      {
+        method: 'DELETE',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  await parseJsonResponse(response);
+    await parseJsonResponse(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function getDesktopDownloadStoreSnapshot<T>(): Promise<T | null> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/store'),
-    {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/store'),
+      {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<T | null>(response);
+    return parseJsonResponse<T | null>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function putDesktopDownloadStoreSnapshot(
   snapshot: unknown
 ): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/store'),
-    {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(snapshot),
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/store'),
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(snapshot),
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  await parseJsonResponse(response);
+    await parseJsonResponse(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function clearDesktopDownloadStoreSnapshot(): Promise<void> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/store'),
-    {
-      method: 'DELETE',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/store'),
+      {
+        method: 'DELETE',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  await parseJsonResponse(response);
+    await parseJsonResponse(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function resolveDesktopDownloadManifest(
@@ -444,71 +568,104 @@ export async function resolveDesktopDownloadManifest(
   } = {}
 ): Promise<ManifestParseResult> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/manifest/resolve'),
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        entryManifestUrls,
-      }),
-      cache: 'no-store',
-      credentials: 'omit',
-      signal: options.signal,
-    }
-  );
+  const timeoutSignal = createTimeoutAbortSignal({
+    sourceSignal: options.signal,
+    timeoutMs: DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS,
+  });
 
-  return parseJsonResponse<ManifestParseResult>(response);
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/manifest/resolve'),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          entryManifestUrls,
+        }),
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
+
+    return parseJsonResponse<ManifestParseResult>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function getDesktopDownloadEngineSnapshot(): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/tasks'),
-    {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/tasks'),
+      {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+    return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function getDesktopDownloadEngineTask(
   taskId: string
 ): Promise<DownloadTask | undefined> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl(`/tasks/${encodeURIComponent(taskId)}`),
-    {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl(`/tasks/${encodeURIComponent(taskId)}`),
+      {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  if (response.status === 404) {
-    return undefined;
+    if (response.status === 404) {
+      return undefined;
+    }
+
+    return parseJsonResponse<DownloadTask>(response);
+  } finally {
+    timeoutSignal.cleanup();
   }
-
-  return parseJsonResponse<DownloadTask>(response);
 }
 
 export async function clearDesktopDownloadEngineTasks(): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/tasks'),
-    {
-      method: 'DELETE',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/tasks'),
+      {
+        method: 'DELETE',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+    return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 async function postDesktopDownloadTaskCommand(
@@ -516,18 +673,26 @@ async function postDesktopDownloadTaskCommand(
   command: DesktopDownloadEngineBulkCommand
 ): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl(
-      `/tasks/${encodeURIComponent(taskId)}/${command}`
-    ),
-    {
-      method: 'POST',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl(
+        `/tasks/${encodeURIComponent(taskId)}/${command}`
+      ),
+      {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+    return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 function subscribeToDesktopDownloadEngineSnapshotsByPolling({
@@ -603,40 +768,56 @@ export async function putDesktopDownloadEngineSettings(
   settings: DesktopDownloadEngineSettingsUpdate
 ): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/tasks/settings'),
-    {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(settings),
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/tasks/settings'),
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(settings),
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+    return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function postDesktopDownloadTask(
   task: DownloadTask
 ): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/tasks'),
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(task),
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/tasks'),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(task),
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+    return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function pauseDesktopDownloadTask(
@@ -668,37 +849,53 @@ export async function postDesktopDownloadTaskBulkCommand(
   taskIds: string[]
 ): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl('/tasks/bulk'),
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        command,
-        taskIds,
-      }),
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl('/tasks/bulk'),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command,
+          taskIds,
+        }),
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+    return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }
 
 export async function deleteDesktopDownloadTask(
   taskId: string
 ): Promise<DesktopDownloadEngineSnapshot> {
   ensureDesktopLocalDownloadRuntime();
-  const response = await localServiceFetch(
-    buildDesktopDownloadRuntimeUrl(`/tasks/${encodeURIComponent(taskId)}`),
-    {
-      method: 'DELETE',
-      cache: 'no-store',
-      credentials: 'omit',
-    }
+  const timeoutSignal = createCallTimeoutSignal(
+    DESKTOP_DOWNLOAD_CALL_TIMEOUT_MS
   );
+  try {
+    const response = await localServiceFetch(
+      buildDesktopDownloadRuntimeUrl(`/tasks/${encodeURIComponent(taskId)}`),
+      {
+        method: 'DELETE',
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: timeoutSignal.signal,
+      }
+    );
 
-  return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+    return parseJsonResponse<DesktopDownloadEngineSnapshot>(response);
+  } finally {
+    timeoutSignal.cleanup();
+  }
 }

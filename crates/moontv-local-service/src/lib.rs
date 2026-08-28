@@ -866,7 +866,24 @@ impl AppState {
         content_type: Option<&str>,
         body: &[u8],
     ) -> Result<DesktopDownloadCacheEntry> {
+        if body.len() > MAX_DOWNLOAD_CACHE_ENTRY_BYTES {
+            anyhow::bail!(
+                "download cache entry exceeds {} bytes",
+                MAX_DOWNLOAD_CACHE_ENTRY_BYTES
+            );
+        }
+
         self.ensure_download_runtime_dirs()?;
+        let current_size = dir_files_size_bytes(&self.download_runtime_cache_body_dir());
+        if current_size.saturating_add(body.len() as u64) > DOWNLOAD_RUNTIME_CACHE_MAX_BYTES {
+            anyhow::bail!(
+                "download cache quota exceeded ({} + {} > {})",
+                current_size,
+                body.len(),
+                DOWNLOAD_RUNTIME_CACHE_MAX_BYTES
+            );
+        }
+
         let body_path = self.cached_download_body_path(url);
         let meta_path = self.cached_download_meta_path(url);
         let timestamp = current_timestamp_ms();
@@ -879,9 +896,12 @@ impl AppState {
             updated_at: timestamp,
         };
 
-        fs::write(&body_path, body)
-            .with_context(|| format!("failed to write {}", body_path.display()))?;
-        write_json_file(&meta_path, &entry)?;
+        // 先写 body，再写 meta；meta 是提交点。读侧先读 meta 再校验 body 长度，
+        // 校验不过按未完成处理，避免读到 torn/半截数据。
+        write_file_atomic(&body_path, body)?;
+        let meta_contents =
+            serde_json::to_vec(&entry).context("failed to encode download cache meta")?;
+        write_file_atomic(&meta_path, &meta_contents)?;
         Ok(entry)
     }
 
@@ -896,8 +916,11 @@ impl AppState {
             return Ok(None);
         }
 
-        if !self.cached_download_body_path(url).exists() {
-            return Ok(None);
+        let body_path = self.cached_download_body_path(url);
+        match fs::metadata(&body_path) {
+            // 校验已写入长度与 meta 一致，屏蔽非原子写留下的半截数据。
+            Ok(metadata) if metadata.len() == entry.size_bytes => {}
+            _ => return Ok(None),
         }
 
         Ok(Some(entry))
@@ -5557,13 +5580,56 @@ fn normalize_optional_text(value: Option<&str>) -> Option<String> {
     })
 }
 
-fn write_json_file<T: Serialize>(path: &Path, payload: &T) -> Result<()> {
+static ATOMIC_WRITE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) const DOWNLOAD_RUNTIME_CACHE_MAX_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+pub(crate) const MAX_DOWNLOAD_CACHE_ENTRY_BYTES: usize = 256 * 1024 * 1024;
+
+// 原子写：先写同目录临时文件再 rename。rename 在同一文件系统上是原子的，
+// 读侧永远只会看到完整的旧文件或完整的新文件，也不会顺着预置符号链接去覆盖目标。
+fn write_file_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("tmp");
+    let temp_path = path.with_file_name(format!(
+        ".{file_name}.tmp.{}.{}",
+        std::process::id(),
+        ATOMIC_WRITE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+
+    let write_result = fs::write(&temp_path, contents);
+    if write_result.is_ok() {
+        if let Err(error) = fs::rename(&temp_path, path) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(error).with_context(|| format!("failed to rename {}", temp_path.display()));
+        }
+        return Ok(());
+    }
+
+    write_result.with_context(|| format!("failed to write {}", temp_path.display()))
+}
+
+fn dir_files_size_bytes(dir: &Path) -> u64 {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| entry.metadata().ok())
+                .filter(|metadata| metadata.is_file())
+                .fold(0_u64, |sum, metadata| sum.saturating_add(metadata.len()))
+        })
+        .unwrap_or(0)
+}
+
+fn write_json_file<T: Serialize>(path: &Path, payload: &T) -> Result<()> {
     let contents = serde_json::to_string_pretty(payload).context("failed to encode json")?;
-    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
+    write_file_atomic(path, contents.as_bytes())
 }
 
 fn read_json_file<T: DeserializeOwned>(path: &Path) -> Result<T> {
@@ -6904,9 +6970,7 @@ const MAX_VOD_UPSTREAM_URL_LENGTH: usize = 8192;
 fn is_blocked_vod_proxy_host(host: url::Host<&str>) -> bool {
     match host {
         url::Host::Domain(_) => false,
-        url::Host::Ipv4(address) => {
-            address.is_link_local() || address.is_unspecified()
-        }
+        url::Host::Ipv4(address) => address.is_link_local() || address.is_unspecified(),
         url::Host::Ipv6(address) => {
             address.is_unspecified()
                 || address.is_unicast_link_local()
@@ -7945,9 +8009,15 @@ mod tests {
         assert!(is_unsafe_vod_upstream_url(
             &Url::parse("http://169.254.169.254/latest/meta-data/").unwrap()
         ));
-        assert!(is_unsafe_vod_upstream_url(&Url::parse("http://0.0.0.0/x.m3u8").unwrap()));
-        assert!(is_unsafe_vod_upstream_url(&Url::parse("file:///etc/passwd").unwrap()));
-        assert!(is_unsafe_vod_upstream_url(&Url::parse("ftp://example.com/x.ts").unwrap()));
+        assert!(is_unsafe_vod_upstream_url(
+            &Url::parse("http://0.0.0.0/x.m3u8").unwrap()
+        ));
+        assert!(is_unsafe_vod_upstream_url(
+            &Url::parse("file:///etc/passwd").unwrap()
+        ));
+        assert!(is_unsafe_vod_upstream_url(
+            &Url::parse("ftp://example.com/x.ts").unwrap()
+        ));
         // 回环 / 私网 / 公网域名继续放行：自建 LAN 源与本地测试 mock 依赖它们。
         assert!(!is_unsafe_vod_upstream_url(
             &Url::parse("http://127.0.0.1:18080/mock/index.m3u8").unwrap()

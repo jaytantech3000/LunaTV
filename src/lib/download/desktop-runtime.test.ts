@@ -156,6 +156,7 @@ describe('desktop download runtime task sdk', () => {
         method: 'GET',
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -171,6 +172,7 @@ describe('desktop download runtime task sdk', () => {
         }),
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
   });
@@ -290,6 +292,7 @@ describe('desktop download runtime task sdk', () => {
         body: JSON.stringify(task),
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -299,6 +302,7 @@ describe('desktop download runtime task sdk', () => {
         method: 'GET',
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -308,6 +312,7 @@ describe('desktop download runtime task sdk', () => {
         method: 'POST',
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -317,6 +322,7 @@ describe('desktop download runtime task sdk', () => {
         method: 'POST',
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -326,6 +332,7 @@ describe('desktop download runtime task sdk', () => {
         method: 'POST',
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -342,6 +349,7 @@ describe('desktop download runtime task sdk', () => {
         }),
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -351,6 +359,7 @@ describe('desktop download runtime task sdk', () => {
         method: 'POST',
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -360,6 +369,7 @@ describe('desktop download runtime task sdk', () => {
         method: 'DELETE',
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -369,6 +379,7 @@ describe('desktop download runtime task sdk', () => {
         method: 'DELETE',
         cache: 'no-store',
         credentials: 'omit',
+        signal: expect.any(AbortSignal),
       }
     );
   });
@@ -420,7 +431,7 @@ describe('desktop download runtime task sdk', () => {
         }),
         cache: 'no-store',
         credentials: 'omit',
-        signal: undefined,
+        signal: expect.any(AbortSignal),
       }
     );
   });

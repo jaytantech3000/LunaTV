@@ -15,7 +15,7 @@ use axum::{
         sse::{Event, Sse},
     },
 };
-use futures::stream;
+use futures::{StreamExt, stream};
 use moontv_download::{
     DesktopDownloadEngine, DesktopDownloadEngineSettingsUpdate, DesktopDownloadEngineSnapshot,
     DesktopDownloadTask, DesktopDownloadTaskStatus,
@@ -122,6 +122,10 @@ pub(crate) struct DesktopDownloadResourceIndexRecord {
 const DOWNLOAD_MANIFEST_FETCH_TIMEOUT_MS: u64 = 20_000;
 const DOWNLOAD_RESOURCE_FETCH_TIMEOUT_MS: u64 = 45_000;
 const MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES: usize = 2;
+const MAX_DOWNLOAD_RESOURCE_FETCH_RETRIES: usize = 2;
+const MAX_DOWNLOAD_MANIFEST_CANDIDATE_URLS: usize = 8;
+const MAX_DOWNLOAD_MANIFEST_BYTES: usize = 8 * 1024 * 1024;
+const MAX_DOWNLOAD_CONTENT_TYPE_LENGTH: usize = 128;
 const DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER: &str = "x-moontv-download-intent";
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT: &str = "background";
 const DOWNLOAD_RUNTIME_ERROR_STORAGE: &str = "download_runtime_storage_error";
@@ -138,6 +142,8 @@ const DOWNLOAD_RUNTIME_ERROR_MISSING_URL: &str = "download_runtime_missing_url";
 const DOWNLOAD_RUNTIME_ERROR_INVALID_URL: &str = "download_runtime_invalid_url";
 const DOWNLOAD_RUNTIME_ERROR_MISSING_INDEX_ID: &str = "download_runtime_missing_index_id";
 const DOWNLOAD_RUNTIME_ERROR_INVALID_STATUS: &str = "download_runtime_invalid_status";
+const DOWNLOAD_RUNTIME_ERROR_PAYLOAD_TOO_LARGE: &str = "download_runtime_payload_too_large";
+const DOWNLOAD_RUNTIME_ERROR_INVALID_CONTENT_TYPE: &str = "download_runtime_invalid_content_type";
 const DOWNLOAD_RUNTIME_ERROR_INVALID_RESOURCE_INDEX: &str =
     "download_runtime_invalid_resource_index";
 
@@ -285,12 +291,34 @@ pub(crate) async fn put_download_runtime_cache(
 ) -> AppResult<Response> {
     let url = require_download_runtime_url(params.url.as_deref())?;
     let status = parse_download_runtime_status(&headers)?;
+    if !status.is_success() {
+        return Err(download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_STATUS,
+            "download runtime cache only accepts successful upstream responses",
+        ));
+    }
     let content_type = headers
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
-    let body_bytes = to_bytes(body, usize::MAX)
+    if let Some(content_type) = content_type {
+        if content_type.len() > MAX_DOWNLOAD_CONTENT_TYPE_LENGTH {
+            return Err(download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_INVALID_CONTENT_TYPE,
+                "download runtime cache content type is too long",
+            ));
+        }
+    }
+    let body_bytes = to_bytes(body, crate::MAX_DOWNLOAD_CACHE_ENTRY_BYTES)
         .await
-        .map_err(|error| download_runtime_storage_error(error.to_string()))?;
+        .map_err(|_| {
+            download_runtime_validation_error(
+                DOWNLOAD_RUNTIME_ERROR_PAYLOAD_TOO_LARGE,
+                format!(
+                    "download runtime cache body exceeds {} bytes",
+                    crate::MAX_DOWNLOAD_CACHE_ENTRY_BYTES
+                ),
+            )
+        })?;
     let entry = state
         .write_cached_download(&url, status, content_type, body_bytes.as_ref())
         .map_err(|error| download_runtime_storage_error(error.to_string()))?;
@@ -466,6 +494,18 @@ async fn fetch_runtime_download_response(
         });
     }
 
+    // 非代理形状的直连 URL 必须通过统一的 host/scheme 校验，防 SSRF。
+    validate_download_fetch_url(url).map_err(|error| {
+        AppError::with_code(
+            StatusCode::BAD_REQUEST,
+            DOWNLOAD_RUNTIME_ERROR_INVALID_URL,
+            format!(
+                "download runtime url rejected before fetch: {}",
+                error.message
+            ),
+        )
+    })?;
+
     let response = send_download_request(
         &state.download_client,
         url,
@@ -504,8 +544,7 @@ async fn fetch_runtime_download_response(
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let body = response
-        .bytes()
+    let body = read_response_bytes_limited(response, crate::MAX_DOWNLOAD_CACHE_ENTRY_BYTES)
         .await
         .map_err(|error| {
             AppError::with_code(
@@ -515,8 +554,7 @@ async fn fetch_runtime_download_response(
                     "failed to read download resource response after identity-encoding fallback: {url} ({error})"
                 ),
             )
-        })?
-        .to_vec();
+        })?;
 
     Ok(RuntimeFetchedDownloadResponse {
         status,
@@ -545,6 +583,23 @@ async fn send_download_request(
     };
 
     request.send().await
+}
+
+// 限流读取整个响应体，避免上游返回超大 body 时无界占用内存。
+async fn read_response_bytes_limited(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| error.to_string())?;
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(format!("download response exceeds {max_bytes} bytes"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 fn build_download_runtime_fetched_response(
@@ -690,6 +745,10 @@ fn normalize_download_manifest_candidate_urls(
         let trimmed = candidate_url.trim();
         if trimmed.is_empty() {
             continue;
+        }
+
+        if normalized.len() >= MAX_DOWNLOAD_MANIFEST_CANDIDATE_URLS {
+            break;
         }
 
         if seen.insert(trimmed.to_string()) {
@@ -922,12 +981,15 @@ async fn fetch_download_manifest_text_via_proxy(
         };
     let status = upstream_response.status();
     let meta = crate::upstream_response_meta(&upstream_response);
-    let manifest_content = upstream_response.text().await.map_err(|error| {
-        DownloadManifestError::network(
-            request_url,
-            format!("Failed to read manifest body: {request_url} ({error})"),
-        )
-    })?;
+    let manifest_body = read_response_bytes_limited(upstream_response, MAX_DOWNLOAD_MANIFEST_BYTES)
+        .await
+        .map_err(|error| {
+            DownloadManifestError::network(
+                request_url,
+                format!("Failed to read manifest body: {request_url} ({error})"),
+            )
+        })?;
+    let manifest_content = String::from_utf8_lossy(&manifest_body).to_string();
 
     if !status.is_success() {
         let detail = summarize_manifest_error_body(&manifest_content);
@@ -1031,12 +1093,14 @@ async fn fetch_download_manifest_text_direct(
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let body_bytes = response.bytes().await.map_err(|error| {
-        DownloadManifestError::network(
-            request_url,
-            format!("Failed to read manifest body: {request_url} ({error})"),
-        )
-    })?;
+    let body_bytes = read_response_bytes_limited(response, MAX_DOWNLOAD_MANIFEST_BYTES)
+        .await
+        .map_err(|error| {
+            DownloadManifestError::network(
+                request_url,
+                format!("Failed to read manifest body: {request_url} ({error})"),
+            )
+        })?;
 
     if !status.is_success() {
         let detail = summarize_manifest_error_body(&String::from_utf8_lossy(&body_bytes));
@@ -1048,23 +1112,20 @@ async fn fetch_download_manifest_text_direct(
         return Err(DownloadManifestError::http(request_url, status, message));
     }
 
+    // 直连清单缺少代理层做基准解析，这里按清单真实基准先把相对 URI 解析成绝对，
+    // 否则相对分段/相对变体会被解析到本地服务地址上导致整批下载失败。
+    let normalized_content =
+        normalize_manifest_relative_uris(&String::from_utf8_lossy(&body_bytes), &fetch_url)?;
+
     cache_manifest_text(
         state,
         request_url,
         status,
         content_type.as_deref(),
-        body_bytes.as_ref(),
+        normalized_content.as_bytes(),
     )?;
 
-    ensure_manifest_text(
-        request_url,
-        String::from_utf8(body_bytes.to_vec()).map_err(|_| {
-            DownloadManifestError::invalid(
-                request_url,
-                format!("Upstream content is not valid UTF-8: {request_url}"),
-            )
-        })?,
-    )
+    ensure_manifest_text(request_url, normalized_content)
 }
 
 fn cache_manifest_text(
@@ -1099,23 +1160,105 @@ fn ensure_manifest_text(
     Ok(manifest_text)
 }
 
+fn manifest_uri_attribute_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"(?i)URI=("[^"]*"|[^,\s]*)"#).expect("manifest uri attribute regex")
+    })
+}
+
+fn resolve_manifest_line_uri_attribute(line: &str, base_url: &Url) -> Option<String> {
+    let capture = manifest_uri_attribute_regex().captures(line)?;
+    let whole = capture.get(0)?;
+    let value_match = capture.get(1)?;
+    let raw = value_match.as_str();
+    let quoted = raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"');
+    let inner = if quoted { &raw[1..raw.len() - 1] } else { raw };
+    if inner.is_empty() {
+        return None;
+    }
+
+    let resolved = base_url
+        .join(inner)
+        .map(|url| url.to_string())
+        .unwrap_or_else(|_| inner.to_string());
+
+    Some(format!(
+        "{}URI=\"{}\"{}",
+        &line[..whole.start()],
+        resolved,
+        &line[whole.end()..]
+    ))
+}
+
+fn normalize_manifest_relative_uris(
+    content: &str,
+    base_url: &str,
+) -> Result<String, DownloadManifestError> {
+    let parsed_base = Url::parse(base_url).map_err(|_| {
+        DownloadManifestError::invalid(
+            base_url,
+            format!("invalid download manifest base url: {base_url}"),
+        )
+    })?;
+    let mut output = String::with_capacity(content.len());
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            output.push('\n');
+            continue;
+        }
+
+        if !trimmed.starts_with('#') {
+            // 裸行（分段或变体 URI）
+            let resolved = parsed_base
+                .join(trimmed)
+                .map(|url| url.to_string())
+                .unwrap_or_else(|_| trimmed.to_string());
+            output.push_str(&resolved);
+        } else if let Some(resolved_line) =
+            resolve_manifest_line_uri_attribute(trimmed, &parsed_base)
+        {
+            output.push_str(&resolved_line);
+        } else {
+            output.push_str(trimmed);
+        }
+        output.push('\n');
+    }
+
+    Ok(output)
+}
+
 fn resolve_download_manifest_fetch_url(
     public_base_url: &str,
     request_url: &str,
 ) -> Result<String, DownloadManifestError> {
-    if Url::parse(request_url).is_ok() {
-        return Ok(request_url.to_string());
-    }
+    let fetch_url = if Url::parse(request_url).is_ok() {
+        request_url.to_string()
+    } else {
+        Url::parse(public_base_url)
+            .and_then(|base_url| base_url.join(request_url))
+            .map(|url| url.to_string())
+            .map_err(|_| {
+                DownloadManifestError::invalid(
+                    request_url,
+                    format!("Invalid download manifest url: {request_url}"),
+                )
+            })?
+    };
 
-    Url::parse(public_base_url)
-        .and_then(|base_url| base_url.join(request_url))
-        .map(|url| url.to_string())
-        .map_err(|_| {
-            DownloadManifestError::invalid(
-                request_url,
-                format!("Invalid download manifest url: {request_url}"),
-            )
-        })
+    validate_download_fetch_url(&fetch_url).map_err(|error| {
+        DownloadManifestError::invalid(
+            request_url,
+            format!(
+                "Disallowed download manifest url: {request_url} ({})",
+                error.message
+            ),
+        )
+    })?;
+
+    Ok(fetch_url)
 }
 
 fn summarize_manifest_error_body(body: &str) -> String {
@@ -1608,31 +1751,51 @@ async fn fetch_and_cache_download_runtime_resource(
         return Ok(entry);
     }
 
-    let fetched_response = fetch_runtime_download_response(state, url, &HeaderMap::new())
-        .await
-        .map_err(|error| error.message)?;
-    if !fetched_response.status.is_success() {
-        let detail =
-            summarize_manifest_error_body(&String::from_utf8_lossy(&fetched_response.body));
-        return Err(format!(
-            "failed to fetch download resource: {url} ({}{})",
-            fetched_response.status.as_u16(),
-            if detail.is_empty() {
-                String::new()
-            } else {
-                format!(", {detail}")
-            }
-        ));
+    let mut last_error = String::new();
+    for attempt in 1..=MAX_DOWNLOAD_RESOURCE_FETCH_RETRIES + 1 {
+        let fetched_response =
+            match fetch_runtime_download_response(state, url, &HeaderMap::new()).await {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = error.message.clone();
+                    let retryable = matches!(
+                        error.code,
+                        Some(DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED)
+                            | Some(crate::DOWNLOAD_RUNTIME_ERROR_RESOURCE_RESPONSE_READ_FAILED)
+                    );
+                    if attempt <= MAX_DOWNLOAD_RESOURCE_FETCH_RETRIES && retryable {
+                        wait_for_download_manifest_retry(attempt).await;
+                        continue;
+                    }
+                    return Err(last_error);
+                }
+            };
+
+        if !fetched_response.status.is_success() {
+            let detail =
+                summarize_manifest_error_body(&String::from_utf8_lossy(&fetched_response.body));
+            return Err(format!(
+                "failed to fetch download resource: {url} ({}{})",
+                fetched_response.status.as_u16(),
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {detail}")
+                }
+            ));
+        }
+
+        return state
+            .write_cached_download(
+                url,
+                fetched_response.status,
+                fetched_response.content_type.as_deref(),
+                fetched_response.body.as_ref(),
+            )
+            .map_err(|error| error.to_string());
     }
 
-    state
-        .write_cached_download(
-            url,
-            fetched_response.status,
-            fetched_response.content_type.as_deref(),
-            fetched_response.body.as_ref(),
-        )
-        .map_err(|error| error.to_string())
+    Err(last_error)
 }
 
 fn cleanup_download_runtime_cache_index(
@@ -1656,6 +1819,15 @@ fn cleanup_download_runtime_cache_index(
         .delete_resource_index(cache_index_id)
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn cleanup_download_runtime_cache_index_best_effort(state: &AppState, cache_index_id: &str) {
+    if let Err(error) = cleanup_download_runtime_cache_index(state, cache_index_id) {
+        warn!(
+            "desktop download runtime cache cleanup for {} failed: {}",
+            cache_index_id, error
+        );
+    }
 }
 
 async fn activate_queued_download_runtime_task(state: &AppState, task_id: &str) -> AppResult<bool> {
@@ -1933,6 +2105,11 @@ async fn execute_download_runtime_task(state: &AppState, task_id: &str) -> Resul
     }
 
     let _ = update_download_runtime_task(state, task_id, |mut task| {
+        // 与失败路径一致：仅在任务仍处于下载中时才写终态，避免覆盖并发的 Pause/Retry/Cancel。
+        if !is_download_runtime_task_running(&task) {
+            return task;
+        }
+
         task.status = DesktopDownloadTaskStatus::Done;
         task.playback_manifest_url = Some(manifest_result.playback_manifest_url.clone());
         task.total_resources = total_resources;
@@ -1998,14 +2175,31 @@ pub(crate) async fn get_download_runtime_task(
 pub(crate) async fn clear_download_runtime_tasks(
     State(state): State<AppState>,
 ) -> AppResult<Response> {
-    mutate_download_engine_snapshot(&state, |engine| Ok(engine.clear_tasks().clone())).await
+    let response =
+        mutate_download_engine_snapshot(&state, |engine| Ok(engine.clear_tasks().clone())).await?;
+    // 任务清空后，磁盘上的缓存体与资源索引同步清掉，避免孤儿文件无限累积。
+    if let Err(error) = state.clear_cached_downloads() {
+        warn!(
+            "desktop download runtime clear cached downloads failed: {}",
+            error
+        );
+    }
+    if let Err(error) = state.clear_resource_indexes() {
+        warn!(
+            "desktop download runtime clear resource indexes failed: {}",
+            error
+        );
+    }
+    Ok(response)
 }
 
 fn build_download_runtime_snapshot_event(
     snapshot: DesktopDownloadEngineSnapshot,
 ) -> Result<Event, Infallible> {
-    Ok(Event::default()
-        .data(serde_json::to_string(&snapshot).expect("download runtime snapshot serializes")))
+    match serde_json::to_string(&snapshot) {
+        Ok(data) => Ok(Event::default().data(data)),
+        Err(_) => Ok(Event::default()),
+    }
 }
 
 pub(crate) async fn stream_download_runtime_tasks(
@@ -2067,19 +2261,22 @@ fn apply_download_runtime_task_bulk_command(
     engine: &mut DesktopDownloadEngine,
     task_id: &str,
     command: DesktopDownloadTaskBulkCommand,
-) {
+) -> Option<String> {
     match command {
         DesktopDownloadTaskBulkCommand::Pause => {
             engine.pause_task(task_id);
+            None
         }
         DesktopDownloadTaskBulkCommand::Resume => {
             engine.resume_task(task_id);
+            None
         }
         DesktopDownloadTaskBulkCommand::Retry => {
             engine.retry_task(task_id);
+            None
         }
         DesktopDownloadTaskBulkCommand::Cancel => {
-            engine.cancel_task(task_id);
+            engine.cancel_task(task_id).map(|task| task.cache_index_id)
         }
     }
 }
@@ -2089,13 +2286,21 @@ pub(crate) async fn post_download_runtime_task_bulk_command(
     Json(request): Json<DesktopDownloadTaskBulkCommandRequest>,
 ) -> AppResult<Response> {
     let (command, task_ids) = request.into_parts();
-    let response = mutate_download_engine_snapshot(&state, move |engine| {
+    let mut removed_cache_index_ids = Vec::new();
+    let response = mutate_download_engine_snapshot(&state, |engine| {
         for task_id in &task_ids {
-            apply_download_runtime_task_bulk_command(engine, task_id, command);
+            if let Some(cache_index_id) =
+                apply_download_runtime_task_bulk_command(engine, task_id, command)
+            {
+                removed_cache_index_ids.push(cache_index_id);
+            }
         }
         Ok(engine.snapshot())
     })
     .await?;
+    for cache_index_id in removed_cache_index_ids {
+        cleanup_download_runtime_cache_index_best_effort(&state, &cache_index_id);
+    }
     schedule_download_runtime_processing(state);
     Ok(response)
 }
@@ -2152,13 +2357,15 @@ pub(crate) async fn cancel_download_runtime_task(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,
 ) -> AppResult<Response> {
-    let response = mutate_download_engine_snapshot(&state, move |engine| {
-        engine
+    let (snapshot, removed_cache_index_id) = {
+        let mut engine = state.download_engine.write().await;
+        let removed_task = engine
             .cancel_task(&task_id)
             .ok_or_else(download_runtime_task_not_found)?;
-        Ok(engine.snapshot())
-    })
-    .await?;
+        (engine.snapshot().clone(), removed_task.cache_index_id)
+    };
+    let response = write_download_engine_snapshot_response(&state, snapshot).await?;
+    cleanup_download_runtime_cache_index_best_effort(&state, &removed_cache_index_id);
     schedule_download_runtime_processing(state);
     Ok(response)
 }
@@ -2167,15 +2374,42 @@ pub(crate) async fn delete_download_runtime_task(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,
 ) -> AppResult<Response> {
-    let response = mutate_download_engine_snapshot(&state, move |engine| {
-        engine
+    let (snapshot, removed_cache_index_id) = {
+        let mut engine = state.download_engine.write().await;
+        let removed_task = engine
             .delete_task(&task_id)
             .ok_or_else(download_runtime_task_not_found)?;
-        Ok(engine.snapshot())
-    })
-    .await?;
+        (engine.snapshot().clone(), removed_task.cache_index_id)
+    };
+    let response = write_download_engine_snapshot_response(&state, snapshot).await?;
+    cleanup_download_runtime_cache_index_best_effort(&state, &removed_cache_index_id);
     schedule_download_runtime_processing(state);
     Ok(response)
+}
+
+// 下载运行时所有“将要发起网络请求”的 URL 都必须通过这里：http/https、非空主机、
+// 拒绝云元数据/链路本地/未指定等内网直连目标，并限制长度。回环/私网仍有意放行以
+// 兼容自建 LAN 源与本地测试 mock（与 vod 代理的 is_unsafe_vod_upstream_url 保持一致）。
+fn validate_download_fetch_url(url: &str) -> AppResult<()> {
+    if url.len() > crate::MAX_VOD_UPSTREAM_URL_LENGTH {
+        return Err(download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_URL,
+            "download runtime url is too long",
+        ));
+    }
+    let parsed_url = Url::parse(url).map_err(|_| {
+        download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_URL,
+            "invalid download runtime url",
+        )
+    })?;
+    if crate::is_unsafe_vod_upstream_url(&parsed_url) {
+        return Err(download_runtime_validation_error(
+            DOWNLOAD_RUNTIME_ERROR_INVALID_URL,
+            "disallowed download runtime url",
+        ));
+    }
+    Ok(())
 }
 
 fn require_download_runtime_url(value: Option<&str>) -> AppResult<String> {
@@ -2185,20 +2419,7 @@ fn require_download_runtime_url(value: Option<&str>) -> AppResult<String> {
             "missing download runtime url",
         )
     })?;
-    let parsed_url = Url::parse(&url).map_err(|_| {
-        download_runtime_validation_error(
-            DOWNLOAD_RUNTIME_ERROR_INVALID_URL,
-            "invalid download runtime url",
-        )
-    })?;
-
-    if !matches!(parsed_url.scheme(), "http" | "https") {
-        return Err(download_runtime_validation_error(
-            DOWNLOAD_RUNTIME_ERROR_INVALID_URL,
-            "download runtime url must use http or https",
-        ));
-    }
-
+    validate_download_fetch_url(&url)?;
     Ok(url)
 }
 
@@ -2289,8 +2510,25 @@ fn normalize_download_runtime_resource_index(
 fn parse_byte_range_header(range_header: &str, total_length: usize) -> Option<(usize, usize)> {
     let normalized = range_header.trim();
     let range_value = normalized.strip_prefix("bytes=")?;
-    let (start_raw, end_raw) = range_value.split_once('-')?;
 
+    // 多段 Range 这里只取第一段，避免把常见的单段请求误判为不可满足；
+    // HLS 播放器基本只用单段或后缀范围。
+    let first_range = range_value.split(',').next()?.trim();
+    if total_length == 0 {
+        return None;
+    }
+
+    if let Some(suffix_raw) = first_range.strip_prefix('-') {
+        let suffix_length = suffix_raw.parse::<usize>().ok()?.min(total_length);
+        if suffix_length == 0 {
+            return None;
+        }
+        let start = total_length - suffix_length;
+        let end = total_length - 1;
+        return Some((start, end));
+    }
+
+    let (start_raw, end_raw) = first_range.split_once('-')?;
     let start = start_raw.parse::<usize>().ok()?;
     if start >= total_length {
         return None;
@@ -2371,4 +2609,48 @@ pub(crate) fn build_cached_download_response(
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_suffix_and_first_range() {
+        assert_eq!(parse_byte_range_header("bytes=-5", 100), Some((95, 99)));
+        assert_eq!(parse_byte_range_header("bytes=0-99", 100), Some((0, 99)));
+        assert_eq!(parse_byte_range_header("bytes=0-", 100), Some((0, 99)));
+        assert_eq!(parse_byte_range_header("bytes=100-", 100), None);
+        assert_eq!(
+            parse_byte_range_header("bytes=0-9,50-59", 100),
+            Some((0, 9))
+        );
+    }
+
+    #[test]
+    fn normalizes_relative_manifest_uris() {
+        let manifest = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-KEY:METHOD=AES-128,URI=\"key.php?k=1\"\n",
+            "#EXTINF:6.0,\n",
+            "seg-001.ts\n",
+            "seg-002.ts\n",
+        );
+        let normalized =
+            normalize_manifest_relative_uris(manifest, "https://cdn.example.com/vod/index.m3u8")
+                .expect("relative uris should resolve");
+        assert!(normalized.contains("https://cdn.example.com/vod/key.php?k=1"));
+        assert!(normalized.contains("https://cdn.example.com/vod/seg-001.ts"));
+        assert!(normalized.contains("https://cdn.example.com/vod/seg-002.ts"));
+    }
+
+    #[test]
+    fn rejects_unsafe_download_fetch_urls() {
+        assert!(validate_download_fetch_url("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(validate_download_fetch_url("file:///etc/passwd").is_err());
+        assert!(validate_download_fetch_url("http://0.0.0.0/x.m3u8").is_err());
+        assert!(validate_download_fetch_url("https://cdn.example.com/index.m3u8").is_ok());
+        // 回环有意放行，兼容自建 LAN 源与本地测试 mock。
+        assert!(validate_download_fetch_url("http://127.0.0.1:18080/mock/index.m3u8").is_ok());
+    }
 }

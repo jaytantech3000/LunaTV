@@ -405,6 +405,12 @@ async function downloadAndCacheUrl(
         });
       }
     } catch (error) {
+      if (cachePromise) {
+        cachePromise.catch(() => {
+          // 读取循环异常时消费置空，避免未处理拒绝
+        });
+      }
+
       if (timeoutSignal.didTimeout()) {
         throw new DownloadRequestError({
           message: `下载资源超时: ${url}`,

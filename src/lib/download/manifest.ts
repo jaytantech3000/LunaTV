@@ -18,6 +18,7 @@ const DOWNLOAD_REQUEST_INTENT_HEADER = 'x-moontv-download-intent';
 const BACKGROUND_DOWNLOAD_REQUEST_INTENT = 'background';
 const MANIFEST_REQUEST_TIMEOUT_MS = 20_000;
 const MAX_MANIFEST_FETCH_RETRIES = 2;
+const MAX_DOWNLOAD_MEDIA_RESOURCES = 10_000;
 
 function summarizeManifestErrorBody(body: string): string {
   const normalizedBody = body.replace(/\s+/g, ' ').trim();
@@ -102,6 +103,14 @@ export function collectMediaPlaylistResources(
   const lines = splitManifestLines(content);
   const resources: DownloadResource[] = [];
 
+  const pushResource = (url: string, type: DownloadResource['type']): void => {
+    if (resources.length >= MAX_DOWNLOAD_MEDIA_RESOURCES) {
+      throw new Error('下载清单资源数量超出上限');
+    }
+
+    resources.push({ url, type });
+  };
+
   lines.forEach((line) => {
     if (!line) {
       return;
@@ -118,10 +127,7 @@ export function collectMediaPlaylistResources(
 
       const uri = extractUriAttribute(line);
       if (uri) {
-        resources.push({
-          url: uri,
-          type: 'key',
-        });
+        pushResource(uri, 'key');
       }
       return;
     }
@@ -129,10 +135,7 @@ export function collectMediaPlaylistResources(
     if (line.startsWith('#EXT-X-MAP:')) {
       const uri = extractUriAttribute(line);
       if (uri) {
-        resources.push({
-          url: uri,
-          type: 'map',
-        });
+        pushResource(uri, 'map');
       }
       return;
     }
@@ -140,10 +143,7 @@ export function collectMediaPlaylistResources(
     if (line.startsWith('#EXT-X-PART:')) {
       const uri = extractUriAttribute(line);
       if (uri) {
-        resources.push({
-          url: uri,
-          type: 'segment',
-        });
+        pushResource(uri, 'segment');
       }
       return;
     }
@@ -157,10 +157,7 @@ export function collectMediaPlaylistResources(
     }
 
     if (!line.startsWith('#')) {
-      resources.push({
-        url: line,
-        type: looksLikeManifestUrl(line) ? 'manifest' : 'segment',
-      });
+      pushResource(line, looksLikeManifestUrl(line) ? 'manifest' : 'segment');
     }
   });
 

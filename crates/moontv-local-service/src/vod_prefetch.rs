@@ -468,7 +468,11 @@ impl VodPrefetchManager {
         Ok(status)
     }
 
-    fn spawn_task(&self, state: AppState, task: VodPrefetchTaskConfig) -> tokio::task::JoinHandle<()> {
+    fn spawn_task(
+        &self,
+        state: AppState,
+        task: VodPrefetchTaskConfig,
+    ) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
             let full_episode = task.window_mode.is_full_episode();

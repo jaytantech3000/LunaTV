@@ -288,8 +288,9 @@ export default function DesktopDownloadStoreSync() {
         } else {
           await putDesktopDownloadStoreSnapshot(snapshot);
         }
-      } catch (_) {
-        // Ignore sidecar snapshot write failures and keep local state intact.
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.warn('desktop download store snapshot flush failed:', error);
       }
     };
 
