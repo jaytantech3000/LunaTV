@@ -15,7 +15,10 @@ import {
   isProfileApiAuthPending,
   PROFILE_API_NO_REDIRECT_OPTIONS,
 } from './request-state';
-import { shouldUseProfileApiStorage } from './runtime';
+import {
+  isDesktopLocalProfileRuntime,
+  shouldUseProfileApiStorage,
+} from './runtime';
 import { generateStorageKey } from './storage-key';
 import { SkipConfig } from '../types';
 
@@ -35,6 +38,60 @@ function shouldUseRemoteUserDataStorage(): boolean {
 
 function dispatchSkipConfigsUpdated(configs: Record<string, SkipConfig>): void {
   dispatchProfileCacheUpdate('skipConfigsUpdated', configs);
+}
+
+// 桌面端本地优先写：本地服务 SQLite 是权威且持久的本地存储。
+// 瞬时失败只重试，不弹“保存失败”；持久化由本地库负责，无需前端队列。
+const LOCAL_WRITE_RETRY_COUNT = 3;
+const LOCAL_WRITE_RETRY_DELAY_MS = 250;
+const RETRYABLE_LOCAL_WRITE_STATUSES = new Set([
+  408, 425, 429, 500, 502, 503, 504,
+]);
+
+function isRecoverableLocalWriteError(error: unknown): boolean {
+  if (error instanceof TypeError) {
+    return true;
+  }
+
+  const status =
+    typeof error === 'object' && error !== null
+      ? (error as { status?: unknown }).status
+      : undefined;
+  if (typeof status === 'number') {
+    return RETRYABLE_LOCAL_WRITE_STATUSES.has(status);
+  }
+
+  return (
+    error instanceof Error &&
+    /failed to fetch|load failed|network|err_connection_refused/i.test(
+      error.message
+    )
+  );
+}
+
+function delayLocalWriteRetry(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, LOCAL_WRITE_RETRY_DELAY_MS);
+  });
+}
+
+async function runLocalWriteWithRetry(
+  operation: () => Promise<unknown>
+): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await operation();
+      return;
+    } catch (error) {
+      if (
+        attempt + 1 >= LOCAL_WRITE_RETRY_COUNT ||
+        !isRecoverableLocalWriteError(error)
+      ) {
+        throw error;
+      }
+      await delayLocalWriteRetry();
+    }
+  }
 }
 
 export async function getSkipConfig(
@@ -118,6 +175,20 @@ export async function saveSkipConfig(
     cachedConfigs[key] = config;
     cacheManager.cacheSkipConfigs(cachedConfigs);
     dispatchSkipConfigsUpdated(cachedConfigs);
+
+    if (isDesktopLocalProfileRuntime()) {
+      try {
+        await runLocalWriteWithRetry(() =>
+          postRemoteProfilePayload(USER_DATA_API_PATHS.skipConfigs, {
+            key,
+            config,
+          })
+        );
+      } catch (err) {
+        console.warn('保存跳过片头片尾配置失败，未写入本地库:', err);
+      }
+      return;
+    }
 
     try {
       await postRemoteProfilePayload(USER_DATA_API_PATHS.skipConfigs, {
@@ -223,6 +294,19 @@ export async function deleteSkipConfig(
     delete cachedConfigs[key];
     cacheManager.cacheSkipConfigs(cachedConfigs);
     dispatchSkipConfigsUpdated(cachedConfigs);
+
+    if (isDesktopLocalProfileRuntime()) {
+      try {
+        await runLocalWriteWithRetry(() =>
+          deleteRemoteProfileResource(USER_DATA_API_PATHS.skipConfigs, {
+            key,
+          })
+        );
+      } catch (err) {
+        console.warn('删除跳过片头片尾配置失败，未写入本地库:', err);
+      }
+      return;
+    }
 
     try {
       await deleteRemoteProfileResource(USER_DATA_API_PATHS.skipConfigs, {

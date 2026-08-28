@@ -146,4 +146,54 @@ describe('skip config client', () => {
 
     expect(mockedFetchRemoteProfileJson).not.toHaveBeenCalled();
   });
+
+  it('retries transient local-service write failures without an error toast (desktop)', async () => {
+    mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie();
+
+    const config = { enable: true, intro_time: 12, outro_time: 34 };
+    mockedFetchRemoteProfileJson.mockResolvedValue({
+      'demo+1': config,
+    });
+
+    let attempts = 0;
+    mockedPostRemoteProfilePayload.mockImplementation(() => {
+      attempts += 1;
+      return attempts < 3
+        ? Promise.reject(new TypeError('Failed to fetch'))
+        : Promise.resolve({ ok: true } as Response);
+    });
+
+    const onGlobalError = jest.fn();
+    window.addEventListener('globalError', onGlobalError);
+
+    await saveSkipConfig('demo', '1', config);
+
+    expect(attempts).toBe(3);
+    expect(onGlobalError).not.toHaveBeenCalled();
+    await expect(getSkipConfig('demo', '1')).resolves.toEqual(config);
+  });
+
+  it('keeps the local value and no error toast when the local write keeps failing (desktop)', async () => {
+    mockedIsDesktopLocalProfileRuntime.mockReturnValue(true);
+    mockedShouldUseProfileApiStorage.mockReturnValue(true);
+    setDesktopAuthCookie();
+    mockedFetchRemoteProfileJson.mockRejectedValue(
+      new TypeError('Failed to fetch')
+    );
+
+    const config = { enable: true, intro_time: 12, outro_time: 34 };
+    mockedPostRemoteProfilePayload.mockRejectedValue(
+      new TypeError('Failed to fetch')
+    );
+
+    const onGlobalError = jest.fn();
+    window.addEventListener('globalError', onGlobalError);
+
+    await saveSkipConfig('demo', '1', config);
+
+    expect(onGlobalError).not.toHaveBeenCalled();
+    await expect(getSkipConfig('demo', '1')).resolves.toEqual(config);
+  });
 });
