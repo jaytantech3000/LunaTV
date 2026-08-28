@@ -239,11 +239,11 @@ impl OnlineVodCache {
 
     fn commit(&self, writer: &OnlineVodCacheWriter) -> io::Result<()> {
         let _access_lock = self.lock_access()?;
-        if writer
-            .prefetch_session_id
-            .as_deref()
-            .is_some_and(|session_id| self.is_prefetch_session_retired(session_id))
-        {
+        let retired_session = match writer.prefetch_session_id.as_deref() {
+            Some(session_id) => self.is_prefetch_session_retired(session_id)?,
+            None => false,
+        };
+        if retired_session {
             let _ = fs::remove_file(&writer.temp_body_path);
             return Ok(());
         }
@@ -462,11 +462,11 @@ impl OnlineVodCache {
         Ok(())
     }
 
-    fn is_prefetch_session_retired(&self, session_id: &str) -> bool {
+    fn is_prefetch_session_retired(&self, session_id: &str) -> io::Result<bool> {
         self.retired_prefetch_sessions
             .lock()
             .map(|sessions| sessions.contains(session_id))
-            .unwrap_or(true)
+            .map_err(|_| io::Error::other("online VOD cache session lock poisoned"))
     }
 }
 

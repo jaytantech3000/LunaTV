@@ -520,6 +520,7 @@ impl AppState {
             .no_brotli()
             .no_deflate()
             .no_zstd()
+            .redirect(vod_upstream_redirect_policy())
             .build()
             .context("failed to build download http client")?;
 
@@ -531,7 +532,10 @@ impl AppState {
             data_dir,
             sqlite_path,
             sqlite,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .redirect(vod_upstream_redirect_policy())
+                .build()
+                .context("failed to build default http client")?,
             download_client,
             image_client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -6892,6 +6896,48 @@ fn build_live_proxy_url(
     format!("{}{}?{}", base_url.trim_end_matches('/'), path, query)
 }
 
+const MAX_VOD_UPSTREAM_URL_LENGTH: usize = 8192;
+
+// 上游 URL 安全校验：只放行 http/https，并拒绝云元数据/链路本地等内网直连目标。
+// 注意：回环与 RFC1918 私网被有意保留为允许——自建 LAN 内容源是受支持场景，
+// 且本地测试/开发的 mock 上游就绑定在 127.0.0.1 上。发现更高危目标请在此收紧。
+fn is_blocked_vod_proxy_host(host: url::Host<&str>) -> bool {
+    match host {
+        url::Host::Domain(_) => false,
+        url::Host::Ipv4(address) => {
+            address.is_link_local() || address.is_unspecified()
+        }
+        url::Host::Ipv6(address) => {
+            address.is_unspecified()
+                || address.is_unicast_link_local()
+                || address.is_unique_local()
+                || address
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_link_local() || mapped.is_unspecified())
+        }
+    }
+}
+
+fn is_unsafe_vod_upstream_url(url: &Url) -> bool {
+    if !matches!(url.scheme(), "http" | "https") {
+        return true;
+    }
+    match url.host() {
+        Some(host) => is_blocked_vod_proxy_host(host),
+        None => true,
+    }
+}
+
+fn vod_upstream_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if is_unsafe_vod_upstream_url(attempt.url()) {
+            attempt.stop()
+        } else {
+            attempt.follow()
+        }
+    })
+}
+
 fn resolve_vod_proxy_request(
     config: &ServiceConfig,
     params: VodProxyQueryParams,
@@ -6901,6 +6947,14 @@ fn resolve_vod_proxy_request(
 
     if source.is_empty() || upstream_url.is_empty() {
         return Err(AppError::bad_request("Missing source or url"));
+    }
+    if upstream_url.len() > MAX_VOD_UPSTREAM_URL_LENGTH {
+        return Err(AppError::bad_request("VOD upstream URL is too long"));
+    }
+    let parsed_upstream_url =
+        Url::parse(&upstream_url).map_err(|_| AppError::bad_request("Invalid VOD upstream URL"))?;
+    if is_unsafe_vod_upstream_url(&parsed_upstream_url) {
+        return Err(AppError::bad_request("Disallowed VOD upstream URL"));
     }
 
     let api_site = config
@@ -7884,6 +7938,27 @@ mod tests {
     use futures::StreamExt;
     use moontv_profile::{Favorite, FollowRecord, PlayRecord, SkipConfig};
     use tower::ServiceExt;
+
+    #[test]
+    fn rejects_unsafe_vod_upstream_urls() {
+        // 拒绝云元数据 / 链路本地 / 非 http(s)，阻断借代理进行的 SSRF。
+        assert!(is_unsafe_vod_upstream_url(
+            &Url::parse("http://169.254.169.254/latest/meta-data/").unwrap()
+        ));
+        assert!(is_unsafe_vod_upstream_url(&Url::parse("http://0.0.0.0/x.m3u8").unwrap()));
+        assert!(is_unsafe_vod_upstream_url(&Url::parse("file:///etc/passwd").unwrap()));
+        assert!(is_unsafe_vod_upstream_url(&Url::parse("ftp://example.com/x.ts").unwrap()));
+        // 回环 / 私网 / 公网域名继续放行：自建 LAN 源与本地测试 mock 依赖它们。
+        assert!(!is_unsafe_vod_upstream_url(
+            &Url::parse("http://127.0.0.1:18080/mock/index.m3u8").unwrap()
+        ));
+        assert!(!is_unsafe_vod_upstream_url(
+            &Url::parse("http://192.168.1.50/index.m3u8").unwrap()
+        ));
+        assert!(!is_unsafe_vod_upstream_url(
+            &Url::parse("https://cdn.example.com/index.m3u8").unwrap()
+        ));
+    }
 
     fn empty_remote_profile_snapshot() -> Value {
         json!({

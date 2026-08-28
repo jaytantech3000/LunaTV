@@ -25,6 +25,7 @@ use crate::{
 const VOD_PREFETCH_SESSION_FILE_NAME: &str = "vod-prefetch-session.json";
 const MAX_SESSION_ID_LENGTH: usize = 128;
 const PREFETCH_RETRY_COUNT: usize = 2;
+const MAX_VOD_PREFETCH_SEGMENTS: usize = 10_000;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -121,6 +122,7 @@ struct ActiveVodPrefetchSession {
     last_segment_url: Option<String>,
     generation: u64,
     cancellation: Arc<AtomicBool>,
+    task: Option<tokio::task::JoinHandle<()>>,
     status: VodPrefetchStatus,
 }
 
@@ -186,7 +188,7 @@ impl VodPrefetchManager {
             let mut inner = self.inner.lock().await;
             let old_session = inner.active.take();
 
-            if let Some(old_session) = old_session {
+            if let Some(mut old_session) = old_session {
                 if old_session.session_id == request.session_id
                     && old_session.manifest_url == request.manifest_url
                     && old_session.window_mode == request.window_mode
@@ -197,6 +199,9 @@ impl VodPrefetchManager {
                 }
 
                 old_session.cancellation.store(true, Ordering::Release);
+                if let Some(old_task) = old_session.task.take() {
+                    old_task.abort();
+                }
                 if old_session.session_id != request.session_id
                     && old_session.window_mode.is_full_episode()
                 {
@@ -242,6 +247,7 @@ impl VodPrefetchManager {
                 last_segment_url: None,
                 generation,
                 cancellation,
+                task: None,
                 status,
             });
             task
@@ -269,7 +275,8 @@ impl VodPrefetchManager {
             self.cache.clear_temporary_max_bytes();
         }
 
-        self.spawn_task(state, task.clone());
+        let handle = self.spawn_task(state, task.clone());
+        self.track_task(task.generation, handle).await;
         Ok(self
             .status_for_generation(task.generation)
             .await
@@ -312,6 +319,9 @@ impl VodPrefetchManager {
                     return Ok(active.status.clone());
                 }
                 active.cancellation.store(true, Ordering::Release);
+                if let Some(active_task) = active.task.take() {
+                    active_task.abort();
+                }
                 (
                     active.session_id.clone(),
                     active.manifest_url.clone(),
@@ -325,9 +335,10 @@ impl VodPrefetchManager {
             let active = inner
                 .active
                 .as_mut()
-                .expect("active VOD prefetch session should be retained");
+                .ok_or_else(|| AppError::internal("VOD 预取会话状态丢失"))?;
             active.generation = generation;
             active.cancellation = Arc::clone(&cancellation);
+            active.task = None;
             active.status = VodPrefetchStatus {
                 session_id: session_id.clone(),
                 state: VodPrefetchTaskState::Running,
@@ -349,7 +360,8 @@ impl VodPrefetchManager {
                 cancellation,
             }
         };
-        self.spawn_task(state, task.clone());
+        let handle = self.spawn_task(state, task.clone());
+        self.track_task(task.generation, handle).await;
         self.status_for_generation(task.generation)
             .await
             .ok_or_else(|| AppError::internal("VOD 预取会话状态丢失"))
@@ -382,12 +394,17 @@ impl VodPrefetchManager {
             let active = inner
                 .active
                 .as_mut()
-                .expect("active VOD prefetch session should be retained");
+                .ok_or_else(|| AppError::internal("VOD 预取会话状态丢失"))?;
             active.generation = generation;
             active.cancellation = Arc::clone(&cancellation);
+            active.task = None;
             active.status.state = VodPrefetchTaskState::Running;
             active.status.failure_reason = None;
             active.status.can_retry = false;
+            active.status.queued_count = 0;
+            active.status.completed_count = 0;
+            active.status.cached_count = 0;
+            active.status.cache_bytes = 0;
             VodPrefetchTaskConfig {
                 session_id: active_session_id,
                 manifest_url,
@@ -397,7 +414,8 @@ impl VodPrefetchManager {
                 cancellation,
             }
         };
-        self.spawn_task(state, task.clone());
+        let handle = self.spawn_task(state, task.clone());
+        self.track_task(task.generation, handle).await;
         self.status_for_generation(task.generation)
             .await
             .ok_or_else(|| AppError::internal("VOD 预取会话状态丢失"))
@@ -409,7 +427,7 @@ impl VodPrefetchManager {
         }
         let active = {
             let mut inner = self.inner.lock().await;
-            let Some(active) = inner.active.take() else {
+            let Some(mut active) = inner.active.take() else {
                 return Ok(None);
             };
             if session_id.is_some_and(|session_id| session_id != active.session_id) {
@@ -417,6 +435,9 @@ impl VodPrefetchManager {
                 return Err(AppError::bad_request("VOD 预取会话已过期"));
             }
             active.cancellation.store(true, Ordering::Release);
+            if let Some(active_task) = active.task.take() {
+                active_task.abort();
+            }
             active
         };
         if active.window_mode.is_full_episode() {
@@ -447,12 +468,30 @@ impl VodPrefetchManager {
         Ok(status)
     }
 
-    fn spawn_task(&self, state: AppState, task: VodPrefetchTaskConfig) {
+    fn spawn_task(&self, state: AppState, task: VodPrefetchTaskConfig) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
+            let full_episode = task.window_mode.is_full_episode();
             let result = prefetch_vod_assets(&state, &manager, &task).await;
-            manager.finish_task(task.generation, result).await;
-        });
+            manager
+                .finish_task(task.generation, result, full_episode)
+                .await;
+        })
+    }
+
+    async fn track_task(&self, generation: u64, handle: tokio::task::JoinHandle<()>) {
+        let mut inner = self.inner.lock().await;
+        if let Some(active) = inner
+            .active
+            .as_mut()
+            .filter(|active| active.generation == generation)
+        {
+            if let Some(previous) = active.task.replace(handle) {
+                previous.abort();
+            }
+        } else {
+            handle.abort();
+        }
     }
 
     async fn set_queue(&self, generation: u64, queued_count: usize) {
@@ -472,24 +511,37 @@ impl VodPrefetchManager {
         .await;
     }
 
-    async fn finish_task(&self, generation: u64, result: AppResult<()>) {
+    async fn finish_task(&self, generation: u64, result: AppResult<()>, full_episode: bool) {
         let cache_bytes = self.cache.byte_len().unwrap_or_default();
-        self.update_status(generation, |status| {
-            status.cache_bytes = cache_bytes;
-            match result {
-                Ok(()) => {
-                    status.state = VodPrefetchTaskState::Completed;
-                    status.failure_reason = None;
-                    status.can_retry = false;
-                }
-                Err(error) => {
-                    status.state = VodPrefetchTaskState::Paused;
-                    status.failure_reason = Some(error.message);
-                    status.can_retry = true;
+        let clear_temporary_ceiling = {
+            let mut inner = self.inner.lock().await;
+            let is_current = inner
+                .active
+                .as_ref()
+                .is_some_and(|active| active.generation == generation);
+            if is_current {
+                if let Some(active) = inner.active.as_mut() {
+                    active.task = None;
+                    active.status.cache_bytes = cache_bytes;
+                    match result {
+                        Ok(()) => {
+                            active.status.state = VodPrefetchTaskState::Completed;
+                            active.status.failure_reason = None;
+                            active.status.can_retry = false;
+                        }
+                        Err(error) => {
+                            active.status.state = VodPrefetchTaskState::Paused;
+                            active.status.failure_reason = Some(error.message);
+                            active.status.can_retry = true;
+                        }
+                    }
                 }
             }
-        })
-        .await;
+            full_episode && is_current
+        };
+        if clear_temporary_ceiling {
+            self.cache.clear_temporary_max_bytes();
+        }
     }
 
     async fn update_status(&self, generation: u64, update: impl FnOnce(&mut VodPrefetchStatus)) {
@@ -520,8 +572,11 @@ impl VodPrefetchManager {
             .as_ref()
             .is_some_and(|active| active.generation == generation)
         {
-            if let Some(active) = inner.active.take() {
+            if let Some(mut active) = inner.active.take() {
                 active.cancellation.store(true, Ordering::Release);
+                if let Some(active_task) = active.task.take() {
+                    active_task.abort();
+                }
             }
         }
     }
@@ -823,6 +878,9 @@ fn parse_media_playlist(manifest: &str) -> AppResult<Vec<VodPrefetchSegment>> {
                 duration_seconds,
             },
         });
+        if segments.len() > MAX_VOD_PREFETCH_SEGMENTS {
+            return Err(AppError::bad_request("VOD 媒体清单分段数量超出上限"));
+        }
         duration_seconds = 0.0;
     }
     if segments.is_empty() {

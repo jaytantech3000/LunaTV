@@ -1243,6 +1243,9 @@ function PlayPageClient() {
     if (onlineVodPrefetchStatus.state === 'completed') {
       return `已完成 ${onlineVodPrefetchStatus.completedCount} 个资源`;
     }
+    if (onlineVodPrefetchStatus.state === 'stopped') {
+      return '已停止';
+    }
     return `预取 ${onlineVodPrefetchStatus.completedCount}/${onlineVodPrefetchStatus.queuedCount}`;
   };
 
@@ -1332,6 +1335,7 @@ function PlayPageClient() {
     setOnlineVodPrefetchWindowMode(windowMode);
     onlineVodPrefetchWindowModeRef.current = windowMode;
     updateOnlineVodPrefetchPreferences({ windowMode });
+    manuallyStoppedOnlineVodPrefetchSessionRef.current = '';
     if (
       onlineVodPrefetchEnabledRef.current &&
       onlineVodPrefetchManifestUrlRef.current
@@ -1351,6 +1355,9 @@ function PlayPageClient() {
     const sessionId = onlineVodPrefetchSessionIdRef.current;
     if (!sessionId) {
       return '当前没有可重试的预取任务';
+    }
+    if (!onlineVodPrefetchStatus?.canRetry) {
+      return '当前预取无需重试';
     }
     void retryOnlineVodPrefetch(sessionId)
       .then((status) => {

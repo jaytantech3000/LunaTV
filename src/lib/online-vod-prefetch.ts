@@ -31,6 +31,8 @@ export const ONLINE_VOD_PREFETCH_UPDATED_EVENT =
 
 const ENABLED_STORAGE_KEY = 'onlineVodPrefetchEnabled';
 const WINDOW_MODE_STORAGE_KEY = 'onlineVodPrefetchWindowMode';
+// 预取控制接口只与本机本地服务交互，超时取宽裕值以防服务异常时请求永久挂起。
+const ONLINE_VOD_PREFETCH_TIMEOUT_MS = 10_000;
 
 function normalizeWindowMode(
   value: string | null
@@ -106,6 +108,7 @@ export function startOnlineVodPrefetch(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, manifestUrl, windowMode }),
+      timeoutMs: ONLINE_VOD_PREFETCH_TIMEOUT_MS,
     })
   );
 }
@@ -119,6 +122,7 @@ export function advanceOnlineVodPrefetch(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, segmentUrl }),
+      timeoutMs: ONLINE_VOD_PREFETCH_TIMEOUT_MS,
     })
   );
 }
@@ -131,6 +135,7 @@ export function retryOnlineVodPrefetch(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId }),
+      timeoutMs: ONLINE_VOD_PREFETCH_TIMEOUT_MS,
     })
   );
 }
@@ -139,7 +144,10 @@ export function getOnlineVodPrefetchStatus(
   sessionId: string
 ): Promise<OnlineVodPrefetchStatus | null> {
   return parsePrefetchResponse<OnlineVodPrefetchStatus | null>(
-    apiFetch('/api/vod-prefetch/session', { searchParams: { sessionId } })
+    apiFetch('/api/vod-prefetch/session', {
+      searchParams: { sessionId },
+      timeoutMs: ONLINE_VOD_PREFETCH_TIMEOUT_MS,
+    })
   );
 }
 
@@ -150,6 +158,7 @@ export function stopOnlineVodPrefetch(
     apiFetch('/api/vod-prefetch/session', {
       method: 'DELETE',
       searchParams: { sessionId },
+      timeoutMs: ONLINE_VOD_PREFETCH_TIMEOUT_MS,
     })
   );
 }
