@@ -18,6 +18,22 @@
 
 ---
 
+## Agnir Project Instructions
+
+This Project uses **Agnir** (Core `0.1`, profile `repository-filesystem/0.1`) for project-owned durable continuity. Before doing any Project work, an Agent MUST:
+
+1. Treat the Project root as the authorized Project Entry Point.
+2. Read the top-level `AGNIR.yaml`.
+3. Load Current State (`.agnir/state.md`) and Next Actions (`.agnir/next-actions.md`).
+4. Load Decisions (`.agnir/decisions.md`) and Evidence (`.agnir/evidence/`) when relevant to the task.
+5. Prefer durable Agnir Project truth over chat history or private Agent memory, unless superseded by a newer Principal instruction or directly observed current Project fact.
+6. At an intentional save/finish boundary, checkpoint material state, next-action, decision, and evidence changes into Agnir durable memory.
+7. Treat an authorized request to commit Project changes as a checkpoint boundary: reconcile material continuity before the commit, prefer code and Agnir changes in one revision, and treat a commit-and-push request as checkpoint + commit + push + verification when repository context applies.
+
+Project-specific Agent guidance lives in root `Agent.md`.
+
+---
+
 ## ✨ 功能特性
 
 - 🔍 **多源聚合搜索**：一次搜索立刻返回全源结果。
@@ -41,6 +57,7 @@
 
 ## 🗺 目录
 
+- [Agnir Project Instructions](#agnir-project-instructions)
 - [技术栈](#技术栈)
 - [开发环境与可复现安装](#开发环境与可复现安装)
 - [分支约束](#分支约束)

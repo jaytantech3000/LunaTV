@@ -1,0 +1,25 @@
+agnir:
+  version: "0.1"
+  discovery_profile: "repository-filesystem/0.1"
+
+project:
+  identity: "urn:agnir:project:moontv"
+
+memory:
+  state: ".agnir/state.md"
+  next_actions: ".agnir/next-actions.md"
+  decisions: ".agnir/decisions.md"
+  evidence: ".agnir/evidence/"
+
+policy:
+  checkpoint: event-driven
+
+extensions:
+  agnir/repository:
+    canonical: "MoonTechLab/LunaTV"
+    authoritative_ref: "desktop"
+  agnir/operations:
+    distribution: "agnir-agent-skill"
+    release: "0.1.0"
+    source: "iorLab/agnir"
+    applied_revision: "2a0cb7bf2068b11f361e315670b2f2dc497b2588"
