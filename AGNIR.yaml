@@ -16,7 +16,7 @@ policy:
 
 extensions:
   agnir/repository:
-    canonical: "MoonTechLab/LunaTV"
+    canonical: "jaytantech3000/LunaTV"
     authoritative_ref: "desktop"
   agnir/operations:
     distribution: "agnir-agent-skill"

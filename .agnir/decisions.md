@@ -14,3 +14,9 @@
 - Upgraded the applied Agnir operational package to stable release `v0.1.0` (source `iorLab/agnir`, immutable revision `2a0cb7bf2068b11f361e315670b2f2dc497b2588`).
 - Classification: compatible operational upgrade — Core line remains `0.1`, profile remains `repository-filesystem/0.1`; Project identity, memory locators, and durable memory content preserved.
 - Merged the commit-boundary checkpoint rule into `README.md` `## Agnir Project Instructions`; recorded operational provenance under `extensions.agnir/operations`.
+
+## D-003 — Correct repository canonical to fork source (2026-09-01)
+
+- Changed `agnir/repository.canonical` from `MoonTechLab/LunaTV` to `jaytantech3000/LunaTV` — the active `origin` remote where this work is actually pushed.
+- Rationale: upstream is `MoonTechLab/LunaTV`, but the working repository and push target is the fork `jaytantech3000/LunaTV`; `canonical` now matches where `authoritative_ref: desktop` is published.
+- Updated `.agnir/state.md` Identity to match.

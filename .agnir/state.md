@@ -5,7 +5,7 @@
 ## Identity
 
 - Project: MoonTV (npm package `moontv`)
-- Canonical repository: `MoonTechLab/LunaTV`
+- Canonical repository: `jaytantech3000/LunaTV`
 - Authoritative branch: `desktop`
 - Agnir identity: `urn:agnir:project:moontv`
 
