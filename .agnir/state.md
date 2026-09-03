@@ -22,6 +22,7 @@ MoonTV is a cross-platform media-aggregation player: multi-source search, detail
 
 - Branch `desktop` — desktop local download runtime, online VOD cache, and VOD prefetch.
 - Most recent merged features (see `FeatureLog.md`):
+  - Desktop download concurrency, real-time speed tracking, and retry resilience (6-worker chunk pool, EMA speed tracker, classified retries).
   - Desktop online VOD cache (async disk cache; 512 MiB total / 32 MiB per asset / 4 writers; manifests 15s TTL, keys 1h, segments 24h, LRU eviction).
   - Desktop active VOD prefetch (off / 30s / 1min / full-episode; persistent player setting defaults off).
 

@@ -9,6 +9,33 @@
 - 每条记录尽量包含：目标、核心改动、验证结果、后续待办。
 - 若功能有详细方案文档，优先链接到 `dev-plan/` 下的对应文件。
 
+## 2026-09-03 - Desktop download concurrency, real-time speed tracking, and retry resilience / 桌面端下载并发、实时测速与错误重试
+
+- Branch / 分支：`desktop`
+- Related files / 相关文件：
+  - `crates/moontv-local-service/src/download_runtime.rs`
+
+### Goal / 目标
+
+- Fix desktop offline download speed bottlenecks (single-stream sequential stalls), missing speed metrics, and non-retryable network error aborts.
+- 解决桌面版离线下载单连接串行速度慢、界面测速硬编码为 0、以及网络抖动/超时错误分类缺失导致任务提前失败的问题。
+
+### Core behavior / 核心行为
+
+- Concurrent resource download pool: Uses 6 concurrent workers per download task via `futures::stream::buffer_unordered` to maximize throughput.
+- 分片并发下载池：每个下载任务采用 6 并发分片通道流式下载，充分利用带宽提升吞吐量。
+- Dynamic smoothed speed tracking: Implements `DownloadSpeedTracker` (EMA) to compute real network transfer rate in bytes/sec and push live updates to the UI.
+- 平滑动态测速：实现基于指数移动平均（EMA）的瞬时传输速率统计，实时向前端推送准确下载速度。
+- Resilient retry classification: Classifies connection resets, timeouts, and 5xx/429/408 statuses as retryable with 3 exponential backoff retries.
+- 健壮错误分类与重试：将网络超时、连接重置和 5xx/429 状态码统一纳入重试，支持最多 3 次退避重试。
+- Direct fetch headers: Injects standard browser `User-Agent` (`DEFAULT_WEB_UA`) into direct requests to avoid CDN anti-scraping 403 blocks.
+- 直连请求头健全：为直连分片请求注入标准浏览器 User-Agent，避免防盗链 CDN 拦截。
+
+### Verification / 验证
+
+- `cargo test -p moontv-download`: 7 passed; 0 failed.
+- `cargo test -p moontv-local-service --lib download_runtime::tests`: 6 passed; 0 failed.
+
 ---
 
 ## 2026-08-06 - Desktop online VOD cache / 桌面端在线 VOD 缓存

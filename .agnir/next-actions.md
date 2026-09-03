@@ -8,8 +8,8 @@
 
 ## Desktop download / offline playback
 
-- [ ] Continue moving download task execution into the Rust sidecar (`crates/moontv-local-service`). Current boundary: the frontend still schedules tasks and computes progress; the sidecar owns storage and playback.
+- [ ] Monitor desktop download runtime performance under multi-task scenarios in production/beta feedback.
 
 ## Agnir bootstrap
 
-- [ ] At the first intentional checkpoint after continued work, reconcile this file and `.agnir/state.md` with present Project truth.
+- [x] At the first intentional checkpoint after continued work, reconcile this file and `.agnir/state.md` with present Project truth.

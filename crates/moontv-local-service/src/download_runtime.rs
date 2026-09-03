@@ -1,4 +1,12 @@
-use std::{collections::BTreeSet, convert::Infallible, sync::OnceLock, time::Duration};
+use std::{
+    collections::BTreeSet,
+    convert::Infallible,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use axum::{
     Json,
@@ -120,9 +128,10 @@ pub(crate) struct DesktopDownloadResourceIndexRecord {
 }
 
 const DOWNLOAD_MANIFEST_FETCH_TIMEOUT_MS: u64 = 20_000;
-const DOWNLOAD_RESOURCE_FETCH_TIMEOUT_MS: u64 = 45_000;
+const DOWNLOAD_RESOURCE_FETCH_TIMEOUT_MS: u64 = 30_000;
 const MAX_DOWNLOAD_MANIFEST_FETCH_RETRIES: usize = 2;
-const MAX_DOWNLOAD_RESOURCE_FETCH_RETRIES: usize = 2;
+const MAX_DOWNLOAD_RESOURCE_FETCH_RETRIES: usize = 3;
+const CONCURRENT_RESOURCE_DOWNLOAD_WORKERS: usize = 6;
 const MAX_DOWNLOAD_MANIFEST_CANDIDATE_URLS: usize = 8;
 const MAX_DOWNLOAD_MANIFEST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_DOWNLOAD_CONTENT_TYPE_LENGTH: usize = 128;
@@ -569,18 +578,20 @@ async fn send_download_request(
     timeout_ms: u64,
     request_identity_encoding: bool,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    let request = client
+    let mut request = client
         .get(url)
         .header(
             HeaderName::from_static(DOWNLOAD_MANIFEST_REQUEST_INTENT_HEADER),
             HeaderValue::from_static(BACKGROUND_DOWNLOAD_REQUEST_INTENT),
         )
+        .header(
+            reqwest::header::USER_AGENT,
+            HeaderValue::from_static(crate::DEFAULT_WEB_UA),
+        )
         .timeout(Duration::from_millis(timeout_ms));
-    let request = if request_identity_encoding {
-        request.header("accept-encoding", "identity")
-    } else {
-        request
-    };
+    if request_identity_encoding {
+        request = request.header("accept-encoding", "identity");
+    }
 
     request.send().await
 }
@@ -1740,6 +1751,33 @@ fn should_flush_download_runtime_progress(downloaded_resources: u32, total_resou
         || downloaded_resources % 5 == 0
 }
 
+fn is_retryable_download_resource_error(error: &AppError) -> bool {
+    if matches!(
+        error.code,
+        Some(DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED)
+            | Some(crate::DOWNLOAD_RUNTIME_ERROR_RESOURCE_RESPONSE_READ_FAILED)
+    ) {
+        return true;
+    }
+    if error.status.is_server_error()
+        || error.status == StatusCode::TOO_MANY_REQUESTS
+        || error.status == StatusCode::REQUEST_TIMEOUT
+        || error.status == StatusCode::BAD_GATEWAY
+        || error.status == StatusCode::GATEWAY_TIMEOUT
+    {
+        return true;
+    }
+    let msg = error.message.to_ascii_lowercase();
+    msg.contains("timeout")
+        || msg.contains("timed out")
+        || msg.contains("connection reset")
+        || msg.contains("connection refused")
+        || msg.contains("broken pipe")
+        || msg.contains("failed to read")
+        || msg.contains("failed to fetch")
+        || msg.contains("error sending request")
+}
+
 async fn fetch_and_cache_download_runtime_resource(
     state: &AppState,
     url: &str,
@@ -1758,11 +1796,7 @@ async fn fetch_and_cache_download_runtime_resource(
                 Ok(response) => response,
                 Err(error) => {
                     last_error = error.message.clone();
-                    let retryable = matches!(
-                        error.code,
-                        Some(DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED)
-                            | Some(crate::DOWNLOAD_RUNTIME_ERROR_RESOURCE_RESPONSE_READ_FAILED)
-                    );
+                    let retryable = is_retryable_download_resource_error(&error);
                     if attempt <= MAX_DOWNLOAD_RESOURCE_FETCH_RETRIES && retryable {
                         wait_for_download_manifest_retry(attempt).await;
                         continue;
@@ -1772,17 +1806,26 @@ async fn fetch_and_cache_download_runtime_resource(
             };
 
         if !fetched_response.status.is_success() {
+            let status = fetched_response.status;
             let detail =
                 summarize_manifest_error_body(&String::from_utf8_lossy(&fetched_response.body));
-            return Err(format!(
+            last_error = format!(
                 "failed to fetch download resource: {url} ({}{})",
-                fetched_response.status.as_u16(),
+                status.as_u16(),
                 if detail.is_empty() {
                     String::new()
                 } else {
                     format!(", {detail}")
                 }
-            ));
+            );
+            let retryable = status.is_server_error()
+                || status == StatusCode::TOO_MANY_REQUESTS
+                || status == StatusCode::REQUEST_TIMEOUT;
+            if attempt <= MAX_DOWNLOAD_RESOURCE_FETCH_RETRIES && retryable {
+                wait_for_download_manifest_retry(attempt).await;
+                continue;
+            }
+            return Err(last_error);
         }
 
         return state
@@ -1995,6 +2038,44 @@ async fn fail_download_runtime_task(
     Ok(())
 }
 
+#[derive(Debug)]
+struct DownloadSpeedTracker {
+    last_tick: tokio::time::Instant,
+    last_bytes: u64,
+    current_speed: u64,
+}
+
+impl DownloadSpeedTracker {
+    fn new(initial_bytes: u64) -> Self {
+        Self {
+            last_tick: tokio::time::Instant::now(),
+            last_bytes: initial_bytes,
+            current_speed: 0,
+        }
+    }
+
+    fn update(&mut self, current_bytes: u64) -> u64 {
+        let elapsed = self.last_tick.elapsed().as_secs_f64();
+        if elapsed >= 0.3 {
+            let bytes_delta = current_bytes.saturating_sub(self.last_bytes);
+            let instant_speed = (bytes_delta as f64 / elapsed).round() as u64;
+            self.current_speed = if self.current_speed == 0 {
+                instant_speed
+            } else {
+                ((self.current_speed as f64 * 0.3) + (instant_speed as f64 * 0.7)).round() as u64
+            };
+            self.last_bytes = current_bytes;
+            self.last_tick = tokio::time::Instant::now();
+        }
+        self.current_speed
+    }
+}
+
+struct DownloadChunkResult {
+    size_bytes: u64,
+    from_network: bool,
+}
+
 async fn execute_download_runtime_task(state: &AppState, task_id: &str) -> Result<(), String> {
     let Some(initial_task) = read_download_runtime_task(state, task_id).await else {
         return Ok(());
@@ -2048,39 +2129,78 @@ async fn execute_download_runtime_task(state: &AppState, task_id: &str) -> Resul
     let total_resources = manifest_result.resources.len() as u32;
     let mut downloaded_resources = 0_u32;
     let mut completed_size_bytes = 0_u64;
+    let mut network_transferred_bytes = 0_u64;
+    let mut speed_tracker = DownloadSpeedTracker::new(0);
 
-    for resource in &manifest_result.resources {
+    let aborted = Arc::new(AtomicBool::new(false));
+    let resources = manifest_result.resources.clone();
+
+    let mut download_stream = stream::iter(resources.into_iter())
+        .map(|resource| {
+            let state = state.clone();
+            let aborted = Arc::clone(&aborted);
+            async move {
+                if aborted.load(Ordering::Relaxed) {
+                    return Err("task cancelled or aborted".to_string());
+                }
+
+                if let Some(cache_entry) = state
+                    .read_cached_download_entry(&resource.url)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Ok(DownloadChunkResult {
+                        size_bytes: cache_entry.size_bytes,
+                        from_network: false,
+                    });
+                }
+
+                let cache_entry =
+                    fetch_and_cache_download_runtime_resource(&state, &resource.url).await?;
+
+                Ok(DownloadChunkResult {
+                    size_bytes: cache_entry.size_bytes,
+                    from_network: true,
+                })
+            }
+        })
+        .buffer_unordered(CONCURRENT_RESOURCE_DOWNLOAD_WORKERS);
+
+    let mut last_progress_flush = tokio::time::Instant::now();
+
+    while let Some(result) = download_stream.next().await {
         let Some(current_task) = read_download_runtime_task(state, task_id).await else {
+            aborted.store(true, Ordering::Relaxed);
             cleanup_download_runtime_cache_index(state, &task_after_manifest.cache_index_id)?;
             return Ok(());
         };
         if !is_download_runtime_task_running(&current_task) {
+            aborted.store(true, Ordering::Relaxed);
             return Ok(());
         }
 
-        let cache_entry = if let Some(cache_entry) = state
-            .read_cached_download_entry(&resource.url)
-            .map_err(|error| error.to_string())?
-        {
-            cache_entry
-        } else {
-            fetch_and_cache_download_runtime_resource(state, &resource.url).await?
+        let chunk = match result {
+            Ok(item) => item,
+            Err(error) => {
+                aborted.store(true, Ordering::Relaxed);
+                return Err(error);
+            }
         };
 
-        completed_size_bytes = completed_size_bytes.saturating_add(cache_entry.size_bytes);
+        completed_size_bytes = completed_size_bytes.saturating_add(chunk.size_bytes);
+        if chunk.from_network {
+            network_transferred_bytes = network_transferred_bytes.saturating_add(chunk.size_bytes);
+        }
         downloaded_resources = downloaded_resources.saturating_add(1);
 
-        if !should_flush_download_runtime_progress(downloaded_resources, total_resources) {
+        let should_flush = should_flush_download_runtime_progress(downloaded_resources, total_resources)
+            || last_progress_flush.elapsed() >= Duration::from_millis(400);
+
+        if !should_flush {
             continue;
         }
 
-        let Some(current_task) = read_download_runtime_task(state, task_id).await else {
-            cleanup_download_runtime_cache_index(state, &task_after_manifest.cache_index_id)?;
-            return Ok(());
-        };
-        if !is_download_runtime_task_running(&current_task) {
-            return Ok(());
-        }
+        last_progress_flush = tokio::time::Instant::now();
+        let speed = speed_tracker.update(network_transferred_bytes);
 
         let estimated_total_size_bytes = estimate_download_task_total_size_bytes(
             completed_size_bytes,
@@ -2094,7 +2214,7 @@ async fn execute_download_runtime_task(state: &AppState, task_id: &str) -> Resul
             task.size_bytes = completed_size_bytes;
             task.current_size_bytes = completed_size_bytes;
             task.estimated_total_size_bytes = estimated_total_size_bytes;
-            task.download_speed_bytes_per_second = 0;
+            task.download_speed_bytes_per_second = speed;
             task.progress = calculate_download_task_progress(downloaded_resources, total_resources);
             task.error_message = None;
             task.updated_at = crate::current_timestamp_ms();
@@ -2652,5 +2772,55 @@ mod tests {
         assert!(validate_download_fetch_url("https://cdn.example.com/index.m3u8").is_ok());
         // 回环有意放行，兼容自建 LAN 源与本地测试 mock。
         assert!(validate_download_fetch_url("http://127.0.0.1:18080/mock/index.m3u8").is_ok());
+    }
+
+    #[test]
+    fn test_download_speed_tracker_calculates_rate() {
+        let mut tracker = DownloadSpeedTracker::new(0);
+        // Initial speed should be 0
+        assert_eq!(tracker.current_speed, 0);
+
+        // Advance simulated time by altering last_tick
+        tracker.last_tick = tokio::time::Instant::now() - Duration::from_millis(500);
+        // 1 MB in 0.5s -> 2 MB/s
+        let speed = tracker.update(1_048_576);
+        assert!(speed > 1_500_000 && speed < 2_500_000);
+    }
+
+    #[test]
+    fn test_is_retryable_download_resource_error() {
+        let timeout_err = AppError::with_code(
+            StatusCode::BAD_GATEWAY,
+            DOWNLOAD_RUNTIME_ERROR_RESOURCE_FETCH_FAILED,
+            "timed out connecting to server",
+        );
+        assert!(is_retryable_download_resource_error(&timeout_err));
+
+        let gateway_err = AppError::with_code(
+            StatusCode::BAD_GATEWAY,
+            "upstream_error",
+            "502 Bad Gateway",
+        );
+        assert!(is_retryable_download_resource_error(&gateway_err));
+
+        let generic_internal_err = AppError::internal("request timed out");
+        assert!(is_retryable_download_resource_error(&generic_internal_err));
+
+        let fatal_404_err = AppError::with_code(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Resource not found",
+        );
+        assert!(!is_retryable_download_resource_error(&fatal_404_err));
+    }
+
+    #[test]
+    fn test_should_flush_download_runtime_progress() {
+        assert!(should_flush_download_runtime_progress(1, 100));
+        assert!(should_flush_download_runtime_progress(5, 100));
+        assert!(should_flush_download_runtime_progress(10, 100));
+        assert!(should_flush_download_runtime_progress(100, 100));
+        assert!(!should_flush_download_runtime_progress(2, 100));
+        assert!(!should_flush_download_runtime_progress(3, 100));
     }
 }
