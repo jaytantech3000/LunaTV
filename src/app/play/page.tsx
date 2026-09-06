@@ -47,6 +47,7 @@ import {
   isDesktopFollowUpdatesEnabled,
   mergeLatestEpisodeCountWithoutRegression,
 } from '@/lib/follow-updates';
+import { HlsFatalErrorRecovery, HlsFatalErrorType } from '@/lib/hls-recovery';
 import {
   advanceOnlineVodPrefetch,
   getOnlineVodPrefetchStatus,
@@ -3203,6 +3204,31 @@ function PlayPageClient() {
 
             const hls = new Hls(hlsConfig);
 
+            // Bounded recovery: unlimited startLoad/recoverMediaError retries
+            // make a failing VOD restart from the playlist head forever.
+            // startLoad on a VOD with an empty buffer reloads from the head,
+            // so snapshot the position and restore it once the stream
+            // buffers again.
+            let recoveryPosition: number | null = null;
+            const hlsRecovery = new HlsFatalErrorRecovery(
+              {
+                startLoad: () => {
+                  recoveryPosition = artPlayerRef.current?.currentTime || 0;
+                  hls.startLoad();
+                },
+                recoverMediaError: () => hls.recoverMediaError(),
+                swapAudioCodec: () => hls.swapAudioCodec(),
+              },
+              {
+                onExhausted: ({ message }) => {
+                  console.warn('HLS 恢复重试已达上限，停止播放');
+                  hls.destroy();
+                  setIsVideoLoading(false);
+                  setError(message);
+                },
+              }
+            );
+
             hls.on(Hls.Events.MEDIA_ATTACHED, () => {
               if (
                 !isOfflineMode &&
@@ -3220,6 +3246,22 @@ function PlayPageClient() {
             });
 
             hls.on(Hls.Events.FRAG_BUFFERED, () => {
+              // Playback is flowing again, so the recovery budget restarts.
+              hlsRecovery.reset();
+              // Restore the position lost to a startLoad restart from the
+              // playlist head; only when playback actually fell back.
+              if (
+                recoveryPosition !== null &&
+                recoveryPosition > 1 &&
+                video.currentTime < recoveryPosition - 5
+              ) {
+                try {
+                  video.currentTime = recoveryPosition;
+                } catch (err) {
+                  console.warn('恢复播放位置失败:', err);
+                }
+              }
+              recoveryPosition = null;
               markVideoReady();
             });
 
@@ -3241,26 +3283,23 @@ function PlayPageClient() {
               }
 
               if (data.fatal) {
-                switch (data.type) {
-                  case Hls.ErrorTypes.NETWORK_ERROR:
-                    if (isOfflineMode) {
-                      setIsVideoLoading(false);
-                      setError('离线资源缺失或缓存异常，请返回下载页重新下载');
-                      hls.destroy();
-                      break;
-                    }
-                    console.log('网络错误，尝试恢复...');
-                    hls.startLoad();
-                    break;
-                  case Hls.ErrorTypes.MEDIA_ERROR:
-                    console.log('媒体错误，尝试恢复...');
-                    hls.recoverMediaError();
-                    break;
-                  default:
-                    console.log('无法恢复的错误');
-                    hls.destroy();
-                    break;
+                if (
+                  data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+                  isOfflineMode
+                ) {
+                  setIsVideoLoading(false);
+                  setError('离线资源缺失或缓存异常，请返回下载页重新下载');
+                  hls.destroy();
+                  return;
                 }
+                const fatalType: HlsFatalErrorType =
+                  data.type === Hls.ErrorTypes.NETWORK_ERROR
+                    ? 'network'
+                    : data.type === Hls.ErrorTypes.MEDIA_ERROR
+                    ? 'media'
+                    : 'other';
+                console.warn('HLS 致命错误，执行受限恢复:', fatalType);
+                hlsRecovery.handleFatal(fatalType);
               }
             });
           },

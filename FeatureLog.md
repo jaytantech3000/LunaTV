@@ -9,6 +9,41 @@
 - 每条记录尽量包含：目标、核心改动、验证结果、后续待办。
 - 若功能有详细方案文档，优先链接到 `dev-plan/` 下的对应文件。
 
+## 2026-09-04 - Bounded HLS fatal-error recovery to stop endless VOD restarts / 受限的 HLS 致命错误恢复，修复点播反复从头重播
+
+- Branch / 分支：`desktop`
+- Related files / 相关文件：
+  - `src/lib/hls-recovery.ts`
+  - `src/lib/hls-recovery.test.ts`
+  - `src/app/play/page.tsx`
+
+### Goal / 目标
+
+- Fix on-demand (VOD) playback endlessly restarting from the beginning when the stream keeps failing at startup, especially in the desktop online playback path.
+- 修复点播起播阶段持续失败时视频不断从头重新播放的问题（桌面版在线播放路径最明显）。
+
+### Core behavior / Core behavior
+
+- Root cause (verified by local reproduction with CDP-driven Chromium): the player recovered every fatal hls.js error without a cap (`startLoad()` for network errors, `recoverMediaError()` for media errors). For VOD with an empty buffer, `startLoad()` reloads the stream from the playlist head, so a source that keeps failing mid-playback produced the observed loop: play → fatal error → restart from the head → play → …, with the loading overlay flashing between cycles. Plain-browser playback of a healthy source stayed stable throughout, isolating the loop to the error-recovery path.
+- 根因（经本地 CDP 驱动 Chromium 复现验证）：播放器对 hls.js 致命错误无限恢复（网络错误一律 `startLoad()`、媒体错误一律 `recoverMediaError()`）。VOD 缓冲为空时 `startLoad()` 会从清单头重新加载，播放中持续失败的源会形成“播放 → 致命错误 → 从头重播 → 再播放”的循环，且每次循环伴随加载蒙层闪烁。健康源在纯浏览器中全程稳定播放，进一步排除常规播放链路。
+- New bounded recovery policy `HlsFatalErrorRecovery`: at most 3 network recoveries and 3 media recoveries (second media recovery also swaps the audio codec); unrecoverable fatal errors stop immediately; the budget resets once fragments buffer successfully again.
+- 新增受限恢复策略 `HlsFatalErrorRecovery`：网络错误最多恢复 3 次、媒体错误最多恢复 3 次（第二次媒体恢复同时 `swapAudioCodec()`）；不可恢复错误立即停止；分片成功缓冲后重置预算。
+- Position-preserving recovery: before `startLoad()` the current playback position is snapshotted; once a fragment buffers again after recovery, playback seeks back to the snapshot if it actually fell back toward the head, so bounded retries no longer lose progress.
+- 保位恢复：`startLoad()` 前快照当前播放位置；恢复后有分片成功缓冲且进度确实回退到片头附近时跳回快照位置，受限重试不再丢失播放进度。
+- On exhaustion the hls instance is destroyed and a clear error message is surfaced through the existing error overlay instead of looping.
+- 重试耗尽后销毁 hls 实例，并通过现有错误浮层给出明确提示，不再无限循环。
+
+### Verification / 验证
+
+- `pnpm test -- src/lib/hls-recovery.test.ts`: 10 passed; 0 failed.
+- `pnpm typecheck`: passed.
+- Local reproduction (dev server + headless Chromium via CDP): healthy source (ikun) played continuously with zero recovery events and no restarts; failing source (upstream 500/404) showed the fatal error path with bounded recovery and no unbounded retry storm.
+- Not yet verified on a real desktop playback session (needs a source that reproduces the fatal-error loop on the user's machine).
+- 本地复现验证（dev 服务 + CDP 无头 Chromium）：健康源（ikun）全程连续播放，零恢复事件、零重播；失败源（上游 500/404）触发致命错误路径，恢复有界，未再出现无限重试风暴。
+- 尚未在真实桌面版播放会话中验证（需在用户机器上能复现致命错误循环的源）。
+
+---
+
 ## 2026-09-03 - Desktop download concurrency, real-time speed tracking, and retry resilience / 桌面端下载并发、实时测速与错误重试
 
 - Branch / 分支：`desktop`
