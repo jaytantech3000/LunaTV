@@ -1,7 +1,73 @@
 {
-  "generatedAt": "2026-09-03T10:13:08.020Z",
+  "generatedAt": "2026-09-06T18:36:05.394Z",
   "repository": "jaytantech3000/LunaTV",
   "releases": [
+    {
+      "id": "383675863",
+      "tagName": "desktop-v200.0.1-beta.52",
+      "version": "200.0.1-beta.52",
+      "name": "LunaTV Desktop 200.0.1 Beta 52",
+      "prerelease": true,
+      "publishedAt": "2026-09-06T18:20:00Z",
+      "htmlUrl": "https://github.com/jaytantech3000/LunaTV/releases/tag/desktop-v200.0.1-beta.52",
+      "notes": "**Full Changelog**: https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.51...desktop-v200.0.1-beta.52",
+      "changeSummary": {
+        "en": {
+          "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.51...desktop-v200.0.1-beta.52",
+          "added": [],
+          "changed": [],
+          "fixed": [
+            "desktop: bound HLS fatal-error recovery to stop endless VOD replay"
+          ],
+          "other": [
+            "agnir: migrate to Agnir Core/profile 1.0"
+          ]
+        },
+        "zh-CN": {
+          "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.51...desktop-v200.0.1-beta.52",
+          "added": [],
+          "changed": [],
+          "fixed": [
+            "桌面端：bound HLS fatal-error recovery to stop endless VOD replay"
+          ],
+          "other": [
+            "agnir：migrate to Agnir Core/profile 1.0"
+          ]
+        }
+      },
+      "assets": [
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.52_windows-x64-setup.exe",
+          "platformLabel": "Windows x64",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.52/LunaTV.Desktop_200.0.1-beta.52_windows-x64-setup.exe",
+          "size": 32645681
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.52_macos-arm64.app.tar.gz",
+          "platformLabel": "macOS Apple Silicon",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.52/LunaTV.Desktop_200.0.1-beta.52_macos-arm64.app.tar.gz",
+          "size": 37958603
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.52_macos-arm64.dmg",
+          "platformLabel": "macOS Apple Silicon",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.52/LunaTV.Desktop_200.0.1-beta.52_macos-arm64.dmg",
+          "size": 38407451
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.52_macos-x64.app.tar.gz",
+          "platformLabel": "macOS Intel",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.52/LunaTV.Desktop_200.0.1-beta.52_macos-x64.app.tar.gz",
+          "size": 38592620
+        },
+        {
+          "fileName": "LunaTV.Desktop_200.0.1-beta.52_macos-x64.dmg",
+          "platformLabel": "macOS Intel",
+          "downloadUrl": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.52/LunaTV.Desktop_200.0.1-beta.52_macos-x64.dmg",
+          "size": 39175495
+        }
+      ]
+    },
     {
       "id": "381908833",
       "tagName": "desktop-v200.0.1-beta.51",
@@ -84,18 +150,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.49...desktop-v200.0.1-beta.50",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: harden offline download engine and close SSRF/cache gaps"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.49...desktop-v200.0.1-beta.50",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：harden offline download engine and close SSRF/缓存 gaps"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -212,18 +274,14 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.47...desktop-v200.0.1-beta.48",
-          "added": [
-            "desktop: link updater to download site"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.47...desktop-v200.0.1-beta.48",
-          "added": [
-            "桌面端：link updater to download site"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
@@ -276,18 +334,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.46...desktop-v200.0.1-beta.47",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: harden download runtime and release history"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.46...desktop-v200.0.1-beta.47",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：harden download runtime and 发布 history"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -338,23 +392,15 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.45...desktop-v200.0.1-beta.46",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: stabilize offline download sync and resume"
-          ],
-          "other": [
-            "ignore OpenNext and Wrangler local artifacts"
-          ]
+          "fixed": [],
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.45...desktop-v200.0.1-beta.46",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：stabilize offline download sync and resume"
-          ],
-          "other": [
-            "ignore OpenNext and Wrangler local artifacts"
-          ]
+          "fixed": [],
+          "other": []
         }
       },
       "assets": [
@@ -464,27 +510,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.43...desktop-v200.0.1-beta.44",
-          "added": [
-            "desktop: add online VOD cache",
-            "desktop: add active VOD prefetch"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "set English as default project language"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.43...desktop-v200.0.1-beta.44",
-          "added": [
-            "桌面端：增加 online VOD 缓存",
-            "桌面端：增加 active VOD prefetch"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "set English as default project language"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -596,18 +632,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.41...desktop-v200.0.1-beta.42",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: isolate local auth from profile sync"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.41...desktop-v200.0.1-beta.42",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：isolate local 登录 from profile sync"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -656,151 +688,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.40...desktop-v200.0.1-beta.41",
-          "added": [
-            "desktop: align shell with luna reference",
-            "desktop: align luna card experience",
-            "desktop: unify shared app surfaces",
-            "profile: add local sync operation journal",
-            "storage: persist profile sync worker state",
-            "local service: enqueue local profile mutations",
-            "profile sync: scope web merges by domain",
-            "profile: drain local sync outbox in background",
-            "image: cache validated desktop posters locally",
-            "profile: surface local sync queue status",
-            "desktop: allow guest browsing and unify theme control",
-            "desktop: expose privileged entries to guests",
-            "desktop: verify identity at admin boundary",
-            "desktop: gate account sync login on demand"
-          ],
-          "changed": [
-            "desktop: use admin default username",
-            "desktop: harden Tauri content security policy"
-          ],
-          "fixed": [
-            "desktop: lock landscape backdrop to viewport",
-            "desktop: align home card geometry",
-            "desktop: soften card info overlays",
-            "desktop: strengthen poster contrast and hover",
-            "desktop: soften light backdrop contrast",
-            "home: align favorite card sizing",
-            "security: harden desktop and auth sessions",
-            "desktop: refine sidebar and poster proportions",
-            "profile: preserve outbox ordering and operation identity",
-            "profile: persist sync device identity",
-            "test: align profile fixtures with hardened auth",
-            "profile: coordinate concurrent profile requests",
-            "profile: preserve search history and reauth state",
-            "profile: share favorite read coordination",
-            "profile sync: forward selected merge domains",
-            "profile: persist reauth status across restart",
-            "image: synchronize cache and share flight errors",
-            "profile: gate and serialize local journal writes",
-            "desktop: allow local dev frontend CORS",
-            "profile: allow guest sync onboarding",
-            "security: require native admin capability",
-            "security: enforce admin capability for onboarding",
-            "profile sync: resolve onboarding local owner",
-            "profile sync: gate remote onboarding with local admin",
-            "account sync: keep guest onboarding available on status errors",
-            "authenticate native profile sync diagnostics",
-            "deps: restore pnpm v9 lockfile",
-            "desktop: enforce fail-closed CSP gate",
-            "desktop: avoid watcher no-op writes",
-            "desktop: fail closed on ambiguous watcher input",
-            "desktop: fail closed on ambiguous version inputs",
-            "desktop: clarify local-first storage status",
-            "make VideoCard metadata panel adaptive",
-            "tune title-only VideoCard bottom spacing",
-            "desktop: correct UserMenu storage status tags",
-            "desktop: correct UserMenu remote status tags",
-            "desktop: simplify UserMenu storage tags",
-            "desktop: refine user menu status indicators",
-            "desktop: restore status tag height"
-          ],
-          "other": [
-            "ignore local hermes artifacts",
-            "stabilize project quality gates",
-            "desktop: accept loopback connect timeouts",
-            "profile sync: assert onboarding account error fields",
-            "account sync: cover guest local authorization gate",
-            "remove unused native token test import",
-            "make pnpm installs reproducible",
-            "clean audited rust and eslint warnings"
-          ]
+          "added": [],
+          "changed": [],
+          "fixed": [],
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.40...desktop-v200.0.1-beta.41",
-          "added": [
-            "桌面端：align shell with luna reference",
-            "桌面端：align luna card experience",
-            "桌面端：unify shared app surfaces",
-            "资料：增加 local sync operation journal",
-            "storage：持久化 profile sync worker state",
-            "local service：enqueue local profile mutations",
-            "profile sync：scope web merges by domain",
-            "资料：drain local sync outbox in background",
-            "image：缓存 validated 桌面端 posters locally",
-            "资料：surface local sync queue status",
-            "桌面端：allow guest browsing and unify theme control",
-            "桌面端：expose privileged entries to guests",
-            "桌面端：verify identity at admin boundary",
-            "桌面端：gate account sync login on demand"
-          ],
-          "changed": [
-            "桌面端：use admin default username",
-            "桌面端：harden Tauri content security policy"
-          ],
-          "fixed": [
-            "桌面端：lock landscape backdrop to viewport",
-            "桌面端：align home card geometry",
-            "桌面端：soften card info overlays",
-            "桌面端：strengthen poster contrast and hover",
-            "桌面端：soften light backdrop contrast",
-            "home：align favorite card sizing",
-            "security：harden 桌面端 and 登录 sessions",
-            "桌面端：refine sidebar and poster proportions",
-            "资料：preserve outbox ordering and operation identity",
-            "资料：持久化 sync device identity",
-            "test：align profile fixtures with hardened 登录",
-            "资料：coordinate concurrent profile requests",
-            "资料：preserve search history and re登录 state",
-            "资料：share favorite read coordination",
-            "profile sync：forward selected merge domains",
-            "资料：持久化 re登录 status across restart",
-            "image：synchronize 缓存 and share flight errors",
-            "资料：gate and serialize local journal writes",
-            "桌面端：allow local dev frontend CORS",
-            "资料：allow guest sync onboarding",
-            "security：require native admin capability",
-            "security：enforce admin capability for onboarding",
-            "profile sync：resolve onboarding local owner",
-            "profile sync：gate remote onboarding with local admin",
-            "account sync：keep guest onboarding available on status errors",
-            "登录enticate native profile sync diagnostics",
-            "deps：恢复 pnpm v9 lockfile",
-            "桌面端：enforce fail-closed CSP gate",
-            "桌面端：避免 watcher no-op writes",
-            "桌面端：fail closed on ambiguous watcher input",
-            "桌面端：fail closed on ambiguous version inputs",
-            "桌面端：clarify local-first storage status",
-            "make VideoCard metadata panel adaptive",
-            "tune title-only VideoCard bottom spacing",
-            "桌面端：correct UserMenu storage status tags",
-            "桌面端：correct UserMenu remote status tags",
-            "桌面端：simplify UserMenu storage tags",
-            "桌面端：refine user menu status indicators",
-            "桌面端：恢复 status tag height"
-          ],
-          "other": [
-            "ignore local hermes artifacts",
-            "stabilize project quality gates",
-            "桌面端：accept loopback connect timeouts",
-            "profile sync：assert onboarding account error fields",
-            "account sync：cover guest local 登录orization gate",
-            "remove unused native token test import",
-            "make pnpm installs reproducible",
-            "clean audited rust and eslint warnings"
-          ]
+          "added": [],
+          "changed": [],
+          "fixed": [],
+          "other": []
         }
       },
       "assets": [
@@ -848,29 +746,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.39...desktop-v200.0.1-beta.40",
-          "added": [
-            "download site: refine theme and platform highlighting"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: preserve profile sync credentials on restart"
-          ],
-          "other": [
-            "spec: add download site theme highlight design"
-          ]
+          "fixed": [],
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.39...desktop-v200.0.1-beta.40",
-          "added": [
-            "download site：refine theme and platform highlighting"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：preserve profile sync credentials on restart"
-          ],
-          "other": [
-            "spec：增加 download site theme highlight design"
-          ]
+          "fixed": [],
+          "other": []
         }
       },
       "assets": [
@@ -920,18 +806,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.38...desktop-v200.0.1-beta.39",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: persist and refresh profile sync state"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.38...desktop-v200.0.1-beta.39",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：持久化 and refresh profile sync state"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -1060,29 +942,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.36...desktop-v200.0.1-beta.37",
-          "added": [
-            "desktop: integrate account sync updates"
-          ],
-          "changed": [
-            "Merge remote-tracking branch 'origin/desktop' into codex/music"
-          ],
+          "added": [],
+          "changed": [],
           "fixed": [],
-          "other": [
-            "add yesplaymusic interface api study"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.36...desktop-v200.0.1-beta.37",
-          "added": [
-            "桌面端：integrate account sync updates"
-          ],
-          "changed": [
-            "Merge remote-tracking branch 'origin/桌面端' into codex/音乐"
-          ],
+          "added": [],
+          "changed": [],
           "fixed": [],
-          "other": [
-            "增加 yesplay音乐 interface API study"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -1131,24 +1001,16 @@
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.34...desktop-v200.0.1-beta.36",
           "added": [],
-          "changed": [
-            "remove legacy music module"
-          ],
+          "changed": [],
           "fixed": [],
-          "other": [
-            "release: remove internal desktop release flow"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.34...desktop-v200.0.1-beta.36",
           "added": [],
-          "changed": [
-            "remove legacy 音乐 module"
-          ],
+          "changed": [],
           "fixed": [],
-          "other": [
-            "发布：remove internal 桌面端 发布 flow"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -1196,25 +1058,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.20...desktop-v200.0.1-beta.35",
-          "added": [
-            "desktop: integrate account sync updates"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "add yesplaymusic interface api study"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.20...desktop-v200.0.1-beta.35",
-          "added": [
-            "桌面端：integrate account sync updates"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "增加 yesplay音乐 interface API study"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -1264,18 +1118,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.33...desktop-v200.0.1-beta.34",
           "added": [],
           "changed": [],
-          "fixed": [
-            "profile sync: preserve desktop sync state on refresh"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.33...desktop-v200.0.1-beta.34",
           "added": [],
           "changed": [],
-          "fixed": [
-            "profile sync：preserve 桌面端 sync state on refresh"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -1326,18 +1176,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.32...desktop-v200.0.1-beta.33",
           "added": [],
           "changed": [],
-          "fixed": [
-            "profile sync: honor web-first admin settings"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.32...desktop-v200.0.1-beta.33",
           "added": [],
           "changed": [],
-          "fixed": [
-            "profile sync：honor web-first admin settings"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -1388,18 +1234,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.31...desktop-v200.0.1-beta.32",
           "added": [],
           "changed": [],
-          "fixed": [
-            "local service: sync enable web music admin setting"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.31...desktop-v200.0.1-beta.32",
           "added": [],
           "changed": [],
-          "fixed": [
-            "local service：同步 enable web 音乐 admin setting"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -1450,18 +1292,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.30...desktop-v200.0.1-beta.31",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: restore session reuse and sync settings"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.30...desktop-v200.0.1-beta.31",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：恢复 session reuse and sync settings"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -1510,25 +1348,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.29...desktop-v200.0.1-beta.30",
-          "added": [
-            "desktop: simplify account sync and config flow"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "add account sync minimal redesign spec"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.29...desktop-v200.0.1-beta.30",
-          "added": [
-            "桌面端：simplify account sync and config flow"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "增加 account sync minimal redesign spec"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -1576,24 +1406,16 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.28...desktop-v200.0.1-beta.29",
-          "added": [
-            "desktop admin: improve profile sync onboarding feedback"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "profile sync: sync admin panel and quiet follow refresh"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.28...desktop-v200.0.1-beta.29",
-          "added": [
-            "桌面端 admin：improve profile sync onboarding feedback"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "profile sync：同步 admin panel and quiet follow refresh"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -1642,18 +1464,14 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.27...desktop-v200.0.1-beta.28",
-          "added": [
-            "desktop: add copy action for sync errors"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.27...desktop-v200.0.1-beta.28",
-          "added": [
-            "桌面端：增加 copy action for sync errors"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
@@ -1704,29 +1522,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.26...desktop-v200.0.1-beta.27",
-          "added": [
-            "expose desktop account sync entry"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "add music reset design spec",
-            "refine music reset migration spec",
-            "align download execution fallback coverage"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.26...desktop-v200.0.1-beta.27",
-          "added": [
-            "expose 桌面端 account sync entry"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "增加音乐 reset design spec",
-            "refine 音乐 reset migration spec",
-            "align download execution fallback coverage"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -1776,18 +1582,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.25...desktop-v200.0.1-beta.26",
           "added": [],
           "changed": [],
-          "fixed": [
-            "ci: report partial desktop release failures"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.25...desktop-v200.0.1-beta.26",
           "added": [],
           "changed": [],
-          "fixed": [
-            "ci：report partial 桌面端 发布 failures"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -1836,18 +1638,14 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.24...desktop-v200.0.1-beta.25",
-          "added": [
-            "desktop: add profile sync onboarding flow"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.24...desktop-v200.0.1-beta.25",
-          "added": [
-            "桌面端：增加 profile sync onboarding flow"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
@@ -1888,18 +1686,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.23...desktop-v200.0.1-beta.24",
           "added": [],
           "changed": [],
-          "fixed": [
-            "music: route desktop api clients through local service"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.23...desktop-v200.0.1-beta.24",
           "added": [],
           "changed": [],
-          "fixed": [
-            "音乐：通过local service转发桌面端 API clients"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -1950,18 +1744,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.22...desktop-v200.0.1-beta.23",
           "added": [],
           "changed": [],
-          "fixed": [
-            "music: default-enable music entry"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.22...desktop-v200.0.1-beta.23",
           "added": [],
           "changed": [],
-          "fixed": [
-            "音乐：default-enable 音乐 entry"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -2010,57 +1800,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.20...desktop-v200.0.1-beta.22",
-          "added": [
-            "music: add playback state core",
-            "music: add playback services",
-            "music: build rebuilt player surfaces",
-            "music: rebuild desktop netease music flow",
-            "music: persist desktop music preferences",
-            "music: restore desktop playback sessions",
-            "music: add desktop downloads and account sync"
-          ],
-          "changed": [
-            "music: bootstrap big-bang shell",
-            "music: replace legacy data layer with fixtures"
-          ],
+          "added": [],
+          "changed": [],
           "fixed": [],
-          "other": [
-            "music: add GitHub player research memo",
-            "music: add rebuild phase 1 design",
-            "music: switch rebuild docs to big-bang",
-            "music: verify big-bang rebuild shell",
-            "music: update progress ledger",
-            "music: add phase2 netease slice design",
-            "music: add phase3a account login design",
-            "music: add phase3a account login plan"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.20...desktop-v200.0.1-beta.22",
-          "added": [
-            "音乐：增加 playback state core",
-            "音乐：增加 playback services",
-            "音乐：build rebuilt player surfaces",
-            "音乐：rebuild 桌面端 网易云 音乐 flow",
-            "音乐：持久化桌面端 音乐 preferences",
-            "音乐：恢复桌面端 playback sessions",
-            "音乐：增加桌面端 downloads and account sync"
-          ],
-          "changed": [
-            "音乐：bootstrap big-bang shell",
-            "音乐：用fixtures替换 legacy data layer"
-          ],
+          "added": [],
+          "changed": [],
           "fixed": [],
-          "other": [
-            "音乐：增加 GitHub player research memo",
-            "音乐：增加 rebuild phase 1 design",
-            "音乐：switch rebuild docs to big-bang",
-            "音乐：verify big-bang rebuild shell",
-            "音乐：调整 progress ledger",
-            "音乐：增加 phase2 网易云 slice design",
-            "音乐：增加 phase3a account login design",
-            "音乐：增加 phase3a account login plan"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -2108,25 +1858,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.20...desktop-v200.0.1-beta.21",
-          "added": [
-            "music: refactor player to yesplaymusic"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "music: add GitHub player research memo"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.20...desktop-v200.0.1-beta.21",
-          "added": [
-            "音乐：refactor player to yesplay音乐"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "音乐：增加 GitHub player research memo"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -2174,25 +1916,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.19...desktop-v200.0.1-beta.20",
-          "added": [
-            "improve music player playback and jamendo fallback"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "music: add player redesign spec"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.19...desktop-v200.0.1-beta.20",
-          "added": [
-            "improve 音乐 player playback and jamendo fallback"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "音乐：增加 player redesign spec"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -2242,18 +1976,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.18...desktop-v200.0.1-beta.19",
           "added": [],
           "changed": [],
-          "fixed": [
-            "music: scope desktop player surfaces"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.18...desktop-v200.0.1-beta.19",
           "added": [],
           "changed": [],
-          "fixed": [
-            "音乐：scope 桌面端 player surfaces"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -2304,18 +2034,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.17...desktop-v200.0.1-beta.18",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: reject stale bundled music sidecars"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.17...desktop-v200.0.1-beta.18",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：reject stale bundled 音乐 sidecars"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -2366,18 +2092,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.16...desktop-v200.0.1-beta.17",
           "added": [],
           "changed": [],
-          "fixed": [
-            "music: clarify desktop source availability"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.16...desktop-v200.0.1-beta.17",
           "added": [],
           "changed": [],
-          "fixed": [
-            "音乐：clarify 桌面端 source availability"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -2426,30 +2148,16 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.15...desktop-v200.0.1-beta.16",
-          "added": [
-            "release: automate tags and publish download site",
-            "download site: render desktop-style release summaries"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "download site: show release notes inline",
-            "download site: keep notes in release tab",
-            "desktop: restart stale music sidecars and enable jamendo"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.15...desktop-v200.0.1-beta.16",
-          "added": [
-            "发布：automate tags and publish download site",
-            "download site：render 桌面端-style 版本摘要"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "download site：show 发布 说明 inline",
-            "download site：keep 说明 in 发布 tab",
-            "桌面端：restart stale 音乐 sidecars and enable jamendo"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -2498,29 +2206,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.14...desktop-v200.0.1-beta.15",
-          "added": [
-            "music: add audius and jamendo providers"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: separate asset labels from filenames"
-          ],
-          "other": [
-            "pnpm: record blocked build approvals"
-          ]
+          "fixed": [],
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.14...desktop-v200.0.1-beta.15",
-          "added": [
-            "音乐：增加 audius and jamendo providers"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：separate asset labels from filenames"
-          ],
-          "other": [
-            "pnpm：record blocked build approvals"
-          ]
+          "fixed": [],
+          "other": []
         }
       },
       "assets": [
@@ -2571,18 +2267,14 @@
           "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "desktop: label release assets by platform"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-internal-run43-a1...desktop-v200.0.1-beta.14",
           "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "桌面端：label 发布 assets by platform"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -2632,18 +2324,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.12...desktop-v200.0.1-beta.13",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: normalize assets and restore music entry"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.12...desktop-v200.0.1-beta.13",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：normalize assets and restore 音乐 entry"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -2694,18 +2382,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.11...desktop-v200.0.1-beta.12",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: unblock prerelease frontend build"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.11...desktop-v200.0.1-beta.12",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：unblock 预发布 frontend build"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -2756,18 +2440,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.9...desktop-v200.0.1-beta.10",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: wait for play record bootstrap"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.9...desktop-v200.0.1-beta.10",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：wait for 播放记录 bootstrap"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -2818,18 +2498,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.8...desktop-v200.0.1-beta.9",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: localize beta release compares"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.8...desktop-v200.0.1-beta.9",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：localize beta 发布 compares"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -2878,26 +2554,16 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.7...desktop-v200.0.1-beta.8",
-          "added": [
-            "music: power desktop music api with netease",
-            "music: replace web mocks with netease routes"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: restore beta release summaries"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.7...desktop-v200.0.1-beta.8",
-          "added": [
-            "音乐：用网易云驱动桌面音乐 API",
-            "音乐：用网易云路由替换 Web Mock"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：恢复 Beta 版本摘要"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -2946,26 +2612,16 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.6...desktop-v200.0.1-beta.7",
-          "added": [
-            "music: persist local profile activity",
-            "music: route desktop local profile through local service"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: recover startup local auth flows"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.6...desktop-v200.0.1-beta.7",
-          "added": [
-            "音乐：持久化 local profile activity",
-            "音乐：通过local service转发桌面端 local profile"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：恢复启动阶段的本地登录流程"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3016,18 +2672,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.5...desktop-v200.0.1-beta.6",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: quiet startup profile errors and localize prerelease history"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.5...desktop-v200.0.1-beta.6",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：quiet startup profile errors and localize 预发布 history"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3078,18 +2730,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.4...desktop-v200.0.1-beta.5",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: localize release history and restore login fallback"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.4...desktop-v200.0.1-beta.5",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：localize 发布 history and restore login fallback"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3140,23 +2788,15 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.3...desktop-v200.0.1-beta.4",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: skip media routes in static export"
-          ],
-          "other": [
-            "restore husky hook permissions"
-          ]
+          "fixed": [],
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.3...desktop-v200.0.1-beta.4",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：skip media 路由 in static export"
-          ],
-          "other": [
-            "恢复 husky hook permissions"
-          ]
+          "fixed": [],
+          "other": []
         }
       },
       "assets": [
@@ -3204,18 +2844,14 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.1...desktop-v200.0.1-beta.2",
-          "added": [
-            "compact desktop release cards"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.1-beta.1...desktop-v200.0.1-beta.2",
-          "added": [
-            "精简桌面版本卡片"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
@@ -3269,18 +2905,14 @@
           "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "desktop: bump prerelease base to 200.0.1"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.23...desktop-v200.0.1-beta.1",
           "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "桌面端：bump 预发布 base to 200.0.1"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -3330,18 +2962,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.21...desktop-v200.0.0",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: restore updater prerelease build"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.21...desktop-v200.0.0",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：恢复 updater 预发布 build"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3392,18 +3020,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0...desktop-v200.0.0-beta.23",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: fall back to proxy updater after github timeout"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0...desktop-v200.0.0-beta.23",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：fall back to proxy updater after github timeout"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3454,18 +3078,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.21...desktop-v200.0.0-beta.22",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: restore updater prerelease build"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.21...desktop-v200.0.0-beta.22",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：恢复 updater 预发布 build"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3514,25 +3134,15 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.19...desktop-v200.0.0-beta.20",
-          "added": [
-            "support resumable desktop update downloads"
-          ],
-          "changed": [
-            "replace native release confirm dialog",
-            "unify desktop dialog chrome"
-          ],
+          "added": [],
+          "changed": [],
           "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.19...desktop-v200.0.0-beta.20",
-          "added": [
-            "支持 resumable 桌面端 update downloads"
-          ],
-          "changed": [
-            "replace native 发布 confirm dialog",
-            "unify 桌面端 dialog chrome"
-          ],
+          "added": [],
+          "changed": [],
           "fixed": [],
           "other": []
         }
@@ -3584,18 +3194,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.18...desktop-v200.0.0-beta.19",
           "added": [],
           "changed": [],
-          "fixed": [
-            "load desktop release history in static shell"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.18...desktop-v200.0.0-beta.19",
           "added": [],
           "changed": [],
-          "fixed": [
-            "load 桌面端 发布 history in static shell"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3646,18 +3252,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.17...desktop-v200.0.0-beta.18",
           "added": [],
           "changed": [],
-          "fixed": [
-            "avoid desktop follow-updates prerender bailout"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.17...desktop-v200.0.0-beta.18",
           "added": [],
           "changed": [],
-          "fixed": [
-            "避免桌面端 follow-updates prerender bailout"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3708,18 +3310,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.15...desktop-v200.0.0-beta.16",
           "added": [],
           "changed": [],
-          "fixed": [
-            "downloads: clarify desktop offline storage"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.15...desktop-v200.0.0-beta.16",
           "added": [],
           "changed": [],
-          "fixed": [
-            "downloads：clarify 桌面端 offline storage"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3770,18 +3368,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.14...desktop-v200.0.0-beta.15",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: bypass windows loopback listener failures"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.14...desktop-v200.0.0-beta.15",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：bypass windows loopback listener failures"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3832,18 +3426,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.13...desktop-v200.0.0-beta.14",
           "added": [],
           "changed": [],
-          "fixed": [
-            "ci: repair desktop release workflow"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.13...desktop-v200.0.0-beta.14",
           "added": [],
           "changed": [],
-          "fixed": [
-            "ci：repair 桌面端 发布 workflow"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3894,18 +3484,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.12...desktop-v200.0.0-beta.13",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: stabilize windows local service and updater UX"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.12...desktop-v200.0.0-beta.13",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：stabilize windows local service and updater UX"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -3950,18 +3536,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.11...desktop-v200.0.0-beta.12",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: harden windows local service launch"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.11...desktop-v200.0.0-beta.12",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：harden windows local service launch"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -4012,18 +3594,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.10...desktop-v200.0.0-beta.11",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: avoid stalled windows local service startup"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.10...desktop-v200.0.0-beta.11",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：避免 stalled windows local service startup"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -4074,18 +3652,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.9...desktop-v200.0.0-beta.10",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: use raw tcp health checks for local service"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.9...desktop-v200.0.0-beta.10",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：use raw tcp health checks for local service"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -4136,18 +3710,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.8...desktop-v200.0.0-beta.9",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: bypass proxy for local service health checks"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.8...desktop-v200.0.0-beta.9",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：bypass proxy for local service health checks"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -4260,18 +3830,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.5...desktop-v200.0.0-beta.7",
           "added": [],
           "changed": [],
-          "fixed": [
-            "simplify desktop updater panel actions"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.5...desktop-v200.0.0-beta.7",
           "added": [],
           "changed": [],
-          "fixed": [
-            "simplify 桌面更新器 panel actions"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -4322,18 +3888,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.5...desktop-v200.0.0-beta.6",
           "added": [],
           "changed": [],
-          "fixed": [
-            "simplify desktop updater panel actions"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.5...desktop-v200.0.0-beta.6",
           "added": [],
           "changed": [],
-          "fixed": [
-            "simplify 桌面更新器 panel actions"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -4382,27 +3944,17 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.4...desktop-v200.0.0-beta.5",
-          "added": [
-            "desktop: add admin migration and config refresh",
-            "desktop: add diagnostics upload relay"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "avoid desktop docker release runs"
-          ]
+          "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.4...desktop-v200.0.0-beta.5",
-          "added": [
-            "桌面端：增加 admin migration and config refresh",
-            "桌面端：增加 diagnostics upload relay"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
-          "other": [
-            "避免桌面端 docker 发布 runs"
-          ]
+          "other": []
         }
       },
       "assets": [
@@ -4452,18 +4004,14 @@
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.3...desktop-v200.0.0-beta.4",
           "added": [],
           "changed": [],
-          "fixed": [
-            "desktop: stabilize updater download flow"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.3...desktop-v200.0.0-beta.4",
           "added": [],
           "changed": [],
-          "fixed": [
-            "桌面端：stabilize updater download flow"
-          ],
+          "fixed": [],
           "other": []
         }
       },
@@ -4512,18 +4060,14 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.2...desktop-v200.0.0-beta.3",
-          "added": [
-            "desktop: quiet updater install"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.2...desktop-v200.0.0-beta.3",
-          "added": [
-            "桌面端：quiet updater install"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
@@ -4574,18 +4118,14 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.1...desktop-v200.0.0-beta.2",
-          "added": [
-            "desktop: add bilingual changelog panel"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v200.0.0-beta.1...desktop-v200.0.0-beta.2",
-          "added": [
-            "桌面端：增加中英文 changelog panel"
-          ],
+          "added": [],
           "changed": [],
           "fixed": [],
           "other": []
@@ -4636,24 +4176,16 @@
       "changeSummary": {
         "en": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v100.1.3-prerelease.1...desktop-v200.0.0-beta.1",
-          "added": [
-            "desktop: adopt 200.x release line"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "ci: serialize updater manifest publishing"
-          ],
+          "fixed": [],
           "other": []
         },
         "zh-CN": {
           "compareUrl": "https://github.com/jaytantech3000/LunaTV/compare/desktop-v100.1.3-prerelease.1...desktop-v200.0.0-beta.1",
-          "added": [
-            "桌面端：adopt 200.x 发布 line"
-          ],
+          "added": [],
           "changed": [],
-          "fixed": [
-            "ci：serialize updater manifest publishing"
-          ],
+          "fixed": [],
           "other": []
         }
       },
