@@ -8,6 +8,7 @@
 - Canonical repository: `jaytantech3000/LunaTV`
 - Authoritative branch: `desktop`
 - Agnir identity: `urn:agnir:project:moontv`
+- Continuity lineage: `urn:agnir:lineage:moontv-default`
 
 ## What this Project is
 

@@ -1,9 +1,12 @@
 agnir:
-  version: "0.1"
-  discovery_profile: "repository-filesystem/0.1"
+  version: "1.0"
+  discovery_profile: "repository-filesystem/1.0"
 
 project:
   identity: "urn:agnir:project:moontv"
+
+continuity:
+  lineage: "urn:agnir:lineage:moontv-default"
 
 memory:
   state: ".agnir/state.md"
@@ -20,6 +23,6 @@ extensions:
     authoritative_ref: "desktop"
   agnir/operations:
     distribution: "agnir-agent-skill"
-    release: "0.1.0"
+    release: "1.0.0"
     source: "iorLab/agnir"
-    applied_revision: "2a0cb7bf2068b11f361e315670b2f2dc497b2588"
+    applied_revision: "6d16dcfd17b8e9f22fd25804e22b9f8a516d06c3"

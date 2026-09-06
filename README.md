@@ -20,15 +20,15 @@
 
 ## Agnir Project Instructions
 
-This Project uses **Agnir** (Core `0.1`, profile `repository-filesystem/0.1`) for project-owned durable continuity. Before doing any Project work, an Agent MUST:
+This Project uses **Agnir** (Core `1.0`, profile `repository-filesystem/1.0`) for project-owned durable continuity. Before doing any Project work, an Agent MUST:
 
 1. Treat the Project root as the authorized Project Entry Point.
-2. Read the top-level `AGNIR.yaml`.
+2. Read the top-level `AGNIR.yaml` and validate its declared compatibility, Project identity, and selected Continuity Lineage before relying on it.
 3. Load Current State (`.agnir/state.md`) and Next Actions (`.agnir/next-actions.md`).
 4. Load Decisions (`.agnir/decisions.md`) and Evidence (`.agnir/evidence/`) when relevant to the task.
 5. Prefer durable Agnir Project truth over chat history or private Agent memory, unless superseded by a newer Principal instruction or directly observed current Project fact.
 6. At an intentional save/finish boundary, checkpoint material state, next-action, decision, and evidence changes into Agnir durable memory.
-7. Treat an authorized request to commit Project changes as a checkpoint boundary: reconcile material continuity before the commit, prefer code and Agnir changes in one revision, and treat a commit-and-push request as checkpoint + commit + push + verification when repository context applies.
+7. Treat an authorized request to commit Project changes as a checkpoint boundary: reconcile material continuity before the commit, prefer code and Agnir changes in one revision, and treat a commit-and-push request as checkpoint + commit + push + destination-ref verification when repository context applies.
 
 Project-specific Agent guidance lives in root `Agent.md`.
 

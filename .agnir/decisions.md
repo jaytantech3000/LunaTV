@@ -20,3 +20,9 @@
 - Changed `agnir/repository.canonical` from `MoonTechLab/LunaTV` to `jaytantech3000/LunaTV` — the active `origin` remote where this work is actually pushed.
 - Rationale: upstream is `MoonTechLab/LunaTV`, but the working repository and push target is the fork `jaytantech3000/LunaTV`; `canonical` now matches where `authoritative_ref: desktop` is published.
 - Updated `.agnir/state.md` Identity to match.
+
+## D-004 — Authorized compatibility-line migration to Agnir Core/profile 1.0 (2026-09-07)
+
+- Migrated the Project from Core/profile `0.1` to `1.0` via the published two-boundary path: explicit `0.1` → `0.2` migration (`spec/CORE_0_1_TO_0_2_MIGRATION.md`), then semantics-preserving `0.2` → `1.0` promotion (`spec/CORE_0_2_TO_1_0_PROMOTION.md`); target release `v1.0.0` (source `iorLab/agnir`, immutable revision `6d16dcfd17b8e9f22fd25804e22b9f8a516d06c3`).
+- The single implicit `0.1` continuity line became exactly one logical Continuity Lineage: `urn:agnir:lineage:moontv-default` (URN form per Core recommendation; `default` per the migration contract's default-lineage guidance; deliberately not VCS-derived, since a branch/ref is a selector, not lineage identity).
+- Preserved exactly: `project.identity` (`urn:agnir:project:moontv`), all memory locators and durable memory content, `policy`, and unrelated extensions (`agnir/repository` unchanged; `agnir/operations` provenance updated to release `1.0.0`).
