@@ -13,6 +13,7 @@ use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
 };
+use futures::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
@@ -26,6 +27,7 @@ const VOD_PREFETCH_SESSION_FILE_NAME: &str = "vod-prefetch-session.json";
 const MAX_SESSION_ID_LENGTH: usize = 128;
 const PREFETCH_RETRY_COUNT: usize = 2;
 const MAX_VOD_PREFETCH_SEGMENTS: usize = 10_000;
+const VOD_PREFETCH_CONCURRENCY: usize = 3;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -670,6 +672,41 @@ pub(crate) async fn stop_vod_prefetch_session(
     ))
 }
 
+async fn prefetch_single_resource(
+    state: &AppState,
+    task: &VodPrefetchTaskConfig,
+    resource: &VodPrefetchResource,
+) -> AppResult<bool> {
+    if task.cancellation.load(Ordering::Acquire) {
+        return Ok(false);
+    }
+    let cache_hit = state.read_cached_online_vod_asset(&resource.url).is_some();
+    if !cache_hit {
+        let mut last_error = None;
+        for attempt in 0..PREFETCH_RETRY_COUNT {
+            if task.cancellation.load(Ordering::Acquire) {
+                return Ok(false);
+            }
+            match fetch_or_read_vod_asset(state, task, &resource.url).await {
+                Ok(_) => {
+                    last_error = None;
+                    break;
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    if attempt + 1 < PREFETCH_RETRY_COUNT {
+                        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+                    }
+                }
+            }
+        }
+        if let Some(error) = last_error {
+            return Err(error);
+        }
+    }
+    Ok(cache_hit)
+}
+
 async fn prefetch_vod_assets(
     state: &AppState,
     manager: &VodPrefetchManager,
@@ -690,30 +727,27 @@ async fn prefetch_vod_assets(
     );
     manager.set_queue(task.generation, resources.len()).await;
 
-    for resource in resources {
+    let mut stream = stream::iter(resources)
+        .map(|resource| {
+            let state = state.clone();
+            let task = task.clone();
+            async move {
+                if task.cancellation.load(Ordering::Acquire) {
+                    return Ok((false, true));
+                }
+                let cache_hit = prefetch_single_resource(&state, &task, &resource).await?;
+                Ok::<_, AppError>((cache_hit, false))
+            }
+        })
+        .buffered(VOD_PREFETCH_CONCURRENCY);
+
+    while let Some(result) = stream.next().await {
         if task.cancellation.load(Ordering::Acquire) {
             return Ok(());
         }
-        let cache_hit = state.read_cached_online_vod_asset(&resource.url).is_some();
-        if !cache_hit {
-            let mut last_error = None;
-            for attempt in 0..PREFETCH_RETRY_COUNT {
-                match fetch_or_read_vod_asset(state, task, &resource.url).await {
-                    Ok(_) => {
-                        last_error = None;
-                        break;
-                    }
-                    Err(error) => {
-                        last_error = Some(error);
-                        if attempt + 1 < PREFETCH_RETRY_COUNT {
-                            tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-                        }
-                    }
-                }
-            }
-            if let Some(error) = last_error {
-                return Err(error);
-            }
+        let (cache_hit, cancelled) = result?;
+        if cancelled {
+            return Ok(());
         }
         manager
             .record_prefetched_asset(task.generation, cache_hit)

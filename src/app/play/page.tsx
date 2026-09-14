@@ -3190,15 +3190,28 @@ function PlayPageClient() {
             if (video.hls) {
               video.hls.destroy();
             }
+            const isDesktop = isDesktopLocalDownloadRuntimeEnabled();
             const hlsConfig: Record<string, any> = {
               debug: false, // 关闭日志
               enableWorker: !isOfflineMode, // 离线场景优先稳定性，减少 Worker 变量
               lowLatencyMode: !isOfflineMode, // 离线场景不需要 LL-HLS，避免请求 part/preload 资源
 
               /* 缓冲/内存相关 */
-              maxBufferLength: 30, // 前向缓冲最大 30s，过大容易导致高延迟
-              backBufferLength: 30, // 仅保留 30s 已播放内容，避免内存占用
-              maxBufferSize: 60 * 1000 * 1000, // 约 60MB，超出后触发清理
+              maxBufferLength: isDesktop ? 180 : 60, // 桌面端 180s 前向缓冲，平滑突发网络抖动
+              maxMaxBufferLength: isDesktop ? 600 : 120, // 桌面端最大允许缓冲 600s
+              backBufferLength: isDesktop ? 60 : 30, // 桌面端保留 60s 已播放内容
+              maxBufferSize: (isDesktop ? 256 : 100) * 1000 * 1000, // 桌面端 256MB 缓冲区
+              maxBufferHole: 0.5, // 容忍 0.5 秒时间戳缝隙，避免因切片时间戳微小不连续卡死
+              highBufferWatchdogPeriod: 2, // 看门狗周期
+              nudgeOffset: 0.2, // 遇到停滞时微调跳转 offset
+              nudgeMaxRetry: 5,
+
+              /* 分片加载超时与重试优化 */
+              fragLoadingTimeOut: 15000, // 15s 超时（避免默认 20s 导致过长时间卡顿）
+              fragLoadingMaxRetry: 3,
+              fragLoadingRetryDelay: 1000,
+              fragLoadingMaxRetryTimeout: 30000,
+
               loader: CustomHlsJsLoader,
             };
 

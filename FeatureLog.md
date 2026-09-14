@@ -9,6 +9,35 @@
 - 每条记录尽量包含：目标、核心改动、验证结果、后续待办。
 - 若功能有详细方案文档，优先链接到 `dev-plan/` 下的对应文件。
 
+## 2026-09-11 - Desktop online VOD anti-stutter optimization / 桌面端在线点播全链路防卡顿优化
+
+- Branch / 分支：`desktop`
+- Related files / 相关文件：
+  - `src/app/play/page.tsx`
+  - `crates/moontv-local-service/src/vod_prefetch.rs`
+  - `crates/moontv-local-service/src/online_vod_cache.rs`
+
+### Goal / 目标
+
+- Fix desktop online VOD playback stuttering and buffering freezes during network fluctuations, upstream rate-limiting, or non-standard M3U8 timestamp gaps.
+- 解决桌面端在线点播在网络抖动、上游采集站限速或非标准切片时间戳缝隙时频繁转圈卡顿的问题。
+
+### Core behavior / 核心行为
+
+- **Enlarged Hls.js hardware buffer & gap tolerance / 播放器硬件级大缓冲与空洞容错**：针对桌面端环境（`isDesktopLocalDownloadRuntimeEnabled()`），将前向缓冲 `maxBufferLength` 从 30s 提升至 180s、`maxMaxBufferLength` 设为 600s、`maxBufferSize` 扩至 256MB，并配置 `maxBufferHole: 0.5`、`highBufferWatchdogPeriod: 2`、`nudgeOffset: 0.2` 与 `fragLoadingTimeOut: 15000`，有效平滑突发网络抖动并自动跳过微小时间戳缝隙。
+- **Concurrent VOD segment prefetch pipeline / Rust 后台预取并发化**：将 `prefetch_vod_assets` 的单线程串行循环改造为基于 `futures::stream::buffered(3)` 的并发流式下载池，支持 3 并发分片通道并行拉取，使后台预取吞吐大幅领先播放消耗速度。
+- **Expanded local disk cache capacity / 本地磁盘缓存扩容**：将桌面端点播缓存常规上限由 512MB 提升至 2GB，整集模式临时上限扩至 4GB，单分片上限扩至 64MB，最大并发写槽位由 4 提升至 8，避免高清剧集在播放中被提前 LRU 淘汰或写槽争用。
+
+### Verification / 验证
+
+- `cargo test -p moontv-local-service --lib vod_prefetch::tests`: 2 passed; 0 failed.
+- `cargo test -p moontv-local-service --lib online_vod_cache::tests`: 6 passed; 0 failed.
+- `cargo test -p moontv-download`: 7 passed; 0 failed.
+- `pnpm typecheck`: passed with 0 errors.
+- `pnpm test`: 111 suites passed (558 passed, 0 failed).
+
+---
+
 ## 2026-09-04 - Bounded HLS fatal-error recovery to stop endless VOD restarts / 受限的 HLS 致命错误恢复，修复点播反复从头重播
 
 - Branch / 分支：`desktop`
