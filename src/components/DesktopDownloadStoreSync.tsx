@@ -226,33 +226,11 @@ function syncRuntimeCompletedTaskToLibrary(task: DownloadTask): void {
 }
 
 function syncRuntimeCompletedTasksToLibrary(
-  runtimeSnapshot: DesktopDownloadRuntimeSnapshot,
-  options: {
-    hydrateAllDoneTasks?: boolean;
-  } = {}
+  runtimeSnapshot: DesktopDownloadRuntimeSnapshot
 ): void {
-  const candidateTasks = options.hydrateAllDoneTasks
-    ? Object.values(runtimeSnapshot.tasks).filter(
-        (task) => task.status === 'done'
-      )
-    : (() => {
-        const runtimeEvent = runtimeSnapshot.lastEvent;
-        if (!runtimeEvent) {
-          return [];
-        }
-
-        if (
-          runtimeEvent.type === 'taskUpserted' ||
-          runtimeEvent.type === 'taskStatusChanged'
-        ) {
-          const task = runtimeSnapshot.tasks[runtimeEvent.taskId];
-          if (task?.status === 'done') {
-            return [task];
-          }
-        }
-
-        return [];
-      })();
+  const candidateTasks = Object.values(runtimeSnapshot.tasks).filter(
+    (task) => task.status === 'done'
+  );
 
   candidateTasks.forEach((task) => {
     syncRuntimeCompletedTaskToLibrary(task);
@@ -359,9 +337,7 @@ export default function DesktopDownloadStoreSync() {
       }
 
       if (engineSnapshot) {
-        syncRuntimeCompletedTasksToLibrary(engineSnapshot, {
-          hydrateAllDoneTasks: true,
-        });
+        syncRuntimeCompletedTasksToLibrary(engineSnapshot);
       }
 
       const nextState = useDownloadStore.getState();

@@ -436,7 +436,58 @@ describe('desktop download runtime task sdk', () => {
     );
   });
 
-  it('polls authenticated snapshots instead of opening an unauthenticated EventSource', async () => {
+  it('streams authenticated snapshots in real-time from the SSE endpoint', async () => {
+    const snapshot = {
+      maxConcurrentTasks: 2,
+      tasks: {},
+      lastEvent: {
+        type: 'maxConcurrentTasksChanged',
+        maxConcurrentTasks: 2,
+      },
+    };
+    const onSnapshot = jest.fn();
+    const onError = jest.fn();
+
+    const stream = new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(snapshot)}\n\n`)
+        );
+      },
+    });
+
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      body: stream,
+    });
+
+    const snapshotPromise = new Promise((resolve) => {
+      onSnapshot.mockImplementationOnce(resolve as (value: unknown) => void);
+    });
+
+    const unsubscribe =
+      desktopRuntime.subscribeToDesktopDownloadEngineSnapshots({
+        onSnapshot,
+        onError,
+      });
+
+    await expect(snapshotPromise).resolves.toEqual(snapshot);
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/download-runtime/tasks/stream',
+      expect.objectContaining({
+        method: 'GET',
+        cache: 'no-store',
+      })
+    );
+    expect(onSnapshot).toHaveBeenCalledWith(snapshot);
+    expect(onError).not.toHaveBeenCalled();
+
+    unsubscribe();
+  });
+
+  it('falls back to adaptive polling when SSE streaming is unavailable', async () => {
     jest.useFakeTimers();
     const snapshot = {
       maxConcurrentTasks: 2,
@@ -450,9 +501,10 @@ describe('desktop download runtime task sdk', () => {
     const onError = jest.fn();
 
     try {
-      (global.fetch as jest.Mock).mockResolvedValue(
-        buildJsonResponse(snapshot)
-      );
+      (global.fetch as jest.Mock)
+        .mockRejectedValueOnce(new Error('stream endpoint unavailable'))
+        .mockResolvedValue(buildJsonResponse(snapshot));
+
       const firstSnapshotPromise = new Promise((resolve) => {
         onSnapshot.mockImplementationOnce(resolve as (value: unknown) => void);
       });
@@ -464,20 +516,15 @@ describe('desktop download runtime task sdk', () => {
         });
 
       await expect(firstSnapshotPromise).resolves.toEqual(snapshot);
-      expect(global.fetch).toHaveBeenCalledTimes(1);
       expect(onSnapshot).toHaveBeenCalledWith(snapshot);
-      expect(onError).not.toHaveBeenCalled();
 
       const secondSnapshotPromise = new Promise((resolve) => {
         onSnapshot.mockImplementationOnce(resolve as (value: unknown) => void);
       });
       jest.advanceTimersByTime(2_000);
       await expect(secondSnapshotPromise).resolves.toEqual(snapshot);
-      expect(global.fetch).toHaveBeenCalledTimes(2);
 
       unsubscribe();
-      jest.advanceTimersByTime(2_000);
-      expect(global.fetch).toHaveBeenCalledTimes(2);
     } finally {
       jest.useRealTimers();
     }

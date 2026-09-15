@@ -695,12 +695,23 @@ async function postDesktopDownloadTaskCommand(
   }
 }
 
+const DESKTOP_DOWNLOAD_RUNTIME_ACTIVE_POLL_INTERVAL_MS = 800;
+
+function hasActiveDownloadingTasks(
+  snapshot: DesktopDownloadEngineSnapshot
+): boolean {
+  return Object.values(snapshot.tasks).some(
+    (task) => task.status === 'downloading'
+  );
+}
+
 function subscribeToDesktopDownloadEngineSnapshotsByPolling({
   onSnapshot,
   onError,
 }: DesktopDownloadEngineSnapshotSubscriptionOptions): () => void {
   let active = true;
   let nextPollTimer: ReturnType<typeof setTimeout> | null = null;
+  let currentPollInterval = DESKTOP_DOWNLOAD_RUNTIME_POLL_INTERVAL_MS;
 
   const clearNextPollTimer = () => {
     if (!nextPollTimer) {
@@ -711,7 +722,7 @@ function subscribeToDesktopDownloadEngineSnapshotsByPolling({
     nextPollTimer = null;
   };
 
-  const scheduleNextPoll = () => {
+  const scheduleNextPoll = (intervalMs = currentPollInterval) => {
     clearNextPollTimer();
     if (!active) {
       return;
@@ -719,7 +730,7 @@ function subscribeToDesktopDownloadEngineSnapshotsByPolling({
 
     nextPollTimer = setTimeout(() => {
       void pollSnapshot();
-    }, DESKTOP_DOWNLOAD_RUNTIME_POLL_INTERVAL_MS);
+    }, intervalMs);
   };
 
   const pollSnapshot = async () => {
@@ -728,6 +739,10 @@ function subscribeToDesktopDownloadEngineSnapshotsByPolling({
       if (!active) {
         return;
       }
+
+      currentPollInterval = hasActiveDownloadingTasks(snapshot)
+        ? DESKTOP_DOWNLOAD_RUNTIME_ACTIVE_POLL_INTERVAL_MS
+        : DESKTOP_DOWNLOAD_RUNTIME_POLL_INTERVAL_MS;
 
       onSnapshot(snapshot);
     } catch (error) {
@@ -753,15 +768,130 @@ function subscribeToDesktopDownloadEngineSnapshotsByPolling({
   };
 }
 
+async function streamDesktopDownloadEngineSnapshots({
+  onSnapshot,
+  signal,
+}: {
+  onSnapshot: (snapshot: DesktopDownloadEngineSnapshot) => void;
+  signal: AbortSignal;
+}): Promise<void> {
+  const response = await localServiceFetch(
+    buildDesktopDownloadRuntimeUrl('/tasks/stream'),
+    {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+      signal,
+    }
+  );
+
+  if (!response.ok || !response.body) {
+    throw await buildDesktopDownloadRuntimeError(response);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const messages = buffer.split('\n\n');
+      buffer = messages.pop() || '';
+
+      for (const message of messages) {
+        for (const line of message.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data:')) {
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr) {
+              try {
+                const snapshot = JSON.parse(
+                  dataStr
+                ) as DesktopDownloadEngineSnapshot;
+                onSnapshot(snapshot);
+              } catch {
+                // Ignore malformed SSE message frames
+              }
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // Ignore reader release errors when stream is already closed
+    }
+  }
+}
+
 export function subscribeToDesktopDownloadEngineSnapshots({
   onSnapshot,
   onError,
 }: DesktopDownloadEngineSnapshotSubscriptionOptions): () => void {
   ensureDesktopLocalDownloadRuntime();
-  return subscribeToDesktopDownloadEngineSnapshotsByPolling({
-    onSnapshot,
-    onError,
-  });
+
+  let active = true;
+  let abortController = new AbortController();
+  let fallbackCleanup: (() => void) | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const startStreaming = async () => {
+    while (active) {
+      try {
+        await streamDesktopDownloadEngineSnapshots({
+          onSnapshot,
+          signal: abortController.signal,
+        });
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+
+        if (!fallbackCleanup) {
+          fallbackCleanup = subscribeToDesktopDownloadEngineSnapshotsByPolling({
+            onSnapshot,
+            onError,
+          });
+        }
+      }
+
+      if (!active) {
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        reconnectTimer = setTimeout(resolve, 3_000);
+      });
+
+      if (fallbackCleanup) {
+        fallbackCleanup();
+        fallbackCleanup = null;
+      }
+
+      abortController = new AbortController();
+    }
+  };
+
+  void startStreaming();
+
+  return () => {
+    active = false;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+    }
+    abortController.abort();
+    if (fallbackCleanup) {
+      fallbackCleanup();
+    }
+  };
 }
 
 export async function putDesktopDownloadEngineSettings(
