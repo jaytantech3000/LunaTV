@@ -1,31 +1,31 @@
 {
-  "version": "200.0.1-beta.53",
+  "version": "200.0.1-beta.54",
   "notes": "",
-  "pub_date": "2026-09-14T19:24:27.575Z",
+  "pub_date": "2026-09-15T10:06:56.988Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocFB0SkpIT0F3Y0tqUDdNUDlYQlM5RnowYlVZaHJPRlphNHZqSEhzTXQ5QXdWNEQ4M2MwRjdwV1puQTg2M2JOL3U5WEI3TDJnL2NZcGdQSXZDTkR2aHdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDEzMDIwCWZpbGU6THVuYVRWIERlc2t0b3AuYXBwLnRhci5negppTDN4dmZhR2xaUVNCYUx2RWRpNS83eDRqWHVDV0tUd0tLUVBhR1h2MFIrWFJuaG5pRlBxWlZhT3MvZ0k5VVBlSlBkaFlXc09XNjhsblF2UFkzNWxBZz09Cg==",
-      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.53/LunaTV.Desktop_200.0.1-beta.53_macos-arm64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocEp0UHhyYVJGN1BEL21BV21VNjRvY2o1Tkl0MUVuZmozOWJmdDV6NXJ2ektNN0xzSlRyUTU5UzJJaTRRRUZ3dm1nVHRFRUgrY2srQkN4UlF1Q08xT3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDY2MTk4CWZpbGU6THVuYVRWIERlc2t0b3AuYXBwLnRhci5negpPZmdMeHNCNjlkTWtlclZsNDVXNGtyNktqb3ZjSDdFN0hYSVZHK29FT3Fka0NlOUVBTlBLRlNLbzZXYnhmQklqdk1xNmJEekNObDc2V0Fxbnd1aFhEUT09Cg==",
+      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.54/LunaTV.Desktop_200.0.1-beta.54_macos-arm64.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocFB0SkpIT0F3Y0tqUDdNUDlYQlM5RnowYlVZaHJPRlphNHZqSEhzTXQ5QXdWNEQ4M2MwRjdwV1puQTg2M2JOL3U5WEI3TDJnL2NZcGdQSXZDTkR2aHdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDEzMDIwCWZpbGU6THVuYVRWIERlc2t0b3AuYXBwLnRhci5negppTDN4dmZhR2xaUVNCYUx2RWRpNS83eDRqWHVDV0tUd0tLUVBhR1h2MFIrWFJuaG5pRlBxWlZhT3MvZ0k5VVBlSlBkaFlXc09XNjhsblF2UFkzNWxBZz09Cg==",
-      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.53/LunaTV.Desktop_200.0.1-beta.53_macos-arm64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocEp0UHhyYVJGN1BEL21BV21VNjRvY2o1Tkl0MUVuZmozOWJmdDV6NXJ2ektNN0xzSlRyUTU5UzJJaTRRRUZ3dm1nVHRFRUgrY2srQkN4UlF1Q08xT3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDY2MTk4CWZpbGU6THVuYVRWIERlc2t0b3AuYXBwLnRhci5negpPZmdMeHNCNjlkTWtlclZsNDVXNGtyNktqb3ZjSDdFN0hYSVZHK29FT3Fka0NlOUVBTlBLRlNLbzZXYnhmQklqdk1xNmJEekNObDc2V0Fxbnd1aFhEUT09Cg==",
+      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.54/LunaTV.Desktop_200.0.1-beta.54_macos-arm64.app.tar.gz"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocEZuNWdkeG9CRUpxKzNKTk9FU3JkK1BOSTJiM0NrNTJrbE1RS0lpd29QWWRNZVVEcDZONWJqVHpseTBDTzFlMStvMmgwZ3BOYnNra2hHZG1pNjh2M0FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDEzMDkzCWZpbGU6THVuYVRWIERlc2t0b3BfMjAwLjAuMS1iZXRhLjUzX3g2NC1zZXR1cC5leGUKb2lRSUZSSGE0U3FFUThGRmI2aW5ucEFNdGpSd2RhWmN6SEZUblVHZnl5ckcxeFVUQ2Vmbmx3NUxzUjhkNnhUWkZ2Ymw2cHBhWU1IMndIVG5jMEtiRHc9PQo=",
-      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.53/LunaTV.Desktop_200.0.1-beta.53_windows-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocE9IU3BkU3JId3RqS0ZqNTBINUJHQ1JPVVJXcUgwZXFnOVg5Z1BuUTNXS0kvU05oOWtHczZMVDhyR2JvRExxZlBqbDhCaTBkdWVmTjhlUm53QWl6cVE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDY2Mjk2CWZpbGU6THVuYVRWIERlc2t0b3BfMjAwLjAuMS1iZXRhLjU0X3g2NC1zZXR1cC5leGUKOTFycFh2cDZ1dGc1bEIzdVRWZkRQWDM0cURwem5mWG9EcVdkT25Rbk8wR0ZQMU91cmR0TXcwV1NwYldDalJFYTBKL2NmczJkQ1Z4ZmJtUmNmcnBZQWc9PQo=",
+      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.54/LunaTV.Desktop_200.0.1-beta.54_windows-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocEZuNWdkeG9CRUpxKzNKTk9FU3JkK1BOSTJiM0NrNTJrbE1RS0lpd29QWWRNZVVEcDZONWJqVHpseTBDTzFlMStvMmgwZ3BOYnNra2hHZG1pNjh2M0FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDEzMDkzCWZpbGU6THVuYVRWIERlc2t0b3BfMjAwLjAuMS1iZXRhLjUzX3g2NC1zZXR1cC5leGUKb2lRSUZSSGE0U3FFUThGRmI2aW5ucEFNdGpSd2RhWmN6SEZUblVHZnl5ckcxeFVUQ2Vmbmx3NUxzUjhkNnhUWkZ2Ymw2cHBhWU1IMndIVG5jMEtiRHc9PQo=",
-      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.53/LunaTV.Desktop_200.0.1-beta.53_windows-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocE9IU3BkU3JId3RqS0ZqNTBINUJHQ1JPVVJXcUgwZXFnOVg5Z1BuUTNXS0kvU05oOWtHczZMVDhyR2JvRExxZlBqbDhCaTBkdWVmTjhlUm53QWl6cVE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDY2Mjk2CWZpbGU6THVuYVRWIERlc2t0b3BfMjAwLjAuMS1iZXRhLjU0X3g2NC1zZXR1cC5leGUKOTFycFh2cDZ1dGc1bEIzdVRWZkRQWDM0cURwem5mWG9EcVdkT25Rbk8wR0ZQMU91cmR0TXcwV1NwYldDalJFYTBKL2NmczJkQ1Z4ZmJtUmNmcnBZQWc9PQo=",
+      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.54/LunaTV.Desktop_200.0.1-beta.54_windows-x64-setup.exe"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocEttd1lyaVM2K21WRmJPTkZMWFFXRXE5UVlybWNZekVIZUVIU29LMFhSdkcrS2g1VkRYcU1FdkJxZFpyT1l0Rzk2N0FwSjFvcDNQdVhSRXZmdzE0eFE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDEzODU4CWZpbGU6THVuYVRWIERlc2t0b3AuYXBwLnRhci5negp2OU9Gd3oxaVdIZmt6TC94Rk9OaTZ4OEQ2S1VrbHdlTlFTbGdXZldEVy90R3BMWFJTRldBQS90ZEZlNmVBUTVLV05MS2NRMS96VFRQMkE3SHVqSjJBZz09Cg==",
-      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.53/LunaTV.Desktop_200.0.1-beta.53_macos-x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocFBsTlVYRUdVNUFuZ255clFub3prMlNwZDdMeE9iRnltYzlueU04WHlkVlNlMHVkdGp3UGNmNDl2TUVULzVlYVFMYll0ZWNEaW5nQTNzMU4wWXBlMGdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDY2ODExCWZpbGU6THVuYVRWIERlc2t0b3AuYXBwLnRhci5negprMDdueGthaDVOUDlzcUVjbGcxVlVCRy9vZGl1UjlRaHhqWHNGTHhSRVdBQlk2UFV0WFdxMjFleFRybWVNU3hwRHFZdDY5clJnSU1MbjhwMDdpUm1EUT09Cg==",
+      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.54/LunaTV.Desktop_200.0.1-beta.54_macos-x64.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocEttd1lyaVM2K21WRmJPTkZMWFFXRXE5UVlybWNZekVIZUVIU29LMFhSdkcrS2g1VkRYcU1FdkJxZFpyT1l0Rzk2N0FwSjFvcDNQdVhSRXZmdzE0eFE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDEzODU4CWZpbGU6THVuYVRWIERlc2t0b3AuYXBwLnRhci5negp2OU9Gd3oxaVdIZmt6TC94Rk9OaTZ4OEQ2S1VrbHdlTlFTbGdXZldEVy90R3BMWFJTRldBQS90ZEZlNmVBUTVLV05MS2NRMS96VFRQMkE3SHVqSjJBZz09Cg==",
-      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.53/LunaTV.Desktop_200.0.1-beta.53_macos-x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTU3Q3RXQ2SjdocFBsTlVYRUdVNUFuZ255clFub3prMlNwZDdMeE9iRnltYzlueU04WHlkVlNlMHVkdGp3UGNmNDl2TUVULzVlYVFMYll0ZWNEaW5nQTNzMU4wWXBlMGdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDY2ODExCWZpbGU6THVuYVRWIERlc2t0b3AuYXBwLnRhci5negprMDdueGthaDVOUDlzcUVjbGcxVlVCRy9vZGl1UjlRaHhqWHNGTHhSRVdBQlk2UFV0WFdxMjFleFRybWVNU3hwRHFZdDY5clJnSU1MbjhwMDdpUm1EUT09Cg==",
+      "url": "https://github.com/jaytantech3000/LunaTV/releases/download/desktop-v200.0.1-beta.54/LunaTV.Desktop_200.0.1-beta.54_macos-x64.app.tar.gz"
     }
   }
 }
