@@ -79,10 +79,20 @@ pub struct ProfileRemoteMergeWrite<'a> {
     pub timestamp_ms: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DesktopSqlite {
     path: PathBuf,
     info: SqliteDatabaseInfo,
+    conn: std::sync::Arc<std::sync::Mutex<Connection>>,
+}
+
+impl std::fmt::Debug for DesktopSqlite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DesktopSqlite")
+            .field("path", &self.path)
+            .field("info", &self.info)
+            .finish()
+    }
 }
 
 impl DesktopSqlite {
@@ -96,7 +106,17 @@ impl DesktopSqlite {
         let mut connection = open_connection(&path)?;
         let info = apply_migrations(&mut connection)?;
 
-        Ok(Self { path, info })
+        Ok(Self {
+            path,
+            info,
+            conn: std::sync::Arc::new(std::sync::Mutex::new(connection)),
+        })
+    }
+
+    fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("sqlite connection lock poisoned"))
     }
 
     pub fn path(&self) -> &Path {
@@ -108,7 +128,7 @@ impl DesktopSqlite {
     }
 
     pub fn read_download_store_snapshot(&self) -> Result<Option<Value>> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         let payload = connection
             .query_row(
                 "SELECT payload_json FROM download_store_snapshot WHERE snapshot_key = ?1",
@@ -127,7 +147,7 @@ impl DesktopSqlite {
     }
 
     pub fn write_download_store_snapshot(&self, snapshot: &Value) -> Result<()> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         let payload = serde_json::to_string(snapshot)
             .context("failed to serialize desktop download store")?;
 
@@ -149,7 +169,7 @@ impl DesktopSqlite {
     }
 
     pub fn clear_download_store_snapshot(&self) -> Result<bool> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         let deleted = connection
             .execute(
                 "DELETE FROM download_store_snapshot WHERE snapshot_key = ?1",
@@ -163,7 +183,7 @@ impl DesktopSqlite {
     where
         T: DeserializeOwned,
     {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         let payload = connection
             .query_row(
                 "SELECT value_json FROM app_metadata WHERE metadata_key = ?1",
@@ -185,7 +205,7 @@ impl DesktopSqlite {
     where
         T: Serialize + ?Sized,
     {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         let payload = serde_json::to_string(value)
             .with_context(|| format!("failed to serialize app metadata for key {key}"))?;
 
@@ -207,7 +227,7 @@ impl DesktopSqlite {
     }
 
     pub fn delete_app_metadata(&self, key: &str) -> Result<bool> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         let deleted = connection
             .execute("DELETE FROM app_metadata WHERE metadata_key = ?1", [key])
             .with_context(|| format!("failed to delete app metadata for key {key}"))?;
@@ -215,7 +235,7 @@ impl DesktopSqlite {
     }
 
     pub fn apply_profile_mutation(&self, write: ProfileMutationWrite<'_>) -> Result<i64> {
-        let mut connection = open_connection(&self.path)?;
+        let mut connection = self.connection()?;
         let tx = connection
             .transaction()
             .context("failed to start profile mutation transaction")?;
@@ -311,7 +331,7 @@ impl DesktopSqlite {
     }
 
     pub fn apply_remote_profile_merge(&self, write: ProfileRemoteMergeWrite<'_>) -> Result<bool> {
-        let mut connection = open_connection(&self.path)?;
+        let mut connection = self.connection()?;
         let tx = connection
             .transaction()
             .context("failed to start remote profile merge transaction")?;
@@ -411,7 +431,7 @@ impl DesktopSqlite {
         now_ms: i64,
         limit: usize,
     ) -> Result<Vec<ProfileOutboxRecord>> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         let mut statement = connection
             .prepare(
                 "SELECT op_id, username, domain, entity_key, operation, payload_json,
@@ -454,7 +474,7 @@ impl DesktopSqlite {
     }
 
     pub fn pending_profile_outbox_count(&self, username: &str) -> Result<u64> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         connection
             .query_row(
                 "SELECT COUNT(*) FROM profile_outbox
@@ -468,7 +488,7 @@ impl DesktopSqlite {
     pub fn latest_auth_blocked_profile_sync_worker_state(
         &self,
     ) -> Result<Option<ProfileSyncWorkerState>> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         connection
             .query_row(
                 "SELECT username, device_id, next_local_seq, last_pushed_seq,
@@ -502,7 +522,7 @@ impl DesktopSqlite {
         &self,
         username: &str,
     ) -> Result<Option<ProfileSyncWorkerState>> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         connection
             .query_row(
                 "SELECT username, device_id, next_local_seq, last_pushed_seq,
@@ -537,7 +557,7 @@ impl DesktopSqlite {
         local_seq: i64,
         acked_at_ms: i64,
     ) -> Result<bool> {
-        let mut connection = open_connection(&self.path)?;
+        let mut connection = self.connection()?;
         let tx = connection
             .transaction()
             .context("failed to start profile outbox acknowledgement transaction")?;
@@ -586,7 +606,7 @@ impl DesktopSqlite {
         next_attempt_at_ms: i64,
         error: &str,
     ) -> Result<bool> {
-        let mut connection = open_connection(&self.path)?;
+        let mut connection = self.connection()?;
         let tx = connection
             .transaction()
             .context("failed to start profile outbox failure transaction")?;
@@ -633,7 +653,7 @@ impl DesktopSqlite {
         blocked_at_ms: i64,
         error: &str,
     ) -> Result<bool> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         let changed = connection
             .execute(
                 "UPDATE profile_sync_state
@@ -654,7 +674,7 @@ impl DesktopSqlite {
         username: &str,
         cleared_at_ms: i64,
     ) -> Result<bool> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         let changed = connection
             .execute(
                 "UPDATE profile_sync_state
@@ -675,7 +695,7 @@ impl DesktopSqlite {
         domain: &str,
         entity_key: &str,
     ) -> Result<bool> {
-        let connection = open_connection(&self.path)?;
+        let connection = self.connection()?;
         Ok(connection
             .query_row(
                 "SELECT 1 FROM profile_tombstone

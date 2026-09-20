@@ -1,10 +1,10 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
@@ -48,18 +48,24 @@ pub(crate) struct CachedOnlineVodAsset {
     pub(crate) body: Vec<u8>,
 }
 
+#[derive(Debug, Default)]
+struct OnlineVodCacheIndex {
+    entries: HashMap<String, OnlineVodCacheMeta>,
+    total_bytes: u64,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct OnlineVodCache {
     root: PathBuf,
-    max_bytes: u64,
-    max_entry_bytes: u64,
-    access_lock: Arc<Mutex<()>>,
+    pub(crate) max_bytes: u64,
+    pub(crate) max_entry_bytes: u64,
+    index: Arc<RwLock<OnlineVodCacheIndex>>,
     active_writers: Arc<AtomicUsize>,
     temporary_max_bytes: Arc<AtomicU64>,
     retired_prefetch_sessions: Arc<Mutex<BTreeSet<String>>>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct OnlineVodCacheMeta {
     request_url: String,
     status: u16,
@@ -97,11 +103,43 @@ impl OnlineVodCache {
     pub(crate) fn new(data_dir: &Path) -> io::Result<Self> {
         let root = data_dir.join(ONLINE_VOD_CACHE_DIR_NAME);
         fs::create_dir_all(&root)?;
+
+        let mut entries = HashMap::new();
+        let mut total_bytes = 0_u64;
+
+        if let Ok(dir_entries) = fs::read_dir(&root) {
+            for entry in dir_entries.flatten() {
+                let body_path = entry.path();
+                if body_path.extension().is_none_or(|ext| ext != "body") {
+                    continue;
+                }
+                let Some(key) = body_path.file_stem().and_then(|stem| stem.to_str()) else {
+                    continue;
+                };
+                let meta_path = root.join(format!("{key}.meta.json"));
+                let body_len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                if let Ok(meta_bytes) = fs::read(&meta_path) {
+                    if let Ok(meta) = serde_json::from_slice::<OnlineVodCacheMeta>(&meta_bytes) {
+                        if meta.body_len == body_len {
+                            total_bytes = total_bytes.saturating_add(body_len);
+                            entries.insert(key.to_string(), meta);
+                            continue;
+                        }
+                    }
+                }
+                let _ = fs::remove_file(&body_path);
+                let _ = fs::remove_file(&meta_path);
+            }
+        }
+
         Ok(Self {
             root,
             max_bytes: ONLINE_VOD_CACHE_MAX_BYTES,
             max_entry_bytes: ONLINE_VOD_CACHE_MAX_ENTRY_BYTES,
-            access_lock: Arc::new(Mutex::new(())),
+            index: Arc::new(RwLock::new(OnlineVodCacheIndex {
+                entries,
+                total_bytes,
+            })),
             active_writers: Arc::new(AtomicUsize::new(0)),
             temporary_max_bytes: Arc::new(AtomicU64::new(0)),
             retired_prefetch_sessions: Arc::new(Mutex::new(BTreeSet::new())),
@@ -113,37 +151,44 @@ impl OnlineVodCache {
         request_url: &str,
         now_ms: u64,
     ) -> io::Result<Option<CachedOnlineVodAsset>> {
-        let _access_lock = self.lock_access()?;
-        let (body_path, meta_path) = self.entry_paths(request_url);
-        let (body, mut meta) = match (fs::read(&body_path), fs::read(&meta_path)) {
-            (Ok(body), Ok(meta_bytes)) => {
-                match serde_json::from_slice::<OnlineVodCacheMeta>(&meta_bytes) {
-                    Ok(meta)
-                        if meta.request_url == request_url
-                            && meta.body_len == body.len() as u64
-                            && meta.expires_at_ms > now_ms =>
-                    {
-                        (body, meta)
-                    }
-                    _ => {
-                        self.remove_entry(&body_path, &meta_path);
-                        return Ok(None);
-                    }
+        let key = cache_key(request_url);
+        let (body_path, _) = self.entry_paths_by_key(&key);
+
+        let (status, content_type, body_len) = {
+            let index = self
+                .index
+                .read()
+                .map_err(|_| io::Error::other("online VOD cache index lock poisoned"))?;
+            match index.entries.get(&key) {
+                Some(meta) if meta.expires_at_ms > now_ms && meta.request_url == request_url => {
+                    (meta.status, meta.content_type.clone(), meta.body_len)
                 }
+                Some(_) => {
+                    drop(index);
+                    self.remove_entry_by_key(&key);
+                    return Ok(None);
+                }
+                None => return Ok(None),
             }
-            (Err(error), _) | (_, Err(error)) if error.kind() == io::ErrorKind::NotFound => {
-                self.remove_entry(&body_path, &meta_path);
-                return Ok(None);
-            }
-            (Err(error), _) | (_, Err(error)) => return Err(error),
         };
 
-        meta.last_accessed_at_ms = now_ms;
-        self.write_meta(&meta_path, &meta)?;
+        let body = match fs::read(&body_path) {
+            Ok(body) if body.len() as u64 == body_len => body,
+            _ => {
+                self.remove_entry_by_key(&key);
+                return Ok(None);
+            }
+        };
+
+        if let Ok(mut index) = self.index.write() {
+            if let Some(meta) = index.entries.get_mut(&key) {
+                meta.last_accessed_at_ms = now_ms;
+            }
+        }
 
         Ok(Some(CachedOnlineVodAsset {
-            status: meta.status,
-            content_type: meta.content_type,
+            status,
+            content_type,
             body,
         }))
     }
@@ -238,7 +283,6 @@ impl OnlineVodCache {
     }
 
     fn commit(&self, writer: &OnlineVodCacheWriter) -> io::Result<()> {
-        let _access_lock = self.lock_access()?;
         let retired_session = match writer.prefetch_session_id.as_deref() {
             Some(session_id) => self.is_prefetch_session_retired(session_id)?,
             None => false,
@@ -247,9 +291,16 @@ impl OnlineVodCache {
             let _ = fs::remove_file(&writer.temp_body_path);
             return Ok(());
         }
-        self.evict_to_fit(writer.body_len, &writer.body_path)?;
-        self.remove_entry(&writer.body_path, &writer.meta_path);
-        fs::rename(&writer.temp_body_path, &writer.body_path)?;
+
+        let key = cache_key(&writer.request_url);
+        let max_bytes = self.effective_max_bytes();
+        if writer.body_len > max_bytes {
+            let _ = fs::remove_file(&writer.temp_body_path);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "online VOD asset exceeds cache byte limit",
+            ));
+        }
 
         let meta = OnlineVodCacheMeta {
             request_url: writer.request_url.clone(),
@@ -261,18 +312,55 @@ impl OnlineVodCache {
             expires_at_ms: writer.expires_at_ms,
             prefetch_session_id: writer.prefetch_session_id.clone(),
         };
+
+        let evicted_keys = {
+            let mut index = self
+                .index
+                .write()
+                .map_err(|_| io::Error::other("online VOD cache index lock poisoned"))?;
+
+            if let Some(old_meta) = index.entries.remove(&key) {
+                index.total_bytes = index.total_bytes.saturating_sub(old_meta.body_len);
+            }
+
+            let mut to_evict = Vec::new();
+            if index.total_bytes.saturating_add(writer.body_len) > max_bytes {
+                let mut candidates: Vec<(String, u64, u64)> = index
+                    .entries
+                    .iter()
+                    .map(|(k, m)| (k.clone(), m.last_accessed_at_ms, m.body_len))
+                    .collect();
+                candidates.sort_by_key(|(_, last_accessed, _)| *last_accessed);
+
+                for (cand_key, _, body_len) in candidates {
+                    if index.total_bytes.saturating_add(writer.body_len) <= max_bytes {
+                        break;
+                    }
+                    index.entries.remove(&cand_key);
+                    index.total_bytes = index.total_bytes.saturating_sub(body_len);
+                    to_evict.push(cand_key);
+                }
+            }
+
+            index.total_bytes = index.total_bytes.saturating_add(writer.body_len);
+            index.entries.insert(key.clone(), meta.clone());
+            to_evict
+        };
+
+        for evict_key in evicted_keys {
+            let (body, meta_p) = self.entry_paths_by_key(&evict_key);
+            self.remove_entry(&body, &meta_p);
+        }
+
+        self.remove_entry(&writer.body_path, &writer.meta_path);
+        fs::rename(&writer.temp_body_path, &writer.body_path)?;
+
         if let Err(error) = self.write_meta(&writer.meta_path, &meta) {
-            self.remove_entry(&writer.body_path, &writer.meta_path);
+            self.remove_entry_by_key(&key);
             return Err(error);
         }
 
         Ok(())
-    }
-
-    fn lock_access(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
-        self.access_lock
-            .lock()
-            .map_err(|_| io::Error::other("online VOD cache access lock poisoned"))
     }
 
     fn try_acquire_writer_slot(&self) -> Option<OnlineVodCacheWriterSlot> {
@@ -298,12 +386,15 @@ impl OnlineVodCache {
         }
     }
 
-    fn entry_paths(&self, request_url: &str) -> (PathBuf, PathBuf) {
-        let key = cache_key(request_url);
+    fn entry_paths_by_key(&self, key: &str) -> (PathBuf, PathBuf) {
         (
             self.root.join(format!("{key}.body")),
             self.root.join(format!("{key}.meta.json")),
         )
+    }
+
+    fn entry_paths(&self, request_url: &str) -> (PathBuf, PathBuf) {
+        self.entry_paths_by_key(&cache_key(request_url))
     }
 
     fn new_temp_path(&self, body_path: &Path) -> PathBuf {
@@ -323,64 +414,14 @@ impl OnlineVodCache {
         let _ = fs::remove_file(meta_path);
     }
 
-    fn evict_to_fit(&self, incoming_bytes: u64, preserve_body_path: &Path) -> io::Result<()> {
-        let max_bytes = self.effective_max_bytes();
-        if incoming_bytes > max_bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "online VOD asset exceeds cache byte limit",
-            ));
-        }
-
-        let mut entries = Vec::new();
-        for entry in fs::read_dir(&self.root)? {
-            let entry = entry?;
-            let body_path = entry.path();
-            if body_path
-                .extension()
-                .is_none_or(|extension| extension != "body")
-            {
-                continue;
+    fn remove_entry_by_key(&self, key: &str) {
+        if let Ok(mut index) = self.index.write() {
+            if let Some(meta) = index.entries.remove(key) {
+                index.total_bytes = index.total_bytes.saturating_sub(meta.body_len);
             }
-
-            let Some(key) = body_path.file_stem().and_then(|key| key.to_str()) else {
-                continue;
-            };
-            let meta_path = self.root.join(format!("{key}.meta.json"));
-            let body_len = entry.metadata()?.len();
-            let last_accessed_at_ms = fs::read(&meta_path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<OnlineVodCacheMeta>(&bytes).ok())
-                .filter(|meta| meta.body_len == body_len)
-                .map(|meta| meta.last_accessed_at_ms)
-                .unwrap_or_default();
-            entries.push((last_accessed_at_ms, body_len, body_path, meta_path));
         }
-
-        let mut total_bytes = entries
-            .iter()
-            .map(|(_, body_len, _, _)| *body_len)
-            .sum::<u64>();
-        if let Some((_, body_len, _, _)) = entries
-            .iter()
-            .find(|(_, _, body_path, _)| body_path == preserve_body_path)
-        {
-            total_bytes = total_bytes.saturating_sub(*body_len);
-        }
-
-        entries.sort_by_key(|(last_accessed_at_ms, _, _, _)| *last_accessed_at_ms);
-        for (_, body_len, body_path, meta_path) in entries {
-            if total_bytes.saturating_add(incoming_bytes) <= max_bytes {
-                break;
-            }
-            if body_path == preserve_body_path {
-                continue;
-            }
-            self.remove_entry(&body_path, &meta_path);
-            total_bytes = total_bytes.saturating_sub(body_len);
-        }
-
-        Ok(())
+        let (body_path, meta_path) = self.entry_paths_by_key(key);
+        self.remove_entry(&body_path, &meta_path);
     }
 
     pub(crate) fn set_temporary_max_bytes(&self, max_bytes: u64) {
@@ -400,49 +441,39 @@ impl OnlineVodCache {
     }
 
     pub(crate) fn remove_prefetch_session_entries(&self, session_id: &str) -> io::Result<u64> {
-        let _access_lock = self.lock_access()?;
         self.retire_prefetch_session(session_id)?;
-        let mut removed = 0_u64;
-        for entry in fs::read_dir(&self.root)? {
-            let entry = entry?;
-            let body_path = entry.path();
-            if body_path
-                .extension()
-                .is_none_or(|extension| extension != "body")
-            {
-                continue;
-            }
+        let (removed_bytes, removed_keys) = {
+            let mut index = self
+                .index
+                .write()
+                .map_err(|_| io::Error::other("online VOD cache index lock poisoned"))?;
+            let mut removed_bytes = 0_u64;
+            let mut removed_keys = Vec::new();
+            index.entries.retain(|key, meta| {
+                if meta.prefetch_session_id.as_deref() == Some(session_id) {
+                    removed_bytes = removed_bytes.saturating_add(meta.body_len);
+                    removed_keys.push(key.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            index.total_bytes = index.total_bytes.saturating_sub(removed_bytes);
+            (removed_bytes, removed_keys)
+        };
 
-            let Some(key) = body_path.file_stem().and_then(|key| key.to_str()) else {
-                continue;
-            };
-            let meta_path = self.root.join(format!("{key}.meta.json"));
-            let matches_session = fs::read(&meta_path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<OnlineVodCacheMeta>(&bytes).ok())
-                .is_some_and(|meta| meta.prefetch_session_id.as_deref() == Some(session_id));
-            if matches_session {
-                removed = removed.saturating_add(entry.metadata()?.len());
-                self.remove_entry(&body_path, &meta_path);
-            }
+        for key in removed_keys {
+            let (body, meta) = self.entry_paths_by_key(&key);
+            self.remove_entry(&body, &meta);
         }
-        Ok(removed)
+        Ok(removed_bytes)
     }
 
     pub(crate) fn byte_len(&self) -> io::Result<u64> {
-        let _access_lock = self.lock_access()?;
-        fs::read_dir(&self.root)?.try_fold(0_u64, |total, entry| {
-            let entry = entry?;
-            let path = entry.path();
-            if path
-                .extension()
-                .is_some_and(|extension| extension == "body")
-            {
-                Ok(total.saturating_add(entry.metadata()?.len()))
-            } else {
-                Ok(total)
-            }
-        })
+        self.index
+            .read()
+            .map(|index| index.total_bytes)
+            .map_err(|_| io::Error::other("online VOD cache index lock poisoned"))
     }
 
     fn effective_max_bytes(&self) -> u64 {

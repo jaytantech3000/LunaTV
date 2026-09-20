@@ -9,6 +9,40 @@
 - 每条记录尽量包含：目标、核心改动、验证结果、后续待办。
 - 若功能有详细方案文档，优先链接到 `dev-plan/` 下的对应文件。
 
+## 2026-09-20 - Desktop full-phase architecture & performance optimization / 桌面端全阶段架构与性能优化
+
+- Branch / 分支：`desktop`
+- Related files / 相关文件：
+  - `crates/moontv-local-service/src/online_vod_cache.rs`
+  - `crates/moontv-local-service/src/lib.rs`
+  - `crates/moontv-local-service/src/tests.rs`
+  - `crates/moontv-storage/src/sqlite/db.rs`
+  - `src-tauri/src/lib.rs`
+  - `package.json`
+
+### Goal / 目标
+
+- Eliminate online VOD playback stuttering caused by O(N) disk I/O amplification and global lock contention in the online cache.
+- Resolve 12 Rust cross-platform dead_code compiler warnings, decouple god files (16K LOC), and remove unused dependencies.
+- Optimize SQLite connection reuse to avoid redundant PRAGMA execution on every read/write.
+
+### Core behavior / 核心行为
+
+- **Online VOD In-Memory Index & Incremental Eviction / 点播缓存内存索引化与增量淘汰**：Refactored `OnlineVodCache` to maintain an in-memory index (`OnlineVodCacheIndex`) with `RwLock`. Eliminated full-directory `fs::read_dir` and JSON parsing on segment commit; enabled concurrent non-blocking reads and pure in-memory LRU eviction.
+- **Compiler Warnings & Dependency Cleanup / 编译警告消除与死依赖剔除**：Added `#[cfg(target_os = "windows")]` to Windows-only diagnostic structs/helpers in `src-tauri/src/lib.rs`, reducing compiler warnings from 12 to 0. Removed unused `@vidstack/react`, `vidstack`, and `media-icons` from `package.json`.
+- **God-File Modularization / 巨石单测解耦**：Extracted 8,780 lines of unit tests from `moontv-local-service/src/lib.rs` into an isolated `tests.rs` module, reducing `lib.rs` size by >50%.
+- **SQLite Connection Persistence / 数据库连接持久化**：Cached SQLite connection in `DesktopSqlite` (`Arc<Mutex<Connection>>`), executing WAL/pragmas only once at initialization.
+- **Updater Timeout Tuning / 更新器超时调优**：Increased `DESKTOP_UPDATER_NETWORK_TIMEOUT` from 3s to 10s to tolerate CDN network jitter.
+
+### Verification / 验证
+
+- `cargo check --workspace`: 0 warnings, 0 errors.
+- `cargo test --workspace`: 158 passed, 0 failed.
+- `pnpm typecheck`: passed with 0 errors.
+- `pnpm test`: 111 test suites passed (559 passed, 0 failed).
+
+---
+
 ## 2026-09-11 - Desktop online VOD anti-stutter optimization / 桌面端在线点播全链路防卡顿优化
 
 - Branch / 分支：`desktop`
